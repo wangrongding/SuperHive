@@ -1,0 +1,8 @@
+dist
+coverage
+node_modules
+packages/ai-hive/web
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+ChatGPT.md

@@ -1,0 +1,46 @@
+{
+  "name": "ai-hive-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A self-hosted shared workspace for humans, Codex, Claude Code, Copilot, OpenClaw, and extensible agents.",
+  "type": "module",
+  "scripts": {
+    "predev": "pnpm --filter @ai-hive/protocol build",
+    "pretest": "pnpm --filter @ai-hive/protocol build",
+    "dev": "concurrently -n server,web -c cyan,magenta \"pnpm --filter @ai-hive/server dev\" \"pnpm --filter @ai-hive/web dev\"",
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "test": "pnpm -r --if-present test",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "start": "pnpm --filter @ai-hive/server start",
+    "agent": "pnpm --filter ai-hive dev",
+    "agent:echo": "pnpm --filter ai-hive echo"
+  },
+  "keywords": [
+    "codex",
+    "claude-code",
+    "github-copilot",
+    "openclaw",
+    "agent",
+    "chat"
+  ],
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "ai-hive": "workspace:*",
+    "concurrently": "^9.2.0",
+    "eslint": "^9.31.0",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
+  }
+}

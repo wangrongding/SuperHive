@@ -1,0 +1,32 @@
+#!/usr/bin/env node
+import { run } from "./run.js";
+import { startService, stopService } from "./service.js";
+
+const usage = `
+AI Hive（命令别名：hive）
+
+用法：
+  ai-hive start [选项]   启动自己的 Hive Server 和 Web UI
+  ai-hive stop [选项]    停止由 ai-hive start 启动的 Server
+  ai-hive join [选项]    将本机 Agent 加入一个 Hive 房间
+
+运行 ai-hive <命令> --help 查看详细选项。
+上述 ai-hive 均可替换为 hive。
+`;
+
+async function main(): Promise<void> {
+  const command = process.argv[2];
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    console.log(usage);
+    return;
+  }
+  if (command === "start") return startService();
+  if (command === "stop") return stopService();
+  if (command === "join") return run("codex");
+  throw new Error(`未知命令：“${command}”。\n${usage}`);
+}
+
+main().catch((error: unknown) => {
+  console.error(`[hive] ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});

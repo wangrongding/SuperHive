@@ -1,0 +1,64 @@
+{
+  "name": "ai-hive",
+  "version": "0.1.0",
+  "description": "Start a shared AI Hive server and connect Codex, Claude Code, Copilot, or OpenClaw agents.",
+  "type": "module",
+  "files": [
+    "dist",
+    "web",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "ai-hive": "dist/cli.js",
+    "hive": "dist/cli.js",
+    "hive-agent": "dist/cli.js",
+    "hive-echo-agent": "dist/echo.js"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "ai-hive",
+    "codex",
+    "claude-code",
+    "copilot",
+    "openclaw",
+    "mcp",
+    "agent"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "echo": "tsx src/echo.ts",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "pnpm build:distribution",
+    "build:cli": "pnpm clean && tsc -p tsconfig.json",
+    "build:server": "esbuild ../../apps/server/src/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --alias:@ai-hive/protocol=../../packages/protocol/src/index.ts --outfile=dist/server/index.js",
+    "copy:web": "node -e \"const fs=require('node:fs');fs.rmSync('web',{recursive:true,force:true});fs.cpSync('../../apps/web/dist','web',{recursive:true})\"",
+    "build:distribution": "pnpm build:cli && pnpm --dir ../.. --filter @ai-hive/protocol build && pnpm --dir ../.. --filter @ai-hive/web build && pnpm build:server && pnpm copy:web",
+    "test": "vitest run",
+    "prepack": "pnpm build:distribution"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.1.0",
+    "@fastify/static": "^8.2.0",
+    "@fastify/websocket": "^11.2.0",
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "better-sqlite3": "^12.2.0",
+    "fastify": "^5.4.0",
+    "ws": "^8.18.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.13",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

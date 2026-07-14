@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.DS_Store
+*.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
+packages/ai-hive/web/
+
+ChatGPT.md
