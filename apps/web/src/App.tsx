@@ -21,6 +21,7 @@ import {
   type MentionContext,
 } from "./mention-autocomplete";
 import { createClientMessageId } from "./client-id";
+import { copyTextToClipboard } from "./clipboard";
 import { resolveServerBase } from "./server-url";
 
 const storedUsernameKey = "ai-hive.username";
@@ -403,6 +404,7 @@ export function App() {
   );
   const [error, setError] = useState<string>();
   const [copiedProvider, setCopiedProvider] = useState<SelectableAgentProvider>();
+  const [copyError, setCopyError] = useState<string>();
   const [agentProvider, setAgentProvider] = useState<SelectableAgentProvider>("codex");
   const [agentAccess, setAgentAccess] = useState<AgentAccessMode>("read-only");
   const [fullAccessConfirmationOpen, setFullAccessConfirmationOpen] = useState(false);
@@ -581,6 +583,7 @@ export function App() {
 
   const openAgentDialog = useCallback((trigger: HTMLButtonElement) => {
     agentDialogTriggerRef.current = trigger;
+    setCopyError(undefined);
     setAgentDialogOpen(true);
   }, []);
 
@@ -862,12 +865,18 @@ export function App() {
   async function copyCommand(provider: SelectableAgentProvider = agentProvider) {
     if (!meta) return;
     setAgentProvider(provider);
-    await navigator.clipboard.writeText(agentCommandFor(meta, provider, username, agentAccess));
-    setCopiedProvider(provider);
-    window.setTimeout(
-      () => setCopiedProvider((current) => (current === provider ? undefined : current)),
-      1500,
-    );
+    setCopyError(undefined);
+    try {
+      await copyTextToClipboard(agentCommandFor(meta, provider, username, agentAccess));
+      setCopiedProvider(provider);
+      window.setTimeout(
+        () => setCopiedProvider((current) => (current === provider ? undefined : current)),
+        1500,
+      );
+    } catch {
+      setCopiedProvider(undefined);
+      setCopyError("浏览器未允许自动复制，请选中上方命令后手动复制。");
+    }
   }
 
   return (
@@ -1337,6 +1346,7 @@ export function App() {
                       onClick={() => {
                         setAgentProvider(provider);
                         setCopiedProvider(undefined);
+                        setCopyError(undefined);
                       }}
                       key={provider}
                     >
@@ -1373,6 +1383,7 @@ export function App() {
                       className={`${option.id} ${agentAccess === option.id ? "active" : ""}`}
                       onClick={() => {
                         setCopiedProvider(undefined);
+                        setCopyError(undefined);
                         if (option.id === "full" && agentAccess !== "full") {
                           setFullAccessConfirmationOpen(true);
                           return;
@@ -1413,6 +1424,7 @@ export function App() {
                         onClick={() => {
                           setAgentAccess("full");
                           setFullAccessConfirmationOpen(false);
+                          setCopyError(undefined);
                         }}
                       >
                         我了解风险，开启完全访问
@@ -1442,6 +1454,11 @@ export function App() {
                     <span>{copiedProvider === agentProvider ? "已复制到剪贴板" : "复制命令"}</span>
                   </button>
                 </div>
+                {copyError && (
+                  <p className="command-copy-error" role="alert">
+                    {copyError}
+                  </p>
+                )}
                 <div className="agent-next-steps" aria-label="接入后的操作">
                   <p>
                     <span>权限范围</span>

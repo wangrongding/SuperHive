@@ -65,10 +65,19 @@ npx ai-hive start
 npx ai-hive stop
 ```
 
+安装新版本后，可以直接重启并沿用上次的监听地址、端口和公开地址：
+
+```bash
+npx ai-hive restart
+```
+
+也可以在重启时覆盖启动参数，例如 `npx ai-hive restart --port 9000`。
+
 全局安装或本地 link 后，也可以使用更短的 `hive` 别名：
 
 ```bash
 hive start
+hive restart
 hive stop
 hive join --help
 ```

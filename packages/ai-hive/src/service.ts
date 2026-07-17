@@ -14,6 +14,12 @@ import { parseArgs } from "node:util";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 
+type ServiceStartOptions = {
+  host: string;
+  port: number;
+  publicUrl?: string;
+};
+
 type ServiceState = {
   pid: number;
   instanceId: string;
@@ -22,6 +28,7 @@ type ServiceState = {
   dataDir: string;
   logPath: string;
   startedAt: string;
+  startOptions?: ServiceStartOptions;
 };
 
 const startUsage = `
@@ -40,6 +47,22 @@ const startUsage = `
 const stopUsage = `
 用法：
   ai-hive stop [--data-dir PATH]
+`;
+
+const restartUsage = `
+用法：
+  ai-hive restart [选项]
+
+说明：
+  默认沿用上次启动时的 host、port 和 public-url；显式传入的选项会覆盖原配置。
+
+选项：
+  --host ADDRESS     监听地址
+  --port PORT        监听端口
+  --data-dir PATH    数据、PID 和日志目录（默认 ~/.ai-hive）
+  --public-url URL   对外访问地址
+  --token TOKEN      更新固定 Join Token
+  --foreground       重启后在前台运行
 `;
 
 function pathsFor(dataDir?: string): {
@@ -72,7 +95,31 @@ function readState(statePath: string): ServiceState | undefined {
     ) {
       return undefined;
     }
-    return value as ServiceState;
+    const rawStartOptions = value.startOptions as Partial<ServiceStartOptions> | undefined;
+    const startOptions =
+      rawStartOptions &&
+      typeof rawStartOptions.host === "string" &&
+      typeof rawStartOptions.port === "number" &&
+      Number.isSafeInteger(rawStartOptions.port) &&
+      rawStartOptions.port >= 1 &&
+      rawStartOptions.port <= 65_535 &&
+      (rawStartOptions.publicUrl === undefined || typeof rawStartOptions.publicUrl === "string")
+        ? {
+            host: rawStartOptions.host,
+            port: rawStartOptions.port,
+            ...(rawStartOptions.publicUrl ? { publicUrl: rawStartOptions.publicUrl } : {}),
+          }
+        : undefined;
+    return {
+      pid: value.pid,
+      instanceId: value.instanceId,
+      healthUrl: value.healthUrl,
+      publicUrl: value.publicUrl,
+      dataDir: value.dataDir,
+      logPath: value.logPath,
+      startedAt: value.startedAt,
+      ...(startOptions ? { startOptions } : {}),
+    };
   } catch {
     return undefined;
   }
@@ -124,19 +171,21 @@ async function fetchPublicUrl(healthUrl: string, fallback: string): Promise<stri
 
 function printStarted(state: ServiceState, alreadyRunning = false): void {
   const defaultDataDir = pathsFor().dataDir;
+  const dataDirArgument =
+    state.dataDir === defaultDataDir ? "" : ` --data-dir ${JSON.stringify(state.dataDir)}`;
+  const restartCommand = `npx ai-hive restart${dataDirArgument}`;
   const stopCommand =
-    state.dataDir === defaultDataDir
-      ? "npx ai-hive stop"
-      : `npx ai-hive stop --data-dir ${JSON.stringify(state.dataDir)}`;
+    state.dataDir === defaultDataDir ? "npx ai-hive stop" : `npx ai-hive stop${dataDirArgument}`;
   console.log(`[hive] ${alreadyRunning ? "服务已经在运行" : "服务已启动"}（PID ${state.pid}）`);
   console.log(`[hive] Web UI：${state.publicUrl}`);
   console.log(`[hive] 日志：${state.logPath}`);
+  console.log(`[hive] 重启：${restartCommand}`);
   console.log(`[hive] 停止：${stopCommand}`);
 }
 
-export async function startService(): Promise<void> {
+export async function startService(args = process.argv.slice(3)): Promise<void> {
   const parsed = parseArgs({
-    args: process.argv.slice(3),
+    args,
     options: {
       host: { type: "string", default: "0.0.0.0" },
       port: { type: "string", default: "8787" },
@@ -210,6 +259,11 @@ export async function startService(): Promise<void> {
       dataDir: servicePaths.dataDir,
       logPath: "标准输出（前台运行）",
       startedAt: new Date().toISOString(),
+      startOptions: {
+        host: parsed.values.host,
+        port,
+        ...(parsed.values["public-url"] ? { publicUrl: parsed.values["public-url"] } : {}),
+      },
     };
     writeState(servicePaths.statePath, state);
     const cleanup = () => rmSync(servicePaths.statePath, { force: true });
@@ -246,6 +300,11 @@ export async function startService(): Promise<void> {
     dataDir: servicePaths.dataDir,
     logPath: servicePaths.logPath,
     startedAt: new Date().toISOString(),
+    startOptions: {
+      host: parsed.values.host,
+      port,
+      ...(parsed.values["public-url"] ? { publicUrl: parsed.values["public-url"] } : {}),
+    },
   };
   writeState(servicePaths.statePath, state);
   try {
@@ -260,9 +319,9 @@ export async function startService(): Promise<void> {
   printStarted(state);
 }
 
-export async function stopService(): Promise<void> {
+export async function stopService(args = process.argv.slice(3)): Promise<void> {
   const parsed = parseArgs({
-    args: process.argv.slice(3),
+    args,
     options: {
       "data-dir": { type: "string" },
       help: { type: "boolean", short: "h" },
@@ -296,4 +355,50 @@ export async function stopService(): Promise<void> {
   if (processExists(state.pid)) process.kill(state.pid, "SIGKILL");
   rmSync(servicePaths.statePath, { force: true });
   console.log(`[hive] 已停止 Hive Server（PID ${state.pid}）。`);
+}
+
+function optionsFromLegacyState(state: ServiceState | undefined): ServiceStartOptions | undefined {
+  if (!state) return undefined;
+  if (state.startOptions) return state.startOptions;
+  try {
+    const port = Number.parseInt(new URL(state.healthUrl).port, 10);
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) return undefined;
+    return { host: "0.0.0.0", port };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function restartService(args = process.argv.slice(3)): Promise<void> {
+  const parsed = parseArgs({
+    args,
+    options: {
+      host: { type: "string" },
+      port: { type: "string" },
+      "data-dir": { type: "string" },
+      "public-url": { type: "string" },
+      token: { type: "string" },
+      foreground: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+  if (parsed.values.help) {
+    console.log(restartUsage);
+    return;
+  }
+
+  const servicePaths = pathsFor(parsed.values["data-dir"]);
+  const previousOptions = optionsFromLegacyState(readState(servicePaths.statePath));
+  const host = parsed.values.host ?? previousOptions?.host ?? "0.0.0.0";
+  const port = parsed.values.port ?? String(previousOptions?.port ?? 8787);
+  const publicUrl = parsed.values["public-url"] ?? previousOptions?.publicUrl;
+  const startArgs = ["--host", host, "--port", port];
+  if (parsed.values["data-dir"]) startArgs.push("--data-dir", parsed.values["data-dir"]);
+  if (publicUrl) startArgs.push("--public-url", publicUrl);
+  if (parsed.values.token) startArgs.push("--token", parsed.values.token);
+  if (parsed.values.foreground) startArgs.push("--foreground");
+
+  await stopService(parsed.values["data-dir"] ? ["--data-dir", parsed.values["data-dir"]] : []);
+  console.log("[hive] 正在重新启动 Hive Server…");
+  await startService(startArgs);
 }

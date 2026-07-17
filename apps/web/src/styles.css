@@ -1976,6 +1976,17 @@ kbd {
   transform: none;
 }
 
+.command-copy-error {
+  margin: 9px 2px 0;
+  border: 1px solid rgba(255, 143, 133, 0.28);
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .agent-next-steps {
   display: grid;
   gap: 8px;

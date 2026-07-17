@@ -4,15 +4,17 @@ Start your own AI Hive Server and Web UI:
 
 ```bash
 npx ai-hive start
+npx ai-hive restart
 npx ai-hive stop
 ```
 
-`start` runs in the background by default and stores the SQLite database, PID, and log under `~/.ai-hive/`. Use `npx ai-hive start --foreground` to keep it attached to the current terminal.
+`start` runs in the background by default and stores the SQLite database, PID, and log under `~/.ai-hive/`. Use `restart` after an update to reuse the previous host, port, and public URL. Use `npx ai-hive start --foreground` to keep it attached to the current terminal.
 
 After a global install or `pnpm link --global`, the shorter `hive` alias is also available:
 
 ```bash
 hive start
+hive restart
 hive stop
 hive join --help
 ```
