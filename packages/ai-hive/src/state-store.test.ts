@@ -32,4 +32,22 @@ describe("StateStore", () => {
 
     expect(codex.filename).not.toBe(claude.filename);
   });
+
+  it("keeps elevated sessions separate while preserving the legacy read-only key", async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "hive-access-state-test-"));
+    const identity = {
+      serverUrl: "http://localhost:8787",
+      roomId: "general",
+      username: "agent-a",
+      provider: "codex",
+    };
+    const legacy = new StateStore(directory, identity);
+    const readOnly = new StateStore(directory, { ...identity, access: "read-only" });
+    const workspace = new StateStore(directory, { ...identity, access: "workspace" });
+    const full = new StateStore(directory, { ...identity, access: "full" });
+
+    expect(readOnly.filename).toBe(legacy.filename);
+    expect(workspace.filename).not.toBe(readOnly.filename);
+    expect(full.filename).not.toBe(workspace.filename);
+  });
 });

@@ -1,12 +1,32 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { codexHiveMcpOverrides, type HiveMcpConnection } from "./hive-mcp-config.js";
-import type { AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
+import type { AgentAccessMode, AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
 
 type ToolDescription = {
   name: string;
   inputSchema?: { properties?: Record<string, unknown> };
 };
+
+type ToolCaller = {
+  callTool(request: { name: string; arguments?: Record<string, unknown> }): Promise<any>;
+};
+
+type CodexMcpResponderDependencies = {
+  client?: ToolCaller;
+  tools?: ToolDescription[];
+  log?: (message: string) => void;
+};
+
+function codexAccess(access: AgentAccessMode = "read-only") {
+  if (access === "workspace") {
+    return { sandbox: "workspace-write", approvalPolicy: "never" } as const;
+  }
+  if (access === "full") {
+    return { sandbox: "danger-full-access", approvalPolicy: "never" } as const;
+  }
+  return { sandbox: "read-only", approvalPolicy: "untrusted" } as const;
+}
 
 function textFromResult(result: any): string {
   const content = Array.isArray(result?.content) ? result.content : [];
@@ -46,33 +66,69 @@ function parseToolResult(result: any, previousThreadId?: string): AgentReply {
   return { text, ...(threadId ? { threadId } : {}) };
 }
 
+export function isMissingCodexThread(error: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    messages.push(current instanceof Error ? current.message : String(current));
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return /session not found for (?:thread|conversation)[_ ]?id/i.test(messages.join("\n"));
+}
+
 export class CodexMcpResponder implements AgentResponder {
-  private client: Client | undefined;
+  private client: ToolCaller | undefined;
   private transport: StdioClientTransport | undefined;
-  private tools = new Map<string, ToolDescription>();
+  private tools: Map<string, ToolDescription>;
+  private readonly log: (message: string) => void;
 
   constructor(
-    private readonly options: { command: string; cwd: string; hive: HiveMcpConnection },
-  ) {}
+    private readonly options: {
+      command: string;
+      cwd: string;
+      hive: HiveMcpConnection;
+      access?: AgentAccessMode;
+    },
+    dependencies: CodexMcpResponderDependencies = {},
+  ) {
+    this.client = dependencies.client;
+    this.tools = new Map((dependencies.tools ?? []).map((tool) => [tool.name, tool]));
+    this.log = dependencies.log ?? console.warn;
+  }
 
   async reply(input: AgentReplyInput): Promise<AgentReply> {
     await this.ensureConnected();
     const client = this.client!;
     if (input.threadId) {
-      const result = await client.callTool({
-        name: "codex-reply",
-        arguments: { threadId: input.threadId, prompt: input.prompt },
-      });
-      return parseToolResult(result, input.threadId);
+      try {
+        const result = await client.callTool({
+          name: "codex-reply",
+          arguments: { threadId: input.threadId, prompt: input.prompt },
+        });
+        if (result?.isError) {
+          throw new Error(textFromResult(result) || "Codex 无法继续现有会话。");
+        }
+        return parseToolResult(result, input.threadId);
+      } catch (error) {
+        if (!isMissingCodexThread(error)) throw error;
+        this.log(`[hive] Codex 旧会话 ${input.threadId} 已失效，自动创建新会话继续处理。`);
+      }
     }
 
+    return this.startThread(client, input);
+  }
+
+  private async startThread(client: ToolCaller, input: AgentReplyInput): Promise<AgentReply> {
     const tool = this.tools.get("codex");
     if (!tool) throw new Error("当前 codex mcp-server 没有暴露 codex 工具。");
     const properties = tool.inputSchema?.properties ?? {};
+    const access = codexAccess(this.options.access);
     const arguments_: Record<string, unknown> = { prompt: input.prompt };
     if ("cwd" in properties) arguments_.cwd = this.options.cwd;
-    if ("sandbox" in properties) arguments_.sandbox = "read-only";
-    if ("approval-policy" in properties) arguments_["approval-policy"] = "untrusted";
+    if ("sandbox" in properties) arguments_.sandbox = access.sandbox;
+    if ("approval-policy" in properties) {
+      arguments_["approval-policy"] = access.approvalPolicy;
+    }
     if ("developer-instructions" in properties) {
       arguments_["developer-instructions"] = input.instructions;
     } else if ("base-instructions" in properties) {
@@ -92,19 +148,20 @@ export class CodexMcpResponder implements AgentResponder {
 
   private async ensureConnected(): Promise<void> {
     if (this.client) return;
+    const access = codexAccess(this.options.access);
     const transport = new StdioClientTransport({
       command: this.options.command,
       args: [
         "mcp-server",
         "-c",
-        'sandbox_mode="read-only"',
+        `sandbox_mode="${access.sandbox}"`,
         "-c",
-        'approval_policy="untrusted"',
+        `approval_policy="${access.approvalPolicy}"`,
         ...codexHiveMcpOverrides(this.options.hive).flatMap((override) => ["-c", override]),
       ],
       stderr: "inherit",
     });
-    const client = new Client({ name: "ai-hive-agent", version: "0.1.0" });
+    const client = new Client({ name: "ai-hive-agent", version: "0.1.1" });
     try {
       await client.connect(transport);
       const listed = await client.listTools();
@@ -117,7 +174,7 @@ export class CodexMcpResponder implements AgentResponder {
         );
       }
       this.transport = transport;
-      this.client = client;
+      this.client = client as unknown as ToolCaller;
     } catch (error) {
       await transport.close().catch(() => undefined);
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {

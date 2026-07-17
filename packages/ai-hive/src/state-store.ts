@@ -16,13 +16,21 @@ export class StateStore {
 
   constructor(
     private readonly stateDir: string,
-    identity: { serverUrl: string; roomId: string; username: string; provider?: string },
+    identity: {
+      serverUrl: string;
+      roomId: string;
+      username: string;
+      provider?: string;
+      access?: string;
+    },
   ) {
     const providerKey =
       identity.provider && identity.provider !== "codex" ? `\0${identity.provider}` : "";
+    const accessKey =
+      identity.access && identity.access !== "read-only" ? `\0${identity.access}` : "";
     const key = createHash("sha256")
       .update(
-        `${identity.serverUrl}\0${identity.roomId}\0${identity.username.toLocaleLowerCase()}${providerKey}`,
+        `${identity.serverUrl}\0${identity.roomId}\0${identity.username.toLocaleLowerCase()}${providerKey}${accessKey}`,
       )
       .digest("hex")
       .slice(0, 20);

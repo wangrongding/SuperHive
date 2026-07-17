@@ -51,6 +51,46 @@ describe("ClaudeCodeResponder", () => {
     expect(runner.mock.calls[0]?.[2]).toMatchObject({ input: "Shared context" });
   });
 
+  it.each(["workspace", "full"] as const)("maps %s access to Claude Code", async (access) => {
+    const runner = vi.fn<CommandRunner>(async () => ({
+      stdout: JSON.stringify({ result: "ok", session_id: `session-${access}` }),
+      stderr: "",
+    }));
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/workspace",
+      hive,
+      access,
+      runner,
+    });
+
+    await responder.reply({ instructions: "rules", prompt: "context" });
+
+    const args = runner.mock.calls[0]?.[1] ?? [];
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe(
+      access === "workspace" ? "auto" : "bypassPermissions",
+    );
+    const settings = JSON.parse(args[args.indexOf("--settings") + 1] ?? "{}") as {
+      sandbox?: {
+        enabled?: boolean;
+        failIfUnavailable?: boolean;
+        allowUnsandboxedCommands?: boolean;
+      };
+    };
+    if (access === "workspace") {
+      expect(args.join(" ")).toContain("Edit,Write,Bash");
+      expect(settings.sandbox).toMatchObject({
+        enabled: true,
+        failIfUnavailable: true,
+        allowUnsandboxedCommands: false,
+      });
+      expect(args).not.toContain("--dangerously-skip-permissions");
+    } else {
+      expect(settings.sandbox).toMatchObject({ enabled: false });
+      expect(args).toContain("--dangerously-skip-permissions");
+    }
+  });
+
   it("rejects malformed or empty Claude Code results", async () => {
     const malformed = new ClaudeCodeResponder({
       command: "claude",

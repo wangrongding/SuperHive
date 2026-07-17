@@ -1,6 +1,6 @@
 import { defaultCommandRunner, type CommandRunner } from "./command-runner.js";
 import { claudeHiveMcpConfig, type HiveMcpConnection } from "./hive-mcp-config.js";
-import type { AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
+import type { AgentAccessMode, AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
 
 type ClaudeJsonResult = {
   is_error?: boolean;
@@ -15,12 +15,16 @@ export class ClaudeCodeResponder implements AgentResponder {
       command: string;
       cwd: string;
       hive: HiveMcpConnection;
+      access?: AgentAccessMode;
       model?: string;
       runner?: CommandRunner;
     },
   ) {}
 
   async reply(input: AgentReplyInput): Promise<AgentReply> {
+    const access = this.options.access ?? "read-only";
+    const hiveTools =
+      "mcp__hive__hive_room_read,mcp__hive__hive_members_list,mcp__hive__hive_message_send";
     const args = [
       "--print",
       "--output-format",
@@ -28,14 +32,33 @@ export class ClaudeCodeResponder implements AgentResponder {
       "--input-format",
       "text",
       "--permission-mode",
-      "plan",
+      access === "read-only" ? "plan" : access === "workspace" ? "auto" : "bypassPermissions",
       "--append-system-prompt",
       input.instructions,
       "--mcp-config",
       claudeHiveMcpConfig(this.options.hive),
       "--allowedTools",
-      "mcp__hive__hive_room_read,mcp__hive__hive_members_list,mcp__hive__hive_message_send",
+      access === "workspace" ? `Read,Glob,Grep,Edit,Write,Bash,${hiveTools}` : hiveTools,
     ];
+    if (access === "workspace") {
+      args.push(
+        "--settings",
+        JSON.stringify({
+          sandbox: {
+            enabled: true,
+            failIfUnavailable: true,
+            allowUnsandboxedCommands: false,
+          },
+        }),
+      );
+    }
+    if (access === "full") {
+      args.push(
+        "--dangerously-skip-permissions",
+        "--settings",
+        JSON.stringify({ sandbox: { enabled: false } }),
+      );
+    }
     if (this.options.model) args.push("--model", this.options.model);
     if (input.threadId) args.push("--resume", input.threadId);
 

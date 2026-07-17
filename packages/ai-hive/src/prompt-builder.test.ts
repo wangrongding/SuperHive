@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "./hive-protocol.js";
-import { buildMentionPrompt } from "./prompt-builder.js";
+import { buildDeveloperInstructions, buildMentionPrompt } from "./prompt-builder.js";
 
 describe("buildMentionPrompt", () => {
   it("includes stable message IDs for hive_message_send parentMessageId", () => {
@@ -20,5 +20,22 @@ describe("buildMentionPrompt", () => {
 
     const prompt = buildMentionPrompt({ messages: [mention], mention });
     expect(prompt).toContain("#7 id=00000000-0000-4000-8000-000000000001");
+  });
+});
+
+describe("buildDeveloperInstructions", () => {
+  it.each([
+    ["read-only", "不得修改本地文件"],
+    ["workspace", "在当前工作目录中读写文件并运行必要命令"],
+    ["full", "已授予完全访问权限"],
+  ] as const)("injects the %s local access boundary", (access, expected) => {
+    expect(
+      buildDeveloperInstructions({
+        agentName: "agent-a",
+        persona: "协作 Agent",
+        serverRules: "server rules",
+        access,
+      }),
+    ).toContain(expected);
   });
 });

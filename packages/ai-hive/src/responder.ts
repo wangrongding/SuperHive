@@ -1,4 +1,5 @@
 export type AgentProvider = "codex" | "claude" | "copilot" | "openclaw" | "echo";
+export type AgentAccessMode = "read-only" | "workspace" | "full";
 
 export type AgentReplyInput = {
   instructions: string;

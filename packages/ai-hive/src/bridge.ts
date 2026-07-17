@@ -1,5 +1,5 @@
 import { isMentioned, type ChatMessage } from "./hive-protocol.js";
-import type { AgentResponder } from "./responder.js";
+import type { AgentAccessMode, AgentResponder } from "./responder.js";
 import { buildDeveloperInstructions, buildMentionPrompt } from "./prompt-builder.js";
 import { RoomClient, type Snapshot } from "./room-client.js";
 import { StateStore, type AgentState } from "./state-store.js";
@@ -40,6 +40,7 @@ export class AgentBridge {
       persona: string;
       provider: string;
       token: string;
+      access?: AgentAccessMode;
     },
     private readonly store: StateStore,
     private readonly responder: AgentResponder,
@@ -79,6 +80,7 @@ export class AgentBridge {
       agentName: this.options.username,
       persona: this.options.persona,
       serverRules,
+      ...(this.options.access ? { access: this.options.access } : {}),
     });
     this.room.start();
     this.log(

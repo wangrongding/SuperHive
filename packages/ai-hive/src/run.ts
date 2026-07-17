@@ -9,7 +9,12 @@ import { CodexMcpResponder } from "./codex-client.js";
 import { CopilotResponder } from "./copilot-client.js";
 import { OpenClawResponder } from "./openclaw-client.js";
 import { hiveMcpUrl, openClawHiveMcpConfig, openClawHiveMcpName } from "./hive-mcp-config.js";
-import { EchoResponder, type AgentProvider, type AgentResponder } from "./responder.js";
+import {
+  EchoResponder,
+  type AgentAccessMode,
+  type AgentProvider,
+  type AgentResponder,
+} from "./responder.js";
 import { StateStore } from "./state-store.js";
 
 const usage = `
@@ -22,8 +27,9 @@ AI Hive Agent
 
 选项：
   --provider NAME   codex、claude、copilot 或 openclaw（默认 codex）
+  --access MODE     read-only、workspace 或 full（默认 read-only）
   --persona TEXT    Agent 的角色描述
-  --cwd PATH        允许 Agent 读取的项目目录（默认使用空临时目录）
+  --cwd PATH        Agent 工作目录（workspace/full 必填；只读默认使用空临时目录）
   --state-dir PATH  Agent 状态目录（默认 ~/.ai-hive/agents）
   --codex PATH      Codex CLI 命令（默认 codex）
   --claude PATH     Claude Code CLI 命令（默认 claude）
@@ -45,6 +51,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       name: { type: "string" },
       token: { type: "string" },
       provider: { type: "string" },
+      access: { type: "string", default: "read-only" },
       persona: { type: "string" },
       cwd: { type: "string" },
       "state-dir": { type: "string" },
@@ -82,6 +89,15 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     );
   }
   const provider = providerValue as AgentProvider;
+  const accessValue = parsed.values.access;
+  const supportedAccessModes: AgentAccessMode[] = ["read-only", "workspace", "full"];
+  if (!supportedAccessModes.includes(accessValue as AgentAccessMode)) {
+    throw new Error(`不支持的 access “${accessValue}”；当前可用：read-only、workspace、full。`);
+  }
+  const access = accessValue as AgentAccessMode;
+  if (access !== "read-only" && !parsed.values.cwd) {
+    throw new Error(`--access ${access} 必须同时显式指定 --cwd，避免授权到错误目录。`);
+  }
 
   const cwd = parsed.values.cwd
     ? path.resolve(parsed.values.cwd)
@@ -126,7 +142,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       throw new Error(`Agent CLI 无法启动：${check.stderr || check.error?.message}`);
   }
 
-  const store = new StateStore(stateDir, { serverUrl, roomId, username, provider });
+  const store = new StateStore(stateDir, { serverUrl, roomId, username, provider, access });
   const hive = { serverUrl, roomId, username, token };
   if (provider === "openclaw" && parsed.values["openclaw-configure-mcp"]) {
     const configured = spawnSync(
@@ -150,6 +166,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
         command,
         cwd,
         hive,
+        access,
         ...(parsed.values.model ? { model: parsed.values.model } : {}),
       });
       break;
@@ -158,6 +175,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
         command,
         cwd,
         hive,
+        access,
         ...(parsed.values.model ? { model: parsed.values.model } : {}),
       });
       break;
@@ -171,11 +189,11 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       });
       break;
     case "codex":
-      responder = new CodexMcpResponder({ command, cwd, hive });
+      responder = new CodexMcpResponder({ command, cwd, hive, access });
       break;
   }
   const bridge = new AgentBridge(
-    { serverUrl, roomId, username, persona, provider, token },
+    { serverUrl, roomId, username, persona, provider, token, access },
     store,
     responder,
   );
@@ -184,6 +202,9 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   console.log(
     `[hive] ${providerLabels[provider]} 命令工作目录：${cwd}${parsed.values.cwd ? "" : "（安全的空临时目录）"}`,
   );
+  console.log(
+    `[hive] 本机权限：${access === "read-only" ? "只读" : access === "workspace" ? "工作区读写与命令" : "完全访问（无 Hive 沙箱）"}`,
+  );
   if (provider === "codex" || provider === "claude" || provider === "copilot") {
     console.log(
       `[hive] ${providerLabels[provider]} Hive MCP：已启用，将按需临时注入 ${hiveMcpUrl(hive)}（仅当前 Agent 进程，不修改全局配置）`,
@@ -191,7 +212,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   }
   if (provider === "openclaw") {
     console.warn(
-      "[hive] OpenClaw 的工具和文件权限由其 Agent/Gateway 配置控制；接入前请确认 sandbox 与 exec policy。",
+      `[hive] OpenClaw 的工具和文件权限由其 Agent/Gateway 配置控制；--access ${access} 仅声明期望档位，请确认 sandbox 与 exec policy 与之匹配。`,
     );
     if (parsed.values["openclaw-configure-mcp"]) {
       console.log(

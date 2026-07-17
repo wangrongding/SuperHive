@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { defaultCommandRunner, type CommandRunner } from "./command-runner.js";
 import { copilotHiveMcpConfig, type HiveMcpConnection } from "./hive-mcp-config.js";
-import type { AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
+import type { AgentAccessMode, AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
 
 type CopilotEvent = {
   type?: string;
@@ -30,6 +30,7 @@ export class CopilotResponder implements AgentResponder {
       command: string;
       cwd: string;
       hive: HiveMcpConnection;
+      access?: AgentAccessMode;
       model?: string;
       runner?: CommandRunner;
     },
@@ -37,6 +38,7 @@ export class CopilotResponder implements AgentResponder {
 
   async reply(input: AgentReplyInput): Promise<AgentReply> {
     const sessionId = input.threadId ?? randomUUID();
+    const access = this.options.access ?? "read-only";
     const args = [
       "--prompt",
       `${input.instructions}\n\n---\n\n${input.prompt}`,
@@ -45,19 +47,33 @@ export class CopilotResponder implements AgentResponder {
       "--stream",
       "off",
       "--mode",
-      "plan",
-      "--deny-tool=write",
-      "--deny-tool=shell",
-      "--disable-builtin-mcps",
+      access === "read-only" ? "plan" : "interactive",
       "--additional-mcp-config",
       copilotHiveMcpConfig(this.options.hive),
       "--allow-tool=hive",
       "--no-custom-instructions",
       "--no-ask-user",
-      "--no-remote",
-      "--disallow-temp-dir",
       `--resume=${sessionId}`,
     ];
+    if (access === "read-only") {
+      args.push(
+        "--disable-builtin-mcps",
+        "--deny-tool=write",
+        "--deny-tool=shell",
+        "--no-remote",
+        "--disallow-temp-dir",
+      );
+    } else if (access === "workspace") {
+      args.push(
+        "--disable-builtin-mcps",
+        "--allow-tool=write",
+        "--allow-tool=shell",
+        "--no-remote",
+        "--disallow-temp-dir",
+      );
+    } else {
+      args.push("--allow-all");
+    }
     if (this.options.model) args.push("--model", this.options.model);
 
     let result;

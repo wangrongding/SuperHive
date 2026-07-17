@@ -56,6 +56,36 @@ describe("CopilotResponder", () => {
     expect(args).toContain("gpt-5");
   });
 
+  it.each(["workspace", "full"] as const)("maps %s access to Copilot", async (access) => {
+    const runner = vi.fn<CommandRunner>(async () => ({
+      stdout: JSON.stringify({ type: "assistant.message", data: { content: "ok" } }),
+      stderr: "",
+    }));
+    const responder = new CopilotResponder({
+      command: "copilot",
+      cwd: "/workspace",
+      hive,
+      access,
+      runner,
+    });
+
+    await responder.reply({ instructions: "rules", prompt: "context" });
+
+    const args = runner.mock.calls[0]?.[1] ?? [];
+    expect(args[args.indexOf("--mode") + 1]).toBe("interactive");
+    if (access === "workspace") {
+      expect(args).toContain("--allow-tool=write");
+      expect(args).toContain("--allow-tool=shell");
+      expect(args).toContain("--no-remote");
+      expect(args).toContain("--disallow-temp-dir");
+      expect(args).not.toContain("--allow-all");
+    } else {
+      expect(args).toContain("--allow-all");
+      expect(args).not.toContain("--disable-builtin-mcps");
+      expect(args).not.toContain("--no-remote");
+    }
+  });
+
   it("rejects output without a final assistant message", async () => {
     const responder = new CopilotResponder({
       command: "copilot",
