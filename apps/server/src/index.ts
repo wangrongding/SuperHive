@@ -17,7 +17,10 @@ for (const entries of Object.values(networkInterfaces())) {
 const detectedHost = host === "0.0.0.0" || host === "::" ? (lanAddresses[0] ?? "localhost") : host;
 const detectedUrl = `http://${detectedHost.includes(":") ? `[${detectedHost}]` : detectedHost}:${port}`;
 const publicUrl = (process.env.HIVE_PUBLIC_URL ?? detectedUrl).replace(/\/$/, "");
-const agentCommandPrefix = process.env.HIVE_AGENT_COMMAND ?? "npx --yes ai-hive";
+// 开发模式（tsx 直接运行 src/）默认生成仓库本地命令；构建产物（dist/）默认生成已发布的 npx 命令。
+const isDevRuntime = import.meta.dirname.endsWith(`${path.sep}src`);
+const agentCommandPrefix =
+  process.env.HIVE_AGENT_COMMAND ?? (isDevRuntime ? "pnpm agent" : "npx --yes ai-hive");
 mkdirSync(path.dirname(databasePath), { recursive: true });
 
 const app = await buildApp({
@@ -40,7 +43,7 @@ app.log.info("AI Hive is ready");
 app.log.info(`Share URL: ${publicUrl}`);
 for (const address of addresses) app.log.info(`Web: ${address}`);
 app.log.info(
-  `Agent: ${agentCommandPrefix} join --server ${publicUrl} --room general --name my-agent --token <JOIN_TOKEN>`,
+  `Agent: ${agentCommandPrefix} join --server ${publicUrl} --name my-agent --token <JOIN_TOKEN>`,
 );
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

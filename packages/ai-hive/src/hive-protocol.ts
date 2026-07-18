@@ -35,6 +35,16 @@ export type MessagesResponse = {
   latestSeq: number;
 };
 
+export type RoomSummary = {
+  id: string;
+  name: string;
+  createdAt: string;
+  createdBy?: string;
+  archivedAt?: string;
+  onlineCount: number;
+  latestSeq: number;
+};
+
 export type ServerEvent =
   | {
       type: "room.snapshot";
@@ -46,6 +56,7 @@ export type ServerEvent =
   | { type: "message.created"; message: ChatMessage }
   | { type: "agent.mentioned"; message: ChatMessage; latestSeq: number }
   | { type: "presence.changed"; participant: Participant }
+  | { type: "rooms.changed"; room: RoomSummary }
   | { type: "error"; code: string; message: string };
 
 const mentionPattern = /@([\p{L}\p{N}_.-]{1,32})/gu;

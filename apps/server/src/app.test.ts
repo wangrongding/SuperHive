@@ -125,7 +125,7 @@ describe("Hive WebSocket protocol", () => {
 
     const response = await app.inject({ method: "GET", url: "/api/meta" });
     expect(response.json().agentCommand).toBe(
-      "pnpm agent join --server http://10.0.0.8:8787 --room general --name my-agent --token test-token",
+      "pnpm agent join --server http://10.0.0.8:8787 --name my-agent --token test-token",
     );
   });
 
@@ -335,5 +335,134 @@ describe("Hive WebSocket protocol", () => {
       "@agent-a please help",
       "still connected from the second tab",
     ]);
+  });
+
+  it("manages the room registry and broadcasts cross-room activity", async () => {
+    const app = await buildApp({
+      databasePath: ":memory:",
+      token: "test-token",
+      staticDir: "/definitely-not-present",
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    closeApp = () => app.close();
+    const port = (app.server.address() as AddressInfo).port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const wsUrl = `ws://127.0.0.1:${port}/ws`;
+    const authHeaders = { Authorization: "Bearer test-token" };
+    const jsonHeaders = { ...authHeaders, "Content-Type": "application/json" };
+
+    expect((await fetch(`${baseUrl}/api/rooms`)).status).toBe(401);
+    const initialList = (await (
+      await fetch(`${baseUrl}/api/rooms`, { headers: authHeaders })
+    ).json()) as { rooms: Array<{ id: string }> };
+    expect(initialList.rooms.map((room) => room.id)).toEqual(["general"]);
+
+    const created = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ id: "frontend", name: "前端", createdBy: "Alice" }),
+    });
+    expect(created.status).toBe(201);
+    const duplicate = await fetch(`${baseUrl}/api/rooms`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ id: "frontend" }),
+    });
+    expect(duplicate.status).toBe(409);
+
+    const renamed = await fetch(`${baseUrl}/api/rooms/frontend`, {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ name: "前端协作" }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as { room: { name: string } }).room.name).toBe("前端协作");
+
+    const protectedRoom = await fetch(`${baseUrl}/api/rooms/general`, {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(protectedRoom.status).toBe(400);
+
+    const watcher = await TestPeer.connect(wsUrl);
+    const roamer = await TestPeer.connect(wsUrl);
+    peers.push(watcher, roamer);
+    watcher.send({
+      type: "participant.join",
+      username: "Watcher",
+      participantType: "human",
+      roomId: "general",
+      token: "test-token",
+    });
+    await watcher.next((event) => event.type === "room.snapshot");
+
+    roamer.send({
+      type: "participant.join",
+      username: "Roamer",
+      participantType: "human",
+      roomId: "adhoc",
+      token: "test-token",
+    });
+    await roamer.next((event) => event.type === "room.snapshot");
+    const registered = await watcher.next(
+      (event) => event.type === "rooms.changed" && event.room.id === "adhoc",
+    );
+    expect(registered.type === "rooms.changed" && registered.room.name).toBe("adhoc");
+
+    roamer.send({ type: "message.send", clientMessageId: "adhoc-1", content: "hello from adhoc" });
+    const activity = await watcher.next(
+      (event) => event.type === "room.activity" && event.roomId === "adhoc" && event.latestSeq > 0,
+    );
+    expect(activity.type === "room.activity" && activity.onlineCount).toBe(1);
+    await expect(watcher.next((event) => event.type === "message.created", 150)).rejects.toThrow(
+      /timed out/i,
+    );
+
+    await roamer.closeAndWait();
+    const archivedResponse = await fetch(`${baseUrl}/api/rooms/adhoc`, {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ archived: true }),
+    });
+    expect(archivedResponse.status).toBe(200);
+
+    const blocked = await TestPeer.connect(wsUrl);
+    peers.push(blocked);
+    blocked.send({
+      type: "participant.join",
+      username: "Blocked",
+      participantType: "human",
+      roomId: "adhoc",
+      token: "test-token",
+    });
+    const blockedError = await blocked.next(
+      (event) => event.type === "error" && event.code === "ROOM_ARCHIVED",
+    );
+    expect(blockedError.type).toBe("error");
+    await new Promise<void>((resolve) => blocked.socket.once("close", () => resolve()));
+
+    const restoredResponse = await fetch(`${baseUrl}/api/rooms/adhoc`, {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ archived: false }),
+    });
+    expect(restoredResponse.status).toBe(200);
+    const restored = await TestPeer.connect(wsUrl);
+    peers.push(restored);
+    restored.send({
+      type: "participant.join",
+      username: "Returning",
+      participantType: "human",
+      roomId: "adhoc",
+      token: "test-token",
+    });
+    await restored.next((event) => event.type === "room.snapshot");
+
+    const finalList = (await (
+      await fetch(`${baseUrl}/api/rooms`, { headers: authHeaders })
+    ).json()) as { rooms: Array<{ id: string; latestSeq: number }> };
+    expect(finalList.rooms.map((room) => room.id).sort()).toEqual(["adhoc", "frontend", "general"]);
+    expect(finalList.rooms.find((room) => room.id === "adhoc")?.latestSeq).toBeGreaterThan(0);
   });
 });

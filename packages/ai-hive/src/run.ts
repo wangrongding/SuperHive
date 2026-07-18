@@ -4,11 +4,18 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { AgentBridge } from "./bridge.js";
+import { AgentManager, type StackHooks } from "./agent-manager.js";
 import { ClaudeCodeResponder } from "./claude-client.js";
 import { CodexMcpResponder } from "./codex-client.js";
 import { CopilotResponder } from "./copilot-client.js";
 import { OpenClawResponder } from "./openclaw-client.js";
-import { hiveMcpUrl, openClawHiveMcpConfig, openClawHiveMcpName } from "./hive-mcp-config.js";
+import {
+  hiveMcpUrl,
+  openClawHiveMcpConfig,
+  openClawHiveMcpName,
+  type HiveMcpConnection,
+} from "./hive-mcp-config.js";
+import { fetchRooms } from "./room-client.js";
 import {
   EchoResponder,
   type AgentAccessMode,
@@ -23,9 +30,11 @@ AI Hive Agent
 提示：全局安装或 link 后，ai-hive 可简写为 hive。
 
 用法：
-  ai-hive join --server URL --room general --name NAME --token TOKEN [选项]
+  ai-hive join --server URL --name NAME --token TOKEN [选项]
 
 选项：
+  --room ID         只加入指定房间；省略时加入服务器上所有未归档房间，
+                    并自动跟随房间的新建与归档
   --provider NAME   codex、claude、copilot 或 openclaw（默认 codex）
   --access MODE     read-only、workspace 或 full（默认 read-only）
   --persona TEXT    Agent 的角色描述
@@ -47,7 +56,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     allowPositionals: true,
     options: {
       server: { type: "string" },
-      room: { type: "string", default: "general" },
+      room: { type: "string" },
       name: { type: "string" },
       token: { type: "string" },
       provider: { type: "string" },
@@ -78,8 +87,11 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   if (!serverUrl || !username || !token)
     throw new Error(`缺少 --server、--name 或 --token。\n${usage}`);
   new URL(serverUrl);
-  if (!/^[A-Za-z0-9_-]+$/.test(roomId) || !/^[\p{L}\p{N}_.-]+$/u.test(username)) {
-    throw new Error("room 或 name 含有不支持的字符。");
+  if (roomId !== undefined && !/^[A-Za-z0-9_-]+$/.test(roomId)) {
+    throw new Error("room 含有不支持的字符。");
+  }
+  if (!/^[\p{L}\p{N}_.-]+$/u.test(username)) {
+    throw new Error("name 含有不支持的字符。");
   }
   const providerValue = defaultProvider === "echo" ? "echo" : (parsed.values.provider ?? "codex");
   const supportedProviders: AgentProvider[] = ["codex", "claude", "copilot", "openclaw", "echo"];
@@ -142,63 +154,111 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       throw new Error(`Agent CLI 无法启动：${check.stderr || check.error?.message}`);
   }
 
-  const store = new StateStore(stateDir, { serverUrl, roomId, username, provider, access });
-  const hive = { serverUrl, roomId, username, token };
-  if (provider === "openclaw" && parsed.values["openclaw-configure-mcp"]) {
-    const configured = spawnSync(
-      command,
-      ["mcp", "set", openClawHiveMcpName(hive), openClawHiveMcpConfig(hive)],
-      { encoding: "utf8" },
-    );
-    if (configured.status !== 0) {
-      throw new Error(
-        `无法配置 OpenClaw Hive MCP：${configured.stderr || configured.error?.message}`,
-      );
+  function buildResponder(hive: HiveMcpConnection): AgentResponder {
+    switch (provider) {
+      case "echo":
+        return new EchoResponder(username!);
+      case "claude":
+        return new ClaudeCodeResponder({
+          command,
+          cwd,
+          hive,
+          access,
+          ...(parsed.values.model ? { model: parsed.values.model } : {}),
+        });
+      case "copilot":
+        return new CopilotResponder({
+          command,
+          cwd,
+          hive,
+          access,
+          ...(parsed.values.model ? { model: parsed.values.model } : {}),
+        });
+      case "openclaw":
+        return new OpenClawResponder({
+          command,
+          cwd,
+          local: parsed.values["openclaw-local"] ?? false,
+          ...(parsed.values["openclaw-agent"] ? { agentId: parsed.values["openclaw-agent"] } : {}),
+          ...(parsed.values.model ? { model: parsed.values.model } : {}),
+        });
+      case "codex":
+        return new CodexMcpResponder({ command, cwd, hive, access });
     }
   }
-  let responder: AgentResponder;
-  switch (provider) {
-    case "echo":
-      responder = new EchoResponder(username);
-      break;
-    case "claude":
-      responder = new ClaudeCodeResponder({
+
+  function buildStack(stackRoomId: string, hooks?: Partial<StackHooks>): AgentBridge {
+    const hive: HiveMcpConnection = {
+      serverUrl: serverUrl!,
+      roomId: stackRoomId,
+      username: username!,
+      token: token!,
+    };
+    if (provider === "openclaw" && parsed.values["openclaw-configure-mcp"]) {
+      const configured = spawnSync(
         command,
-        cwd,
-        hive,
+        ["mcp", "set", openClawHiveMcpName(hive), openClawHiveMcpConfig(hive)],
+        { encoding: "utf8" },
+      );
+      if (configured.status !== 0) {
+        throw new Error(
+          `无法配置 OpenClaw Hive MCP：${configured.stderr || configured.error?.message}`,
+        );
+      }
+    }
+    const store = new StateStore(stateDir, {
+      serverUrl: serverUrl!,
+      roomId: stackRoomId,
+      username: username!,
+      provider,
+      access,
+    });
+    return new AgentBridge(
+      {
+        serverUrl: serverUrl!,
+        roomId: stackRoomId,
+        username: username!,
+        persona,
+        provider,
+        token: token!,
         access,
-        ...(parsed.values.model ? { model: parsed.values.model } : {}),
-      });
-      break;
-    case "copilot":
-      responder = new CopilotResponder({
-        command,
-        cwd,
-        hive,
-        access,
-        ...(parsed.values.model ? { model: parsed.values.model } : {}),
-      });
-      break;
-    case "openclaw":
-      responder = new OpenClawResponder({
-        command,
-        cwd,
-        local: parsed.values["openclaw-local"] ?? false,
-        ...(parsed.values["openclaw-agent"] ? { agentId: parsed.values["openclaw-agent"] } : {}),
-        ...(parsed.values.model ? { model: parsed.values.model } : {}),
-      });
-      break;
-    case "codex":
-      responder = new CodexMcpResponder({ command, cwd, hive, access });
-      break;
+        ...(hooks?.onRoomsChanged ? { onRoomsChanged: hooks.onRoomsChanged } : {}),
+        ...(hooks?.onArchived ? { onArchived: hooks.onArchived } : {}),
+      },
+      store,
+      buildResponder(hive),
+    );
   }
-  const bridge = new AgentBridge(
-    { serverUrl, roomId, username, persona, provider, token, access },
-    store,
-    responder,
-  );
-  await bridge.start();
-  console.log(`[hive] 状态文件：${store.filename}`);
+
+  let stopAll: () => Promise<void>;
+  if (roomId !== undefined) {
+    const bridge: AgentBridge = buildStack(roomId, {
+      onArchived: () => {
+        console.error(`[hive] 房间 #${roomId} 已归档，Agent 退出。`);
+        void bridge.stop().finally(() => process.exit(1));
+      },
+    });
+    await bridge.start();
+    stopAll = () => bridge.stop();
+  } else {
+    const manager = new AgentManager({
+      listRooms: () => fetchRooms(serverUrl, token),
+      createStack: (id, hooks) => buildStack(id, hooks),
+    });
+    const joined = await manager.start();
+    console.log(
+      `[hive] 已加入 ${joined.length} 个房间：${joined.map((id) => `#${id}`).join("、")}`,
+    );
+    console.log("[hive] 将自动加入新建房间，并在房间归档时离开对应房间。");
+    stopAll = () => manager.stop();
+  }
+  const hiveForLogs: HiveMcpConnection = {
+    serverUrl,
+    roomId: roomId ?? "general",
+    username,
+    token,
+  };
+  console.log(`[hive] 状态目录：${stateDir}（每个房间一个状态文件）`);
   console.log(
     `[hive] ${providerLabels[provider]} 命令工作目录：${cwd}${parsed.values.cwd ? "" : "（安全的空临时目录）"}`,
   );
@@ -207,7 +267,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   );
   if (provider === "codex" || provider === "claude" || provider === "copilot") {
     console.log(
-      `[hive] ${providerLabels[provider]} Hive MCP：已启用，将按需临时注入 ${hiveMcpUrl(hive)}（仅当前 Agent 进程，不修改全局配置）`,
+      `[hive] ${providerLabels[provider]} Hive MCP：已启用，将按需临时注入 ${hiveMcpUrl(hiveForLogs)}（仅当前 Agent 进程，不修改全局配置）`,
     );
   }
   if (provider === "openclaw") {
@@ -215,9 +275,12 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       `[hive] OpenClaw 的工具和文件权限由其 Agent/Gateway 配置控制；--access ${access} 仅声明期望档位，请确认 sandbox 与 exec policy 与之匹配。`,
     );
     if (parsed.values["openclaw-configure-mcp"]) {
-      console.log(
-        `[hive] OpenClaw Hive MCP：已保存 ${hiveMcpUrl(hive)}（配置名 ${openClawHiveMcpName(hive)}）`,
-      );
+      console.log(`[hive] OpenClaw Hive MCP：已按房间保存 ${hiveMcpUrl(hiveForLogs)}`);
+      if (roomId === undefined) {
+        console.warn(
+          "[hive] OpenClaw Hive MCP 按房间写入全局配置；房间归档后对应条目不会自动清理。",
+        );
+      }
     } else {
       console.warn(
         "[hive] 当前未配置 Hive MCP；添加 --openclaw-configure-mcp 后，OpenClaw 才能直接读取成员/消息并主动发送。",
@@ -228,7 +291,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
-      void bridge.stop().finally(() => process.exit(0));
+      void stopAll().finally(() => process.exit(0));
     });
   }
 }

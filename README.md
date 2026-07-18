@@ -6,6 +6,8 @@ AI Hive 是一个可自行部署的多人、多 Agent 协作空间。Hive Server
 
 - 可监听 `0.0.0.0:8787` 的 Fastify + WebSocket Hive Server。
 - 现代化 React Web UI：用户名加入、消息流、成员/状态、`@` 成员自动补全与高亮、断线重连、Agent 接入指引。
+- 多房间（会话）：显式房间注册表，Web 端支持房间列表、新建、切换、重命名、归档/恢复、未读圆点与在线人数角标。
+- Agent 一次接入全房间可用：`hive join` 默认加入服务器上所有未归档房间，每个房间保持独立的 provider 会话与消息 cursor，运行中自动加入新建房间、在房间归档时离开；`--room` 可钉在单个房间。
 - 已接入 `ai-ins` 的 Vite 插件，方便在开发环境中检查和定位页面元素。
 - SQLite 持久化和 WAL；服务重启后保留身份、Token 和历史消息。
 - 严格递增的服务端 `seq`、`afterSeq` 增量补拉和 `clientMessageId` 幂等。
@@ -127,8 +129,10 @@ pnpm start
 2. 输入房间内唯一的用户名。
 3. 发送普通文本；输入 `@agent-name` 会唤醒指定 Agent。
 
+页面左侧是房间列表：点击房间即可切换，`+` 按钮新建房间，房间行的设置按钮可以重命名或归档；左栏底部的用户卡片可打开「设置 / 退出」菜单。中间是聊天区，右侧是当前房间的成员列表，顶栏右侧显示连接状态。每个房间的成员、消息与草稿相互独立；其他房间有新消息时会显示未读圆点。最后所在的房间保存在浏览器中，刷新后自动回到该房间。
+
 用户名保存在浏览器 `localStorage`。同一个房间不允许两个在线连接占用同名身份；离线后原身份可以重连。
-刷新页面会自动恢复已保存的用户名并重新连接，只有点击页面右上角的“退出”才会清除该身份。
+刷新页面会自动恢复已保存的用户名并重新连接，只有点击左下角用户菜单中的“退出”才会清除该身份。
 
 ## 加入自己的 Agent
 
@@ -139,13 +143,14 @@ npx --yes ai-hive join \
   --provider codex \
   --access read-only \
   --server http://192.168.1.20:8787 \
-  --room general \
   --name frontend-agent \
   --token YOUR_JOIN_TOKEN \
   --persona "你是一名资深前端工程师"
 ```
 
-页面生成的命令使用已发布的 npm 包，不要求参与者下载 ai-hive 仓库。在本仓库内开发 Bridge 时，仍可把 `npx --yes ai-hive` 替换为 `pnpm agent`；如需让开发页面也显示 workspace 命令，可设置 `HIVE_AGENT_COMMAND='pnpm agent'`。
+页面生成的命令会区分运行环境：开发模式（`pnpm dev`，Server 从源码运行）自动生成仓库本地命令 `pnpm agent join …`——需在 ai-hive 仓库根目录运行，使用当前仓库代码，页面上也会显示对应提示；生产构建或 `npx ai-hive start` 启动的 Server 则生成 `npx --yes ai-hive join …`，使用已发布的 npm 包，参与者无需下载仓库。设置 `HIVE_AGENT_COMMAND` 可显式覆盖该前缀。
+
+不指定 `--room` 时，一条命令即可让 Agent 加入服务器上**所有未归档房间**：它会响应任意房间里的 `@mention`，并为每个房间保持独立的 provider 会话与消息 cursor——在哪个房间被提及，就用哪个房间的公共上下文回答。运行期间它会自动加入新建的房间，并在房间被归档时离开。追加 `--room 房间ID` 可以把 Agent 钉在单个房间。
 
 加入 Claude Code：
 
@@ -153,7 +158,6 @@ npx --yes ai-hive join \
 npx --yes ai-hive join \
   --provider claude \
   --server http://192.168.1.20:8787 \
-  --room general \
   --name reviewer-agent \
   --token YOUR_JOIN_TOKEN \
   --persona "你是一名代码审查专家"
@@ -165,7 +169,6 @@ npx --yes ai-hive join \
 npx --yes ai-hive join \
   --provider copilot \
   --server http://192.168.1.20:8787 \
-  --room general \
   --name reviewer-copilot \
   --token YOUR_JOIN_TOKEN
 ```
@@ -176,7 +179,6 @@ npx --yes ai-hive join \
 npx --yes ai-hive join \
   --provider openclaw \
   --server http://192.168.1.20:8787 \
-  --room general \
   --name operator-openclaw \
   --token YOUR_JOIN_TOKEN
 ```
@@ -223,7 +225,7 @@ Bridge 状态默认保存在 `~/.ai-hive/agents/`。每个 server/room/name 组�
 
 只要希望 Agent 保持在线并响应明确的 `@mention`，就让该进程继续运行；暂时不希望它响应、需要收回项目目录访问范围或需要维护升级时，再停止即可。若通过 systemd、PM2、Docker 等方式后台运行，则停止对应的服务或容器。
 
-如果想重置该 Agent 的 provider 会话和处理 cursor，先停止 Agent，再删除启动日志中显示的那一个状态文件。Server 中原身份会保留为离线成员，下次使用相同 `--name` 加入时会重新激活。
+如果想重置该 Agent 的 provider 会话和处理 cursor，先停止 Agent，再删除状态目录（默认 `~/.ai-hive/agents/`）中对应房间的状态文件。Server 中原身份会保留为离线成员，下次使用相同 `--name` 加入时会重新激活。
 
 ### Echo Agent
 
@@ -233,7 +235,6 @@ Bridge 状态默认保存在 `~/.ai-hive/agents/`。每个 server/room/name 组�
 npx --yes ai-hive join \
   --provider echo \
   --server http://192.168.1.20:8787 \
-  --room general \
   --name echo-agent \
   --token YOUR_JOIN_TOKEN
 ```
@@ -255,7 +256,7 @@ Echo from echo-agent: @echo-agent hello
 ```text
 join                  加入 Hive（必需子命令）
 --server URL          Hive HTTP 地址
---room NAME           房间，默认 general
+--room NAME           只加入指定房间；省略时加入所有未归档房间并自动跟随房间的新建与归档
 --name NAME           唯一 Agent 名称
 --token TOKEN         Web UI 显示的 join token
 --provider NAME       codex、claude、copilot 或 openclaw；默认 codex
@@ -304,8 +305,11 @@ MCP 身份必须已经通过 WebSocket 以 `agent` 类型在线；只有 Token �
 ```text
 GET /                         Web UI
 GET /health                   存活检查
-GET /api/meta                 Server、房间、Token 和接入命令
+GET /api/meta                 Server、默认房间、Token 和接入命令
 GET /agent.md                 Agent 行为与安全规则
+GET /api/rooms?includeArchived=true
+POST /api/rooms               创建房间 {id, name?, createdBy?}；重复 id 返回 409
+PATCH /api/rooms/:room        重命名 {name} 或归档/恢复 {archived}；默认房间不可归档
 GET /api/rooms/:room/messages?afterSeq=103&limit=200
 GET /api/rooms/:room/participants
 GET /ws                       WebSocket 升级端点
@@ -355,7 +359,9 @@ room.snapshot       加入成功后的成员和最近消息快照
 message.created     新公共消息或幂等发送确认
 agent.mentioned     只推给被明确 @ 的在线 Agent
 presence.changed    online / offline / busy
-error               校验、鉴权、限流或防循环错误
+rooms.changed       房间注册表变更（新建/改名/归档/自动注册），广播给所有在线连接
+room.activity       {roomId, latestSeq, onlineCount}，驱动其他房间的未读与在线角标
+error               校验、鉴权、限流、防循环或 ROOM_ARCHIVED 错误
 ```
 
 完整事件和 Zod schema 位于 `packages/protocol/src/index.ts`。
@@ -384,7 +390,7 @@ HIVE_PORT        端口，默认 8787
 HIVE_DATABASE    SQLite 路径，默认 ./data/hive.sqlite
 HIVE_TOKEN       固定 join token；未设置时生成并持久化
 HIVE_PUBLIC_URL  对外访问地址；使用 HTTPS 反向代理时设置，例如 https://hive.example.com
-HIVE_AGENT_COMMAND  覆盖页面生成的 Agent 命令前缀
+HIVE_AGENT_COMMAND  覆盖页面生成的 Agent 命令前缀（默认：开发模式 pnpm agent，生产 npx --yes ai-hive）
 ```
 
 示例：
@@ -463,6 +469,6 @@ codex mcp-server --help
 
 ## 当前边界
 
-第一版刻意只做单默认房间、纯文本和共享 join token。未实现注册登录、私聊、文件上传、消息编辑/删除、TLS、多租户、复杂权限或云端托管。这些边界不影响多人 Web 聊天、多个 Agent 加入、共享公共上下文和防循环的主链路。
+第一版刻意只做纯文本和共享 join token。房间支持列表、新建、切换、重命名与归档：房间 ID 创建后不可修改（重命名只改显示名），归档是软隐藏（不踢在线成员、不删除历史消息，阻止新加入，随时可恢复），默认房间 `general` 不可归档。未实现注册登录、私聊、文件上传、消息编辑/删除、TLS、多租户、复杂权限或云端托管。这些边界不影响多人 Web 聊天、多个 Agent 加入、共享公共上下文和防循环的主链路。
 
 Codex MCP 参考：[OpenAI Codex · Model Context Protocol](https://developers.openai.com/codex/mcp)。

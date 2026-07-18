@@ -1,5 +1,29 @@
-import type { ChatMessage, MessagesResponse, Participant, ServerEvent } from "./hive-protocol.js";
+import type {
+  ChatMessage,
+  MessagesResponse,
+  Participant,
+  RoomSummary,
+  ServerEvent,
+} from "./hive-protocol.js";
 import WebSocket from "ws";
+
+export class RoomClientError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = "RoomClientError";
+  }
+}
+
+export async function fetchRooms(serverUrl: string, token: string): Promise<RoomSummary[]> {
+  const response = await fetch(`${serverUrl}/api/rooms`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error(`无法获取房间列表 (${response.status})`);
+  return ((await response.json()) as { rooms: RoomSummary[] }).rooms;
+}
 
 export type RoomClientOptions = {
   serverUrl: string;
@@ -19,6 +43,7 @@ export type Snapshot = {
 export type RoomClientHandlers = {
   onSnapshot: (snapshot: Snapshot) => void | Promise<void>;
   onMention: (message: ChatMessage, latestSeq: number) => void;
+  onRoomsChanged?: (room: RoomSummary) => void;
   onError: (error: Error) => void;
 };
 
@@ -168,8 +193,12 @@ export class RoomClient {
       }
       return;
     }
+    if (event.type === "rooms.changed") {
+      this.handlers.onRoomsChanged?.(event.room);
+      return;
+    }
     if (event.type === "error") {
-      const error = new Error(`${event.code}: ${event.message}`);
+      const error = new RoomClientError(`${event.code}: ${event.message}`, event.code);
       const first = this.pending.entries().next().value as [string, PendingSend] | undefined;
       if (first) {
         const [clientMessageId, pending] = first;

@@ -25,4 +25,9 @@ describe("service CLI", () => {
     expect(output).toContain("默认沿用上次启动时的 host、port 和 public-url");
     expect(output).toContain("--foreground");
   });
+
+  it("documents the all-rooms default for join", async () => {
+    const output = await runCli("join", "--help");
+    expect(output).toContain("省略时加入服务器上所有未归档房间");
+  });
 });

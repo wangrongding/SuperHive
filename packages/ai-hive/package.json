@@ -1,6 +1,6 @@
 {
   "name": "ai-hive",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Start a shared AI Hive server and connect Codex, Claude Code, Copilot, or OpenClaw agents.",
   "type": "module",
   "files": [

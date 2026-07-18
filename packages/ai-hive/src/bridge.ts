@@ -1,7 +1,7 @@
-import { isMentioned, type ChatMessage } from "./hive-protocol.js";
+import { isMentioned, type ChatMessage, type RoomSummary } from "./hive-protocol.js";
 import type { AgentAccessMode, AgentResponder } from "./responder.js";
 import { buildDeveloperInstructions, buildMentionPrompt } from "./prompt-builder.js";
-import { RoomClient, type Snapshot } from "./room-client.js";
+import { RoomClient, RoomClientError, type Snapshot } from "./room-client.js";
 import { StateStore, type AgentState } from "./state-store.js";
 
 export function shouldProcessMention(input: {
@@ -41,6 +41,8 @@ export class AgentBridge {
       provider: string;
       token: string;
       access?: AgentAccessMode;
+      onRoomsChanged?: (room: RoomSummary) => void;
+      onArchived?: () => void;
     },
     private readonly store: StateStore,
     private readonly responder: AgentResponder,
@@ -58,7 +60,13 @@ export class AgentBridge {
       {
         onSnapshot: (snapshot) => this.onSnapshot(snapshot),
         onMention: (message) => this.enqueue(message),
-        onError: (error) => this.log(`[hive] ${error.message}`),
+        ...(this.options.onRoomsChanged ? { onRoomsChanged: this.options.onRoomsChanged } : {}),
+        onError: (error) => {
+          this.log(`[hive] ${error.message}`);
+          if (error instanceof RoomClientError && error.code === "ROOM_ARCHIVED") {
+            this.options.onArchived?.();
+          }
+        },
       },
     );
   }

@@ -8,6 +8,7 @@ import {
   type AgentProvider,
   type ParticipantStatus,
   type ParticipantType,
+  type RoomSummary,
 } from "@ai-hive/protocol";
 
 type ParticipantRow = {
@@ -37,6 +38,16 @@ type MessageRow = {
   hop_count: number;
   client_message_id: string | null;
   created_at: string;
+};
+
+type RoomRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  created_by: string | null;
+  archived_at: string | null;
+  online_count: number;
+  latest_seq: number;
 };
 
 export class HiveError extends Error {
@@ -91,6 +102,32 @@ function mapMessage(row: MessageRow): ChatMessage {
   };
 }
 
+function mapRoom(row: RoomRow): RoomSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: row.created_at,
+    ...(row.created_by ? { createdBy: row.created_by } : {}),
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    onlineCount: row.online_count,
+    latestSeq: row.latest_seq,
+  };
+}
+
+const roomSummarySelect = `
+  SELECT r.id, r.name, r.created_at, r.created_by, r.archived_at,
+         COALESCE(p.online_count, 0) AS online_count,
+         COALESCE(m.latest_seq, 0) AS latest_seq
+  FROM rooms r
+  LEFT JOIN (
+    SELECT room_id, COUNT(*) AS online_count FROM participants
+    WHERE status != 'offline' GROUP BY room_id
+  ) p ON p.room_id = r.id
+  LEFT JOIN (
+    SELECT room_id, MAX(seq) AS latest_seq FROM messages GROUP BY room_id
+  ) m ON m.room_id = r.id
+`;
+
 export class HiveDatabase {
   private readonly db: Database.Database;
 
@@ -141,6 +178,14 @@ export class HiveDatabase {
         WHERE client_message_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS messages_room_seq ON messages(room_id, seq);
       CREATE INDEX IF NOT EXISTS messages_trace ON messages(trace_id, sender_type);
+
+      CREATE TABLE IF NOT EXISTS rooms (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by TEXT,
+        archived_at TEXT
+      );
     `);
     const participantColumns = this.db.pragma("table_info(participants)") as Array<{
       name: string;
@@ -148,6 +193,18 @@ export class HiveDatabase {
     if (!participantColumns.some((column) => column.name === "provider")) {
       this.db.exec("ALTER TABLE participants ADD COLUMN provider TEXT");
     }
+    const roomSeedTime = new Date().toISOString();
+    this.db
+      .prepare("INSERT OR IGNORE INTO rooms(id, name, created_at) VALUES('general', 'general', ?)")
+      .run(roomSeedTime);
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO rooms(id, name, created_at)
+         SELECT room_id, room_id, ? FROM (
+           SELECT room_id FROM participants UNION SELECT room_id FROM messages
+         )`,
+      )
+      .run(roomSeedTime);
     this.db.prepare("UPDATE participants SET status = 'offline'").run();
   }
 
@@ -170,6 +227,71 @@ export class HiveDatabase {
     const token = randomUUID().replaceAll("-", "");
     this.db.prepare("INSERT INTO meta(key, value) VALUES('join_token', ?)").run(token);
     return token;
+  }
+
+  listRooms(includeArchived = false): RoomSummary[] {
+    const rows = this.db
+      .prepare(
+        `${roomSummarySelect} WHERE (? = 1 OR r.archived_at IS NULL) ORDER BY r.created_at, r.id`,
+      )
+      .all(includeArchived ? 1 : 0) as RoomRow[];
+    return rows.map(mapRoom);
+  }
+
+  getRoom(id: string): RoomSummary | undefined {
+    const row = this.db.prepare(`${roomSummarySelect} WHERE r.id = ?`).get(id) as
+      RoomRow | undefined;
+    return row ? mapRoom(row) : undefined;
+  }
+
+  createRoom(input: {
+    id: string;
+    name?: string | undefined;
+    createdBy?: string | undefined;
+  }): RoomSummary {
+    const existing = this.db.prepare("SELECT id FROM rooms WHERE id = ?").get(input.id);
+    if (existing) throw new HiveError("ROOM_EXISTS", "A room with this id already exists.");
+    this.db
+      .prepare("INSERT INTO rooms(id, name, created_at, created_by) VALUES(?, ?, ?, ?)")
+      .run(input.id, input.name ?? input.id, new Date().toISOString(), input.createdBy ?? null);
+    return this.getRoom(input.id)!;
+  }
+
+  ensureRoom(id: string, createdBy?: string): { room: RoomSummary; created: boolean } {
+    const room = this.getRoom(id);
+    if (room) return { room, created: false };
+    return { room: this.createRoom({ id, createdBy }), created: true };
+  }
+
+  updateRoom(
+    id: string,
+    patch: { name?: string | undefined; archived?: boolean | undefined },
+  ): RoomSummary {
+    const room = this.getRoom(id);
+    if (!room) throw new HiveError("ROOM_NOT_FOUND", "Room not found.");
+    if (patch.archived === true && id === "general") {
+      throw new HiveError("ROOM_PROTECTED", "The default room cannot be archived.");
+    }
+    if (patch.name !== undefined) {
+      this.db.prepare("UPDATE rooms SET name = ? WHERE id = ?").run(patch.name, id);
+    }
+    if (patch.archived === true) {
+      this.db
+        .prepare("UPDATE rooms SET archived_at = COALESCE(archived_at, ?) WHERE id = ?")
+        .run(new Date().toISOString(), id);
+    } else if (patch.archived === false) {
+      this.db.prepare("UPDATE rooms SET archived_at = NULL WHERE id = ?").run(id);
+    }
+    return this.getRoom(id)!;
+  }
+
+  onlineCount(roomId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM participants WHERE room_id = ? AND status != 'offline'",
+      )
+      .get(roomId) as { count: number };
+    return row.count;
   }
 
   upsertParticipant(input: {

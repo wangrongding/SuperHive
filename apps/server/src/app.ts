@@ -5,7 +5,13 @@ import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { clientEventSchema, type Participant, type ServerEvent } from "@ai-hive/protocol";
+import {
+  clientEventSchema,
+  createRoomRequestSchema,
+  updateRoomRequestSchema,
+  type Participant,
+  type ServerEvent,
+} from "@ai-hive/protocol";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { z } from "zod";
@@ -60,6 +66,12 @@ const messagesQuerySchema = z.object({
   afterSeq: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(500).default(200),
 });
+const roomsQuerySchema = z.object({
+  includeArchived: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+});
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: options.logger ?? false });
@@ -86,12 +98,30 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
   }
 
+  function broadcastAll(event: ServerEvent): void {
+    for (const connection of connections) {
+      if (connection.participant) send(connection.socket, event);
+    }
+  }
+
+  function broadcastRoomActivity(roomId: string): void {
+    broadcastAll({
+      type: "room.activity",
+      roomId,
+      latestSeq: database.latestSeq(roomId),
+      onlineCount: database.onlineCount(roomId),
+    });
+  }
+
   function setStatus(connection: Connection, status: "online" | "offline" | "busy"): void {
     const current = connection.participant;
     if (!current || current.status === status) return;
     const participant = database.setParticipantStatus(current.id, status);
     connection.participant = participant;
     broadcast(participant.roomId, { type: "presence.changed", participant });
+    if ((current.status === "offline") !== (status === "offline")) {
+      broadcastRoomActivity(participant.roomId);
+    }
   }
 
   function disconnect(connection: Connection): void {
@@ -117,6 +147,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const result = database.createMessage(participant, input);
     if (!result.created) return result;
     broadcast(participant.roomId, { type: "message.created", message: result.message });
+    broadcastRoomActivity(participant.roomId);
     if (result.message.hopCount >= 4) return result;
     for (const mention of result.message.mentions) {
       if (mention.toLocaleLowerCase() === "all") continue;
@@ -150,7 +181,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       wsUrl,
       mcpUrl: `${httpUrl}/mcp`,
       joinToken,
-      agentCommand: `${agentCommandPrefix} join --server ${httpUrl} --room general --name my-agent --token ${joinToken}`,
+      agentCommand: `${agentCommandPrefix} join --server ${httpUrl} --name my-agent --token ${joinToken}`,
     };
   });
 
@@ -259,6 +290,52 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
   );
 
+  app.get<{ Querystring: { includeArchived?: string } }>("/api/rooms", async (request, reply) => {
+    const query = roomsQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: "Invalid query parameters." });
+    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+    return { rooms: database.listRooms(query.data.includeArchived) };
+  });
+
+  app.post("/api/rooms", async (request, reply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+    const body = createRoomRequestSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "Invalid room payload." });
+    try {
+      const room = database.createRoom(body.data);
+      broadcastAll({ type: "rooms.changed", room });
+      return reply.code(201).send({ room });
+    } catch (error) {
+      if (error instanceof HiveError && error.code === "ROOM_EXISTS") {
+        return reply.code(409).send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
+  });
+
+  app.patch<{ Params: { roomId: string } }>("/api/rooms/:roomId", async (request, reply) => {
+    const params = roomParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+    const body = updateRoomRequestSchema.safeParse(request.body);
+    if (!body.success || (body.data.name === undefined && body.data.archived === undefined)) {
+      return reply.code(400).send({ error: "Invalid room patch payload." });
+    }
+    try {
+      const room = database.updateRoom(params.data.roomId, body.data);
+      broadcastAll({ type: "rooms.changed", room });
+      return { room };
+    } catch (error) {
+      if (error instanceof HiveError && error.code === "ROOM_NOT_FOUND") {
+        return reply.code(404).send({ error: error.message, code: error.code });
+      }
+      if (error instanceof HiveError && error.code === "ROOM_PROTECTED") {
+        return reply.code(400).send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
+  });
+
   if (!hasWebUi) {
     app.get("/", async (_request, reply) => {
       return reply
@@ -304,6 +381,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           });
           return;
         }
+        const { room, created: roomCreated } = database.ensureRoom(event.roomId, event.username);
+        if (room.archivedAt) {
+          send(socket, {
+            type: "error",
+            code: "ROOM_ARCHIVED",
+            message: "This room is archived and no longer accepts new participants.",
+          });
+          socket.close(1008, "Room archived");
+          return;
+        }
+        if (roomCreated) broadcastAll({ type: "rooms.changed", room });
         const key = participantKey(event.roomId, event.username);
         const namedConnections = onlineByName.get(key);
         const existingConnection = namedConnections?.values().next().value;
@@ -341,8 +429,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             messages: database.getRecentMessages(event.roomId),
             latestSeq: database.latestSeq(event.roomId),
           });
-          if (!existingParticipant)
+          if (!existingParticipant) {
             broadcast(event.roomId, { type: "presence.changed", participant });
+            broadcastRoomActivity(event.roomId);
+          }
         } catch (error) {
           const hiveError = error instanceof HiveError ? error : undefined;
           send(socket, {

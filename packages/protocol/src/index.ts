@@ -100,11 +100,42 @@ export const serverErrorEventSchema = z.object({
   message: z.string(),
 });
 
+export const roomIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+export const roomSummarySchema = z.object({
+  id: roomIdSchema,
+  name: z.string().min(1).max(64),
+  createdAt: z.string().datetime(),
+  createdBy: z.string().max(32).optional(),
+  archivedAt: z.string().datetime().optional(),
+  onlineCount: z.number().int().nonnegative(),
+  latestSeq: z.number().int().nonnegative(),
+});
+
+export const roomsChangedEventSchema = z.object({
+  type: z.literal("rooms.changed"),
+  room: roomSummarySchema,
+});
+
+export const roomActivityEventSchema = z.object({
+  type: z.literal("room.activity"),
+  roomId: z.string(),
+  latestSeq: z.number().int().nonnegative(),
+  onlineCount: z.number().int().nonnegative(),
+});
+
 export const serverEventSchema = z.discriminatedUnion("type", [
   roomSnapshotEventSchema,
   messageCreatedEventSchema,
   agentMentionedEventSchema,
   presenceChangedEventSchema,
+  roomsChangedEventSchema,
+  roomActivityEventSchema,
   serverErrorEventSchema,
 ]);
 
@@ -115,6 +146,21 @@ export const messagesResponseSchema = z.object({
 
 export const participantsResponseSchema = z.object({
   participants: z.array(participantSchema),
+});
+
+export const roomsResponseSchema = z.object({
+  rooms: z.array(roomSummarySchema),
+});
+
+export const createRoomRequestSchema = z.object({
+  id: roomIdSchema,
+  name: z.string().trim().min(1).max(64).optional(),
+  createdBy: z.string().trim().min(1).max(32).optional(),
+});
+
+export const updateRoomRequestSchema = z.object({
+  name: z.string().trim().min(1).max(64).optional(),
+  archived: z.boolean().optional(),
 });
 
 export const metaResponseSchema = z.object({
@@ -132,9 +178,11 @@ export type ParticipantStatus = z.infer<typeof participantStatusSchema>;
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
 export type Participant = z.infer<typeof participantSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
+export type RoomSummary = z.infer<typeof roomSummarySchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 export type ServerEvent = z.infer<typeof serverEventSchema>;
 export type MessagesResponse = z.infer<typeof messagesResponseSchema>;
+export type RoomsResponse = z.infer<typeof roomsResponseSchema>;
 export type MetaResponse = z.infer<typeof metaResponseSchema>;
 
 const mentionPattern = /@([\p{L}\p{N}_.-]{1,32})/gu;

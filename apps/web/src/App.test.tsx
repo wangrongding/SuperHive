@@ -76,6 +76,22 @@ function participant(id: string, username: string, type: Participant["type"]): P
   };
 }
 
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+const roomSummary = (id: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  name: id,
+  createdAt: `2026-07-18T00:00:0${id === "general" ? 0 : 1}.000Z`,
+  onlineCount: 0,
+  latestSeq: 0,
+  ...extra,
+});
+
 describe("App mention autocomplete", () => {
   beforeEach(() => {
     FakeWebSocket.instances.length = 0;
@@ -86,23 +102,32 @@ describe("App mention autocomplete", () => {
     vi.stubGlobal("Notification", FakeNotification);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              name: "AI Hive",
-              roomId: "general",
-              httpUrl: "http://10.0.0.8:8787",
-              wsUrl: "ws://10.0.0.8:8787/ws",
-              mcpUrl: "http://10.0.0.8:8787/mcp",
-              joinToken: "test-token",
-              agentCommand:
-                "npx --yes ai-hive join --server http://10.0.0.8:8787 --room general --name my-agent --token test-token",
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        ),
-      ),
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/meta")) {
+          return jsonResponse({
+            name: "AI Hive",
+            roomId: "general",
+            httpUrl: "http://10.0.0.8:8787",
+            wsUrl: "ws://10.0.0.8:8787/ws",
+            mcpUrl: "http://10.0.0.8:8787/mcp",
+            joinToken: "test-token",
+            agentCommand:
+              "npx --yes ai-hive join --server http://10.0.0.8:8787 --name my-agent --token test-token",
+          });
+        }
+        if (/\/api\/rooms\/[^/]+\/messages/.test(url)) {
+          return jsonResponse({ messages: [], latestSeq: 0 });
+        }
+        if (url.includes("/api/rooms") && init?.method === "POST") {
+          const body = JSON.parse(String(init.body)) as { id: string; name?: string };
+          return jsonResponse({ room: roomSummary(body.id, { name: body.name ?? body.id }) }, 201);
+        }
+        if (url.includes("/api/rooms")) {
+          return jsonResponse({ rooms: [roomSummary("general"), roomSummary("frontend")] });
+        }
+        return jsonResponse({ error: "not found" }, 404);
+      }),
     );
     Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
@@ -154,6 +179,11 @@ describe("App mention autocomplete", () => {
       }),
     );
 
+    const themeSwitcher = screen.getByRole("radiogroup", { name: "颜色主题" });
+    await user.click(within(themeSwitcher).getByRole("radio", { name: "浅色" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(localStorage.getItem("ai-hive.theme")).toBe("light");
+
     const membersPanel = screen.getByLabelText("成员列表");
     expect(within(membersPanel).getByRole("button", { name: "接入 Agent" })).toBeTruthy();
     const membersTrigger = screen.getByRole("button", { name: "打开成员列表" });
@@ -192,8 +222,10 @@ describe("App mention autocomplete", () => {
       content: "默认快捷键",
     });
 
-    const settingsTrigger = screen.getByRole("button", { name: "打开设置" });
+    const settingsTrigger = screen.getByRole("button", { name: "用户菜单" });
     await user.click(settingsTrigger);
+    const userMenu = screen.getByRole("menu", { name: "用户菜单" });
+    await user.click(within(userMenu).getByRole("menuitem", { name: /设置/ }));
     const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
     expect(
       within(settingsDialog)
@@ -206,7 +238,9 @@ describe("App mention autocomplete", () => {
         .getAttribute("aria-checked"),
     ).toBe("true");
     fireEvent.change(composer, { target: { value: "保留这份草稿" } });
-    await waitFor(() => expect(localStorage.getItem("ai-hive.draft.alice")).toBe("保留这份草稿"));
+    await waitFor(() =>
+      expect(localStorage.getItem("ai-hive.draft.alice.general")).toBe("保留这份草稿"),
+    );
     await user.click(within(settingsDialog).getByRole("radio", { name: /^Enter 发送/ }));
     expect(localStorage.getItem("ai-hive.send-shortcut")).toBe("enter");
     await user.click(within(settingsDialog).getByRole("radio", { name: "24 小时" }));
@@ -272,7 +306,7 @@ describe("App mention autocomplete", () => {
 
     const agentDialogTrigger = screen.getByRole("button", { name: "接入 Agent" });
     await user.click(agentDialogTrigger);
-    const agentDialog = screen.getByRole("dialog", { name: "把 Agent 接入当前房间" });
+    const agentDialog = screen.getByRole("dialog", { name: "把 Agent 接入 Hive" });
     expect(agentDialog).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "关闭" }));
 
@@ -369,8 +403,122 @@ describe("App mention autocomplete", () => {
     expect(screen.getByText(/已被同名 Agent 或其他身份占用/)).toBeTruthy();
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    await user.click(screen.getByRole("button", { name: "退出" }));
+    await user.click(screen.getByRole("button", { name: "用户菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: /退出/ }));
     expect(localStorage.getItem("ai-hive.username")).toBeNull();
     expect(screen.getByText("进入 AI Hive")).toBeTruthy();
+  });
+
+  it("switches rooms, shows unread dots, and creates rooms from the sidebar", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("ai-hive.username", "Alice");
+    render(<App />);
+
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    expect(JSON.parse(socket.sent[0]!)).toMatchObject({
+      type: "participant.join",
+      roomId: "general",
+    });
+
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+
+    const roomsPanel = screen.getByLabelText("房间列表");
+    await waitFor(() => expect(within(roomsPanel).getByText("# frontend")).toBeTruthy());
+
+    act(() =>
+      socket.serverEvent({
+        type: "room.activity",
+        roomId: "frontend",
+        latestSeq: 5,
+        onlineCount: 1,
+      }),
+    );
+    expect(screen.getByLabelText("# frontend 有未读消息")).toBeTruthy();
+
+    await user.click(within(roomsPanel).getByRole("button", { name: /# frontend/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const frontendSocket = FakeWebSocket.instances[1]!;
+    act(() => frontendSocket.open());
+    expect(JSON.parse(frontendSocket.sent[0]!)).toMatchObject({
+      type: "participant.join",
+      roomId: "frontend",
+    });
+    expect(localStorage.getItem("ai-hive.room")).toBe("frontend");
+
+    const frontendSelf = { ...self, roomId: "frontend" };
+    act(() =>
+      frontendSocket.serverEvent({
+        type: "room.snapshot",
+        self: frontendSelf,
+        participants: [frontendSelf],
+        messages: [
+          {
+            id: "00000000-0000-4000-8000-000000000020",
+            roomId: "frontend",
+            seq: 5,
+            senderId: "00000000-0000-4000-8000-000000000001",
+            senderName: "Alice",
+            senderType: "human",
+            content: "frontend 房间的第一条消息",
+            mentions: [],
+            traceId: "00000000-0000-4000-8000-000000000021",
+            hopCount: 0,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        latestSeq: 5,
+      }),
+    );
+    await waitFor(() => expect(localStorage.getItem("ai-hive.read-seq.frontend")).toBe("5"));
+    expect(screen.queryByLabelText("# frontend 有未读消息")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "接入 Agent" }));
+    expect(
+      screen.getByText((_, element) =>
+        Boolean(
+          element?.matches(".command code") &&
+          element.textContent?.includes("--name Alice-codex") &&
+          !element.textContent.includes("--room"),
+        ),
+      ),
+    ).toBeTruthy();
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "新建房间" }));
+    const roomDialog = screen.getByRole("dialog", { name: "新建房间" });
+    await user.type(within(roomDialog).getByLabelText(/房间 ID/), "design");
+    await user.click(within(roomDialog).getByRole("button", { name: "创建房间" }));
+
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([, init]) => (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(String((postCall![1] as RequestInit).body))).toMatchObject({
+        id: "design",
+        name: "design",
+        createdBy: "Alice",
+      });
+    });
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(3));
+    const designSocket = FakeWebSocket.instances[2]!;
+    act(() => designSocket.open());
+    expect(JSON.parse(designSocket.sent[0]!)).toMatchObject({
+      type: "participant.join",
+      roomId: "design",
+    });
+    expect(localStorage.getItem("ai-hive.room")).toBe("design");
   });
 });

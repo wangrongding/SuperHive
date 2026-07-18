@@ -19,7 +19,7 @@ export class EchoResponder implements AgentResponder {
 
   async reply(input: AgentReplyInput): Promise<AgentReply> {
     const trigger = input.prompt.match(
-      /<trigger_message>\s*#\d+ \[[^\]]+\] ([\s\S]*?)\s*<\/trigger_message>/,
+      /<trigger_message>\s*#\d+ (?:id=\S+ )?\[[^\]]+\] ([\s\S]*?)\s*<\/trigger_message>/,
     )?.[1];
     return { text: `Echo from ${this.agentName}: ${trigger ?? "收到"}` };
   }

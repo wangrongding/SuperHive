@@ -168,4 +168,66 @@ describe("HiveDatabase", () => {
     second.close();
     rmSync(directory, { recursive: true, force: true });
   });
+
+  it("seeds the general room and registers implicit rooms from existing data", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "hive-db-rooms-"));
+    const filename = path.join(directory, "hive.sqlite");
+    const first = new HiveDatabase(filename);
+    const member = first.upsertParticipant({
+      roomId: "implicit-room",
+      username: "Old User",
+      type: "human",
+    });
+    first.createMessage(member, { content: "legacy", clientMessageId: "legacy-1" });
+    first.close();
+
+    const second = new HiveDatabase(filename);
+    const roomIds = second.listRooms().map((room) => room.id);
+    expect(roomIds).toContain("general");
+    expect(roomIds).toContain("implicit-room");
+    const implicit = second.getRoom("implicit-room");
+    expect(implicit).toMatchObject({ name: "implicit-room", latestSeq: 1, onlineCount: 0 });
+    second.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("creates rooms explicitly and rejects duplicate ids", () => {
+    const room = db.createRoom({ id: "frontend", name: "前端协作", createdBy: "Alice" });
+    expect(room).toMatchObject({
+      id: "frontend",
+      name: "前端协作",
+      createdBy: "Alice",
+      onlineCount: 0,
+      latestSeq: 0,
+    });
+    expect(() => db.createRoom({ id: "frontend" })).toThrowError(HiveError);
+    expect(db.ensureRoom("frontend")).toMatchObject({ created: false });
+    expect(db.ensureRoom("backend", "Bob").created).toBe(true);
+  });
+
+  it("renames, archives, and restores rooms while protecting the default room", () => {
+    db.createRoom({ id: "frontend" });
+    expect(db.updateRoom("frontend", { name: "前端" }).name).toBe("前端");
+
+    const archived = db.updateRoom("frontend", { archived: true });
+    expect(archived.archivedAt).toBeTruthy();
+    expect(db.listRooms().map((room) => room.id)).not.toContain("frontend");
+    expect(db.listRooms(true).map((room) => room.id)).toContain("frontend");
+
+    const restored = db.updateRoom("frontend", { archived: false });
+    expect(restored.archivedAt).toBeUndefined();
+    expect(db.listRooms().map((room) => room.id)).toContain("frontend");
+
+    expect(() => db.updateRoom("missing-room", { name: "x" })).toThrowError(/not found/i);
+    expect(() => db.updateRoom("general", { archived: true })).toThrowError(/cannot be archived/i);
+  });
+
+  it("tracks online counts and latest seq per room", () => {
+    expect(db.getRoom("general")).toMatchObject({ onlineCount: 3, latestSeq: 0 });
+    db.createMessage(human, { content: "hi", clientMessageId: "room-stats-1" });
+    expect(db.getRoom("general")?.latestSeq).toBeGreaterThan(0);
+    db.setParticipantStatus(human.id, "offline");
+    expect(db.onlineCount("general")).toBe(2);
+    expect(db.getRoom("general")?.onlineCount).toBe(2);
+  });
 });
