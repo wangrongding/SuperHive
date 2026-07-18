@@ -672,6 +672,7 @@ export function App() {
   useEffect(() => {
     if (!meta || !username) return;
     let cancelled = false;
+    let reconnectAllowed = true;
 
     const connect = () => {
       if (cancelled) return;
@@ -747,8 +748,10 @@ export function App() {
           }
         } else if (event.type === "error") {
           if (event.code === "USERNAME_TAKEN") {
+            reconnectAllowed = false;
+            setConnectionState("offline");
             setError(
-              `用户名 ${username} 仍处于在线状态，正在等待旧连接释放并自动重连；如果这是另一个会话，请点击右上角“退出”后更换用户名。`,
+              `用户名 ${username} 已被同名 Agent 或其他身份占用，请点击右上角“退出”后更换用户名。`,
             );
             socket.close();
           } else {
@@ -757,7 +760,7 @@ export function App() {
         }
       });
       socket.addEventListener("close", () => {
-        if (cancelled) return;
+        if (cancelled || !reconnectAllowed) return;
         setConnectionState("offline");
         const wait = Math.min(10_000, 500 * 2 ** retryRef.current++);
         reconnectTimerRef.current = window.setTimeout(connect, wait);

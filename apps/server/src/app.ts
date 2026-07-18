@@ -66,7 +66,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const database = new HiveDatabase(options.databasePath ?? "./data/hive.sqlite");
   const joinToken = database.getOrCreateToken(options.token ?? process.env.HIVE_TOKEN);
   const connections = new Set<Connection>();
-  const onlineByName = new Map<string, Connection>();
+  const onlineByName = new Map<string, Set<Connection>>();
   const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 45_000;
   let shuttingDown = false;
 
@@ -99,10 +99,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const participant = connection.participant;
     if (!participant) return;
     const key = participantKey(participant.roomId, participant.username);
-    if (onlineByName.get(key) !== connection) return;
+    const namedConnections = onlineByName.get(key);
+    namedConnections?.delete(connection);
+    if (namedConnections?.size) return;
     onlineByName.delete(key);
     if (shuttingDown) return;
     setStatus(connection, "offline");
+  }
+
+  function onlineAgent(roomId: string, username: string): Connection | undefined {
+    return [...(onlineByName.get(participantKey(roomId, username)) ?? [])].find(
+      (connection) => connection.participant?.type === "agent",
+    );
   }
 
   function createAndDispatchMessage(participant: Participant, input: CreateMessageInput) {
@@ -112,7 +120,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (result.message.hopCount >= 4) return result;
     for (const mention of result.message.mentions) {
       if (mention.toLocaleLowerCase() === "all") continue;
-      const target = onlineByName.get(participantKey(participant.roomId, mention));
+      const target = onlineAgent(participant.roomId, mention);
       if (target?.participant?.type === "agent" && target.participant.id !== participant.id) {
         send(target.socket, {
           type: "agent.mentioned",
@@ -157,7 +165,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const roomId = headerString(request.headers["x-hive-room"]);
     const username = headerString(request.headers["x-hive-agent-name"]);
     if (!roomId || !username) return undefined;
-    const connection = onlineByName.get(participantKey(roomId, username));
+    const connection = onlineAgent(roomId, username);
     return connection?.participant?.type === "agent" ? connection.participant : undefined;
   }
 
@@ -297,7 +305,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           return;
         }
         const key = participantKey(event.roomId, event.username);
-        if (onlineByName.has(key)) {
+        const namedConnections = onlineByName.get(key);
+        const existingConnection = namedConnections?.values().next().value;
+        const existingParticipant = existingConnection?.participant;
+        if (
+          existingParticipant &&
+          (event.participantType !== "human" || existingParticipant.type !== "human")
+        ) {
           send(socket, {
             type: "error",
             code: "USERNAME_TAKEN",
@@ -306,16 +320,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           return;
         }
         try {
-          const participant = database.upsertParticipant({
-            roomId: event.roomId,
-            username: event.username,
-            type: event.participantType,
-            ...(event.persona ? { persona: event.persona } : {}),
-            ...(event.provider ? { provider: event.provider } : {}),
-          });
+          const participant =
+            existingParticipant ??
+            database.upsertParticipant({
+              roomId: event.roomId,
+              username: event.username,
+              type: event.participantType,
+              ...(event.persona ? { persona: event.persona } : {}),
+              ...(event.provider ? { provider: event.provider } : {}),
+            });
           connection.participant = participant;
           connection.lastHeartbeat = Date.now();
-          onlineByName.set(key, connection);
+          const activeConnections = namedConnections ?? new Set<Connection>();
+          activeConnections.add(connection);
+          onlineByName.set(key, activeConnections);
           send(socket, {
             type: "room.snapshot",
             self: participant,
@@ -323,7 +341,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             messages: database.getRecentMessages(event.roomId),
             latestSeq: database.latestSeq(event.roomId),
           });
-          broadcast(event.roomId, { type: "presence.changed", participant });
+          if (!existingParticipant)
+            broadcast(event.roomId, { type: "presence.changed", participant });
         } catch (error) {
           const hiveError = error instanceof HiveError ? error : undefined;
           send(socket, {

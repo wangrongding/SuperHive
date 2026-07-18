@@ -366,7 +366,8 @@ describe("App mention autocomplete", () => {
       }),
     );
     expect(localStorage.getItem("ai-hive.username")).toBe("SavedUser");
-    expect(screen.getByText(/正在等待旧连接释放并自动重连/)).toBeTruthy();
+    expect(screen.getByText(/已被同名 Agent 或其他身份占用/)).toBeTruthy();
+    expect(FakeWebSocket.instances).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "退出" }));
     expect(localStorage.getItem("ai-hive.username")).toBeNull();

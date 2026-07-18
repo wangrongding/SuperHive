@@ -59,6 +59,14 @@ class TestPeer {
   close(): void {
     this.socket.close();
   }
+
+  async closeAndWait(): Promise<void> {
+    if (this.socket.readyState === WebSocket.CLOSED) return;
+    await new Promise<void>((resolve) => {
+      this.socket.once("close", () => resolve());
+      this.socket.close();
+    });
+  }
 }
 
 describe("Hive WebSocket protocol", () => {
@@ -198,7 +206,7 @@ describe("Hive WebSocket protocol", () => {
     await client.close();
   });
 
-  it("enforces unique online names and routes mentions only to the named agent", async () => {
+  it("shares a human identity across tabs while keeping Agent names unique", async () => {
     const app = await buildApp({
       databasePath: ":memory:",
       token: "test-token",
@@ -210,10 +218,11 @@ describe("Hive WebSocket protocol", () => {
     const wsUrl = `ws://127.0.0.1:${port}/ws`;
 
     const human = await TestPeer.connect(wsUrl);
+    const duplicateHuman = await TestPeer.connect(wsUrl);
     const agentA = await TestPeer.connect(wsUrl);
     const agentB = await TestPeer.connect(wsUrl);
-    const duplicate = await TestPeer.connect(wsUrl);
-    peers.push(human, agentA, agentB, duplicate);
+    const duplicateAgent = await TestPeer.connect(wsUrl);
+    peers.push(human, duplicateHuman, agentA, agentB, duplicateAgent);
 
     human.send({
       type: "participant.join",
@@ -222,6 +231,29 @@ describe("Hive WebSocket protocol", () => {
       roomId: "general",
       token: "test-token",
     });
+    const humanSnapshot = await human.next((event) => event.type === "room.snapshot");
+
+    duplicateHuman.send({
+      type: "participant.join",
+      username: "alice",
+      participantType: "human",
+      roomId: "general",
+      token: "test-token",
+    });
+    const duplicateSnapshot = await duplicateHuman.next((event) => event.type === "room.snapshot");
+    expect(
+      humanSnapshot.type === "room.snapshot" &&
+        duplicateSnapshot.type === "room.snapshot" &&
+        duplicateSnapshot.self.id,
+    ).toBe(humanSnapshot.type === "room.snapshot" ? humanSnapshot.self.id : undefined);
+    expect(
+      duplicateSnapshot.type === "room.snapshot"
+        ? duplicateSnapshot.participants.filter(
+            (participant) => participant.username.toLocaleLowerCase() === "alice",
+          )
+        : [],
+    ).toHaveLength(1);
+
     agentA.send({
       type: "participant.join",
       username: "agent-a",
@@ -230,6 +262,9 @@ describe("Hive WebSocket protocol", () => {
       roomId: "general",
       token: "test-token",
     });
+    const agentSnapshot = await agentA.next((event) => event.type === "room.snapshot");
+    expect(agentSnapshot.type === "room.snapshot" && agentSnapshot.self.provider).toBe("claude");
+
     agentB.send({
       type: "participant.join",
       username: "agent-b",
@@ -237,19 +272,17 @@ describe("Hive WebSocket protocol", () => {
       roomId: "general",
       token: "test-token",
     });
-    duplicate.send({
+    await agentB.next((event) => event.type === "room.snapshot");
+
+    duplicateAgent.send({
       type: "participant.join",
-      username: "alice",
-      participantType: "human",
+      username: "agent-a",
+      participantType: "agent",
+      provider: "claude",
       roomId: "general",
       token: "test-token",
     });
-
-    await human.next((event) => event.type === "room.snapshot");
-    const agentSnapshot = await agentA.next((event) => event.type === "room.snapshot");
-    expect(agentSnapshot.type === "room.snapshot" && agentSnapshot.self.provider).toBe("claude");
-    await agentB.next((event) => event.type === "room.snapshot");
-    const duplicateError = await duplicate.next(
+    const duplicateError = await duplicateAgent.next(
       (event) => event.type === "error" && event.code === "USERNAME_TAKEN",
     );
     expect(duplicateError.type).toBe("error");
@@ -261,17 +294,46 @@ describe("Hive WebSocket protocol", () => {
     });
     const created = await human.next((event) => event.type === "message.created");
     expect(created.type === "message.created" && created.message.seq).toBe(1);
+    const duplicateCreated = await duplicateHuman.next((event) => event.type === "message.created");
+    expect(duplicateCreated.type === "message.created" && duplicateCreated.message.seq).toBe(1);
     const mention = await agentA.next((event) => event.type === "agent.mentioned");
     expect(mention.type === "agent.mentioned" && mention.message.mentions).toContain("agent-a");
     await expect(agentB.next((event) => event.type === "agent.mentioned", 150)).rejects.toThrow(
       /timed out/i,
     );
 
+    await human.closeAndWait();
+    const participantsResponse = await fetch(
+      `http://127.0.0.1:${port}/api/rooms/general/participants`,
+      { headers: { Authorization: "Bearer test-token" } },
+    );
+    const participantsPayload = (await participantsResponse.json()) as {
+      participants: Array<{ username: string; status: string }>;
+    };
+    expect(
+      participantsPayload.participants.find(
+        (participant) => participant.username.toLocaleLowerCase() === "alice",
+      )?.status,
+    ).toBe("online");
+
+    duplicateHuman.send({
+      type: "message.send",
+      clientMessageId: "human-2",
+      content: "still connected from the second tab",
+    });
+    const secondCreated = await duplicateHuman.next(
+      (event) => event.type === "message.created" && event.message.clientMessageId === "human-2",
+    );
+    expect(secondCreated.type === "message.created" && secondCreated.message.seq).toBe(2);
+
     const response = await fetch(`http://127.0.0.1:${port}/api/rooms/general/messages?afterSeq=0`, {
       headers: { Authorization: "Bearer test-token" },
     });
     expect(response.status).toBe(200);
     const payload = (await response.json()) as { messages: Array<{ content: string }> };
-    expect(payload.messages.map((message) => message.content)).toEqual(["@agent-a please help"]);
+    expect(payload.messages.map((message) => message.content)).toEqual([
+      "@agent-a please help",
+      "still connected from the second tab",
+    ]);
   });
 });
