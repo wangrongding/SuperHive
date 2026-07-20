@@ -1,6 +1,10 @@
 #!/usr/bin/env node
+import { createRequire } from "module";
 import { run } from "./run.js";
 import { restartService, startService, stopService } from "./service.js";
+
+const _require = createRequire(import.meta.url);
+const { version } = _require("../package.json") as { version: string };
 
 const usage = `
 AI Hive（命令别名：hive）
@@ -19,6 +23,10 @@ async function main(): Promise<void> {
   const command = process.argv[2];
   if (!command || command === "help" || command === "--help" || command === "-h") {
     console.log(usage);
+    return;
+  }
+  if (command === "-v" || command === "-V" || command === "--version" || command === "version") {
+    console.log(version);
     return;
   }
   if (command === "start") return startService();
