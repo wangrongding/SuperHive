@@ -95,7 +95,7 @@ describe("Hive WebSocket protocol", () => {
       wsUrl: "wss://hive.example.com/ws",
       mcpUrl: "https://hive.example.com/mcp",
       agentCommand: expect.stringMatching(
-        /^npx --yes ai-hive join --server https:\/\/hive\.example\.com/,
+        /^npx --yes ai-hive@latest join --server https:\/\/hive\.example\.com/,
       ),
     });
   });

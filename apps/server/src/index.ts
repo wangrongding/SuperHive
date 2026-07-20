@@ -20,7 +20,7 @@ const publicUrl = (process.env.HIVE_PUBLIC_URL ?? detectedUrl).replace(/\/$/, ""
 // 开发模式（tsx 直接运行 src/）默认生成仓库本地命令；构建产物（dist/）默认生成已发布的 npx 命令。
 const isDevRuntime = import.meta.dirname.endsWith(`${path.sep}src`);
 const agentCommandPrefix =
-  process.env.HIVE_AGENT_COMMAND ?? (isDevRuntime ? "pnpm agent" : "npx --yes ai-hive");
+  process.env.HIVE_AGENT_COMMAND ?? (isDevRuntime ? "pnpm agent" : "npx --yes ai-hive@latest");
 mkdirSync(path.dirname(databasePath), { recursive: true });
 
 const app = await buildApp({

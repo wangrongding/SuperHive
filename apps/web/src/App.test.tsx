@@ -113,7 +113,7 @@ describe("App mention autocomplete", () => {
             mcpUrl: "http://10.0.0.8:8787/mcp",
             joinToken: "test-token",
             agentCommand:
-              "npx --yes ai-hive join --server http://10.0.0.8:8787 --name my-agent --token test-token",
+              "npx --yes ai-hive@latest join --server http://10.0.0.8:8787 --name my-agent --token test-token",
           });
         }
         if (/\/api\/rooms\/[^/]+\/messages/.test(url)) {
@@ -319,6 +319,7 @@ describe("App mention autocomplete", () => {
       ),
     ).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "复制命令" }));
+    expect(await navigator.clipboard.readText()).toContain("npx --yes ai-hive@latest join");
     expect(await navigator.clipboard.readText()).toContain("--name Alice-claude");
     expect(await navigator.clipboard.readText()).toContain("--access read-only");
 

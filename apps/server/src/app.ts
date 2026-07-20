@@ -173,7 +173,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.get("/api/meta", async (request) => {
     const httpUrl = requestPublicUrl(request, options.publicUrl);
     const wsUrl = httpUrl.replace(/^http/, "ws") + "/ws";
-    const agentCommandPrefix = options.agentCommandPrefix ?? "npx --yes ai-hive";
+    const agentCommandPrefix = options.agentCommandPrefix ?? "npx --yes ai-hive@latest";
     return {
       name: "AI Hive",
       roomId: "general",
