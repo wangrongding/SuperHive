@@ -56,6 +56,25 @@ describe("CopilotResponder", () => {
     expect(args).toContain("gpt-5");
   });
 
+  it("starts a new session with --session-id when there is no prior threadId", async () => {
+    const runner = vi.fn<CommandRunner>(async () => ({
+      stdout: JSON.stringify({ type: "assistant.message", data: { content: "ok" } }),
+      stderr: "",
+    }));
+    const responder = new CopilotResponder({
+      command: "copilot",
+      cwd: "/workspace",
+      hive,
+      runner,
+    });
+
+    await responder.reply({ instructions: "rules", prompt: "context" });
+
+    const args = runner.mock.calls[0]?.[1] ?? [];
+    expect(args.some((arg) => arg.startsWith("--session-id="))).toBe(true);
+    expect(args.some((arg) => arg.startsWith("--resume="))).toBe(false);
+  });
+
   it.each(["workspace", "full"] as const)("maps %s access to Copilot", async (access) => {
     const runner = vi.fn<CommandRunner>(async () => ({
       stdout: JSON.stringify({ type: "assistant.message", data: { content: "ok" } }),

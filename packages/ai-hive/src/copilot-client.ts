@@ -53,7 +53,8 @@ export class CopilotResponder implements AgentResponder {
       "--allow-tool=hive",
       "--no-custom-instructions",
       "--no-ask-user",
-      `--resume=${sessionId}`,
+      // --resume 只能恢复已存在的 session；首次会话需用 --session-id 创建新 session。
+      input.threadId ? `--resume=${sessionId}` : `--session-id=${sessionId}`,
     ];
     if (access === "read-only") {
       args.push(
