@@ -12,3 +12,4 @@ apps/web/vite.config.d.ts
 packages/ai-hive/web/
 
 ChatGPT.md
+.claude

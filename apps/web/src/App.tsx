@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import type {
@@ -45,7 +46,8 @@ const storedRoomKey = "ai-hive.room";
 const storedSendShortcutKey = "ai-hive.send-shortcut";
 const storedAutoSaveDraftKey = "ai-hive.auto-save-draft";
 const storedTimeFormatKey = "ai-hive.time-format";
-const storedMentionNotificationsKey = "ai-hive.notify-mentions";
+const storedMessageNotificationsKey = "ai-hive.notify-messages";
+const storedNotificationPromptDismissedKey = "ai-hive.notify-prompt-dismissed";
 const storedNotificationSoundKey = "ai-hive.notification-sound";
 const storedPresenceNotificationsKey = "ai-hive.notify-agent-presence";
 const storedThemeKey = "ai-hive.theme";
@@ -54,6 +56,8 @@ const storedMessageSizeKey = "ai-hive.message-size";
 const storedReduceMotionKey = "ai-hive.reduce-motion";
 type SelectableAgentProvider = "codex" | "claude" | "copilot" | "openclaw";
 type AgentAccessMode = "read-only" | "workspace" | "full";
+type AgentSetupStep = 1 | 2 | 3;
+type MessageNotificationMode = "off" | "mentions" | "all";
 type SendShortcut = "modifier-enter" | "enter";
 type SettingsTab = "chat" | "notifications" | "appearance";
 type TimeFormat = "system" | "24h" | "12h";
@@ -65,6 +69,7 @@ type MobilePanel = "members" | "rooms";
 type IconName =
   | "arrow-down"
   | "arrow-right"
+  | "bell"
   | "check"
   | "close"
   | "copy"
@@ -91,11 +96,29 @@ const agentProviderDescriptions: Record<SelectableAgentProvider, string> = {
 const agentAccessOptions: Array<{
   id: AgentAccessMode;
   label: string;
-  shortDescription: string;
+  description: string;
 }> = [
-  { id: "read-only", label: "只读", shortDescription: "不写入工作区" },
-  { id: "workspace", label: "工作区", shortDescription: "读写并运行命令" },
-  { id: "full", label: "完全访问", shortDescription: "不设 Hive 沙箱" },
+  { id: "read-only", label: "只读", description: "推荐。只读取与规划，不写入工作区。" },
+  { id: "workspace", label: "工作区", description: "可在当前终端目录内读写文件、运行命令。" },
+  { id: "full", label: "完全访问", description: "不设 Hive 沙箱，可执行当前系统用户的所有操作。" },
+];
+
+const messageNotificationModes = ["off", "mentions", "all"] as const;
+
+const messageNotificationOptions: Array<{
+  id: MessageNotificationMode;
+  label: string;
+  description: string;
+}> = [
+  { id: "off", label: "关闭通知", description: "不弹系统通知，提示音不受影响" },
+  { id: "mentions", label: "@ 我时通知", description: "只有消息里提到我才提醒" },
+  { id: "all", label: "当前房间任意消息", description: "所在房间的每条新消息都提醒" },
+];
+
+const agentSetupSteps: Array<{ step: AgentSetupStep; label: string }> = [
+  { step: 1, label: "选择 Agent" },
+  { step: 2, label: "设置权限" },
+  { step: 3, label: "复制命令" },
 ];
 
 const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = [
@@ -118,6 +141,10 @@ function storedChoice<T extends string>(key: string, choices: readonly T[], fall
   return choices.includes(value as T) ? (value as T) : fallback;
 }
 
+function storedMessageNotificationMode(): MessageNotificationMode {
+  return storedChoice(storedMessageNotificationsKey, messageNotificationModes, "mentions");
+}
+
 function draftStorageKey(username: string, roomId: string): string {
   return `ai-hive.draft.${username.toLocaleLowerCase()}.${roomId}`;
 }
@@ -126,9 +153,16 @@ function readSeqStorageKey(roomId: string): string {
   return `ai-hive.read-seq.${roomId}`;
 }
 
-function storedRoomId(): string {
-  const value = localStorage.getItem(storedRoomKey);
-  return value && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : "general";
+const roomIdPattern = /^[A-Za-z0-9_-]{1,64}$/;
+
+function roomIdFromHash(): string | undefined {
+  const value = window.location.hash.replace(/^#/, "");
+  return roomIdPattern.test(value) ? value : undefined;
+}
+
+function initialRoomId(): string {
+  const value = roomIdFromHash() ?? localStorage.getItem(storedRoomKey);
+  return value && roomIdPattern.test(value) ? value : "general";
 }
 
 function sortRooms(rooms: RoomSummary[]): RoomSummary[] {
@@ -201,6 +235,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     external: (
       <path d="M14 5h5v5m0-5-8 8M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
     ),
+    bell: <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2H4.5L6 16Zm4 4a2 2 0 0 0 4 0" />,
     hash: <path d="M9 4 7 20M17 4l-2 16M4 9h17M3 15h17" />,
     logout: <path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4m5-4 3-3-3-3m3 3H9" />,
     plug: <path d="M8 3v4m8-4v4M6 7h12v2a6 6 0 0 1-6 6v0a6 6 0 0 1-6-6V7Zm6 8v6" />,
@@ -354,6 +389,25 @@ function agentCommandFor(
     .replace("--name my-agent", `--name ${agentName}`)
     .concat(` --access ${access}${access === "read-only" ? "" : " --cwd ."}`)
     .concat(provider === "openclaw" ? " --openclaw-configure-mcp" : "");
+}
+
+function moveRadioSelection(
+  event: ReactKeyboardEvent<HTMLElement>,
+  checkedIndex: number,
+  select: (index: number) => void,
+): void {
+  const delta =
+    event.key === "ArrowDown" || event.key === "ArrowRight"
+      ? 1
+      : event.key === "ArrowUp" || event.key === "ArrowLeft"
+        ? -1
+        : 0;
+  if (!delta) return;
+  event.preventDefault();
+  const radios = event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]');
+  const next = (checkedIndex + delta + radios.length) % radios.length;
+  select(next);
+  radios[next]?.focus();
 }
 
 function serverBase(): string {
@@ -528,7 +582,7 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
 export function App() {
   const [meta, setMeta] = useState<MetaResponse>();
   const [username, setUsername] = useState(() => localStorage.getItem(storedUsernameKey) ?? "");
-  const [currentRoomId, setCurrentRoomId] = useState(storedRoomId);
+  const [currentRoomId, setCurrentRoomId] = useState(initialRoomId);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [readSeqs, setReadSeqs] = useState<Record<string, number>>({});
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
@@ -537,7 +591,7 @@ export function App() {
   const [draft, setDraft] = useState(() => {
     const storedUsername = localStorage.getItem(storedUsernameKey) ?? "";
     return storedUsername && storedBoolean(storedAutoSaveDraftKey, true)
-      ? (localStorage.getItem(draftStorageKey(storedUsername, storedRoomId())) ?? "")
+      ? (localStorage.getItem(draftStorageKey(storedUsername, initialRoomId())) ?? "")
       : "";
   });
   const [mentionContext, setMentionContext] = useState<MentionContext>();
@@ -546,10 +600,11 @@ export function App() {
     "connecting",
   );
   const [error, setError] = useState<string>();
-  const [copiedProvider, setCopiedProvider] = useState<SelectableAgentProvider>();
+  const [commandCopied, setCommandCopied] = useState(false);
   const [copyError, setCopyError] = useState<string>();
   const [agentProvider, setAgentProvider] = useState<SelectableAgentProvider>("codex");
   const [agentAccess, setAgentAccess] = useState<AgentAccessMode>("read-only");
+  const [agentStep, setAgentStep] = useState<AgentSetupStep>(1);
   const [fullAccessConfirmationOpen, setFullAccessConfirmationOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>();
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
@@ -585,8 +640,8 @@ export function App() {
   const [timeFormat, setTimeFormat] = useState<TimeFormat>(() =>
     storedChoice(storedTimeFormatKey, ["system", "24h", "12h"], "system"),
   );
-  const [mentionNotifications, setMentionNotifications] = useState(() =>
-    storedBoolean(storedMentionNotificationsKey, false),
+  const [messageNotifications, setMessageNotifications] = useState<MessageNotificationMode>(
+    storedMessageNotificationMode,
   );
   const [notificationSound, setNotificationSound] = useState(() =>
     storedBoolean(storedNotificationSoundKey, false),
@@ -596,6 +651,9 @@ export function App() {
   );
   const [notificationPermission, setNotificationPermission] =
     useState<BrowserNotificationPermission>(browserNotificationPermission);
+  const [notificationPromptDismissed, setNotificationPromptDismissed] = useState(() =>
+    storedBoolean(storedNotificationPromptDismissedKey, false),
+  );
   const [themePreference, setThemePreference] = useState<ThemePreference>(() =>
     storedChoice(storedThemeKey, ["system", "dark", "light"], "system"),
   );
@@ -613,10 +671,10 @@ export function App() {
   const retryRef = useRef(0);
   const latestSeqRef = useRef(0);
   const composingRef = useRef(false);
-  const draftContextRef = useRef(`${username}:${storedRoomId()}`);
+  const draftContextRef = useRef(`${username}:${initialRoomId()}`);
   const participantStatusRef = useRef(new Map<string, Participant["status"]>());
   const notificationPreferencesRef = useRef({
-    mentionNotifications,
+    messageNotifications,
     notificationSound,
     presenceNotifications,
   });
@@ -633,6 +691,7 @@ export function App() {
   const agentDialogRef = useRef<HTMLDivElement>(null);
   const agentDialogCloseRef = useRef<HTMLButtonElement>(null);
   const agentDialogTriggerRef = useRef<HTMLButtonElement>(null);
+  const agentStepHeadingRef = useRef<HTMLHeadingElement>(null);
   const roomDialogRef = useRef<HTMLDivElement>(null);
   const roomDialogCloseRef = useRef<HTMLButtonElement>(null);
   const roomDialogTriggerRef = useRef<HTMLButtonElement>(null);
@@ -652,6 +711,10 @@ export function App() {
     if (!meta) return "加载中…";
     return agentCommandFor(meta, agentProvider, username, agentAccess);
   }, [agentAccess, agentProvider, meta, username]);
+  const showNotificationPrompt =
+    messageNotifications !== "off" &&
+    notificationPermission === "default" &&
+    !notificationPromptDismissed;
   const currentRoom = useMemo(
     () => rooms.find((room) => room.id === currentRoomId),
     [currentRoomId, rooms],
@@ -682,17 +745,17 @@ export function App() {
 
   useEffect(() => {
     notificationPreferencesRef.current = {
-      mentionNotifications,
+      messageNotifications,
       notificationSound,
       presenceNotifications,
     };
-  }, [mentionNotifications, notificationSound, presenceNotifications]);
+  }, [messageNotifications, notificationSound, presenceNotifications]);
 
   useEffect(() => {
-    if (notificationPermission === "granted") return;
-    setMentionNotifications(false);
+    if (notificationPermission !== "denied" && notificationPermission !== "unsupported") return;
+    setMessageNotifications("off");
     setPresenceNotifications(false);
-    localStorage.setItem(storedMentionNotificationsKey, "false");
+    localStorage.setItem(storedMessageNotificationsKey, "off");
     localStorage.setItem(storedPresenceNotificationsKey, "false");
   }, [notificationPermission]);
 
@@ -910,9 +973,31 @@ export function App() {
 
   const openAgentDialog = useCallback((trigger: HTMLButtonElement) => {
     agentDialogTriggerRef.current = trigger;
+    setAgentStep(1);
+    setCommandCopied(false);
     setCopyError(undefined);
     setAgentDialogOpen(true);
   }, []);
+
+  const goToAgentStep = useCallback((step: AgentSetupStep) => {
+    setAgentStep(step);
+    setFullAccessConfirmationOpen(false);
+    setCommandCopied(false);
+    setCopyError(undefined);
+    window.requestAnimationFrame(() => agentStepHeadingRef.current?.focus());
+  }, []);
+
+  const chooseAgentAccess = useCallback(
+    (access: AgentAccessMode) => {
+      if (access === "full" && agentAccess !== "full") {
+        setFullAccessConfirmationOpen(true);
+        return;
+      }
+      setFullAccessConfirmationOpen(false);
+      setAgentAccess(access);
+    },
+    [agentAccess],
+  );
 
   useEffect(() => {
     if (!agentDialogOpen) return;
@@ -1085,11 +1170,26 @@ export function App() {
       setVisibleLimit(25);
       setShowJumpToBottom(false);
       setCurrentRoomId(roomId);
-      localStorage.setItem(storedRoomKey, roomId);
       closeMobilePanel(false);
     },
     [closeMobilePanel, currentRoomId, markRoomRead],
   );
+
+  useEffect(() => {
+    localStorage.setItem(storedRoomKey, currentRoomId);
+    if (roomIdFromHash() === currentRoomId) return;
+    window.history.replaceState(window.history.state, "", `#${currentRoomId}`);
+  }, [currentRoomId]);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const roomId = roomIdFromHash();
+      if (roomId) switchRoom(roomId);
+      else window.history.replaceState(window.history.state, "", `#${currentRoomId}`);
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, [currentRoomId, switchRoom]);
 
   const refreshRooms = useCallback(async () => {
     if (!meta) return;
@@ -1181,15 +1281,17 @@ export function App() {
           if (event.message.senderName.toLocaleLowerCase() !== username.toLocaleLowerCase()) {
             const preferences = notificationPreferencesRef.current;
             if (preferences.notificationSound) playNotificationTone();
-            if (
-              preferences.mentionNotifications &&
-              document.visibilityState !== "visible" &&
-              event.message.mentions.some(
-                (mention) => mention.toLocaleLowerCase() === username.toLocaleLowerCase(),
-              )
-            ) {
+            const mentioned = event.message.mentions.some(
+              (mention) => mention.toLocaleLowerCase() === username.toLocaleLowerCase(),
+            );
+            const shouldNotify =
+              preferences.messageNotifications === "all" ||
+              (preferences.messageNotifications === "mentions" && mentioned);
+            if (shouldNotify && document.visibilityState !== "visible") {
               showBrowserNotification(
-                `${event.message.senderName} 在 AI Hive 提到了你`,
+                mentioned
+                  ? `${event.message.senderName} 在 AI Hive 提到了你`
+                  : `${event.message.senderName} · # ${event.message.roomId}`,
                 event.message.content.slice(0, 180),
               );
             }
@@ -1277,6 +1379,7 @@ export function App() {
         onJoin={(nextUsername) => {
           localStorage.setItem(storedUsernameKey, nextUsername);
           setUsername(nextUsername);
+          if (messageNotifications !== "off") void ensureNotificationPermission();
         }}
       />
     );
@@ -1285,28 +1388,34 @@ export function App() {
   const online = participants.filter((participant) => participant.status !== "offline");
   const offline = participants.filter((participant) => participant.status === "offline");
 
-  async function updateBrowserNotificationPreference(
-    next: boolean,
-    storageKey: string,
-    update: (value: boolean) => void,
-  ) {
-    if (!next) {
-      update(false);
-      localStorage.setItem(storageKey, "false");
-      return;
-    }
+  async function ensureNotificationPermission(): Promise<boolean> {
     if (!("Notification" in window)) {
       setNotificationPermission("unsupported");
-      return;
+      return false;
     }
     const permission =
       Notification.permission === "default"
         ? await Notification.requestPermission()
         : Notification.permission;
     setNotificationPermission(permission);
-    const enabled = permission === "granted";
-    update(enabled);
-    localStorage.setItem(storageKey, String(enabled));
+    return permission === "granted";
+  }
+
+  function dismissNotificationPrompt() {
+    setNotificationPromptDismissed(true);
+    localStorage.setItem(storedNotificationPromptDismissedKey, "true");
+  }
+
+  async function updateMessageNotifications(mode: MessageNotificationMode) {
+    const next = mode !== "off" && !(await ensureNotificationPermission()) ? "off" : mode;
+    setMessageNotifications(next);
+    localStorage.setItem(storedMessageNotificationsKey, next);
+  }
+
+  async function updatePresenceNotifications(next: boolean) {
+    const enabled = next && (await ensureNotificationPermission());
+    setPresenceNotifications(enabled);
+    localStorage.setItem(storedPresenceNotificationsKey, String(enabled));
   }
 
   function sendMessage() {
@@ -1447,19 +1556,15 @@ export function App() {
     }
   }
 
-  async function copyCommand(provider: SelectableAgentProvider = agentProvider) {
+  async function copyCommand() {
     if (!meta) return;
-    setAgentProvider(provider);
     setCopyError(undefined);
     try {
-      await copyTextToClipboard(agentCommandFor(meta, provider, username, agentAccess));
-      setCopiedProvider(provider);
-      window.setTimeout(
-        () => setCopiedProvider((current) => (current === provider ? undefined : current)),
-        1500,
-      );
+      await copyTextToClipboard(selectedAgentCommand);
+      setCommandCopied(true);
+      window.setTimeout(() => setCommandCopied(false), 1500);
     } catch {
-      setCopiedProvider(undefined);
+      setCommandCopied(false);
       setCopyError("浏览器未允许自动复制，请选中上方命令后手动复制。");
     }
   }
@@ -1706,50 +1811,71 @@ export function App() {
         </aside>
 
         <section className="chat-panel panel" id="main-content" tabIndex={-1}>
-          <div className="chat-heading">
-            <div>
-              <p className="eyebrow">LIVE SHARED CONTEXT</p>
-              <h1># {currentRoomName}</h1>
-            </div>
-            <div className="chat-actions">
-              <button
-                type="button"
-                aria-label={shareMode ? "退出分享模式" : "分享对话"}
-                aria-pressed={shareMode}
-                className={shareMode ? "active" : undefined}
-                onClick={() => (shareMode ? exitShareMode() : setShareMode(true))}
-              >
-                <Icon name="share" />
-                <span>分享</span>
-              </button>
-              <button
-                type="button"
-                className="mobile-only"
-                aria-label="打开房间列表"
-                aria-expanded={mobilePanel === "rooms"}
-                onClick={(event) => openMobilePanel("rooms", event.currentTarget)}
-              >
-                <Icon name="hash" />
-                <span>房间</span>
-              </button>
-              <button
-                type="button"
-                className="mobile-only"
-                aria-label="打开成员列表"
-                aria-expanded={mobilePanel === "members"}
-                onClick={(event) => openMobilePanel("members", event.currentTarget)}
-              >
-                <Icon name="users" />
-                <span>成员</span>
-              </button>
-            </div>
+          <div className="chat-float-actions">
+            <button
+              type="button"
+              className="mobile-only"
+              aria-label="打开房间列表"
+              aria-expanded={mobilePanel === "rooms"}
+              onClick={(event) => openMobilePanel("rooms", event.currentTarget)}
+            >
+              <Icon name="hash" size={17} />
+            </button>
+            <button
+              type="button"
+              className="mobile-only"
+              aria-label="打开成员列表"
+              aria-expanded={mobilePanel === "members"}
+              onClick={(event) => openMobilePanel("members", event.currentTarget)}
+            >
+              <Icon name="users" size={17} />
+            </button>
+            <button
+              type="button"
+              className={`share-fab ${shareMode ? "active" : ""}`}
+              aria-label={shareMode ? "退出分享模式" : "分享对话"}
+              aria-pressed={shareMode}
+              onClick={() => (shareMode ? exitShareMode() : setShareMode(true))}
+            >
+              <Icon name="share" size={16} />
+              <span>{shareMode ? "取消" : "分享"}</span>
+            </button>
           </div>
-          {error && (
-            <div className="error-banner" role="alert">
-              <span>{error}</span>
-              <button type="button" aria-label="关闭错误提示" onClick={() => setError(undefined)}>
-                <Icon name="close" size={16} />
-              </button>
+          {(error || showNotificationPrompt) && (
+            <div className="chat-notices">
+              {error && (
+                <div className="error-banner" role="alert">
+                  <span>{error}</span>
+                  <button
+                    type="button"
+                    aria-label="关闭错误提示"
+                    onClick={() => setError(undefined)}
+                  >
+                    <Icon name="close" size={16} />
+                  </button>
+                </div>
+              )}
+              {showNotificationPrompt && (
+                <div className="notification-prompt" role="status" aria-label="开启浏览器通知">
+                  <Icon name="bell" size={18} />
+                  <p>
+                    <strong>开启浏览器通知</strong>
+                    页面不在前台时，有人 @ 你会收到系统提醒。
+                  </p>
+                  <div className="notification-prompt-actions">
+                    <button type="button" onClick={dismissNotificationPrompt}>
+                      暂不
+                    </button>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void ensureNotificationPermission()}
+                    >
+                      开启
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           <div
@@ -2341,9 +2467,7 @@ export function App() {
                 <p className="eyebrow">BRING YOUR OWN AGENT</p>
                 <h2 id="agent-dialog-title">把 Agent 接入 Hive</h2>
                 <p id="agent-dialog-description">
-                  选择你正在使用的 Agent，复制命令到它所在电脑的终端运行。接入后 Agent
-                  会加入所有房间并保持每个房间的独立上下文；只有被 <code>@</code> 才会响应。
-                  若只想加入单个房间，可在命令后追加 <code>--room 房间ID</code>。
+                  三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。
                 </p>
               </div>
               <button
@@ -2357,26 +2481,84 @@ export function App() {
               </button>
             </header>
 
+            <ol className="agent-steps" aria-label="接入步骤">
+              {agentSetupSteps.map(({ step, label }) => {
+                const state =
+                  step === agentStep ? "current" : step < agentStep ? "done" : "upcoming";
+                return (
+                  <li
+                    key={step}
+                    className={state}
+                    aria-current={state === "current" ? "step" : undefined}
+                  >
+                    {state === "done" ? (
+                      <button
+                        type="button"
+                        aria-label={`返回第 ${step} 步：${label}`}
+                        onClick={() => goToAgentStep(step)}
+                      >
+                        <span className="agent-step-index" aria-hidden="true">
+                          <Icon name="check" size={12} />
+                        </span>
+                        <span>{label}</span>
+                      </button>
+                    ) : (
+                      <span>
+                        <span className="agent-step-index" aria-hidden="true">
+                          {step}
+                        </span>
+                        <span>{label}</span>
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+
             <div className="agent-dialog-body">
-              <section className="agent-provider-section" aria-labelledby="agent-provider-title">
-                <div className="dialog-section-heading">
-                  <span>1</span>
-                  <div>
-                    <h3 id="agent-provider-title">选择 Agent</h3>
-                    <p>命令会根据所选运行环境自动调整。</p>
-                  </div>
-                </div>
-                <div className="provider-selector" role="group" aria-label="选择 Agent">
+              <div className="agent-step-heading">
+                <h3 id="agent-step-title" ref={agentStepHeadingRef} tabIndex={-1}>
+                  {agentStep === 1
+                    ? "选择要接入的 Agent"
+                    : agentStep === 2
+                      ? `允许 ${agentProviderLabel(agentProvider)} 在本机做什么？`
+                      : "复制命令，到终端运行"}
+                </h3>
+                {agentStep === 1 && <p>接入命令会根据所选 Agent 的运行环境自动调整。</p>}
+                {agentStep === 2 && (
+                  <p>权限只在 Agent 所在电脑生效，Hive Server 始终只转发消息。默认只读。</p>
+                )}
+                {agentStep === 3 && (
+                  <p>
+                    将以 <code>{agentNameFor(username, agentProvider)}</code> 身份加入 · 权限：
+                    <strong className={`agent-access-label ${agentAccess}`}>
+                      {agentAccessOptions.find((option) => option.id === agentAccess)?.label}
+                    </strong>
+                  </p>
+                )}
+              </div>
+
+              {agentStep === 1 && (
+                <div
+                  className="provider-selector"
+                  role="radiogroup"
+                  aria-labelledby="agent-step-title"
+                  onKeyDown={(event) =>
+                    moveRadioSelection(
+                      event,
+                      selectableAgentProviders.indexOf(agentProvider),
+                      (index) => setAgentProvider(selectableAgentProviders[index]!),
+                    )
+                  }
+                >
                   {selectableAgentProviders.map((provider) => (
                     <button
                       type="button"
+                      role="radio"
+                      aria-checked={agentProvider === provider}
+                      tabIndex={agentProvider === provider ? 0 : -1}
                       className={agentProvider === provider ? "active" : ""}
-                      aria-pressed={agentProvider === provider}
-                      onClick={() => {
-                        setAgentProvider(provider);
-                        setCopiedProvider(undefined);
-                        setCopyError(undefined);
-                      }}
+                      onClick={() => setAgentProvider(provider)}
                       key={provider}
                     >
                       <span className="provider-monogram" aria-hidden="true">
@@ -2392,175 +2574,177 @@ export function App() {
                     </button>
                   ))}
                 </div>
-              </section>
+              )}
 
-              <section className="agent-command-section" aria-labelledby="agent-command-title">
-                <div className="dialog-section-heading">
-                  <span>2</span>
-                  <div>
-                    <h3 id="agent-command-title">选择本机权限</h3>
-                    <p>权限由 Agent 所在电脑执行，默认保持只读。</p>
-                  </div>
-                </div>
-                <div className="access-selector" role="radiogroup" aria-label="Agent 本机权限">
-                  {agentAccessOptions.map((option) => (
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={agentAccess === option.id}
-                      aria-expanded={option.id === "full" ? fullAccessConfirmationOpen : undefined}
-                      className={`${option.id} ${agentAccess === option.id ? "active" : ""}`}
-                      onClick={() => {
-                        setCopiedProvider(undefined);
-                        setCopyError(undefined);
-                        if (option.id === "full" && agentAccess !== "full") {
-                          setFullAccessConfirmationOpen(true);
-                          return;
-                        }
-                        setFullAccessConfirmationOpen(false);
-                        setAgentAccess(option.id);
-                      }}
-                      key={option.id}
-                    >
-                      <span className="access-indicator" aria-hidden="true">
-                        <i />
-                      </span>
-                      <strong>{option.label}</strong>
-                      <small>{option.shortDescription}</small>
-                    </button>
-                  ))}
-                </div>
-                {agentProvider === "openclaw" && (
-                  <p className="openclaw-access-note">
-                    OpenClaw 的实际权限还需在其 Agent / Gateway 中设置；Hive 不会自动改写全局策略。
-                  </p>
-                )}
-                {fullAccessConfirmationOpen && agentAccess !== "full" && (
-                  <div className="full-access-confirmation" role="alert">
-                    <div>
-                      <strong>确认移除本机安全边界？</strong>
-                      <p>
-                        {agentProviderLabel(agentProvider)}{" "}
-                        将可以执行当前系统用户有权进行的操作；房间消息可能触发文件、命令或网络操作。
-                      </p>
-                    </div>
-                    <div className="full-access-actions">
-                      <button type="button" onClick={() => setFullAccessConfirmationOpen(false)}>
-                        取消
-                      </button>
+              {agentStep === 2 && (
+                <>
+                  <div
+                    className="access-selector"
+                    role="radiogroup"
+                    aria-labelledby="agent-step-title"
+                    onKeyDown={(event) =>
+                      moveRadioSelection(
+                        event,
+                        agentAccessOptions.findIndex((option) => option.id === agentAccess),
+                        (index) => chooseAgentAccess(agentAccessOptions[index]!.id),
+                      )
+                    }
+                  >
+                    {agentAccessOptions.map((option) => (
                       <button
                         type="button"
-                        onClick={() => {
-                          setAgentAccess("full");
-                          setFullAccessConfirmationOpen(false);
-                          setCopyError(undefined);
-                        }}
+                        role="radio"
+                        aria-checked={agentAccess === option.id}
+                        aria-expanded={
+                          option.id === "full" ? fullAccessConfirmationOpen : undefined
+                        }
+                        tabIndex={agentAccess === option.id ? 0 : -1}
+                        className={`${option.id} ${agentAccess === option.id ? "active" : ""}`}
+                        onClick={() => chooseAgentAccess(option.id)}
+                        key={option.id}
                       >
-                        我了解风险，开启完全访问
+                        <span className="access-indicator" aria-hidden="true">
+                          <i />
+                        </span>
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
                       </button>
+                    ))}
+                  </div>
+                  {agentProvider === "openclaw" && (
+                    <p className="openclaw-access-note">
+                      OpenClaw 的实际权限还需在其 Agent / Gateway 中设置；Hive
+                      不会自动改写全局策略。
+                    </p>
+                  )}
+                  {fullAccessConfirmationOpen && agentAccess !== "full" && (
+                    <div className="full-access-confirmation" role="alert">
+                      <div>
+                        <strong>确认移除本机安全边界？</strong>
+                        <p>
+                          {agentProviderLabel(agentProvider)}{" "}
+                          将可以执行当前系统用户有权进行的操作；房间消息可能触发文件、命令或网络操作。
+                        </p>
+                      </div>
+                      <div className="full-access-actions">
+                        <button type="button" onClick={() => setFullAccessConfirmationOpen(false)}>
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAgentAccess("full");
+                            setFullAccessConfirmationOpen(false);
+                          }}
+                        >
+                          我了解风险，开启完全访问
+                        </button>
+                      </div>
                     </div>
+                  )}
+                </>
+              )}
+
+              {agentStep === 3 && (
+                <>
+                  <div className="command">
+                    <div className="command-heading">
+                      <span className="terminal-dots" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <small>TERMINAL</small>
+                    </div>
+                    <code>{selectedAgentCommand}</code>
+                    <button type="button" disabled={!meta} onClick={() => void copyCommand()}>
+                      <Icon name={commandCopied ? "check" : "copy"} size={16} />
+                      <span>{commandCopied ? "已复制到剪贴板" : "复制命令"}</span>
+                    </button>
                   </div>
-                )}
-                <div className="dialog-section-heading command-step-heading">
-                  <span>3</span>
-                  <div>
-                    <h3>复制接入命令</h3>
-                    <p>在 {agentProviderLabel(agentProvider)} 所在电脑的终端中运行。</p>
-                  </div>
-                </div>
-                <div className="command">
-                  <div className="command-heading">
-                    <span className="terminal-dots" aria-hidden="true">
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <small>TERMINAL</small>
-                  </div>
-                  <code>{selectedAgentCommand}</code>
-                  <button type="button" disabled={!meta} onClick={() => void copyCommand()}>
-                    <Icon name={copiedProvider === agentProvider ? "check" : "copy"} size={16} />
-                    <span>{copiedProvider === agentProvider ? "已复制到剪贴板" : "复制命令"}</span>
-                  </button>
-                </div>
-                {copyError && (
-                  <p className="command-copy-error" role="alert">
-                    {copyError}
-                  </p>
-                )}
-                {meta && !meta.agentCommand.startsWith("npx") && (
-                  <p className="command-dev-note">
-                    开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码，
-                    而非已发布的 npm 包。
-                  </p>
-                )}
-                <div className="agent-next-steps" aria-label="接入后的操作">
-                  <p>
-                    <span>权限范围</span>
-                    {agentAccess === "read-only" ? (
-                      "只读或规划，不写入工作区"
-                    ) : agentAccess === "workspace" ? (
-                      <>
-                        当前终端目录 <code>--cwd .</code>
-                      </>
-                    ) : (
-                      "当前系统用户的全部权限"
-                    )}
-                  </p>
-                  <p>
-                    <span>运行后</span>Agent 会以{" "}
-                    <code>{agentNameFor(username, agentProvider)}</code> 加入
-                  </p>
-                  <p>
-                    <span>开始协作</span>在消息中输入{" "}
-                    <code>@{agentNameFor(username, agentProvider)}</code>
-                  </p>
-                  <p>
-                    <span>随时停止</span>终端按 <kbd>Ctrl + C</kbd> 即可离线
-                  </p>
-                </div>
-              </section>
+                  {copyError && (
+                    <p className="command-copy-error" role="alert">
+                      {copyError}
+                    </p>
+                  )}
+                  {meta && !meta.agentCommand.startsWith("npx") && (
+                    <p className="command-dev-note">
+                      开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码，
+                      而非已发布的 npm 包。
+                    </p>
+                  )}
+                  <ol className="agent-next-steps" aria-label="接入后的操作">
+                    <li>
+                      在 {agentProviderLabel(agentProvider)} 所在电脑的终端运行这条命令，Agent
+                      会加入所有房间并保持每个房间的独立上下文。
+                    </li>
+                    <li>
+                      在消息中输入 <code>@{agentNameFor(username, agentProvider)}</code>{" "}
+                      即可让它响应；没被 @ 时它只会旁听。
+                    </li>
+                    <li>
+                      终端按 <kbd>Ctrl + C</kbd> 即可让它离线。只想加入单个房间可在命令后追加{" "}
+                      <code>--room 房间ID</code>。
+                    </li>
+                  </ol>
+                </>
+              )}
             </div>
 
             <footer className="agent-dialog-footer">
-              <div className={`safety-note ${agentAccess}`}>
-                <Icon name="shield" size={18} />
-                <p>
-                  <strong>
-                    {agentAccess === "read-only"
-                      ? "只读模式 · 推荐"
-                      : agentAccess === "workspace"
-                        ? "工作区权限已开启"
-                        : "完全访问 · 高风险"}
-                  </strong>
-                  {agentAccess === "read-only"
-                    ? "Agent 保持只读或规划模式，不获得文件写入权限。"
-                    : agentAccess === "workspace"
-                      ? "Agent 可在指定工作目录内写文件和运行命令。"
-                      : "Agent 可执行当前系统用户有权进行的所有操作。"}
-                  {" Hive Server 始终只转发消息。"}
-                </p>
+              {agentStep === 3 && (
+                <div className="agent-dialog-links">
+                  <details className="connection-details">
+                    <summary>查看连接信息</summary>
+                    <dl>
+                      <div>
+                        <dt>SERVER</dt>
+                        <dd>
+                          <code>{meta?.httpUrl ?? base}</code>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>HIVE MCP</dt>
+                        <dd>
+                          <code>{meta?.mcpUrl ?? `${base}/mcp`}</code>
+                        </dd>
+                      </div>
+                    </dl>
+                  </details>
+                  <a
+                    className="agent-doc"
+                    href={`${base}/agent.md`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    行为与安全规则 <Icon name="external" size={15} />
+                  </a>
+                </div>
+              )}
+              <div className="agent-dialog-nav">
+                {agentStep > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => goToAgentStep((agentStep - 1) as AgentSetupStep)}
+                  >
+                    上一步
+                  </button>
+                )}
+                {agentStep < 3 ? (
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => goToAgentStep((agentStep + 1) as AgentSetupStep)}
+                  >
+                    <span>下一步</span>
+                    <Icon name="arrow-right" size={16} />
+                  </button>
+                ) : (
+                  <button type="button" onClick={closeAgentDialog}>
+                    完成
+                  </button>
+                )}
               </div>
-              <details className="connection-details">
-                <summary>查看连接信息</summary>
-                <dl>
-                  <div>
-                    <dt>SERVER</dt>
-                    <dd>
-                      <code>{meta?.httpUrl ?? base}</code>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>HIVE MCP</dt>
-                    <dd>
-                      <code>{meta?.mcpUrl ?? `${base}/mcp`}</code>
-                    </dd>
-                  </div>
-                </dl>
-              </details>
-              <a className="agent-doc" href={`${base}/agent.md`} target="_blank" rel="noreferrer">
-                查看行为与安全规则 <Icon name="external" size={15} />
-              </a>
             </footer>
           </div>
         </div>
@@ -2760,20 +2944,52 @@ export function App() {
                           </span>
                         </div>
                       )}
-                    <div className="settings-group settings-switch-list">
-                      <SettingsSwitch
-                        checked={mentionNotifications}
-                        disabled={notificationPermission === "unsupported"}
-                        label="提及我的消息"
-                        description="页面不在前台时，通过系统通知提醒我"
-                        onChange={(checked) =>
-                          void updateBrowserNotificationPreference(
-                            checked,
-                            storedMentionNotificationsKey,
-                            setMentionNotifications,
-                          )
-                        }
-                      />
+                    {notificationPermission === "default" && messageNotifications !== "off" && (
+                      <div className="notification-permission-note" role="status">
+                        <Icon name="bell" size={16} />
+                        <span>浏览器尚未授权通知，当前选项要等授权后才会生效。</span>
+                        <button type="button" onClick={() => void ensureNotificationPermission()}>
+                          立即授权
+                        </button>
+                      </div>
+                    )}
+                    <div className="settings-group">
+                      <div className="settings-section-heading">
+                        <div>
+                          <h4>消息通知</h4>
+                          <p>页面不在前台时，通过系统通知提醒我。</p>
+                        </div>
+                        <span>MESSAGES</span>
+                      </div>
+                      <div
+                        className="shortcut-selector notification-modes"
+                        role="radiogroup"
+                        aria-label="消息通知"
+                      >
+                        {messageNotificationOptions.map((option) => (
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={messageNotifications === option.id}
+                            disabled={
+                              notificationPermission === "unsupported" && option.id !== "off"
+                            }
+                            className={messageNotifications === option.id ? "active" : ""}
+                            onClick={() => void updateMessageNotifications(option.id)}
+                            key={option.id}
+                          >
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.description}</small>
+                            </span>
+                            <i aria-hidden="true">
+                              <Icon name="check" size={14} />
+                            </i>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="settings-group divided settings-switch-list">
                       <SettingsSwitch
                         checked={notificationSound}
                         label="新消息提示音"
@@ -2789,13 +3005,7 @@ export function App() {
                         disabled={notificationPermission === "unsupported"}
                         label="Agent 上下线"
                         description="页面不在前台时，提醒 Agent 离线或重新上线"
-                        onChange={(checked) =>
-                          void updateBrowserNotificationPreference(
-                            checked,
-                            storedPresenceNotificationsKey,
-                            setPresenceNotifications,
-                          )
-                        }
+                        onChange={(checked) => void updatePresenceNotifications(checked)}
                       />
                     </div>
                     <p className="settings-local-note">
