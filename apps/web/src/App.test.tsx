@@ -6,6 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Participant, ServerEvent } from "@ai-hive/protocol";
 import { App } from "./App";
 
+type RoomSnapshotEvent = Extract<ServerEvent, { type: "room.snapshot" }>;
+// 与 zod 输入类型一致：快照里的 invocations / whiteboard 有默认值，可以省略
+type ServerEventInput =
+  | Exclude<ServerEvent, RoomSnapshotEvent>
+  | (Omit<RoomSnapshotEvent, "invocations" | "whiteboard"> &
+      Partial<Pick<RoomSnapshotEvent, "invocations" | "whiteboard">>);
+
 class FakeWebSocket {
   static readonly OPEN = 1;
   static readonly instances: FakeWebSocket[] = [];
@@ -38,7 +45,7 @@ class FakeWebSocket {
     this.emit("open", new Event("open"));
   }
 
-  serverEvent(event: ServerEvent): void {
+  serverEvent(event: ServerEventInput): void {
     this.emit("message", new MessageEvent("message", { data: JSON.stringify(event) }));
   }
 
@@ -613,6 +620,104 @@ describe("App mention autocomplete", () => {
     expect(window.location.hash).toBe("#design");
   });
 
+  it("lets a user recall their own message and renders tombstones for everyone", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const agent = participant("00000000-0000-4000-8000-000000000002", "backend-agent", "agent");
+    const base = {
+      roomId: "general",
+      mentions: [] as string[],
+      traceId: "00000000-0000-4000-8000-000000000011",
+      hopCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    const mine = {
+      ...base,
+      id: "00000000-0000-4000-8000-000000000010",
+      seq: 1,
+      senderId: self.id,
+      senderName: "Alice",
+      senderType: "human" as const,
+      content: "发错群了，密钥是 sk-secret",
+    };
+    const theirs = {
+      ...base,
+      id: "00000000-0000-4000-8000-000000000020",
+      seq: 2,
+      senderId: agent.id,
+      senderName: "backend-agent",
+      senderType: "agent" as const,
+      content: "收到",
+    };
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, agent],
+        messages: [mine, theirs],
+        latestSeq: 2,
+      }),
+    );
+    // 消息列表渲染在 shadow root 内，screen 查询不到
+    const list = () =>
+      within(document.querySelector(".message-list")!.shadowRoot as unknown as HTMLElement);
+    await waitFor(() => expect(list().getByText("发错群了，密钥是 sk-secret")).toBeTruthy());
+
+    // 只有自己的消息有撤回入口
+    const recallButtons = list().getAllByRole("button", { name: "撤回这条消息" });
+    expect(recallButtons).toHaveLength(1);
+    expect(list().getByRole("button", { name: "在输入框中提及 backend-agent" })).toBeTruthy();
+
+    // 二次确认：先取消，再确认
+    await user.click(recallButtons[0]!);
+    const confirm = list().getByRole("group", { name: "确认撤回" });
+    await user.click(within(confirm).getByRole("button", { name: "取消" }));
+    expect(list().queryByRole("group", { name: "确认撤回" })).toBeNull();
+    const sentBefore = socket.sent.length;
+    await user.click(list().getByRole("button", { name: "撤回这条消息" }));
+    await user.click(
+      within(list().getByRole("group", { name: "确认撤回" })).getByRole("button", { name: "撤回" }),
+    );
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "message.delete", messageId: mine.id });
+    expect(socket.sent).toHaveLength(sentBefore + 1);
+
+    // 服务端广播墓碑：正文消失、操作按钮消失、显示占位
+    act(() =>
+      socket.serverEvent({
+        type: "message.deleted",
+        message: { ...mine, content: "", mentions: [], deletedAt: new Date().toISOString() },
+      }),
+    );
+    expect(list().queryByText("发错群了，密钥是 sk-secret")).toBeNull();
+    expect(list().getByText("你撤回了一条消息")).toBeTruthy();
+    expect(list().queryByRole("button", { name: "撤回这条消息" })).toBeNull();
+
+    act(() =>
+      socket.serverEvent({
+        type: "message.deleted",
+        message: { ...theirs, content: "", mentions: [], deletedAt: new Date().toISOString() },
+      }),
+    );
+    expect(list().getByText("backend-agent 撤回了一条消息")).toBeTruthy();
+    expect(list().queryByRole("button", { name: "在输入框中提及 backend-agent" })).toBeNull();
+
+    act(() =>
+      socket.serverEvent({
+        type: "error",
+        code: "FORBIDDEN",
+        message: "Only the sender can recall a message.",
+      }),
+    );
+    expect(screen.getByRole("alert").textContent).toContain("只能撤回自己发送的消息");
+  });
+
   it("asks returning users to grant notification permission from an in-app prompt", async () => {
     const user = userEvent.setup();
     localStorage.setItem("ai-hive.username", "Alice");
@@ -687,5 +792,283 @@ describe("App mention autocomplete", () => {
     });
     await waitFor(() => expect(window.location.hash).toBe("#design"));
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("shows per-message invocation chips and sends retry, cancel, and budget actions", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const backend = participant("00000000-0000-4000-8000-000000000002", "backend-agent", "agent");
+    const frontend = participant("00000000-0000-4000-8000-000000000003", "frontend-agent", "agent");
+    const reviewer = participant("00000000-0000-4000-8000-000000000004", "reviewer-agent", "agent");
+    const now = new Date().toISOString();
+    const messageBase = {
+      roomId: "general",
+      traceId: "00000000-0000-4000-8000-000000000011",
+      hopCount: 0,
+      createdAt: now,
+    };
+    const trigger = {
+      ...messageBase,
+      id: "00000000-0000-4000-8000-000000000010",
+      seq: 1,
+      senderId: self.id,
+      senderName: "Alice",
+      senderType: "human" as const,
+      mentions: ["backend-agent", "frontend-agent", "reviewer-agent"],
+      content: "@backend-agent @frontend-agent @reviewer-agent 一起看看构建",
+    };
+    const plain = {
+      ...messageBase,
+      id: "00000000-0000-4000-8000-000000000030",
+      seq: 2,
+      senderId: self.id,
+      senderName: "Alice",
+      senderType: "human" as const,
+      mentions: [] as string[],
+      content: "没有 @ 的普通消息",
+    };
+    const reply = {
+      ...messageBase,
+      id: "00000000-0000-4000-8000-000000000020",
+      seq: 3,
+      senderId: backend.id,
+      senderName: "backend-agent",
+      senderType: "agent" as const,
+      mentions: [] as string[],
+      content: "构建已修好",
+    };
+    const invocationBase = {
+      roomId: "general",
+      messageId: trigger.id,
+      requesterName: "Alice",
+      requesterType: "human" as const,
+      attempts: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const running = {
+      ...invocationBase,
+      id: "00000000-0000-4000-8000-0000000000a1",
+      agentId: backend.id,
+      agentName: "backend-agent",
+      status: "running" as const,
+      progress: "执行命令：pnpm test",
+      receivedAt: now,
+      startedAt: new Date(Date.now() - 125_000).toISOString(),
+    };
+    const failed = {
+      ...invocationBase,
+      id: "00000000-0000-4000-8000-0000000000a2",
+      agentId: frontend.id,
+      agentName: "frontend-agent",
+      status: "failed" as const,
+      detail: "进程退出码 1",
+      attempts: 2,
+    };
+    const blocked = {
+      ...invocationBase,
+      id: "00000000-0000-4000-8000-0000000000a3",
+      agentId: reviewer.id,
+      agentName: "reviewer-agent",
+      status: "blocked" as const,
+      blockReason: "consecutive_limit" as const,
+      detail: "Agent 之间已连续对话 8 轮",
+    };
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, backend, frontend, reviewer],
+        messages: [trigger, plain, reply],
+        latestSeq: 3,
+        invocations: [running, failed, blocked],
+        whiteboard: [],
+      }),
+    );
+    const shadow = () =>
+      document.querySelector(".message-list")!.shadowRoot as unknown as HTMLElement;
+    const list = () => within(shadow());
+    await waitFor(() => expect(list().getByRole("list", { name: "Agent 调用状态" })).toBeTruthy());
+
+    const chips = list().getByRole("list", { name: "Agent 调用状态" });
+    expect(within(chips).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(chips).getByText("执行命令：pnpm test")).toBeTruthy();
+    expect(within(chips).getByText("2分钟")).toBeTruthy();
+    expect(within(chips).getByText("第2次")).toBeTruthy();
+    expect(within(chips).getByText("Agent 之间已连续对话 8 轮")).toBeTruthy();
+    // 只有触发了调用的消息才有状态行
+    expect(list().getAllByRole("list", { name: "Agent 调用状态" })).toHaveLength(1);
+
+    await user.click(within(chips).getByRole("button", { name: "停止 @backend-agent" }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+      type: "invocation.cancel",
+      invocationId: running.id,
+    });
+    await user.click(within(chips).getByRole("button", { name: "重试 @frontend-agent" }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+      type: "invocation.retry",
+      invocationId: failed.id,
+    });
+    await user.click(
+      within(chips).getByRole("button", { name: "为 Agent 对话追加 5 轮，恢复 @reviewer-agent" }),
+    );
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "budget.extend", turns: 5 });
+
+    // 房间级提示同样可以续命
+    const notice = screen.getByRole("status", { name: "Agent 连续对话已暂停" });
+    await user.click(within(notice).getByRole("button", { name: "继续 5 轮" }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "budget.extend", turns: 5 });
+
+    // 被拦下的调用恢复后提示消失；运行中的调用完成后可以跳到回复
+    act(() => {
+      socket.serverEvent({
+        type: "invocation.updated",
+        invocation: { ...blocked, status: "queued", blockReason: undefined, attempts: 2 },
+      });
+      socket.serverEvent({
+        type: "invocation.updated",
+        invocation: {
+          ...running,
+          status: "completed",
+          progress: undefined,
+          replyMessageId: reply.id,
+          finishedAt: new Date().toISOString(),
+          updatedAt: new Date(Date.now() + 1000).toISOString(),
+        },
+      });
+    });
+    expect(screen.queryByRole("status", { name: "Agent 连续对话已暂停" })).toBeNull();
+    expect(list().queryByText("执行命令：pnpm test")).toBeNull();
+    expect(list().queryByRole("button", { name: "停止 @backend-agent" })).toBeNull();
+    const jump = list().getByRole("button", { name: /^@backend-agent，已完成.*跳到回复$/ });
+    await user.click(jump);
+    const replyArticle = shadow().querySelector(`[data-message-id="${reply.id}"]`)!;
+    expect(replyArticle.classList.contains("highlighted")).toBe(true);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+
+    act(() =>
+      socket.serverEvent({
+        type: "error",
+        code: "INVOCATION_NOT_RETRYABLE",
+        message: "This invocation cannot be retried now.",
+      }),
+    );
+    expect(screen.getByRole("alert").textContent).toContain("这次调用当前无法重试");
+  });
+
+  it("shows the room whiteboard grouped by slot and keeps it in sync", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const agent = participant("00000000-0000-4000-8000-000000000002", "backend-agent", "agent");
+    const now = new Date().toISOString();
+    const entryBase = {
+      roomId: "general",
+      authorId: agent.id,
+      authorName: "backend-agent",
+      unblocks: [] as string[],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const ready = {
+      ...entryBase,
+      id: "00000000-0000-4000-8000-0000000000b1",
+      key: "api",
+      slot: "ready" as const,
+      summary: "登录 API 已合入，可以接前端",
+      repo: "ai-hive",
+      branch: "feat/login",
+      commit: "0123456789abcdef0123",
+      unblocks: ["frontend-login"],
+    };
+    const blockedEntry = {
+      ...entryBase,
+      id: "00000000-0000-4000-8000-0000000000b2",
+      key: "db",
+      slot: "blocked" as const,
+      summary: "等待数据库迁移权限",
+    };
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, agent],
+        messages: [],
+        latestSeq: 0,
+        invocations: [],
+        whiteboard: [ready, blockedEntry],
+      }),
+    );
+
+    const panel = screen.getByLabelText("成员列表");
+    const tab = within(panel).getByRole("tab", { name: /白板/ });
+    expect(tab.getAttribute("aria-selected")).toBe("false");
+    await user.click(tab);
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    const board = within(panel).getByRole("tabpanel");
+    const headings = within(board)
+      .getAllByRole("heading")
+      .map((heading) => heading.textContent);
+    expect(headings).toEqual(["阻塞1", "已就绪1"]);
+    expect(within(board).getByText("登录 API 已合入，可以接前端")).toBeTruthy();
+    expect(within(board).getByText("feat/login")).toBeTruthy();
+    expect(within(board).getByText("0123456")).toBeTruthy();
+    expect(within(board).getByText("解除阻塞：frontend-login")).toBeTruthy();
+
+    act(() =>
+      socket.serverEvent({
+        type: "whiteboard.updated",
+        entry: {
+          ...entryBase,
+          id: "00000000-0000-4000-8000-0000000000b3",
+          key: "ui",
+          slot: "in_progress",
+          summary: "正在做登录页",
+        },
+      }),
+    );
+    expect(
+      within(board)
+        .getAllByRole("heading")
+        .map((heading) => heading.textContent),
+    ).toEqual(["阻塞1", "进行中1", "已就绪1"]);
+
+    await user.click(within(board).getByRole("button", { name: "从白板移除：等待数据库迁移权限" }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+      type: "whiteboard.remove",
+      entryId: blockedEntry.id,
+    });
+    act(() =>
+      socket.serverEvent({
+        type: "whiteboard.removed",
+        roomId: "general",
+        entryId: blockedEntry.id,
+      }),
+    );
+    expect(within(board).queryByText("等待数据库迁移权限")).toBeNull();
+
+    act(() => {
+      socket.serverEvent({ type: "whiteboard.removed", roomId: "general", entryId: ready.id });
+      socket.serverEvent({
+        type: "whiteboard.removed",
+        roomId: "general",
+        entryId: "00000000-0000-4000-8000-0000000000b3",
+      });
+    });
+    expect(within(panel).getByText("白板还是空的")).toBeTruthy();
+    expect(within(panel).getByText("hive_board_update")).toBeTruthy();
   });
 });

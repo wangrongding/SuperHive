@@ -14,12 +14,14 @@ import {
 } from "react";
 import type {
   ChatMessage,
+  Invocation,
   MessagesResponse,
   MetaResponse,
   Participant,
   RoomSummary,
   RoomsResponse,
   ServerEvent,
+  WhiteboardEntry,
 } from "@ai-hive/protocol";
 import {
   applyMention,
@@ -28,6 +30,13 @@ import {
   type MentionContext,
 } from "./mention-autocomplete";
 import { createClientMessageId } from "./client-id";
+import {
+  InvocationChips,
+  groupInvocationsByMessage,
+  isExtendableBlock,
+  upsertInvocation,
+} from "./invocations";
+import { WhiteboardPanel, upsertWhiteboardEntry } from "./whiteboard";
 import { easeInOutCubic, easeOutQuint } from "./easing";
 import { ShadowContent } from "./shadow-content";
 import { buildShareMarkdown, downloadFile, formatShareTimestamp, shareFilename } from "./share";
@@ -66,10 +75,12 @@ type InterfaceDensity = "comfortable" | "compact";
 type MessageSize = "small" | "standard" | "large";
 type BrowserNotificationPermission = NotificationPermission | "unsupported";
 type MobilePanel = "members" | "rooms";
+type SidePanelTab = "members" | "whiteboard";
 type IconName =
   | "arrow-down"
   | "arrow-right"
   | "bell"
+  | "board"
   | "check"
   | "close"
   | "copy"
@@ -82,6 +93,7 @@ type IconName =
   | "settings"
   | "share"
   | "shield"
+  | "undo"
   | "users";
 
 const selectableAgentProviders = ["codex", "claude", "copilot", "openclaw"] as const;
@@ -120,6 +132,9 @@ const agentSetupSteps: Array<{ step: AgentSetupStep; label: string }> = [
   { step: 2, label: "设置权限" },
   { step: 3, label: "复制命令" },
 ];
+
+/** "继续"按钮一次追加的 Agent 互相对话轮数 */
+const budgetExtendTurns = 5;
 
 const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = [
   { id: "chat", label: "聊天与输入", description: "发送、草稿与时间" },
@@ -224,6 +239,12 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
     "arrow-down": <path d="M12 5v14m-5-5 5 5 5-5" />,
     "arrow-right": <path d="M5 12h14m-5-5 5 5-5 5" />,
+    board: (
+      <>
+        <rect x="5" y="4" width="14" height="17" rx="2" />
+        <path d="M9 3h6v3H9zM9 11h6M9 15h4" />
+      </>
+    ),
     check: <path d="m5 12 4 4L19 6" />,
     close: <path d="m6 6 12 12M18 6 6 18" />,
     copy: (
@@ -236,6 +257,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       <path d="M14 5h5v5m0-5-8 8M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
     ),
     bell: <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2H4.5L6 16Zm4 4a2 2 0 0 0 4 0" />,
+    undo: <path d="M9 14 4 9l5-5M4 9h9.5a6.5 6.5 0 0 1 0 13H11" />,
     hash: <path d="M9 4 7 20M17 4l-2 16M4 9h17M3 15h17" />,
     logout: <path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4m5-4 3-3-3-3m3 3H9" />,
     plug: <path d="M8 3v4m8-4v4M6 7h12v2a6 6 0 0 1-6 6v0a6 6 0 0 1-6-6V7Zm6 8v6" />,
@@ -588,6 +610,11 @@ export function App() {
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [invocations, setInvocations] = useState<ReadonlyMap<string, Invocation>>(new Map());
+  const [whiteboard, setWhiteboard] = useState<ReadonlyMap<string, WhiteboardEntry>>(new Map());
+  const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("members");
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
+  const [pendingJumpId, setPendingJumpId] = useState<string>();
   const [draft, setDraft] = useState(() => {
     const storedUsername = localStorage.getItem(storedUsernameKey) ?? "";
     return storedUsername && storedBoolean(storedAutoSaveDraftKey, true)
@@ -622,13 +649,14 @@ export function App() {
   const [shadowHost, setShadowHost] = useState<HTMLDivElement | null>(null);
   const [scrollContentElement, setScrollContentElement] = useState<HTMLDivElement | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string>();
+  const [recallCandidateId, setRecallCandidateId] = useState<string>();
   const [shareMode, setShareMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(new Set());
   const [shareBusy, setShareBusy] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string>();
   const shareCardRef = useRef<HTMLDivElement>(null);
   const selectedMessages = useMemo(
-    () => messages.filter((message) => selectedMessageIds.has(message.id)),
+    () => messages.filter((message) => selectedMessageIds.has(message.id) && !message.deletedAt),
     [messages, selectedMessageIds],
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -732,6 +760,23 @@ export function App() {
   const timeline = useMemo(
     () => buildTimeline(hiddenCount > 0 ? messages.slice(-visibleLimit) : messages),
     [messages, visibleLimit, hiddenCount],
+  );
+  const invocationsByMessage = useMemo(() => groupInvocationsByMessage(invocations), [invocations]);
+  const pausedInvocations = useMemo(
+    () => [...invocations.values()].filter(isExtendableBlock),
+    [invocations],
+  );
+  const whiteboardBlockedCount = useMemo(
+    () => [...whiteboard.values()].filter((entry) => entry.slot === "blocked").length,
+    [whiteboard],
+  );
+  const pausedAgentNames = useMemo(
+    () => [...new Set(pausedInvocations.map((invocation) => `@${invocation.agentName}`))],
+    [pausedInvocations],
+  );
+  const loadedMessageIds = useMemo(
+    () => new Set(messages.filter((message) => !message.deletedAt).map((message) => message.id)),
+    [messages],
   );
   const formatMessageTime = useCallback(
     (iso: string) =>
@@ -1158,6 +1203,10 @@ export function App() {
       if (roomId === currentRoomId) return;
       markRoomRead(currentRoomId);
       setMessages([]);
+      setInvocations(new Map());
+      setWhiteboard(new Map());
+      setHighlightedMessageId(undefined);
+      setPendingJumpId(undefined);
       setParticipants([]);
       participantStatusRef.current = new Map();
       latestSeqRef.current = 0;
@@ -1266,6 +1315,11 @@ export function App() {
           );
           setParticipants(event.participants);
           setMessages((current) => mergeMessages(current, event.messages));
+          // 快照里的调用与白板是服务端当前全集，直接替换（重连期间的变化也一并对齐）
+          setInvocations(
+            new Map((event.invocations ?? []).map((invocation) => [invocation.id, invocation])),
+          );
+          setWhiteboard(new Map((event.whiteboard ?? []).map((entry) => [entry.id, entry])));
           latestSeqRef.current = Math.max(latestSeqRef.current, event.latestSeq);
           retryRef.current = 0;
           setConnectionState("online");
@@ -1273,6 +1327,10 @@ export function App() {
           void refreshRooms().catch(() => undefined);
           if (beforeReconnect > 0)
             void catchUp(beforeReconnect).catch((reason: unknown) => setError(String(reason)));
+        } else if (event.type === "message.deleted") {
+          if (event.message.roomId !== currentRoomId) return;
+          setMessages((current) => mergeMessages(current, [event.message]));
+          setRecallCandidateId((current) => (current === event.message.id ? undefined : current));
         } else if (event.type === "message.created") {
           if (event.message.roomId !== currentRoomId) return;
           setMessages((current) => mergeMessages(current, [event.message]));
@@ -1296,6 +1354,20 @@ export function App() {
               );
             }
           }
+        } else if (event.type === "invocation.updated") {
+          if (event.invocation.roomId !== currentRoomId) return;
+          setInvocations((current) => upsertInvocation(current, event.invocation));
+        } else if (event.type === "whiteboard.updated") {
+          if (event.entry.roomId !== currentRoomId) return;
+          setWhiteboard((current) => upsertWhiteboardEntry(current, event.entry));
+        } else if (event.type === "whiteboard.removed") {
+          if (event.roomId !== currentRoomId) return;
+          setWhiteboard((current) => {
+            if (!current.has(event.entryId)) return current;
+            const next = new Map(current);
+            next.delete(event.entryId);
+            return next;
+          });
         } else if (event.type === "presence.changed") {
           const previousStatus = participantStatusRef.current.get(event.participant.id);
           participantStatusRef.current.set(event.participant.id, event.participant.status);
@@ -1344,6 +1416,14 @@ export function App() {
             setError(`房间 # ${currentRoomId} 已归档，无法加入，已切换回默认房间。`);
             socket.close();
             switchRoom("general");
+          } else if (event.code === "FORBIDDEN") {
+            setError("只能撤回自己发送的消息。");
+          } else if (event.code === "MESSAGE_NOT_FOUND" || event.code === "DELETE_FAILED") {
+            setError("撤回失败：消息不存在或已被处理。");
+          } else if (event.code === "INVOCATION_NOT_RETRYABLE") {
+            setError("这次调用当前无法重试：它可能已在进行中，或触发消息已被撤回。");
+          } else if (event.code === "INVOCATION_NOT_FOUND") {
+            setError("找不到这次调用，它可能属于其他房间或已被清理。");
           } else {
             setError(event.message);
           }
@@ -1372,6 +1452,30 @@ export function App() {
       socketRef.current?.close();
     };
   }, [catchUp, currentRoomId, meta, refreshRooms, switchRoom, upsertRoom, username]);
+
+  // 点击已完成的调用跳到 Agent 回复：等目标消息挂载（可能需要先扩大渲染窗口）后再滚动并短暂高亮
+  useEffect(() => {
+    if (!pendingJumpId) return;
+    const list = messageListRef.current;
+    const root = list?.shadowRoot ?? list;
+    const target = root?.querySelector<HTMLElement>(`[data-message-id="${pendingJumpId}"]`);
+    if (!target) return;
+    setPendingJumpId(undefined);
+    cancelAnimationFrame(bottomAnimationRef.current);
+    bottomAnimationRef.current = 0;
+    detachAnimationCancelRef.current?.();
+    nearBottomRef.current = false;
+    const reduce =
+      document.documentElement.dataset.reduceMotion === "true" ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    setHighlightedMessageId(pendingJumpId);
+    const timer = window.setTimeout(
+      () => setHighlightedMessageId((current) => (current === pendingJumpId ? undefined : current)),
+      2200,
+    );
+    return () => window.clearTimeout(timer);
+  }, [pendingJumpId, timeline]);
 
   if (!username) {
     return (
@@ -1487,6 +1591,49 @@ export function App() {
     } catch {
       setError("浏览器未允许自动复制，请手动输入序号。");
     }
+  }
+
+  function recallMessage(messageId: string) {
+    const socket = socketRef.current;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      setError("当前未连接到 Hive Server，无法撤回。");
+      return;
+    }
+    socket.send(JSON.stringify({ type: "message.delete", messageId }));
+    setRecallCandidateId(undefined);
+  }
+
+  function sendClientEvent(payload: Record<string, unknown>, failure: string): void {
+    const socket = socketRef.current;
+    if (socket?.readyState !== WebSocket.OPEN) {
+      setError(`当前未连接到 Hive Server，${failure}`);
+      return;
+    }
+    socket.send(JSON.stringify(payload));
+  }
+
+  function retryInvocation(invocation: Invocation) {
+    sendClientEvent({ type: "invocation.retry", invocationId: invocation.id }, "无法重试。");
+  }
+
+  function cancelInvocation(invocation: Invocation) {
+    sendClientEvent({ type: "invocation.cancel", invocationId: invocation.id }, "无法停止。");
+  }
+
+  function extendAgentBudget() {
+    sendClientEvent({ type: "budget.extend", turns: budgetExtendTurns }, "无法继续 Agent 对话。");
+  }
+
+  function removeWhiteboardEntry(entry: WhiteboardEntry) {
+    sendClientEvent({ type: "whiteboard.remove", entryId: entry.id }, "无法移除白板条目。");
+  }
+
+  function jumpToMessage(messageId: string) {
+    const index = messages.findIndex((message) => message.id === messageId);
+    if (index < 0) return;
+    const needed = messages.length - index;
+    if (needed > visibleLimit) setVisibleLimit(needed + 10);
+    setPendingJumpId(messageId);
   }
 
   function toggleMessageSelected(messageId: string) {
@@ -1841,7 +1988,7 @@ export function App() {
               <span>{shareMode ? "取消" : "分享"}</span>
             </button>
           </div>
-          {(error || showNotificationPrompt) && (
+          {(error || showNotificationPrompt || pausedInvocations.length > 0) && (
             <div className="chat-notices">
               {error && (
                 <div className="error-banner" role="alert">
@@ -1853,6 +2000,25 @@ export function App() {
                   >
                     <Icon name="close" size={16} />
                   </button>
+                </div>
+              )}
+              {pausedInvocations.length > 0 && (
+                <div
+                  className="notification-prompt budget-prompt"
+                  role="status"
+                  aria-label="Agent 连续对话已暂停"
+                >
+                  <Icon name="shield" size={18} />
+                  <p>
+                    <strong>Agent 连续对话已暂停，等待你确认</strong>
+                    {pausedAgentNames.slice(0, 3).join("、")}
+                    {pausedAgentNames.length > 3 ? " 等" : ""} 的调用触及了轮数上限。
+                  </p>
+                  <div className="notification-prompt-actions">
+                    <button type="button" className="primary" onClick={extendAgentBudget}>
+                      继续 {budgetExtendTurns} 轮
+                    </button>
+                  </div>
                 </div>
               )}
               {showNotificationPrompt && (
@@ -1930,14 +2096,21 @@ export function App() {
                       )}
                       <article
                         className={`message ${message.senderType} ${grouped ? "grouped" : ""} ${
-                          shareMode ? "selectable" : ""
-                        } ${selectedMessageIds.has(message.id) ? "selected" : ""}`}
+                          shareMode && !message.deletedAt ? "selectable" : ""
+                        } ${selectedMessageIds.has(message.id) ? "selected" : ""} ${
+                          message.deletedAt ? "deleted" : ""
+                        } ${highlightedMessageId === message.id ? "highlighted" : ""}`}
+                        data-message-id={message.id}
                         style={
                           message.senderType === "human"
                             ? avatarHueStyle(message.senderName)
                             : undefined
                         }
-                        onClick={shareMode ? () => toggleMessageSelected(message.id) : undefined}
+                        onClick={
+                          shareMode && !message.deletedAt
+                            ? () => toggleMessageSelected(message.id)
+                            : undefined
+                        }
                       >
                         {grouped ? (
                           <span className="hover-time" aria-hidden="true">
@@ -1974,15 +2147,37 @@ export function App() {
                               </button>
                             </header>
                           )}
-                          <div className="message-body">
-                            <Suspense
-                              fallback={<p className="message-body-fallback">{message.content}</p>}
-                            >
-                              <MessageMarkdown content={message.content} />
-                            </Suspense>
-                          </div>
+                          {message.deletedAt ? (
+                            <p className="message-recalled">
+                              {message.senderName.toLocaleLowerCase() ===
+                              username.toLocaleLowerCase()
+                                ? "你撤回了一条消息"
+                                : `${message.senderName} 撤回了一条消息`}
+                            </p>
+                          ) : (
+                            <div className="message-body">
+                              <Suspense
+                                fallback={
+                                  <p className="message-body-fallback">{message.content}</p>
+                                }
+                              >
+                                <MessageMarkdown content={message.content} />
+                              </Suspense>
+                            </div>
+                          )}
+                          {invocationsByMessage.has(message.id) && (
+                            <InvocationChips
+                              invocations={invocationsByMessage.get(message.id) ?? []}
+                              participants={participants}
+                              canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
+                              onJump={jumpToMessage}
+                              onRetry={retryInvocation}
+                              onCancel={cancelInvocation}
+                              onExtend={extendAgentBudget}
+                            />
+                          )}
                         </div>
-                        {shareMode ? (
+                        {message.deletedAt ? null : shareMode ? (
                           <span
                             className={`select-indicator ${
                               selectedMessageIds.has(message.id) ? "on" : ""
@@ -2019,7 +2214,7 @@ export function App() {
                               />
                             </button>
                             {message.senderName.toLocaleLowerCase() !==
-                              username.toLocaleLowerCase() && (
+                            username.toLocaleLowerCase() ? (
                               <button
                                 type="button"
                                 className="message-action"
@@ -2028,6 +2223,37 @@ export function App() {
                                 onClick={() => appendMention(message.senderName)}
                               >
                                 @
+                              </button>
+                            ) : recallCandidateId === message.id ? (
+                              <span
+                                className="message-recall-confirm"
+                                role="group"
+                                aria-label="确认撤回"
+                              >
+                                <span>撤回这条消息？</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setRecallCandidateId(undefined)}
+                                >
+                                  取消
+                                </button>
+                                <button
+                                  type="button"
+                                  className="danger"
+                                  onClick={() => recallMessage(message.id)}
+                                >
+                                  撤回
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="message-action danger"
+                                aria-label="撤回这条消息"
+                                title="撤回"
+                                onClick={() => setRecallCandidateId(message.id)}
+                              >
+                                <Icon name="undo" size={13} />
                               </button>
                             )}
                           </div>
@@ -2341,12 +2567,68 @@ export function App() {
           className={`members-panel panel ${mobilePanel === "members" ? "mobile-open" : ""}`}
           aria-label="成员列表"
         >
-          <div className="panel-heading">
-            <span className="panel-title">
-              <Icon name="users" size={16} />
-              成员
-            </span>
-            <span className="panel-meta">{online.length} ONLINE</span>
+          <div className="panel-heading side-panel-heading">
+            <div
+              className="side-tabs"
+              role="tablist"
+              aria-label="侧栏视图"
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next: SidePanelTab =
+                  event.key === "Home"
+                    ? "members"
+                    : event.key === "End"
+                      ? "whiteboard"
+                      : sidePanelTab === "members"
+                        ? "whiteboard"
+                        : "members";
+                setSidePanelTab(next);
+                event.currentTarget.querySelector<HTMLButtonElement>(`#side-tab-${next}`)?.focus();
+              }}
+            >
+              <button
+                type="button"
+                role="tab"
+                id="side-tab-members"
+                aria-selected={sidePanelTab === "members"}
+                aria-controls="side-panel-members"
+                tabIndex={sidePanelTab === "members" ? 0 : -1}
+                className={sidePanelTab === "members" ? "active" : ""}
+                onClick={() => setSidePanelTab("members")}
+              >
+                <Icon name="users" size={15} />
+                成员
+                <span className="side-tab-count" aria-label={`${online.length} 位在线`}>
+                  {online.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="side-tab-whiteboard"
+                aria-selected={sidePanelTab === "whiteboard"}
+                aria-controls="side-panel-whiteboard"
+                tabIndex={sidePanelTab === "whiteboard" ? 0 : -1}
+                className={sidePanelTab === "whiteboard" ? "active" : ""}
+                onClick={() => setSidePanelTab("whiteboard")}
+              >
+                <Icon name="board" size={15} />
+                白板
+                {whiteboard.size > 0 && (
+                  <span
+                    className={`side-tab-count ${whiteboardBlockedCount > 0 ? "warning" : ""}`}
+                    aria-label={
+                      whiteboardBlockedCount > 0
+                        ? `${whiteboard.size} 条，其中 ${whiteboardBlockedCount} 条阻塞`
+                        : `${whiteboard.size} 条`
+                    }
+                  >
+                    {whiteboard.size}
+                  </span>
+                )}
+              </button>
+            </div>
             <button
               ref={membersCloseRef}
               className="panel-close"
@@ -2357,89 +2639,112 @@ export function App() {
               <Icon name="close" />
             </button>
           </div>
-          <div className="member-list">
-            {online.map((participant) => (
+          {sidePanelTab === "whiteboard" ? (
+            <div
+              className="whiteboard-scroll"
+              role="tabpanel"
+              id="side-panel-whiteboard"
+              aria-labelledby="side-tab-whiteboard"
+              tabIndex={0}
+            >
+              <WhiteboardPanel entries={whiteboard} onRemove={removeWhiteboardEntry} />
+            </div>
+          ) : (
+            <>
+              <div
+                className="member-list"
+                role="tabpanel"
+                id="side-panel-members"
+                aria-labelledby="side-tab-members"
+              >
+                {online.map((participant) => (
+                  <button
+                    type="button"
+                    key={participant.id}
+                    className="member"
+                    onClick={() => {
+                      closeMobilePanel(false);
+                      appendMention(participant.username);
+                    }}
+                  >
+                    <span
+                      className={`avatar ${participant.type}`}
+                      style={
+                        participant.type === "human"
+                          ? avatarHueStyle(participant.username)
+                          : undefined
+                      }
+                      aria-hidden="true"
+                    >
+                      {participant.type === "agent"
+                        ? "AI"
+                        : participant.username.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="member-copy">
+                      <strong>{participant.username}</strong>
+                      <small>
+                        {participant.type === "agent"
+                          ? `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
+                          : "Human"}
+                      </small>
+                    </span>
+                    <span
+                      className={`status-dot ${participant.status}`}
+                      title={participantStatusLabel(participant.status)}
+                      aria-label={participantStatusLabel(participant.status)}
+                    />
+                  </button>
+                ))}
+                {offline.length > 0 && <p className="offline-label">离线 · {offline.length}</p>}
+                {offline.map((participant) => (
+                  <div key={participant.id} className="member muted">
+                    <span
+                      className={`avatar ${participant.type}`}
+                      style={
+                        participant.type === "human"
+                          ? avatarHueStyle(participant.username)
+                          : undefined
+                      }
+                      aria-hidden="true"
+                    >
+                      {participant.type === "agent"
+                        ? "AI"
+                        : participant.username.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="member-copy">
+                      <strong>{participant.username}</strong>
+                      <small>{agentProviderLabel(participant.provider)} · Offline</small>
+                    </span>
+                    <span className="status-dot offline" aria-label="离线" />
+                  </div>
+                ))}
+              </div>
               <button
                 type="button"
-                key={participant.id}
-                className="member"
-                onClick={() => {
-                  closeMobilePanel(false);
-                  appendMention(participant.username);
-                }}
+                className="sidebar-agent-entry"
+                aria-label="接入 Agent"
+                aria-haspopup="dialog"
+                aria-expanded={agentDialogOpen}
+                onClick={(event) => openAgentDialog(event.currentTarget)}
               >
-                <span
-                  className={`avatar ${participant.type}`}
-                  style={
-                    participant.type === "human" ? avatarHueStyle(participant.username) : undefined
-                  }
-                  aria-hidden="true"
-                >
-                  {participant.type === "agent"
-                    ? "AI"
-                    : participant.username.slice(0, 1).toUpperCase()}
+                <span className="sidebar-agent-entry-mark" aria-hidden="true">
+                  <Icon name="plug" size={16} />
                 </span>
-                <span className="member-copy">
-                  <strong>{participant.username}</strong>
-                  <small>
-                    {participant.type === "agent"
-                      ? `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
-                      : "Human"}
-                  </small>
+                <span className="sidebar-agent-entry-copy">
+                  <strong>接入 Agent</strong>
+                  <small>选择运行时并复制命令</small>
                 </span>
-                <span
-                  className={`status-dot ${participant.status}`}
-                  title={participantStatusLabel(participant.status)}
-                  aria-label={participantStatusLabel(participant.status)}
-                />
+                <Icon name="arrow-right" size={14} />
               </button>
-            ))}
-            {offline.length > 0 && <p className="offline-label">离线 · {offline.length}</p>}
-            {offline.map((participant) => (
-              <div key={participant.id} className="member muted">
-                <span
-                  className={`avatar ${participant.type}`}
-                  style={
-                    participant.type === "human" ? avatarHueStyle(participant.username) : undefined
-                  }
-                  aria-hidden="true"
-                >
-                  {participant.type === "agent"
-                    ? "AI"
-                    : participant.username.slice(0, 1).toUpperCase()}
+              <div className="room-card">
+                <small>当前共享线程</small>
+                <strong># {currentRoomName}</strong>
+                <span>
+                  {messages.length} 条消息 · {online.length} 位在线
                 </span>
-                <span className="member-copy">
-                  <strong>{participant.username}</strong>
-                  <small>{agentProviderLabel(participant.provider)} · Offline</small>
-                </span>
-                <span className="status-dot offline" aria-label="离线" />
               </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="sidebar-agent-entry"
-            aria-label="接入 Agent"
-            aria-haspopup="dialog"
-            aria-expanded={agentDialogOpen}
-            onClick={(event) => openAgentDialog(event.currentTarget)}
-          >
-            <span className="sidebar-agent-entry-mark" aria-hidden="true">
-              <Icon name="plug" size={16} />
-            </span>
-            <span className="sidebar-agent-entry-copy">
-              <strong>接入 Agent</strong>
-              <small>选择运行时并复制命令</small>
-            </span>
-            <Icon name="arrow-right" size={14} />
-          </button>
-          <div className="room-card">
-            <small>当前共享线程</small>
-            <strong># {currentRoomName}</strong>
-            <span>
-              {messages.length} 条消息 · {online.length} 位在线
-            </span>
-          </div>
+            </>
+          )}
         </aside>
       </section>
 
