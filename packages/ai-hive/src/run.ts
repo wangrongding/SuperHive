@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { AgentBridge } from "./bridge.js";
 import { AgentManager, type StackHooks } from "./agent-manager.js";
 import { ClaudeCodeResponder } from "./claude-client.js";
-import { CodexMcpResponder } from "./codex-client.js";
+import { CodexResponder, type CodexTransport } from "./codex-responder.js";
 import { CopilotResponder } from "./copilot-client.js";
 import { OpenClawResponder } from "./openclaw-client.js";
 import {
@@ -41,6 +41,9 @@ AI Hive Agent
   --cwd PATH        Agent 工作目录（workspace/full 必填；只读默认使用空临时目录）
   --state-dir PATH  Agent 状态目录（默认 ~/.ai-hive/agents）
   --codex PATH      Codex CLI 命令（默认 codex）
+  --codex-transport MODE
+                    auto、app-server 或 mcp（默认 auto：优先 app-server，
+                    旧版 Codex 自动回退到 mcp-server）
   --claude PATH     Claude Code CLI 命令（默认 claude）
   --copilot PATH    GitHub Copilot CLI 命令（默认 copilot）
   --openclaw PATH   OpenClaw CLI 命令（默认 openclaw）
@@ -65,6 +68,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       cwd: { type: "string" },
       "state-dir": { type: "string" },
       codex: { type: "string", default: "codex" },
+      "codex-transport": { type: "string", default: "auto" },
       claude: { type: "string", default: "claude" },
       copilot: { type: "string", default: "copilot" },
       openclaw: { type: "string", default: "openclaw" },
@@ -107,6 +111,12 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     throw new Error(`不支持的 access “${accessValue}”；当前可用：read-only、workspace、full。`);
   }
   const access = accessValue as AgentAccessMode;
+  const codexTransport = parsed.values["codex-transport"] as CodexTransport;
+  if (!["auto", "app-server", "mcp"].includes(codexTransport)) {
+    throw new Error(
+      `不支持的 codex-transport “${codexTransport}”；当前可用：auto、app-server、mcp。`,
+    );
+  }
   if (access !== "read-only" && !parsed.values.cwd) {
     throw new Error(`--access ${access} 必须同时显式指定 --cwd，避免授权到错误目录。`);
   }
@@ -183,7 +193,14 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
           ...(parsed.values.model ? { model: parsed.values.model } : {}),
         });
       case "codex":
-        return new CodexMcpResponder({ command, cwd, hive, access });
+        return new CodexResponder({
+          command,
+          cwd,
+          hive,
+          access,
+          transport: codexTransport,
+          ...(parsed.values.model ? { model: parsed.values.model } : {}),
+        });
     }
   }
 

@@ -25,6 +25,7 @@ describe("OpenClawResponder", () => {
         instructions: "Hive rules",
         prompt: "Shared context",
         threadId: "openclaw-session-1",
+        refreshInstructions: true,
       }),
     ).resolves.toEqual({ text: "第一段\n\n第二段", threadId: "openclaw-session-1" });
     expect(runner).toHaveBeenCalledWith(
@@ -65,5 +66,21 @@ describe("OpenClawResponder", () => {
       threadId: "embedded-session",
     });
     expect(runner.mock.calls[0]?.[1]).toContain("--local");
+  });
+
+  it("does not repeat the rules inside a resumed session unless asked to refresh", async () => {
+    const runner = vi.fn<CommandRunner>(async () => ({
+      stdout: JSON.stringify({ payloads: [{ text: "ok" }] }),
+      stderr: "",
+    }));
+    const responder = new OpenClawResponder({
+      command: "openclaw",
+      cwd: "/w",
+      local: true,
+      runner,
+    });
+    await responder.reply({ instructions: "Hive rules", prompt: "delta", threadId: "s1" });
+    const args = runner.mock.calls[0]?.[1] ?? [];
+    expect(args[args.indexOf("--message") + 1]).toBe("delta");
   });
 });

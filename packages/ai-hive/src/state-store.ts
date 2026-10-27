@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -9,10 +9,26 @@ export type AgentState = {
   threadId?: string;
   lastProcessedSeq: number;
   processedMessageIds: string[];
+  /**
+   * 调用 Provider 之前先落盘的执行意图（参考 yobiru 的 write-ahead intent）。
+   * 进程在执行途中退出时据此得知"结果未知"，不会在重启后盲目重跑可能有副作用的任务。
+   */
+  inflight?: {
+    executionId: string;
+    messageIds: string[];
+    startedAt: string;
+  };
+  /** 距上次发送完整上下文（成员、白板、规则提示）以来的轮数与时间，用于提示节流 */
+  briefTurns?: number;
+  lastFullPromptAt?: string;
+  /** 上次放进 Prompt 的白板摘要指纹；白板没变就不重复发送 */
+  whiteboardDigest?: string;
 };
 
 export class StateStore {
   readonly filename: string;
+  /** 同一个状态文件的写入串行执行，避免并发保存时互相覆盖或抢同一个临时文件 */
+  private writes: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly stateDir: string,
@@ -45,7 +61,10 @@ export class StateStore {
         typeof data.roomId !== "string" ||
         typeof data.username !== "string" ||
         !Number.isInteger(data.lastProcessedSeq) ||
-        !Array.isArray(data.processedMessageIds)
+        !Array.isArray(data.processedMessageIds) ||
+        (data.inflight !== undefined &&
+          (typeof data.inflight.executionId !== "string" ||
+            !Array.isArray(data.inflight.messageIds)))
       ) {
         throw new Error("State file has an invalid shape.");
       }
@@ -56,11 +75,17 @@ export class StateStore {
     }
   }
 
-  async save(state: AgentState): Promise<void> {
-    await mkdir(this.stateDir, { recursive: true, mode: 0o700 });
-    const temporary = `${this.filename}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, this.filename);
-    await chmod(this.filename, 0o600);
+  save(state: AgentState): Promise<void> {
+    // 在排队时就取快照：调用方之后继续修改 state 不影响这次写入的内容
+    const content = `${JSON.stringify(state, null, 2)}\n`;
+    const write = this.writes.then(async () => {
+      await mkdir(this.stateDir, { recursive: true, mode: 0o700 });
+      const temporary = `${this.filename}.${process.pid}.${randomUUID()}.tmp`;
+      await writeFile(temporary, content, { mode: 0o600 });
+      await rename(temporary, this.filename);
+      await chmod(this.filename, 0o600);
+    });
+    this.writes = write.catch(() => undefined);
+    return write;
   }
 }

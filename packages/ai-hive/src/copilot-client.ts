@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { defaultCommandRunner, type CommandRunner } from "./command-runner.js";
 import { copilotHiveMcpConfig, type HiveMcpConnection } from "./hive-mcp-config.js";
-import type { AgentAccessMode, AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
+import {
+  AgentCancelledError,
+  type AgentAccessMode,
+  type AgentReply,
+  type AgentReplyInput,
+  type AgentResponder,
+} from "./responder.js";
 
 type CopilotEvent = {
   type?: string;
@@ -24,6 +30,13 @@ function parseJsonLines(output: string): CopilotEvent[] {
   return events;
 }
 
+/** 新会话或需要刷新规则时才把规则拼进消息，避免每轮重复堆积在会话历史里 */
+function withInstructions(input: AgentReplyInput): string {
+  return !input.threadId || input.refreshInstructions
+    ? `${input.instructions}\n\n---\n\n${input.prompt}`
+    : input.prompt;
+}
+
 export class CopilotResponder implements AgentResponder {
   constructor(
     private readonly options: {
@@ -41,7 +54,7 @@ export class CopilotResponder implements AgentResponder {
     const access = this.options.access ?? "read-only";
     const args = [
       "--prompt",
-      `${input.instructions}\n\n---\n\n${input.prompt}`,
+      withInstructions(input),
       "--output-format",
       "json",
       "--stream",
@@ -81,8 +94,10 @@ export class CopilotResponder implements AgentResponder {
     try {
       result = await (this.options.runner ?? defaultCommandRunner)(this.options.command, args, {
         cwd: this.options.cwd,
+        ...(input.signal ? { signal: input.signal } : {}),
       });
     } catch (error) {
+      if (error instanceof AgentCancelledError) throw error;
       throw new Error(
         `GitHub Copilot 执行失败：${error instanceof Error ? error.message : String(error)}`,
         { cause: error },

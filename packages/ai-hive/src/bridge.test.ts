@@ -71,6 +71,17 @@ describe("shouldProcessMention", () => {
     ).toBe(false);
   });
 
+  it("ignores recalled tombstones even when re-fetched after a reconnect", () => {
+    expect(
+      shouldProcessMention({
+        message: message({ content: "", mentions: [], deletedAt: new Date().toISOString() }),
+        username: "agent-a",
+        ownParticipantId: "self",
+        processedMessageIds: [],
+      }),
+    ).toBe(false);
+  });
+
   it("detects when the Agent already sent through the Hive MCP tool", () => {
     expect(hasAgentMessage([message({ senderId: "self" })], "self")).toBe(true);
     expect(hasAgentMessage([message({ senderId: "another-agent" })], "self")).toBe(false);

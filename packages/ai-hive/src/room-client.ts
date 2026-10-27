@@ -1,9 +1,12 @@
 import type {
   ChatMessage,
+  Invocation,
+  InvocationReport,
   MessagesResponse,
   Participant,
   RoomSummary,
   ServerEvent,
+  WhiteboardEntry,
 } from "./hive-protocol.js";
 import WebSocket from "ws";
 
@@ -38,11 +41,16 @@ export type Snapshot = {
   self: Participant;
   latestSeq: number;
   messages: ChatMessage[];
+  participants: Participant[];
+  /** 旧版服务端为 undefined：Agent 需退回到纯本地的去重判断 */
+  invocations?: Invocation[];
 };
 
 export type RoomClientHandlers = {
   onSnapshot: (snapshot: Snapshot) => void | Promise<void>;
-  onMention: (message: ChatMessage, latestSeq: number) => void;
+  onMention: (message: ChatMessage, latestSeq: number, retry: boolean) => void;
+  onCancel?: (messageId: string) => void;
+  onMessageDeleted?: (message: ChatMessage) => void;
   onRoomsChanged?: (room: RoomSummary) => void;
   onError: (error: Error) => void;
 };
@@ -60,6 +68,11 @@ export class RoomClient {
   private reconnectTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
   private readonly pending = new Map<string, PendingSend>();
+  /** 断线期间产生的状态回报，按消息只保留最新一条，重新加入房间后补发 */
+  private readonly outbox = new Map<string, InvocationReport>();
+  private joined = false;
+  /** 旧版服务端的快照没有 invocations，也不认识 invocation.report，向它发送会触发错误 */
+  private serverTracksInvocations = true;
 
   constructor(
     private readonly options: RoomClientOptions,
@@ -86,6 +99,48 @@ export class RoomClient {
 
   setTyping(active: boolean): void {
     this.sendRaw({ type: "agent.typing", active });
+  }
+
+  /** 回报调用进展；连接不可用时进入 outbox，重连后补发（终态不会因断线丢失） */
+  report(report: Omit<InvocationReport, "type">): void {
+    const event: InvocationReport = { type: "invocation.report", ...report };
+    if (this.joined && !this.serverTracksInvocations) return;
+    if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(event));
+      return;
+    }
+    const previous = this.outbox.get(report.messageId);
+    // 已有终态时，不让迟到的中间状态覆盖它
+    if (previous && previous.status !== "received" && previous.status !== "running") {
+      if (report.status === "received" || report.status === "running") return;
+    }
+    this.outbox.set(report.messageId, event);
+  }
+
+  async fetchWhiteboard(): Promise<WhiteboardEntry[]> {
+    const response = await fetch(
+      new URL(
+        `/api/rooms/${encodeURIComponent(this.options.roomId)}/whiteboard`,
+        this.options.serverUrl,
+      ),
+      { headers: { Authorization: `Bearer ${this.options.token}` } },
+    );
+    // 旧版服务端没有白板接口，视为空白板
+    if (response.status === 404) return [];
+    if (!response.ok) throw new Error(`无法读取协作白板 (${response.status})`);
+    return ((await response.json()) as { entries: WhiteboardEntry[] }).entries;
+  }
+
+  async fetchParticipants(): Promise<Participant[]> {
+    const response = await fetch(
+      new URL(
+        `/api/rooms/${encodeURIComponent(this.options.roomId)}/participants`,
+        this.options.serverUrl,
+      ),
+      { headers: { Authorization: `Bearer ${this.options.token}` } },
+    );
+    if (!response.ok) throw new Error(`无法读取房间成员 (${response.status})`);
+    return ((await response.json()) as { participants: Participant[] }).participants;
   }
 
   async fetchInstructions(): Promise<string> {
@@ -159,6 +214,7 @@ export class RoomClient {
     socket.on("message", (raw) => this.handleEvent(JSON.parse(raw.toString()) as ServerEvent));
     socket.on("error", (error) => this.handlers.onError(error));
     socket.on("close", () => {
+      this.joined = false;
       if (this.stopped) return;
       for (const [clientMessageId, pending] of this.pending) {
         clearTimeout(pending.timer);
@@ -173,15 +229,31 @@ export class RoomClient {
   private handleEvent(event: ServerEvent): void {
     if (event.type === "room.snapshot") {
       this.retry = 0;
+      this.joined = true;
+      this.serverTracksInvocations = Array.isArray(event.invocations);
+      if (this.serverTracksInvocations) {
+        for (const report of this.outbox.values()) this.sendRaw(report);
+      }
+      this.outbox.clear();
       void this.handlers.onSnapshot({
         self: event.self,
         latestSeq: event.latestSeq,
         messages: event.messages,
+        participants: event.participants,
+        ...(event.invocations ? { invocations: event.invocations } : {}),
       });
       return;
     }
     if (event.type === "agent.mentioned") {
-      this.handlers.onMention(event.message, event.latestSeq);
+      this.handlers.onMention(event.message, event.latestSeq, event.retry === true);
+      return;
+    }
+    if (event.type === "agent.cancel") {
+      this.handlers.onCancel?.(event.messageId);
+      return;
+    }
+    if (event.type === "message.deleted") {
+      this.handlers.onMessageDeleted?.(event.message);
       return;
     }
     if (event.type === "message.created" && event.message.clientMessageId) {

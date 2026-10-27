@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { defaultCommandRunner, type CommandRunner } from "./command-runner.js";
-import type { AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
+import {
+  AgentCancelledError,
+  type AgentReply,
+  type AgentReplyInput,
+  type AgentResponder,
+} from "./responder.js";
 
 type OpenClawPayload = { text?: string };
 type OpenClawResult = {
@@ -8,6 +13,13 @@ type OpenClawResult = {
   result?: { payloads?: OpenClawPayload[] };
   meta?: { agentMeta?: { sessionId?: string } };
 };
+
+/** 新会话或需要刷新规则时才把规则拼进消息，避免每轮重复堆积在会话历史里 */
+function withInstructions(input: AgentReplyInput): string {
+  return !input.threadId || input.refreshInstructions
+    ? `${input.instructions}\n\n---\n\n${input.prompt}`
+    : input.prompt;
+}
 
 export class OpenClawResponder implements AgentResponder {
   constructor(
@@ -28,7 +40,7 @@ export class OpenClawResponder implements AgentResponder {
       "--session-id",
       sessionId,
       "--message",
-      `${input.instructions}\n\n---\n\n${input.prompt}`,
+      withInstructions(input),
       "--json",
     ];
     if (this.options.local) args.push("--local");
@@ -39,8 +51,10 @@ export class OpenClawResponder implements AgentResponder {
     try {
       result = await (this.options.runner ?? defaultCommandRunner)(this.options.command, args, {
         cwd: this.options.cwd,
+        ...(input.signal ? { signal: input.signal } : {}),
       });
     } catch (error) {
+      if (error instanceof AgentCancelledError) throw error;
       throw new Error(
         `OpenClaw 执行失败：${error instanceof Error ? error.message : String(error)}`,
         { cause: error },

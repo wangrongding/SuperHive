@@ -1,6 +1,12 @@
 import { defaultCommandRunner, type CommandRunner } from "./command-runner.js";
 import { claudeHiveMcpConfig, type HiveMcpConnection } from "./hive-mcp-config.js";
-import type { AgentAccessMode, AgentReply, AgentReplyInput, AgentResponder } from "./responder.js";
+import {
+  AgentCancelledError,
+  type AgentAccessMode,
+  type AgentReply,
+  type AgentReplyInput,
+  type AgentResponder,
+} from "./responder.js";
 
 type ClaudeJsonResult = {
   is_error?: boolean;
@@ -67,8 +73,10 @@ export class ClaudeCodeResponder implements AgentResponder {
       result = await (this.options.runner ?? defaultCommandRunner)(this.options.command, args, {
         cwd: this.options.cwd,
         input: input.prompt,
+        ...(input.signal ? { signal: input.signal } : {}),
       });
     } catch (error) {
+      if (error instanceof AgentCancelledError) throw error;
       throw new Error(
         `Claude Code 执行失败：${error instanceof Error ? error.message : String(error)}`,
         { cause: error },

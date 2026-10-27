@@ -51,3 +51,21 @@ describe("StateStore", () => {
     expect(full.filename).not.toBe(workspace.filename);
   });
 });
+
+describe("StateStore concurrent saves", () => {
+  it("serialises overlapping saves and keeps the last snapshot", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "hive-state-race-"));
+    try {
+      const identity = { serverUrl: "http://h", roomId: "general", username: "a" };
+      const store = new StateStore(directory, identity);
+      await Promise.all(
+        Array.from({ length: 20 }, (_, index) =>
+          store.save({ ...identity, lastProcessedSeq: index, processedMessageIds: [] }),
+        ),
+      );
+      expect((await store.load())?.lastProcessedSeq).toBe(19);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

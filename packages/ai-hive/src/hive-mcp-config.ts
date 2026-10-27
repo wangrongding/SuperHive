@@ -55,6 +55,13 @@ export function codexHiveMcpOverrides(connection: HiveMcpConnection): string[] {
   ];
 }
 
+/**
+ * Hive 工具只作用于聊天室本身（服务端另有预算与权限限制），预先批准它们，
+ * 否则只读档会把 hive_message_send / hive_board_update 的审批请求一并拒绝。
+ * 仅用于 app-server 路径：更老的 codex 不认识这个字段。
+ */
+export const CODEX_HIVE_TOOLS_APPROVAL_OVERRIDE = `mcp_servers.hive.default_tools_approval_mode="approve"`;
+
 export function openClawHiveMcpConfig(connection: HiveMcpConnection): string {
   return JSON.stringify({
     url: hiveMcpUrl(connection),

@@ -28,6 +28,8 @@ export type ChatMessage = {
   hopCount: number;
   clientMessageId?: string;
   createdAt: string;
+  /** 已撤回：content 与 mentions 已被服务端清空 */
+  deletedAt?: string;
 };
 
 export type MessagesResponse = {
@@ -45,6 +47,45 @@ export type RoomSummary = {
   latestSeq: number;
 };
 
+export type InvocationStatus =
+  "queued" | "running" | "completed" | "failed" | "blocked" | "timed_out" | "cancelled";
+
+/** 服务端对一次 @ 唤醒的追踪记录（Agent 侧只用到其中一部分字段） */
+export type Invocation = {
+  id: string;
+  roomId: string;
+  messageId: string;
+  agentId: string;
+  agentName: string;
+  status: InvocationStatus;
+  blockReason?: string;
+  detail?: string;
+  attempts: number;
+};
+
+export type WhiteboardEntry = {
+  id: string;
+  key: string;
+  slot: "ready" | "in_progress" | "blocked" | "milestone";
+  summary: string;
+  repo?: string;
+  branch?: string;
+  commit?: string;
+  unblocks: string[];
+  authorName: string;
+  updatedAt: string;
+};
+
+export type InvocationReport = {
+  type: "invocation.report";
+  messageId: string;
+  status: "received" | "running" | "completed" | "failed" | "cancelled";
+  detail?: string;
+  progress?: string;
+  replyMessageId?: string;
+  contextSeq?: number;
+};
+
 export type ServerEvent =
   | {
       type: "room.snapshot";
@@ -52,9 +93,15 @@ export type ServerEvent =
       participants: Participant[];
       messages: ChatMessage[];
       latestSeq: number;
+      /** 旧版服务端没有这两个字段 */
+      invocations?: Invocation[];
+      whiteboard?: WhiteboardEntry[];
     }
   | { type: "message.created"; message: ChatMessage }
-  | { type: "agent.mentioned"; message: ChatMessage; latestSeq: number }
+  | { type: "message.deleted"; message: ChatMessage }
+  | { type: "agent.mentioned"; message: ChatMessage; latestSeq: number; retry?: boolean }
+  | { type: "agent.cancel"; messageId: string }
+  | { type: "invocation.updated"; invocation: Invocation }
   | { type: "presence.changed"; participant: Participant }
   | { type: "rooms.changed"; room: RoomSummary }
   | { type: "error"; code: string; message: string };
@@ -65,5 +112,20 @@ export function isMentioned(content: string, username: string): boolean {
   const normalized = username.toLocaleLowerCase();
   return [...content.matchAll(mentionPattern)].some(
     (match) => match[1]?.toLocaleLowerCase() === normalized,
+  );
+}
+
+/**
+ * 与 @ai-hive/protocol 中的同名函数保持一致：去掉控制符、bidi 覆盖/隔离符和行/段分隔符，
+ * 保留换行、制表和 emoji 需要的零宽连接符。
+ */
+export function stripUnsafeCharacters(value: string): string {
+  return (
+    value
+      .replace(/\r\n?/g, "\n")
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "")
+      .replace(/[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/g, "")
+      .replace(/[\u2028\u2029]/g, "\n")
   );
 }
