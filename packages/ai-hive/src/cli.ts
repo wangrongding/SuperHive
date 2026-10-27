@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { createRequire } from "module";
+import updateNotifier from "update-notifier";
 import { run } from "./run.js";
 import { restartService, startService, stopService } from "./service.js";
 
 const _require = createRequire(import.meta.url);
-const { version } = _require("../package.json") as { version: string };
+const pkg = _require("../package.json") as { name: string; version: string };
+const { version } = pkg;
 
 const usage = `
 AI Hive（命令别名：hive）
@@ -18,6 +20,26 @@ AI Hive（命令别名：hive）
 运行 ai-hive <命令> --help 查看详细选项。
 上述 ai-hive 均可替换为 hive。
 `;
+
+// 后台子进程每天最多查一次 npm registry 并缓存，有新版本时在下一次运行打印提示（NO_UPDATE_NOTIFIER=1 可关闭）
+updateNotifier({
+  pkg,
+  updateCheckInterval: 1000 * 60 * 60 * 24,
+  shouldNotifyInNpmScript: true,
+}).notify({
+  isGlobal: true,
+  message:
+    "AI Hive 有新版本 {currentVersion} → {latestVersion}\n" +
+    "在启动服务的电脑运行 npx --yes ai-hive@latest restart 更新",
+  boxenOptions: {
+    title: "有新版本的 AI Hive 可用",
+    padding: 1,
+    margin: 1,
+    align: "center",
+    borderColor: "yellowBright",
+    borderStyle: "round",
+  },
+});
 
 async function main(): Promise<void> {
   const command = process.argv[2];
