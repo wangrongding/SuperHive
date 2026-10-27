@@ -6,9 +6,14 @@ import websocket from "@fastify/websocket";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
+  LIMITS,
   clientEventSchema,
   createRoomRequestSchema,
   updateRoomRequestSchema,
+  type ChatMessage,
+  type ClientEvent,
+  type Invocation,
+  type InvocationBlockReason,
   type Participant,
   type ServerEvent,
 } from "@ai-hive/protocol";
@@ -16,8 +21,13 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { z } from "zod";
 import { AGENT_INSTRUCTIONS } from "./agent-instructions.js";
-import { HiveDatabase, HiveError, type CreateMessageInput } from "./database.js";
-import { createHiveMcpServer } from "./hive-mcp.js";
+import {
+  HiveDatabase,
+  HiveError,
+  TERMINAL_INVOCATION_STATUSES,
+  type CreateMessageInput,
+} from "./database.js";
+import { createHiveMcpServer, type InboxDigest } from "./hive-mcp.js";
 
 type Connection = {
   socket: WebSocket;
@@ -33,6 +43,10 @@ export type BuildAppOptions = {
   instanceId?: string;
   logger?: boolean;
   heartbeatTimeoutMs?: number;
+  /** 扫描超时调用的间隔；测试可调小 */
+  invocationSweepMs?: number;
+  /** 超时扫描使用的时钟；测试用来模拟时间流逝 */
+  now?: () => number;
   staticDir?: string;
 };
 
@@ -143,24 +157,283 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     );
   }
 
+  function emitInvocation(invocation: Invocation): Invocation {
+    broadcast(invocation.roomId, { type: "invocation.updated", invocation });
+    return invocation;
+  }
+
+  function isTerminal(invocation: Invocation): boolean {
+    return TERMINAL_INVOCATION_STATUSES.includes(invocation.status);
+  }
+
+  function deliverMention(message: ChatMessage, agent: Participant, retry = false): void {
+    const target = onlineAgent(message.roomId, agent.username);
+    if (!target) return;
+    send(target.socket, {
+      type: "agent.mentioned",
+      message,
+      latestSeq: database.latestSeq(message.roomId),
+      ...(retry ? { retry: true } : {}),
+    });
+  }
+
+  /**
+   * 多维防循环预算（参考 yobiru）：传递深度、人类缺席时的 Agent 连续轮数、每对 Agent 每日次数。
+   * 人发出的 @ 只受深度限制；人在 UI 中追加轮数后，被拦下的调用会被恢复。
+   */
+  function budgetBlock(
+    sender: Participant,
+    message: ChatMessage,
+    agent: Participant,
+  ): { reason: InvocationBlockReason; detail: string } | undefined {
+    if (message.hopCount >= LIMITS.maxHopCount) {
+      return {
+        reason: "hop_limit",
+        detail: `Agent 之间的转交已达 ${LIMITS.maxHopCount} 跳上限，如需继续请由人重新 @。`,
+      };
+    }
+    if (sender.type !== "agent") return undefined;
+    const budget = database.agentTurnBudget(message.roomId);
+    if (budget.used > budget.limit) {
+      return {
+        reason: "consecutive_limit",
+        detail: `自上次有人发言以来 Agent 已连续对话 ${budget.used - 1} 轮（上限 ${budget.limit}），等待人确认后继续。`,
+      };
+    }
+    const extra = budget.limit - LIMITS.maxConsecutiveAgentTurns;
+    const pairLimit = LIMITS.maxAgentPairTurnsPerDay + extra;
+    if (database.pairTurnsToday(message.roomId, sender.id, agent.id) >= pairLimit) {
+      return {
+        reason: "pair_limit",
+        detail: `${sender.username} 今天已唤醒 ${agent.username} ${pairLimit} 次，达到上限。`,
+      };
+    }
+    return undefined;
+  }
+
+  function completeFromReply(agent: Participant, reply: ChatMessage): void {
+    if (!reply.parentMessageId) return;
+    const invocation = database.getInvocationFor(reply.parentMessageId, agent.id);
+    if (!invocation || isTerminal(invocation)) return;
+    emitInvocation(
+      database.updateInvocation(invocation.id, {
+        status: "completed",
+        replyMessageId: reply.id,
+        finishedAt: new Date().toISOString(),
+        progress: null,
+        detail: invocation.status === "timed_out" ? "迟到的结果" : null,
+      }),
+    );
+  }
+
   function createAndDispatchMessage(participant: Participant, input: CreateMessageInput) {
     const result = database.createMessage(participant, input);
     if (!result.created) return result;
-    broadcast(participant.roomId, { type: "message.created", message: result.message });
+    const message = result.message;
+    broadcast(participant.roomId, { type: "message.created", message });
     broadcastRoomActivity(participant.roomId);
-    if (result.message.hopCount >= 4) return result;
-    for (const mention of result.message.mentions) {
+    if (participant.type === "agent") completeFromReply(participant, message);
+    for (const mention of message.mentions) {
       if (mention.toLocaleLowerCase() === "all") continue;
-      const target = onlineAgent(participant.roomId, mention);
-      if (target?.participant?.type === "agent" && target.participant.id !== participant.id) {
-        send(target.socket, {
-          type: "agent.mentioned",
-          message: result.message,
-          latestSeq: database.latestSeq(participant.roomId),
-        });
-      }
+      const agent = database.findParticipant(participant.roomId, mention);
+      if (!agent || agent.type !== "agent" || agent.id === participant.id) continue;
+      const blocked = budgetBlock(participant, message, agent);
+      const { invocation, created } = database.createInvocation({
+        message,
+        agent,
+        status: blocked ? "blocked" : "queued",
+        ...(blocked ? { blockReason: blocked.reason, detail: blocked.detail } : {}),
+      });
+      if (!created) continue;
+      emitInvocation(invocation);
+      if (!blocked) deliverMention(message, agent);
     }
     return result;
+  }
+
+  function invocationInRoom(participant: Participant, invocationId: string): Invocation {
+    const invocation = database.getInvocation(invocationId);
+    if (!invocation || invocation.roomId !== participant.roomId) {
+      throw new HiveError("INVOCATION_NOT_FOUND", "Invocation not found in this room.");
+    }
+    return invocation;
+  }
+
+  function resetForRedelivery(invocation: Invocation, detail: string): Invocation {
+    return database.updateInvocation(invocation.id, {
+      status: "queued",
+      attempts: invocation.attempts + 1,
+      blockReason: null,
+      detail,
+      progress: null,
+      replyMessageId: null,
+      receivedAt: null,
+      startedAt: null,
+      finishedAt: null,
+    });
+  }
+
+  function retryInvocation(actor: Participant, invocationId: string): void {
+    const invocation = invocationInRoom(actor, invocationId);
+    const retryable =
+      invocation.status === "failed" ||
+      invocation.status === "timed_out" ||
+      invocation.status === "cancelled" ||
+      (invocation.status === "blocked" && invocation.blockReason !== "hop_limit");
+    if (!retryable) {
+      throw new HiveError("INVOCATION_NOT_RETRYABLE", "This invocation cannot be retried now.");
+    }
+    const message = database.getMessage(invocation.messageId);
+    const agent = database.getParticipant(invocation.agentId);
+    if (!message || message.deletedAt || !agent) {
+      throw new HiveError(
+        "INVOCATION_NOT_RETRYABLE",
+        "The trigger message is no longer available.",
+      );
+    }
+    emitInvocation(resetForRedelivery(invocation, `${actor.username} 请求重试`));
+    deliverMention(message, agent, true);
+  }
+
+  function cancelInvocation(actor: Participant, invocationId: string): void {
+    const invocation = invocationInRoom(actor, invocationId);
+    if (isTerminal(invocation)) return;
+    // 立即给出终态，同时通知 Agent 中断；Agent 迟到的回报不会再改动终态
+    emitInvocation(
+      database.updateInvocation(invocation.id, {
+        status: "cancelled",
+        detail: `${actor.username} 已停止`,
+        progress: null,
+        finishedAt: new Date().toISOString(),
+      }),
+    );
+    const target = onlineAgent(invocation.roomId, invocation.agentName);
+    if (target) send(target.socket, { type: "agent.cancel", messageId: invocation.messageId });
+  }
+
+  function extendBudget(actor: Participant, turns: number): void {
+    const allowance = database.extendAgentTurns(actor.roomId, turns);
+    const afterSeq = database.lastHumanMessageSeq(actor.roomId);
+    for (const invocation of database.listBlockedInvocations(actor.roomId, afterSeq)) {
+      const message = database.getMessage(invocation.messageId);
+      const agent = database.getParticipant(invocation.agentId);
+      if (!message || message.deletedAt || !agent) continue;
+      emitInvocation(
+        resetForRedelivery(invocation, `${actor.username} 追加了 ${turns} 轮（共 +${allowance}）`),
+      );
+      deliverMention(message, agent, true);
+    }
+  }
+
+  function handleReport(
+    agent: Participant,
+    report: Extract<ClientEvent, { type: "invocation.report" }>,
+  ): void {
+    let invocation = database.getInvocationFor(report.messageId, agent.id);
+    if (!invocation) {
+      // 功能上线前的旧消息或补拉到的提及：仅为本房间、确实 @ 了该 Agent 的消息补建记录
+      const message = database.getMessage(report.messageId);
+      if (
+        !message ||
+        message.roomId !== agent.roomId ||
+        !message.mentions.some(
+          (mention) => mention.toLocaleLowerCase() === agent.username.toLocaleLowerCase(),
+        )
+      ) {
+        return;
+      }
+      invocation = database.createInvocation({ message, agent, status: "queued" }).invocation;
+    }
+    if (report.contextSeq !== undefined) {
+      inboxCursors.set(agent.id, Math.max(inboxCursors.get(agent.id) ?? 0, report.contextSeq));
+    }
+    const now = new Date().toISOString();
+    if (report.status === "received") {
+      if (invocation.status !== "queued" || invocation.receivedAt) return;
+      emitInvocation(
+        database.updateInvocation(invocation.id, { receivedAt: now, detail: "已送达，排队中" }),
+      );
+      return;
+    }
+    if (report.status === "running") {
+      if (isTerminal(invocation)) return;
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          status: "running",
+          receivedAt: invocation.receivedAt ?? now,
+          startedAt: invocation.startedAt ?? now,
+          progress: report.progress ?? invocation.progress ?? null,
+          detail: report.detail ?? null,
+        }),
+      );
+      return;
+    }
+    if (isTerminal(invocation)) return;
+    emitInvocation(
+      database.updateInvocation(invocation.id, {
+        status: report.status,
+        finishedAt: now,
+        progress: null,
+        detail: report.detail ?? (invocation.status === "timed_out" ? "迟到的结果" : null),
+        ...(report.replyMessageId ? { replyMessageId: report.replyMessageId } : {}),
+      }),
+    );
+  }
+
+  function sweepStaleInvocations(): void {
+    for (const invocation of database.listStaleInvocations(options.now?.() ?? Date.now())) {
+      if (invocation.status === "running") {
+        emitInvocation(
+          database.updateInvocation(invocation.id, {
+            status: "timed_out",
+            detail: `超过 ${Math.round(LIMITS.invocationStaleMs / 60_000)} 分钟没有任何进展，结果未知`,
+          }),
+        );
+        continue;
+      }
+      // 只有 Agent 在线却迟迟不确认才算异常；离线时排队等待它上线是正常的
+      if (!onlineAgent(invocation.roomId, invocation.agentName)) continue;
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          status: "timed_out",
+          detail: "Agent 在线但没有确认收到（可能是不支持回报状态的旧版 ai-hive）",
+        }),
+      );
+    }
+  }
+
+  /** Hive MCP 是无状态的，未读游标按 Agent 身份保存在内存里 */
+  const inboxCursors = new Map<string, number>();
+
+  function takeInbox(agent: Participant): InboxDigest | undefined {
+    const cursor = inboxCursors.get(agent.id);
+    if (cursor === undefined) {
+      inboxCursors.set(agent.id, database.latestSeq(agent.roomId));
+      return undefined;
+    }
+    const fresh = database
+      .getMessages(agent.roomId, cursor, 200)
+      .filter((message) => !message.deletedAt && message.senderId !== agent.id);
+    const latest = database.latestSeq(agent.roomId);
+    if (fresh.length === 0) {
+      inboxCursors.set(agent.id, Math.max(cursor, latest));
+      return undefined;
+    }
+    const included = fresh.slice(0, 20);
+    inboxCursors.set(agent.id, included.at(-1)!.seq);
+    const name = agent.username.toLocaleLowerCase();
+    return {
+      messages: included.map((message) => ({
+        seq: message.seq,
+        id: message.id,
+        sender: message.senderName,
+        senderType: message.senderType,
+        content:
+          message.content.length > 500 ? `${message.content.slice(0, 500)}…` : message.content,
+        mentionsYou: message.mentions.some((mention) => mention.toLocaleLowerCase() === name),
+      })),
+      remaining: fresh.length - included.length,
+    };
   }
 
   app.get("/health", async () => ({
@@ -217,11 +490,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       roomId: participant.roomId,
       username: participant.username,
       readMessages: (afterSeq, limit) => ({
-        messages: database.getMessages(participant.roomId, afterSeq, limit),
+        messages: database
+          .getMessages(participant.roomId, afterSeq, limit)
+          .filter((message) => !message.deletedAt),
         latestSeq: database.latestSeq(participant.roomId),
       }),
       listMembers: () => database.listParticipants(participant.roomId),
       sendMessage: (input) => createAndDispatchMessage(participant, input).message,
+      readWhiteboard: () => database.listWhiteboard(participant.roomId),
+      updateWhiteboard: (input) => {
+        const result = database.upsertWhiteboardEntry(participant, input);
+        if (result.changed) {
+          broadcast(participant.roomId, { type: "whiteboard.updated", entry: result.entry });
+          for (const entryId of result.evicted) {
+            broadcast(participant.roomId, {
+              type: "whiteboard.removed",
+              roomId: participant.roomId,
+              entryId,
+            });
+          }
+        }
+        return { entry: result.entry, changed: result.changed };
+      },
+      takeInbox: () => takeInbox(participant),
+      markRead: (seq) =>
+        inboxCursors.set(participant.id, Math.max(inboxCursors.get(participant.id) ?? 0, seq)),
     });
     const transport = new StreamableHTTPServerTransport();
     try {
@@ -279,6 +572,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       latestSeq: database.latestSeq(params.data.roomId),
     };
   });
+
+  app.get<{ Params: { roomId: string } }>(
+    "/api/rooms/:roomId/whiteboard",
+    async (request, reply) => {
+      const params = roomParamsSchema.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+      return { entries: database.listWhiteboard(params.data.roomId) };
+    },
+  );
+
+  app.get<{ Params: { roomId: string } }>(
+    "/api/rooms/:roomId/invocations",
+    async (request, reply) => {
+      const params = roomParamsSchema.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+      return { invocations: database.listInvocations(params.data.roomId) };
+    },
+  );
 
   app.get<{ Params: { roomId: string } }>(
     "/api/rooms/:roomId/participants",
@@ -428,6 +741,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             participants: database.listParticipants(event.roomId),
             messages: database.getRecentMessages(event.roomId),
             latestSeq: database.latestSeq(event.roomId),
+            invocations: database.listInvocations(event.roomId),
+            whiteboard: database.listWhiteboard(event.roomId),
           });
           if (!existingParticipant) {
             broadcast(event.roomId, { type: "presence.changed", participant });
@@ -460,6 +775,59 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         return;
       }
       if (event.type === "message.ack") return;
+      if (
+        event.type === "invocation.report" ||
+        event.type === "invocation.retry" ||
+        event.type === "invocation.cancel" ||
+        event.type === "budget.extend" ||
+        event.type === "whiteboard.remove"
+      ) {
+        try {
+          if (event.type === "invocation.report") {
+            if (participant.type !== "agent") {
+              throw new HiveError("FORBIDDEN", "Only agents report invocation progress.");
+            }
+            handleReport(participant, event);
+            return;
+          }
+          if (participant.type !== "human") {
+            throw new HiveError("FORBIDDEN", "Only humans can manage invocations.");
+          }
+          if (event.type === "invocation.retry") retryInvocation(participant, event.invocationId);
+          else if (event.type === "invocation.cancel") {
+            cancelInvocation(participant, event.invocationId);
+          } else if (event.type === "budget.extend") extendBudget(participant, event.turns);
+          else if (database.removeWhiteboardEntry(participant.roomId, event.entryId)) {
+            broadcast(participant.roomId, {
+              type: "whiteboard.removed",
+              roomId: participant.roomId,
+              entryId: event.entryId,
+            });
+          }
+        } catch (error) {
+          const hiveError = error instanceof HiveError ? error : undefined;
+          send(socket, {
+            type: "error",
+            code: hiveError?.code ?? "REQUEST_FAILED",
+            message: hiveError?.message ?? "Could not handle the request.",
+          });
+        }
+        return;
+      }
+      if (event.type === "message.delete") {
+        try {
+          const message = database.deleteMessage(participant, event.messageId);
+          broadcast(participant.roomId, { type: "message.deleted", message });
+        } catch (error) {
+          const hiveError = error instanceof HiveError ? error : undefined;
+          send(socket, {
+            type: "error",
+            code: hiveError?.code ?? "DELETE_FAILED",
+            message: hiveError?.message ?? "Could not recall the message.",
+          });
+        }
+        return;
+      }
 
       try {
         const result = createAndDispatchMessage(participant, {
@@ -499,10 +867,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     Math.min(15_000, Math.max(1_000, heartbeatTimeoutMs / 3)),
   );
   heartbeatTimer.unref();
+  const invocationTimer = setInterval(sweepStaleInvocations, options.invocationSweepMs ?? 30_000);
+  invocationTimer.unref();
 
   app.addHook("onClose", async () => {
     shuttingDown = true;
     clearInterval(heartbeatTimer);
+    clearInterval(invocationTimer);
     for (const connection of connections) {
       if (connection.participant)
         database.setParticipantStatus(connection.participant.id, "offline");

@@ -62,6 +62,37 @@ describe("HiveDatabase", () => {
     expect(second.message.content).toBe("hello");
   });
 
+  it("lets only the sender recall a message and purges its content", () => {
+    const { message } = db.createMessage(human, {
+      content: "@agent-a 密钥是 sk-secret",
+      clientMessageId: "recall-1",
+    });
+    db.createMessage(agentA, { content: "after", clientMessageId: "recall-2" });
+
+    expect(() => db.deleteMessage(agentA, message.id)).toThrowError(
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+    expect(() => db.deleteMessage(human, "00000000-0000-4000-8000-000000000000")).toThrowError(
+      expect.objectContaining({ code: "MESSAGE_NOT_FOUND" }),
+    );
+    const other = db.upsertParticipant({ roomId: "other", username: "Alice", type: "human" });
+    expect(() => db.deleteMessage(other, message.id)).toThrowError(
+      expect.objectContaining({ code: "MESSAGE_NOT_FOUND" }),
+    );
+
+    const recalled = db.deleteMessage(human, message.id);
+    expect(recalled).toMatchObject({ id: message.id, seq: message.seq, content: "", mentions: [] });
+    expect(recalled.deletedAt).toBeTruthy();
+    expect(db.deleteMessage(human, message.id).deletedAt).toBe(recalled.deletedAt);
+
+    // seq 占位保留，正文已从库中清除
+    expect(db.getMessages("general").map((entry) => [entry.seq, entry.content])).toEqual([
+      [message.seq, ""],
+      [message.seq + 1, "after"],
+    ]);
+    expect(db.latestSeq("general")).toBe(message.seq + 1);
+  });
+
   it("stops dispatch chains after hop four", () => {
     const root = db.createMessage(human, {
       content: "@agent-a start",
@@ -229,5 +260,63 @@ describe("HiveDatabase", () => {
     db.setParticipantStatus(human.id, "offline");
     expect(db.onlineCount("general")).toBe(2);
     expect(db.getRoom("general")?.onlineCount).toBe(2);
+  });
+
+  it("strips control and bidi characters from message content", () => {
+    const { message } = db.createMessage(human, {
+      content: "hi\u202e @agent-a\u0007 go",
+      clientMessageId: "unsafe-1",
+    });
+    expect(message.content).toBe("hi @agent-a go");
+    expect(message.mentions).toEqual(["agent-a"]);
+    expect(() =>
+      db.createMessage(human, { content: "\u0000\u202e", clientMessageId: "unsafe-2" }),
+    ).toThrowError(expect.objectContaining({ code: "EMPTY_MESSAGE" }));
+  });
+
+  it("counts consecutive agent turns since the last human message and honours extensions", () => {
+    db.createMessage(human, { content: "start", clientMessageId: "h1" });
+    db.createMessage(agentA, { content: "one", clientMessageId: "a1" });
+    db.createMessage(agentB, { content: "two", clientMessageId: "b1" });
+    expect(db.agentTurnBudget("general")).toEqual({ used: 2, limit: 8 });
+    expect(db.extendAgentTurns("general", 3)).toBe(3);
+    expect(db.extendAgentTurns("general", 2)).toBe(5);
+    expect(db.agentTurnBudget("general").limit).toBe(13);
+    // 人一发言，计数和追加额度都重新开始
+    db.createMessage(human, { content: "继续", clientMessageId: "h2" });
+    expect(db.agentTurnBudget("general")).toEqual({ used: 0, limit: 8 });
+  });
+
+  it("creates one invocation per message and agent and counts pair turns", () => {
+    const { message } = db.createMessage(agentA, {
+      content: "@agent-b help",
+      clientMessageId: "pair-1",
+    });
+    const first = db.createInvocation({ message, agent: agentB, status: "queued" });
+    const again = db.createInvocation({ message, agent: agentB, status: "queued" });
+    expect(first.created).toBe(true);
+    expect(again).toEqual({ invocation: first.invocation, created: false });
+    expect(db.pairTurnsToday("general", agentA.id, agentB.id)).toBe(1);
+    const updated = db.updateInvocation(first.invocation.id, {
+      status: "running",
+      progress: "执行命令",
+    });
+    expect(updated).toMatchObject({ status: "running", progress: "执行命令" });
+    expect(db.updateInvocation(first.invocation.id, { progress: null }).progress).toBeUndefined();
+  });
+
+  it("keeps at most fifty whiteboard entries per slot", () => {
+    for (let index = 0; index < 52; index += 1) {
+      db.upsertWhiteboardEntry(agentA, {
+        key: `task-${index}`,
+        slot: "milestone",
+        summary: `里程碑 ${index}`,
+      });
+    }
+    const entries = db.listWhiteboard("general");
+    expect(entries).toHaveLength(50);
+    expect(entries.map((entry) => entry.key)).not.toContain("task-0");
+    expect(db.removeWhiteboardEntry("general", entries[0]!.id)).toBe(true);
+    expect(db.removeWhiteboardEntry("other", entries[1]!.id)).toBe(false);
   });
 });

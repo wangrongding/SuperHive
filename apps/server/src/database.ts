@@ -3,12 +3,18 @@ import Database from "better-sqlite3";
 import {
   LIMITS,
   parseMentions,
+  stripUnsafeCharacters,
   type ChatMessage,
+  type Invocation,
+  type InvocationBlockReason,
+  type InvocationStatus,
   type Participant,
   type AgentProvider,
   type ParticipantStatus,
   type ParticipantType,
   type RoomSummary,
+  type WhiteboardEntry,
+  type WhiteboardSlot,
 } from "@ai-hive/protocol";
 
 type ParticipantRow = {
@@ -38,6 +44,7 @@ type MessageRow = {
   hop_count: number;
   client_message_id: string | null;
   created_at: string;
+  deleted_at: string | null;
 };
 
 type RoomRow = {
@@ -49,6 +56,73 @@ type RoomRow = {
   online_count: number;
   latest_seq: number;
 };
+
+type InvocationRow = {
+  id: string;
+  room_id: string;
+  message_id: string;
+  agent_id: string;
+  agent_name: string;
+  requester_id: string;
+  requester_name: string;
+  requester_type: ParticipantType;
+  status: InvocationStatus;
+  block_reason: InvocationBlockReason | null;
+  detail: string | null;
+  progress: string | null;
+  reply_message_id: string | null;
+  attempts: number;
+  created_at: string;
+  updated_at: string;
+  received_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+type WhiteboardRow = {
+  id: string;
+  room_id: string;
+  key: string;
+  slot: WhiteboardSlot;
+  summary: string;
+  repo: string | null;
+  branch: string | null;
+  commit_ref: string | null;
+  unblocks: string;
+  author_id: string;
+  author_name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InvocationPatch = {
+  status?: InvocationStatus;
+  blockReason?: InvocationBlockReason | null;
+  detail?: string | null;
+  progress?: string | null;
+  replyMessageId?: string | null;
+  attempts?: number;
+  receivedAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+};
+
+export type WhiteboardInput = {
+  key: string;
+  slot: WhiteboardSlot;
+  summary: string;
+  repo?: string | undefined;
+  branch?: string | undefined;
+  commit?: string | undefined;
+  unblocks?: string[] | undefined;
+};
+
+export const TERMINAL_INVOCATION_STATUSES: readonly InvocationStatus[] = [
+  "completed",
+  "failed",
+  "blocked",
+  "cancelled",
+];
 
 export class HiveError extends Error {
   constructor(
@@ -99,6 +173,48 @@ function mapMessage(row: MessageRow): ChatMessage {
     hopCount: row.hop_count,
     ...(row.client_message_id ? { clientMessageId: row.client_message_id } : {}),
     createdAt: row.created_at,
+    ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
+  };
+}
+
+function mapInvocation(row: InvocationRow): Invocation {
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    messageId: row.message_id,
+    agentId: row.agent_id,
+    agentName: row.agent_name,
+    requesterName: row.requester_name,
+    requesterType: row.requester_type,
+    status: row.status,
+    ...(row.block_reason ? { blockReason: row.block_reason } : {}),
+    ...(row.detail ? { detail: row.detail } : {}),
+    ...(row.progress ? { progress: row.progress } : {}),
+    ...(row.reply_message_id ? { replyMessageId: row.reply_message_id } : {}),
+    attempts: row.attempts,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.received_at ? { receivedAt: row.received_at } : {}),
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+  };
+}
+
+function mapWhiteboard(row: WhiteboardRow): WhiteboardEntry {
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    key: row.key,
+    slot: row.slot,
+    summary: row.summary,
+    ...(row.repo ? { repo: row.repo } : {}),
+    ...(row.branch ? { branch: row.branch } : {}),
+    ...(row.commit_ref ? { commit: row.commit_ref } : {}),
+    unblocks: JSON.parse(row.unblocks) as string[],
+    authorId: row.author_id,
+    authorName: row.author_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -135,6 +251,8 @@ export class HiveDatabase {
     this.db = new Database(filename);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
+    // 撤回会清空正文；secure_delete 让被覆盖的旧内容在页内被清零，而不是留在空闲空间里
+    this.db.pragma("secure_delete = ON");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
@@ -186,12 +304,66 @@ export class HiveDatabase {
         created_by TEXT,
         archived_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS invocations (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        agent_name TEXT NOT NULL,
+        requester_id TEXT NOT NULL,
+        requester_name TEXT NOT NULL,
+        requester_type TEXT NOT NULL CHECK(requester_type IN ('human', 'agent')),
+        status TEXT NOT NULL,
+        block_reason TEXT,
+        detail TEXT,
+        progress TEXT,
+        reply_message_id TEXT,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        received_at TEXT,
+        started_at TEXT,
+        finished_at TEXT,
+        UNIQUE(message_id, agent_id)
+      );
+      CREATE INDEX IF NOT EXISTS invocations_room ON invocations(room_id, created_at);
+      CREATE INDEX IF NOT EXISTS invocations_agent_status ON invocations(agent_id, status);
+      CREATE INDEX IF NOT EXISTS invocations_pair
+        ON invocations(room_id, requester_id, agent_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS whiteboard_entries (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        slot TEXT NOT NULL CHECK(slot IN ('ready', 'in_progress', 'blocked', 'milestone')),
+        summary TEXT NOT NULL,
+        repo TEXT,
+        branch TEXT,
+        commit_ref TEXT,
+        unblocks TEXT NOT NULL DEFAULT '[]',
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(room_id, key)
+      );
     `);
     const participantColumns = this.db.pragma("table_info(participants)") as Array<{
       name: string;
     }>;
     if (!participantColumns.some((column) => column.name === "provider")) {
       this.db.exec("ALTER TABLE participants ADD COLUMN provider TEXT");
+    }
+    const messageColumns = this.db.pragma("table_info(messages)") as Array<{ name: string }>;
+    if (!messageColumns.some((column) => column.name === "deleted_at")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN deleted_at TEXT");
+    }
+    const roomColumns = this.db.pragma("table_info(rooms)") as Array<{ name: string }>;
+    if (!roomColumns.some((column) => column.name === "agent_turn_allowance")) {
+      // 人为 Agent 互相对话追加的轮数；只在授予时的那条人类消息之后有效
+      this.db.exec("ALTER TABLE rooms ADD COLUMN agent_turn_allowance INTEGER NOT NULL DEFAULT 0");
+      this.db.exec("ALTER TABLE rooms ADD COLUMN allowance_after_seq INTEGER NOT NULL DEFAULT 0");
     }
     const roomSeedTime = new Date().toISOString();
     this.db
@@ -385,10 +557,32 @@ export class HiveDatabase {
     return rows.map(mapMessage);
   }
 
-  private getMessage(id: string): ChatMessage | undefined {
+  getMessage(id: string): ChatMessage | undefined {
     const row = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as
       MessageRow | undefined;
     return row ? mapMessage(row) : undefined;
+  }
+
+  /**
+   * 撤回消息：保留 seq 占位（客户端靠 seq 增量同步），但把正文和提及从库里真正清掉，
+   * 误发的敏感内容不会留在 sqlite 文件里。只有发送者本人可以撤回；重复撤回幂等。
+   */
+  deleteMessage(actor: Participant, messageId: string): ChatMessage {
+    const message = this.getMessage(messageId);
+    if (!message || message.roomId !== actor.roomId) {
+      throw new HiveError("MESSAGE_NOT_FOUND", "Message not found in this room.");
+    }
+    if (message.senderId !== actor.id) {
+      throw new HiveError("FORBIDDEN", "Only the sender can recall a message.");
+    }
+    if (message.deletedAt) return message;
+    const deletedAt = new Date().toISOString();
+    this.db
+      .prepare("UPDATE messages SET content = '', mentions = '[]', deleted_at = ? WHERE id = ?")
+      .run(deletedAt, messageId);
+    // WAL 里仍保留着含原文的旧页面镜像，立刻 checkpoint 并截断，避免正文残留在 -wal 文件中
+    this.db.pragma("wal_checkpoint(TRUNCATE)");
+    return this.getMessage(messageId)!;
   }
 
   createMessage(sender: Participant, input: CreateMessageInput): CreateMessageResult {
@@ -433,8 +627,10 @@ export class HiveDatabase {
       }
     }
 
+    const content = stripUnsafeCharacters(input.content).trim();
+    if (!content) throw new HiveError("EMPTY_MESSAGE", "Message content is empty.");
     const id = randomUUID();
-    const mentions = parseMentions(input.content);
+    const mentions = parseMentions(content);
     const createdAt = new Date().toISOString();
     this.db
       .prepare(
@@ -449,7 +645,7 @@ export class HiveDatabase {
         sender.id,
         sender.username,
         sender.type,
-        input.content,
+        content,
         JSON.stringify(mentions),
         input.replyToMessageId ?? null,
         traceId,
@@ -459,5 +655,288 @@ export class HiveDatabase {
         createdAt,
       );
     return { message: this.getMessage(id)!, created: true };
+  }
+
+  findParticipant(roomId: string, username: string): Participant | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM participants WHERE room_id = ? AND username_key = ?")
+      .get(roomId, username.toLocaleLowerCase()) as ParticipantRow | undefined;
+    return row ? mapParticipant(row) : undefined;
+  }
+
+  private lastHumanSeq(roomId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COALESCE(MAX(seq), 0) AS seq FROM messages WHERE room_id = ? AND sender_type = 'human'",
+      )
+      .get(roomId) as { seq: number };
+    return row.seq;
+  }
+
+  /**
+   * 自最近一条人类消息以来的 Agent 发言轮数与可用上限。
+   * 人一发言计数就归零，授予的额外轮数也随之失效。
+   */
+  agentTurnBudget(roomId: string): { used: number; limit: number } {
+    const lastHumanSeq = this.lastHumanSeq(roomId);
+    const used = (
+      this.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM messages WHERE room_id = ? AND sender_type = 'agent' AND seq > ?",
+        )
+        .get(roomId, lastHumanSeq) as { count: number }
+    ).count;
+    const room = this.db
+      .prepare("SELECT agent_turn_allowance, allowance_after_seq FROM rooms WHERE id = ?")
+      .get(roomId) as { agent_turn_allowance: number; allowance_after_seq: number } | undefined;
+    const allowance =
+      room && room.allowance_after_seq === lastHumanSeq ? room.agent_turn_allowance : 0;
+    return { used, limit: LIMITS.maxConsecutiveAgentTurns + allowance };
+  }
+
+  /** 为当前这段 Agent 连续对话追加轮数；返回追加后的总额外轮数 */
+  extendAgentTurns(roomId: string, turns: number): number {
+    const lastHumanSeq = this.lastHumanSeq(roomId);
+    const room = this.db
+      .prepare("SELECT agent_turn_allowance, allowance_after_seq FROM rooms WHERE id = ?")
+      .get(roomId) as { agent_turn_allowance: number; allowance_after_seq: number } | undefined;
+    if (!room) throw new HiveError("ROOM_NOT_FOUND", "Room not found.");
+    const current = room.allowance_after_seq === lastHumanSeq ? room.agent_turn_allowance : 0;
+    const next = current + turns;
+    this.db
+      .prepare("UPDATE rooms SET agent_turn_allowance = ?, allowance_after_seq = ? WHERE id = ?")
+      .run(next, lastHumanSeq, roomId);
+    return next;
+  }
+
+  /** 发起方 Agent 在 24 小时内唤醒目标 Agent 的次数（被拦下的不计） */
+  pairTurnsToday(roomId: string, requesterId: string, agentId: string): number {
+    const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM invocations
+         WHERE room_id = ? AND requester_id = ? AND agent_id = ? AND created_at >= ?
+           AND status != 'blocked'`,
+      )
+      .get(roomId, requesterId, agentId, since) as { count: number };
+    return row.count;
+  }
+
+  /** 幂等：同一条消息对同一个 Agent 只会有一条调用记录 */
+  createInvocation(input: {
+    message: ChatMessage;
+    agent: Participant;
+    status: "queued" | "blocked";
+    blockReason?: InvocationBlockReason;
+    detail?: string;
+  }): { invocation: Invocation; created: boolean } {
+    const existing = this.getInvocationFor(input.message.id, input.agent.id);
+    if (existing) return { invocation: existing, created: false };
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO invocations(
+          id, room_id, message_id, agent_id, agent_name, requester_id, requester_name,
+          requester_type, status, block_reason, detail, attempts, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      )
+      .run(
+        id,
+        input.message.roomId,
+        input.message.id,
+        input.agent.id,
+        input.agent.username,
+        input.message.senderId,
+        input.message.senderName,
+        input.message.senderType,
+        input.status,
+        input.blockReason ?? null,
+        input.detail ?? null,
+        now,
+        now,
+      );
+    return { invocation: this.getInvocation(id)!, created: true };
+  }
+
+  getInvocation(id: string): Invocation | undefined {
+    const row = this.db.prepare("SELECT * FROM invocations WHERE id = ?").get(id) as
+      InvocationRow | undefined;
+    return row ? mapInvocation(row) : undefined;
+  }
+
+  getInvocationFor(messageId: string, agentId: string): Invocation | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM invocations WHERE message_id = ? AND agent_id = ?")
+      .get(messageId, agentId) as InvocationRow | undefined;
+    return row ? mapInvocation(row) : undefined;
+  }
+
+  updateInvocation(id: string, patch: InvocationPatch): Invocation {
+    const columns: Record<keyof InvocationPatch, string> = {
+      status: "status",
+      blockReason: "block_reason",
+      detail: "detail",
+      progress: "progress",
+      replyMessageId: "reply_message_id",
+      attempts: "attempts",
+      receivedAt: "received_at",
+      startedAt: "started_at",
+      finishedAt: "finished_at",
+    };
+    const assignments: string[] = ["updated_at = ?"];
+    const values: unknown[] = [new Date().toISOString()];
+    for (const [key, column] of Object.entries(columns) as Array<[keyof InvocationPatch, string]>) {
+      if (patch[key] === undefined) continue;
+      assignments.push(`${column} = ?`);
+      values.push(patch[key]);
+    }
+    this.db
+      .prepare(`UPDATE invocations SET ${assignments.join(", ")} WHERE id = ?`)
+      .run(...values, id);
+    const invocation = this.getInvocation(id);
+    if (!invocation) throw new HiveError("INVOCATION_NOT_FOUND", "Invocation not found.");
+    return invocation;
+  }
+
+  /** 房间最近的调用记录，外加所有尚未结束的调用（避免长任务被窗口挤掉） */
+  listInvocations(roomId: string, limit = 200): Invocation[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM invocations WHERE id IN (
+           SELECT id FROM invocations WHERE room_id = ? ORDER BY created_at DESC LIMIT ?
+         ) OR (room_id = ? AND status IN ('queued', 'running', 'timed_out'))
+         ORDER BY created_at ASC`,
+      )
+      .all(roomId, limit, roomId) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
+  listBlockedInvocations(roomId: string, afterSeq: number): Invocation[] {
+    const rows = this.db
+      .prepare(
+        `SELECT i.* FROM invocations i JOIN messages m ON m.id = i.message_id
+         WHERE i.room_id = ? AND i.status = 'blocked'
+           AND i.block_reason IN ('consecutive_limit', 'pair_limit') AND m.seq > ?
+         ORDER BY m.seq ASC`,
+      )
+      .all(roomId, afterSeq) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
+  lastHumanMessageSeq(roomId: string): number {
+    return this.lastHumanSeq(roomId);
+  }
+
+  /** queued 且未确认送达、或 running 但长时间没有回报的调用 */
+  listStaleInvocations(now = Date.now()): Invocation[] {
+    const staleRunning = new Date(now - LIMITS.invocationStaleMs).toISOString();
+    const unacknowledged = new Date(now - LIMITS.invocationUnacknowledgedMs).toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM invocations
+         WHERE (status = 'running' AND updated_at < ?)
+            OR (status = 'queued' AND received_at IS NULL AND updated_at < ?)`,
+      )
+      .all(staleRunning, unacknowledged) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
+  listWhiteboard(roomId: string): WhiteboardEntry[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM whiteboard_entries WHERE room_id = ? ORDER BY updated_at DESC, rowid DESC",
+      )
+      .all(roomId) as WhiteboardRow[];
+    return rows.map(mapWhiteboard);
+  }
+
+  /**
+   * 按 key 写入白板：同一事项从"进行中"移到"已就绪"只需复用 key。
+   * 60 秒内内容完全相同的重复发布视为节流，不产生更新；每个栏目最多保留 50 条。
+   */
+  upsertWhiteboardEntry(
+    author: Participant,
+    input: WhiteboardInput,
+  ): { entry: WhiteboardEntry; changed: boolean; evicted: string[] } {
+    const now = new Date();
+    const unblocks = [...new Set(input.unblocks ?? [])];
+    const existingRow = this.db
+      .prepare("SELECT * FROM whiteboard_entries WHERE room_id = ? AND key = ?")
+      .get(author.roomId, input.key) as WhiteboardRow | undefined;
+    if (existingRow) {
+      const existing = mapWhiteboard(existingRow);
+      const unchanged =
+        existing.slot === input.slot &&
+        existing.summary === input.summary &&
+        (existing.repo ?? undefined) === input.repo &&
+        (existing.branch ?? undefined) === input.branch &&
+        (existing.commit ?? undefined) === input.commit &&
+        JSON.stringify(existing.unblocks) === JSON.stringify(unblocks);
+      if (unchanged && now.getTime() - Date.parse(existing.updatedAt) < 60_000) {
+        return { entry: existing, changed: false, evicted: [] };
+      }
+      this.db
+        .prepare(
+          `UPDATE whiteboard_entries SET slot = ?, summary = ?, repo = ?, branch = ?, commit_ref = ?,
+             unblocks = ?, author_id = ?, author_name = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          input.slot,
+          input.summary,
+          input.repo ?? null,
+          input.branch ?? null,
+          input.commit ?? null,
+          JSON.stringify(unblocks),
+          author.id,
+          author.username,
+          now.toISOString(),
+          existing.id,
+        );
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO whiteboard_entries(
+            id, room_id, key, slot, summary, repo, branch, commit_ref, unblocks,
+            author_id, author_name, created_at, updated_at
+          ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          randomUUID(),
+          author.roomId,
+          input.key,
+          input.slot,
+          input.summary,
+          input.repo ?? null,
+          input.branch ?? null,
+          input.commit ?? null,
+          JSON.stringify(unblocks),
+          author.id,
+          author.username,
+          now.toISOString(),
+          now.toISOString(),
+        );
+    }
+    const overflow = this.db
+      .prepare(
+        `SELECT id FROM whiteboard_entries WHERE room_id = ? AND slot = ?
+         ORDER BY updated_at DESC, rowid DESC LIMIT -1 OFFSET ?`,
+      )
+      .all(author.roomId, input.slot, LIMITS.maxWhiteboardEntriesPerSlot) as Array<{ id: string }>;
+    for (const { id } of overflow) {
+      this.db.prepare("DELETE FROM whiteboard_entries WHERE id = ?").run(id);
+    }
+    const row = this.db
+      .prepare("SELECT * FROM whiteboard_entries WHERE room_id = ? AND key = ?")
+      .get(author.roomId, input.key) as WhiteboardRow;
+    return { entry: mapWhiteboard(row), changed: true, evicted: overflow.map(({ id }) => id) };
+  }
+
+  removeWhiteboardEntry(roomId: string, entryId: string): boolean {
+    return (
+      this.db
+        .prepare("DELETE FROM whiteboard_entries WHERE room_id = ? AND id = ?")
+        .run(roomId, entryId).changes > 0
+    );
   }
 }
