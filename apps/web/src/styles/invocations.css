@@ -1,0 +1,290 @@
+/*
+ * Agent 调用状态 chip：消息下方的小胶囊。
+ * 安静优先——状态色只出现在前导圆点和状态词上，完成后退为无底色的对勾。
+ */
+.invocation-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.message.agent .invocation-row {
+  margin-top: 10px;
+}
+
+:root[data-density="compact"] .invocation-row {
+  margin-top: 5px;
+}
+
+.invocation-chip {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: 0 4px 0 10px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  transition:
+    background var(--duration-fast),
+    border-color var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.invocation-chip:not(:has(.invocation-action)) {
+  padding-right: 10px;
+}
+
+.invocation-summary {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+}
+
+button.invocation-summary:hover .invocation-agent {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.invocation-summary:focus-visible {
+  outline-offset: 3px;
+}
+
+/* 前导点：唯一承载状态色的元素 */
+.invocation-indicator {
+  width: 7px;
+  height: 7px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.invocation-agent {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+}
+
+.invocation-status {
+  color: var(--text-secondary);
+}
+
+.invocation-progress {
+  min-width: 0;
+  max-width: 30ch;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  text-overflow: ellipsis;
+}
+
+.invocation-elapsed,
+.invocation-attempts {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.invocation-attempts::before {
+  margin-right: 5px;
+  content: "·";
+}
+
+/* chip 内按钮：小号幽灵胶囊 */
+.invocation-action {
+  min-height: 20px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.invocation-action:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.invocation-action.primary {
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.invocation-action.primary:hover {
+  background: var(--bg-hover);
+}
+
+.invocation-action.subtle {
+  color: var(--text-tertiary);
+}
+
+.invocation-action.subtle:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* 排队中：空心点 */
+.invocation-chip.queued .invocation-indicator {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-tertiary);
+}
+
+/* 进行中：强调色点，缓慢脉冲 */
+.invocation-chip.running .invocation-indicator {
+  background: var(--accent);
+  animation: invocation-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes invocation-pulse {
+  50% {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+}
+
+/* 失败：淡红底 + 红点红字 */
+.invocation-chip.failed {
+  background: var(--danger-soft);
+}
+
+.invocation-chip.failed .invocation-indicator {
+  background: var(--danger);
+}
+
+.invocation-chip.failed .invocation-status {
+  color: var(--danger);
+}
+
+/* 暂停 / 结果未知：淡黄底，结果未知用虚线边框表达"悬而未决" */
+.invocation-chip.blocked,
+.invocation-chip.timed_out {
+  background: var(--warning-soft);
+}
+
+.invocation-chip.timed_out {
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  border-style: dashed;
+}
+
+.invocation-chip.blocked .invocation-indicator {
+  background: var(--warning);
+}
+
+.invocation-chip.timed_out .invocation-indicator {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--warning);
+}
+
+.invocation-chip.blocked .invocation-status,
+.invocation-chip.timed_out .invocation-status {
+  color: var(--warning);
+}
+
+.invocation-chip.blocked .invocation-progress,
+.invocation-chip.failed .invocation-progress {
+  max-width: 34ch;
+  color: var(--text-secondary);
+}
+
+/* 已停止：无底色，仅保留虚线轮廓 */
+.invocation-chip.cancelled {
+  border-color: var(--border);
+  border-style: dashed;
+  background: transparent;
+}
+
+/* 已完成：退到背景，不加底色，只留一个小对勾 */
+.invocation-chip.completed {
+  min-height: 22px;
+  padding-left: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.invocation-chip.completed:has(button.invocation-summary):hover {
+  background: var(--bg-hover);
+}
+
+.invocation-chip.completed .invocation-indicator {
+  width: 14px;
+  height: 14px;
+  background: transparent;
+  color: var(--success);
+}
+
+.invocation-chip.completed .invocation-indicator svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.invocation-chip.completed .invocation-agent {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.invocation-chip.completed .invocation-status {
+  color: var(--text-tertiary);
+}
+
+/* 从 chip 跳转到回复时闪一下目标消息 */
+.message.highlighted {
+  background: var(--bg-subtle);
+  animation: message-highlight 2.2s var(--ease-out);
+}
+
+@keyframes message-highlight {
+  0%,
+  45% {
+    background: var(--accent-soft);
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* 触屏上按钮需要更大的点击区域 */
+@media (hover: none) {
+  .invocation-action {
+    min-height: 28px;
+    padding: 0 12px;
+  }
+
+  .invocation-progress {
+    max-width: 18ch;
+  }
+}

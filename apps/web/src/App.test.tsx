@@ -192,13 +192,24 @@ describe("App mention autocomplete", () => {
       }),
     );
 
-    const themeSwitcher = screen.getByRole("radiogroup", { name: "颜色主题" });
+    // 主题切换收在头像菜单里
+    expect(screen.queryByRole("radiogroup", { name: "颜色主题" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "用户菜单" }));
+    const themeSwitcher = within(screen.getByRole("menu", { name: "用户菜单" })).getByRole(
+      "radiogroup",
+      { name: "颜色主题" },
+    );
     await user.click(within(themeSwitcher).getByRole("radio", { name: "浅色" }));
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(localStorage.getItem("ai-hive.theme")).toBe("light");
+    await user.keyboard("{Escape}");
 
     const membersPanel = screen.getByLabelText("成员列表");
+    // 添加成员的入口（邀请人类、接入 Agent）位于成员列表下方
     expect(within(membersPanel).getByRole("button", { name: "接入 Agent" })).toBeTruthy();
+    await user.click(within(membersPanel).getByRole("button", { name: /邀请成员/ }));
+    expect(await navigator.clipboard.readText()).toBe(`${window.location.origin}/#general`);
+    expect(within(membersPanel).getByRole("button", { name: /已复制邀请链接/ })).toBeTruthy();
     const membersTrigger = screen.getByRole("button", { name: "打开成员列表" });
     await user.click(membersTrigger);
     expect(membersPanel.classList.contains("mobile-open")).toBe(true);

@@ -1,0 +1,1071 @@
+/*
+ * 弹窗：Agent 接入、房间新建/管理，以及侧栏底部的用户菜单。
+ * 层级：抽屉/面板 z 50 < 用户菜单 70 < Agent / 房间弹窗 80 < 设置 90（settings.css）。
+ */
+
+/* ---------- 通用弹窗骨架 ---------- */
+.agent-dialog-layer,
+.room-dialog-layer {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.agent-dialog-scrim,
+.room-dialog-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: var(--bg-scrim);
+  cursor: default;
+  animation: fade-in var(--duration) ease-out;
+}
+
+.agent-dialog-scrim:focus-visible,
+.room-dialog-scrim:focus-visible {
+  outline: none;
+}
+
+.agent-dialog,
+.room-dialog {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-2xl);
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-dialog);
+  animation: pop-in var(--duration) var(--ease-out);
+}
+
+/* 标题区：去掉图标徽记与英文小标题，只留标题、说明与关闭按钮 */
+.agent-dialog-header,
+.room-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.agent-dialog-header > div:nth-child(2),
+.room-dialog-header > div:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+
+.agent-dialog-header h2,
+.room-dialog-header h2 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: var(--weight-semibold);
+  line-height: 1.35;
+}
+
+.agent-dialog-close,
+.room-dialog-header > button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  margin: -6px -4px 0 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  transition:
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.agent-dialog-close:hover,
+.room-dialog-header > button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ---------- Agent 接入弹窗 ---------- */
+.agent-dialog {
+  width: min(640px, 100%);
+  max-height: min(760px, calc(100dvh - 48px));
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.agent-dialog-header {
+  padding: 22px 24px 0;
+}
+
+.agent-dialog-header > div:nth-child(2) > p:last-child {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.agent-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin: 18px 24px 0;
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  background: var(--bg-hover);
+  list-style: none;
+}
+
+.agent-steps li > button,
+.agent-steps li > span {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 10px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.agent-steps li > * > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-steps li.current > span {
+  background: var(--bg-main);
+  color: var(--text);
+  box-shadow:
+    0 0 0 1px var(--border-light),
+    0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+.agent-steps li.done > button {
+  color: var(--text-secondary);
+}
+
+.agent-steps li.done > button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.agent-step-index {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border-heavy);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.agent-steps li.current .agent-step-index {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  box-shadow: none;
+}
+
+.agent-steps li.done .agent-step-index {
+  background: var(--bg-muted);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.agent-dialog-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 24px 24px;
+}
+
+.agent-step-heading {
+  margin-bottom: 16px;
+}
+
+.agent-step-heading h3 {
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
+  outline: none;
+}
+
+.agent-step-heading h3:focus-visible {
+  outline: none;
+}
+
+.agent-step-heading p {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.agent-step-heading code,
+.agent-next-steps code {
+  border-radius: var(--radius-xs);
+  padding: 1px 5px;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.agent-access-label {
+  margin-left: 2px;
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.agent-access-label.workspace {
+  color: var(--warning);
+}
+
+.agent-access-label.full {
+  color: var(--danger);
+}
+
+/* 选择卡片：细边框圆角卡，选中态用正文色描边 + 浅底 */
+.provider-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.provider-selector button,
+.access-selector button {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  transition:
+    border-color var(--duration-fast),
+    background var(--duration-fast);
+}
+
+.provider-selector button:hover,
+.access-selector button:hover {
+  background: var(--bg-hover);
+}
+
+.provider-selector button.active,
+.access-selector button.active {
+  border-color: var(--text);
+  background: var(--bg-subtle);
+}
+
+.provider-selector button {
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.provider-monogram {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  transition:
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.provider-selector button.active .provider-monogram {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.provider-copy,
+.provider-copy strong,
+.provider-copy small {
+  display: block;
+  min-width: 0;
+}
+
+.provider-copy strong,
+.access-selector strong {
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  line-height: 1.35;
+}
+
+.provider-copy small,
+.access-selector small {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.provider-check {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--border-heavy);
+  color: transparent;
+}
+
+.provider-selector button.active .provider-check {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  box-shadow: none;
+}
+
+.access-selector {
+  display: grid;
+  gap: 8px;
+}
+
+.access-selector button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 12px;
+  padding: 14px 16px;
+}
+
+.access-selector strong,
+.access-selector small {
+  display: block;
+  min-width: 0;
+}
+
+.access-indicator {
+  grid-row: 1 / span 2;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--border-heavy);
+}
+
+.access-indicator i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.access-selector button.active .access-indicator {
+  box-shadow: inset 0 0 0 1.5px var(--text);
+}
+
+.access-selector button.active .access-indicator i {
+  background: var(--text);
+}
+
+.access-selector button.workspace.active .access-indicator {
+  box-shadow: inset 0 0 0 1.5px var(--warning);
+}
+
+.access-selector button.workspace.active .access-indicator i {
+  background: var(--warning);
+}
+
+.access-selector button.full.active {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.access-selector button.full.active .access-indicator {
+  box-shadow: inset 0 0 0 1.5px var(--danger);
+}
+
+.access-selector button.full.active .access-indicator i {
+  background: var(--danger);
+}
+
+.openclaw-access-note {
+  margin-top: 12px;
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  background: var(--warning-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.full-access-confirmation {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+  border-radius: var(--radius-xl);
+  padding: 16px;
+  background: var(--danger-soft);
+  animation: pop-in var(--duration) var(--ease-out);
+}
+
+.full-access-confirmation strong {
+  color: var(--danger);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.full-access-confirmation p {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.full-access-actions,
+.room-archive-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 弹窗内通用按钮：次要为描边幽灵胶囊，主要为黑/白实心胶囊 */
+.full-access-actions button,
+.room-archive-actions button,
+.agent-dialog-nav button,
+.room-dialog-footer button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 16px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast),
+    border-color var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.full-access-actions button:hover:not(:disabled),
+.room-archive-actions button:hover:not(:disabled),
+.agent-dialog-nav button:hover:not(:disabled),
+.room-dialog-footer button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.full-access-actions button:last-child,
+.room-archive-actions button:last-child {
+  border-color: transparent;
+  background: var(--danger);
+  color: var(--text-inverse);
+}
+
+.full-access-actions button:last-child:hover,
+.room-archive-actions button:last-child:hover:not(:disabled) {
+  background: var(--danger);
+  filter: brightness(1.08);
+}
+
+.agent-dialog-nav button.primary,
+.room-dialog-footer button[type="submit"] {
+  border-color: transparent;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.agent-dialog-nav button.primary:hover,
+.room-dialog-footer button[type="submit"]:hover:not(:disabled) {
+  background: var(--button-primary-hover);
+}
+
+.full-access-actions button:disabled,
+.room-archive-actions button:disabled,
+.agent-dialog-nav button:disabled,
+.room-dialog-footer button:disabled {
+  opacity: 0.45;
+}
+
+/* 终端命令：代码块配色，等宽 12.5px */
+.command {
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-code);
+  box-shadow: inset 0 0 0 1px var(--border-light);
+}
+
+.command-heading {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-light);
+  padding: 0 14px;
+}
+
+.command-heading small {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.terminal-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.terminal-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bg-muted);
+}
+
+.command code {
+  min-height: 64px;
+  display: block;
+  padding: 14px 16px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.command button {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 12px 12px auto;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 0 14px;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: background var(--duration-fast);
+}
+
+.command button:hover:not(:disabled) {
+  background: var(--button-primary-hover);
+}
+
+.command button:disabled {
+  opacity: 0.45;
+}
+
+.command-copy-error,
+.command-dev-note {
+  margin-top: 10px;
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.command-copy-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.command-dev-note {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.agent-next-steps {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: agent-next-step;
+}
+
+.agent-next-steps li {
+  position: relative;
+  padding-left: 30px;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  counter-increment: agent-next-step;
+}
+
+.agent-next-steps li::before {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  content: counter(agent-next-step);
+}
+
+.agent-next-steps kbd {
+  font-size: 11px;
+}
+
+.agent-dialog-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--border-light);
+  padding: 14px 24px;
+}
+
+.agent-dialog-links {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-dialog-nav {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.connection-details {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.connection-details summary {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  padding: 0 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  list-style: none;
+  transition:
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.connection-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.connection-details summary:hover,
+.connection-details[open] summary {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.connection-details summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.connection-details[open] dl {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  margin: 0;
+  border-radius: var(--radius-xl);
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: pop-in var(--duration-fast) var(--ease-out);
+}
+
+.connection-details dl > div + div {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-light);
+  padding-top: 10px;
+}
+
+.connection-details dt {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.connection-details dd {
+  margin: 2px 0 0;
+}
+
+.connection-details code {
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-doc {
+  min-height: 32px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-pill);
+  padding: 0 10px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transition:
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.agent-doc:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ---------- 房间新建 / 管理 ---------- */
+.room-dialog {
+  width: min(440px, 100%);
+  max-height: min(640px, calc(100dvh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.room-dialog-header {
+  padding: 22px 24px 4px;
+}
+
+.room-dialog-header h2 {
+  overflow-wrap: anywhere;
+}
+
+.room-dialog-body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 24px 24px;
+}
+
+.room-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.room-field > span {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.room-field input {
+  min-height: 44px;
+  border: 1px solid var(--border-heavy);
+  border-radius: var(--radius-lg);
+  padding: 0 14px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--text-base);
+  transition: border-color var(--duration-fast);
+}
+
+.room-field input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.room-field input:hover {
+  border-color: var(--text-tertiary);
+}
+
+.room-field input:focus {
+  border-color: var(--accent);
+}
+
+.room-field input:focus-visible {
+  outline-offset: 1px;
+}
+
+.room-field small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.room-dialog-error {
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.room-archive-confirmation {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-radius: var(--radius-xl);
+  padding: 16px;
+  background: var(--danger-soft);
+  animation: pop-in var(--duration) var(--ease-out);
+}
+
+.room-archive-confirmation strong {
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.room-archive-confirmation p {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.room-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.room-dialog-footer .room-archive,
+.room-dialog-footer .room-restore {
+  margin-right: auto;
+}
+
+.room-dialog-footer .room-archive {
+  color: var(--danger);
+}
+
+.room-dialog-footer .room-archive:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--danger-soft);
+}
+
+/* ---------- 用户菜单（侧栏底部身份条弹出） ---------- */
+.user-menu {
+  position: absolute;
+  z-index: 70;
+  right: 8px;
+  bottom: calc(100% + 6px);
+  left: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: var(--radius-xl);
+  padding: 6px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  transform-origin: bottom center;
+  animation: pop-in var(--duration-fast) var(--ease-out);
+}
+
+.user-menu > button {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  padding: 0 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-base);
+  text-align: left;
+  transition:
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.user-menu > button .icon {
+  color: var(--text-secondary);
+}
+
+.user-menu > button:hover {
+  background: var(--bg-hover);
+}
+
+.user-menu > button:focus-visible {
+  outline-offset: -2px;
+}
+
+.user-menu .user-menu-logout {
+  margin-top: 5px;
+  position: relative;
+}
+
+/* 分隔线：退出与常规操作之间 */
+.user-menu .user-menu-logout::before {
+  position: absolute;
+  top: -4px;
+  right: 6px;
+  left: 6px;
+  height: 1px;
+  background: var(--border-light);
+  content: "";
+}
+
+.user-menu .user-menu-logout:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.user-menu .user-menu-logout:hover .icon {
+  color: var(--danger);
+}
+
+.user-menu-theme {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 4px 0 10px;
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+/* ---------- 移动端：底部弹出面板 ---------- */
+@media (max-width: 720px) {
+  .agent-dialog-layer,
+  .room-dialog-layer {
+    place-items: end center;
+    padding: 8px 0 0;
+  }
+
+  .agent-dialog,
+  .room-dialog {
+    width: 100%;
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+    animation-name: sheet-in;
+  }
+
+  .agent-dialog {
+    max-height: calc(100dvh - 8px);
+  }
+
+  .room-dialog {
+    max-height: calc(100dvh - 8px);
+  }
+
+  .agent-dialog-header,
+  .room-dialog-header {
+    padding: 20px 16px 0;
+  }
+
+  .agent-dialog-header > div:nth-child(2) > p:last-child {
+    display: none;
+  }
+
+  .agent-steps {
+    margin: 14px 16px 0;
+  }
+
+  .agent-dialog-body {
+    padding: 18px 16px 22px;
+  }
+
+  .provider-selector button {
+    grid-template-columns: 32px minmax(0, 1fr) 20px;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .provider-monogram {
+    width: 32px;
+    height: 32px;
+  }
+
+  .agent-dialog-footer {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .agent-dialog-links {
+    flex: 1 0 100%;
+    justify-content: space-between;
+  }
+
+  .agent-dialog-nav {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .agent-dialog-nav button {
+    min-height: 42px;
+    flex: 1;
+  }
+
+  .room-dialog-body {
+    padding: 16px 16px max(20px, env(safe-area-inset-bottom));
+  }
+
+  .room-dialog-footer button {
+    min-height: 42px;
+  }
+
+  @keyframes sheet-in {
+    from {
+      transform: translateY(24px);
+      opacity: 0;
+    }
+  }
+}
+
+@media (max-width: 430px) {
+  .agent-dialog-header h2 {
+    font-size: var(--text-lg);
+  }
+
+  .provider-selector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-steps li:not(.current) > * > span:last-child {
+    display: none;
+  }
+
+  .full-access-actions {
+    flex-direction: column-reverse;
+  }
+
+  .full-access-actions button {
+    width: 100%;
+  }
+
+  .connection-details[open] dl {
+    width: min(320px, calc(100vw - 32px));
+  }
+}

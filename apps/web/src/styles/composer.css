@@ -1,0 +1,298 @@
+/* 输入区：居中悬浮的胶囊输入框（参考 ChatGPT composer），以及 @ 提及菜单与回到底部按钮 */
+.composer {
+  position: relative;
+  width: min(100% - 32px, var(--thread-width));
+  flex: 0 0 auto;
+  margin: 0 auto;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+.composer-box {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-composer);
+  background: var(--bg-main);
+  box-shadow: var(--shadow-composer);
+  transition: box-shadow var(--duration);
+}
+
+:root[data-theme="dark"] .composer-box {
+  background: var(--bg-elevated);
+}
+
+.composer-box:focus-within {
+  box-shadow:
+    var(--shadow-composer),
+    0 0 0 1px var(--border-heavy);
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 54px;
+  max-height: 176px;
+  display: block;
+  padding: 15px 20px 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-message);
+  line-height: 24px;
+  resize: none;
+}
+
+/* 聚焦样式由外层胶囊统一呈现 */
+.composer textarea:focus-visible {
+  outline: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px 8px 20px;
+}
+
+.composer-footer > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-footer kbd {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+}
+
+.composer-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.char-count {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.char-count.danger {
+  color: var(--danger);
+}
+
+.composer-send {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  transition:
+    background var(--duration-fast),
+    opacity var(--duration-fast);
+}
+
+.composer-send:hover:not(:disabled) {
+  background: var(--button-primary-hover);
+}
+
+.composer-send:disabled {
+  background: var(--bg-active);
+  color: var(--text-tertiary);
+}
+
+/* 回到底部 / 新消息提示：悬浮在输入框上方居中 */
+.jump-to-bottom,
+.jump-pill {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 0;
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-popover);
+  animation: pop-in var(--duration) var(--ease-out);
+}
+
+.jump-to-bottom {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.jump-pill {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.jump-pill + .jump-to-bottom,
+.jump-to-bottom + .jump-pill {
+  bottom: calc(100% + 56px);
+}
+
+.jump-to-bottom:hover,
+.jump-pill:hover {
+  background: var(--bg-subtle);
+}
+
+/* ---------- @ 提及菜单 ---------- */
+.mention-menu {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(340px, 100%);
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: pop-in var(--duration) var(--ease-out);
+}
+
+.mention-menu-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 14px 4px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.mention-menu-heading span {
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+.mention-options {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px 6px;
+}
+
+.mention-option {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+}
+
+.mention-option.active {
+  background: var(--bg-hover);
+}
+
+.mention-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+
+.mention-member-copy {
+  min-width: 0;
+  display: grid;
+  flex: 1;
+}
+
+.mention-member-copy strong,
+.mention-member-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-member-copy strong {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.mention-member-copy small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.mention-empty {
+  padding: 14px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.mention-menu-footer {
+  display: flex;
+  gap: 14px;
+  padding: 8px 14px 10px;
+  border-top: 1px solid var(--border-light);
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.mention-menu-footer kbd {
+  border: 0;
+  background: var(--bg-hover);
+  font-family: var(--font-sans);
+  font-size: 10px;
+}
+
+:root[data-density="compact"] .composer textarea {
+  padding-top: 13px;
+}
+
+@media (max-width: 720px) {
+  .composer {
+    width: calc(100% - 20px);
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
+  .composer-box {
+    border-radius: 24px;
+  }
+
+  .composer textarea {
+    padding: 15px 16px 0;
+    font-size: 16px;
+  }
+
+  .composer-footer {
+    padding: 0 6px 6px 16px;
+  }
+
+  .composer-footer > span:first-child {
+    visibility: hidden;
+  }
+
+  .mention-menu {
+    width: 100%;
+  }
+
+  .mention-menu-footer {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}

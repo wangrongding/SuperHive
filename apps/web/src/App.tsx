@@ -62,6 +62,7 @@ const storedPresenceNotificationsKey = "ai-hive.notify-agent-presence";
 const storedThemeKey = "ai-hive.theme";
 const storedDensityKey = "ai-hive.density";
 const storedMessageSizeKey = "ai-hive.message-size";
+const storedMembersCollapsedKey = "ai-hive.members-collapsed";
 const storedReduceMotionKey = "ai-hive.reduce-motion";
 type SelectableAgentProvider = "codex" | "claude" | "copilot" | "openclaw";
 type AgentAccessMode = "read-only" | "workspace" | "full";
@@ -79,6 +80,7 @@ type SidePanelTab = "members" | "whiteboard";
 type IconName =
   | "arrow-down"
   | "arrow-right"
+  | "arrow-up"
   | "bell"
   | "board"
   | "check"
@@ -87,6 +89,8 @@ type IconName =
   | "external"
   | "hash"
   | "logout"
+  | "more"
+  | "panel-right"
   | "plug"
   | "plus"
   | "send"
@@ -94,6 +98,7 @@ type IconName =
   | "share"
   | "shield"
   | "undo"
+  | "user-plus"
   | "users";
 
 const selectableAgentProviders = ["codex", "claude", "copilot", "openclaw"] as const;
@@ -239,6 +244,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
     "arrow-down": <path d="M12 5v14m-5-5 5 5 5-5" />,
     "arrow-right": <path d="M5 12h14m-5-5 5 5-5 5" />,
+    "arrow-up": <path d="M12 19V5m-6 6 6-6 6 6" />,
     board: (
       <>
         <rect x="5" y="4" width="14" height="17" rx="2" />
@@ -260,6 +266,13 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     undo: <path d="M9 14 4 9l5-5M4 9h9.5a6.5 6.5 0 0 1 0 13H11" />,
     hash: <path d="M9 4 7 20M17 4l-2 16M4 9h17M3 15h17" />,
     logout: <path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4m5-4 3-3-3-3m3 3H9" />,
+    more: <path d="M6 12h.01M12 12h.01M18 12h.01" strokeWidth="2.6" />,
+    "panel-right": (
+      <>
+        <rect x="3.5" y="4.5" width="17" height="15" rx="3" />
+        <path d="M14.5 4.5v15" />
+      </>
+    ),
     plug: <path d="M8 3v4m8-4v4M6 7h12v2a6 6 0 0 1-6 6v0a6 6 0 0 1-6-6V7Zm6 8v6" />,
     plus: <path d="M12 5v14M5 12h14" />,
     send: <path d="m21 3-7.4 18-3.7-7.9L2 9.4 21 3Zm-11.1 10.1L14 9" />,
@@ -271,6 +284,12 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       </>
     ),
     shield: <path d="M12 3 5 6v5c0 4.6 2.9 8 7 10 4.1-2 7-5.4 7-10V6l-7-3Zm-3 9 2 2 4-4" />,
+    "user-plus": (
+      <>
+        <circle cx="10" cy="8" r="3.5" />
+        <path d="M3.5 20a6.5 6.5 0 0 1 13 0M19 8v6m3-3h-6" />
+      </>
+    ),
     users: (
       <>
         <circle cx="9" cy="8" r="3" />
@@ -538,13 +557,9 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
         <section className="login-intro">
           <div className="login-brand">
             <HiveLogo />
-            <div>
-              <strong>AI HIVE</strong>
-              <span>LOCAL COLLABORATION NETWORK</span>
-            </div>
+            <strong>AI Hive</strong>
           </div>
           <div className="login-thesis">
-            <p className="eyebrow">ONE ROOM · SHARED CONTEXT</p>
             <h1>
               让人类与 Agent，
               <span>沿着同一条思路工作。</span>
@@ -552,17 +567,15 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
             <p>把消息、协作者与本地 Agent 放进一个实时工作区，所有人都看见同一份上下文。</p>
           </div>
           <div className="signal-map" aria-hidden="true">
-            <span className="signal-line" />
             <span className="signal-node human">RD</span>
             <span className="signal-node agent">AI</span>
             <span className="signal-node agent secondary">AI</span>
-            <p>3 collaborators · one live thread</p>
+            <p>3 位协作者 · 同一条实时对话</p>
           </div>
         </section>
 
         <section className="login-form-panel">
           <div className="login-form-heading">
-            <p className="eyebrow">JOIN THE WORKSPACE</p>
             <h2>进入 AI Hive</h2>
             <p className="login-copy">选择一个在当前房间中可识别的名字。</p>
           </div>
@@ -644,6 +657,8 @@ export function App() {
   const [roomDialogBusy, setRoomDialogBusy] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const userMenuHoverTimer = useRef<number | undefined>(undefined);
   const [pendingNewMessages, setPendingNewMessages] = useState(0);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [shadowHost, setShadowHost] = useState<HTMLDivElement | null>(null);
@@ -687,6 +702,9 @@ export function App() {
   );
   const [interfaceDensity, setInterfaceDensity] = useState<InterfaceDensity>(() =>
     storedChoice(storedDensityKey, ["comfortable", "compact"], "comfortable"),
+  );
+  const [membersCollapsed, setMembersCollapsed] = useState(() =>
+    storedBoolean(storedMembersCollapsedKey, false),
   );
   const [messageSize, setMessageSize] = useState<MessageSize>(() =>
     storedChoice(storedMessageSizeKey, ["small", "standard", "large"], "standard"),
@@ -1703,6 +1721,29 @@ export function App() {
     }
   }
 
+  /**
+   * 邀请链接直接指向当前房间的 Web UI：生产环境由 Hive Server 托管页面，用对外地址；
+   * 开发环境页面由 Vite 提供，沿用当前页面地址。
+   */
+  function inviteLink(): string {
+    const origin =
+      import.meta.env.DEV || !meta?.httpUrl
+        ? `${window.location.origin}${window.location.pathname}`
+        : meta.httpUrl;
+    return `${origin.replace(/\/$/, "")}/#${currentRoomId}`;
+  }
+
+  async function copyInviteLink() {
+    const link = inviteLink();
+    try {
+      await copyTextToClipboard(link);
+      setInviteCopied(true);
+      window.setTimeout(() => setInviteCopied(false), 2000);
+    } catch {
+      setError(`浏览器未允许自动复制，请手动发送邀请链接：${link}`);
+    }
+  }
+
   async function copyCommand() {
     if (!meta) return;
     setCopyError(undefined);
@@ -1799,32 +1840,6 @@ export function App() {
       <a className="skip-link" href="#main-content">
         跳到消息区
       </a>
-      <header className="topbar">
-        <div className="brand">
-          <HiveLogo compact />
-          <div>
-            <strong>AI HIVE</strong>
-            <small>LOCAL COLLABORATION NETWORK</small>
-          </div>
-        </div>
-        <div className="topbar-actions">
-          <ThemeSwitcher
-            value={themePreference}
-            onChange={(value) => {
-              setThemePreference(value);
-              localStorage.setItem(storedThemeKey, value);
-            }}
-          />
-          <div className={`connection ${connectionState}`} role="status" aria-live="polite">
-            <span aria-hidden="true" />
-            {connectionState === "online"
-              ? "Hive 已在线"
-              : connectionState === "connecting"
-                ? "正在连接"
-                : "连接已中断"}
-          </div>
-        </div>
-      </header>
 
       {mobilePanel && (
         <button
@@ -1835,26 +1850,37 @@ export function App() {
         />
       )}
 
-      <section className="workspace">
+      <section className={`workspace ${membersCollapsed ? "members-collapsed" : ""}`}>
         <aside
           className={`rooms-panel panel ${mobilePanel === "rooms" ? "mobile-open" : ""}`}
           aria-label="房间列表"
         >
-          <div className="panel-heading">
-            <span className="panel-title">
-              <Icon name="hash" size={16} />
-              房间
-            </span>
-            <span className="panel-meta">{activeRoomCount} ROOMS</span>
-            <button
-              className="room-create"
-              type="button"
-              aria-label="新建房间"
-              aria-haspopup="dialog"
-              onClick={(event) => openRoomDialog({ mode: "create" }, event.currentTarget)}
+          <div className="sidebar-header">
+            <div className="brand">
+              <HiveLogo compact />
+              <strong>AI Hive</strong>
+            </div>
+            <div
+              className={`connection ${connectionState}`}
+              role="status"
+              aria-live="polite"
+              title={
+                connectionState === "online"
+                  ? "Hive 已在线"
+                  : connectionState === "connecting"
+                    ? "正在连接"
+                    : "连接已中断"
+              }
             >
-              <Icon name="plus" size={16} />
-            </button>
+              <span aria-hidden="true" />
+              <span className="connection-label">
+                {connectionState === "online"
+                  ? "Hive 已在线"
+                  : connectionState === "connecting"
+                    ? "正在连接"
+                    : "连接已中断"}
+              </span>
+            </div>
             <button
               ref={roomsCloseRef}
               className="panel-close"
@@ -1864,6 +1890,22 @@ export function App() {
             >
               <Icon name="close" />
             </button>
+          </div>
+          <nav className="sidebar-actions" aria-label="快捷操作">
+            <button
+              className="sidebar-action room-create"
+              type="button"
+              aria-label="新建房间"
+              aria-haspopup="dialog"
+              onClick={(event) => openRoomDialog({ mode: "create" }, event.currentTarget)}
+            >
+              <Icon name="plus" size={16} />
+              <span>新建房间</span>
+            </button>
+          </nav>
+          <div className="sidebar-section-label">
+            <span>房间</span>
+            <span className="panel-meta">{activeRoomCount}</span>
           </div>
           <div className="room-list">
             {visibleRooms.map((room) => (
@@ -1906,9 +1948,33 @@ export function App() {
           >
             {showArchivedRooms ? "隐藏已归档房间" : "显示已归档房间"}
           </button>
-          <div className="sidebar-user" ref={userMenuRef}>
+          <div
+            className="sidebar-user"
+            ref={userMenuRef}
+            onMouseEnter={() => {
+              // 鼠标设备悬停头像即展开菜单；触屏仍通过点击切换
+              if (!window.matchMedia?.("(hover: hover)").matches) return;
+              window.clearTimeout(userMenuHoverTimer.current);
+              setUserMenuOpen(true);
+            }}
+            onMouseLeave={() => {
+              if (!window.matchMedia?.("(hover: hover)").matches) return;
+              window.clearTimeout(userMenuHoverTimer.current);
+              userMenuHoverTimer.current = window.setTimeout(() => setUserMenuOpen(false), 180);
+            }}
+          >
             {userMenuOpen && (
               <div className="user-menu" role="menu" aria-label="用户菜单">
+                <div className="user-menu-theme">
+                  <span>主题</span>
+                  <ThemeSwitcher
+                    value={themePreference}
+                    onChange={(value) => {
+                      setThemePreference(value);
+                      localStorage.setItem(storedThemeKey, value);
+                    }}
+                  />
+                </div>
                 <button
                   type="button"
                   role="menuitem"
@@ -1949,45 +2015,68 @@ export function App() {
                 {username.slice(0, 1).toUpperCase()}
               </span>
               <span className="identity-copy">
-                <small>当前身份</small>
                 <strong>{username}</strong>
+                <small>当前身份</small>
               </span>
-              <Icon name="settings" size={15} />
+              <Icon name="more" size={16} />
             </button>
           </div>
         </aside>
 
         <section className="chat-panel panel" id="main-content" tabIndex={-1}>
-          <div className="chat-float-actions">
+          <header className="chat-header">
             <button
               type="button"
-              className="mobile-only"
+              className="header-button mobile-only"
               aria-label="打开房间列表"
               aria-expanded={mobilePanel === "rooms"}
               onClick={(event) => openMobilePanel("rooms", event.currentTarget)}
             >
               <Icon name="hash" size={17} />
             </button>
-            <button
-              type="button"
-              className="mobile-only"
-              aria-label="打开成员列表"
-              aria-expanded={mobilePanel === "members"}
-              onClick={(event) => openMobilePanel("members", event.currentTarget)}
-            >
-              <Icon name="users" size={17} />
-            </button>
-            <button
-              type="button"
-              className={`share-fab ${shareMode ? "active" : ""}`}
-              aria-label={shareMode ? "退出分享模式" : "分享对话"}
-              aria-pressed={shareMode}
-              onClick={() => (shareMode ? exitShareMode() : setShareMode(true))}
-            >
-              <Icon name="share" size={16} />
-              <span>{shareMode ? "取消" : "分享"}</span>
-            </button>
-          </div>
+            <div className="chat-title">
+              <h1>{currentRoomName}</h1>
+              <span>
+                {online.length} 位在线 · {messages.length} 条消息
+              </span>
+            </div>
+            <div className="chat-header-actions">
+              <button
+                type="button"
+                className={`header-button share-fab ${shareMode ? "active" : ""}`}
+                aria-label={shareMode ? "退出分享模式" : "分享对话"}
+                aria-pressed={shareMode}
+                onClick={() => (shareMode ? exitShareMode() : setShareMode(true))}
+              >
+                <Icon name="share" size={16} />
+                <span>{shareMode ? "取消" : "分享"}</span>
+              </button>
+              <button
+                type="button"
+                className="header-button members-drawer-toggle"
+                aria-label="打开成员列表"
+                aria-expanded={mobilePanel === "members"}
+                onClick={(event) => openMobilePanel("members", event.currentTarget)}
+              >
+                <Icon name="users" size={17} />
+              </button>
+              <button
+                type="button"
+                className="header-button desktop-only"
+                aria-label={membersCollapsed ? "显示成员与白板" : "隐藏成员与白板"}
+                aria-pressed={!membersCollapsed}
+                title={membersCollapsed ? "显示成员与白板" : "隐藏成员与白板"}
+                onClick={() =>
+                  setMembersCollapsed((current) => {
+                    localStorage.setItem(storedMembersCollapsedKey, String(!current));
+                    return !current;
+                  })
+                }
+              >
+                <Icon name="panel-right" size={17} />
+              </button>
+            </div>
+          </header>
           {(error || showNotificationPrompt || pausedInvocations.length > 0) && (
             <div className="chat-notices">
               {error && (
@@ -2060,8 +2149,7 @@ export function App() {
                 {messages.length === 0 && (
                   <div className="empty-state">
                     <HiveLogo />
-                    <p className="eyebrow">THREAD READY</p>
-                    <h2>共享上下文已就绪</h2>
+                    <h2>今天在 #{currentRoomName} 协作什么？</h2>
                     <p>
                       发出第一条消息，或输入 <code>@agent-name</code> 邀请一个 Agent 参与。
                     </p>
@@ -2095,7 +2183,12 @@ export function App() {
                         </div>
                       )}
                       <article
-                        className={`message ${message.senderType} ${grouped ? "grouped" : ""} ${
+                        className={`message ${message.senderType} ${
+                          message.senderType === "human" &&
+                          message.senderName.toLocaleLowerCase() === username.toLocaleLowerCase()
+                            ? "own"
+                            : ""
+                        } ${grouped ? "grouped" : ""} ${
                           shareMode && !message.deletedAt ? "selectable" : ""
                         } ${selectedMessageIds.has(message.id) ? "selected" : ""} ${
                           message.deletedAt ? "deleted" : ""
@@ -2127,7 +2220,7 @@ export function App() {
                           {!grouped && (
                             <header>
                               <strong>{message.senderName}</strong>
-                              {message.senderType === "agent" && <b>AGENT</b>}
+                              {message.senderType === "agent" && <b>Agent</b>}
                               <time dateTime={message.createdAt}>
                                 {formatMessageTime(message.createdAt)}
                               </time>
@@ -2344,7 +2437,7 @@ export function App() {
                     <div className="share-card-body">
                       <header>
                         <strong>{message.senderName}</strong>
-                        {message.senderType === "agent" && <b>AGENT</b>}
+                        {message.senderType === "agent" && <b>Agent</b>}
                         <time dateTime={message.createdAt}>
                           {formatShareTimestamp(message.createdAt)}
                         </time>
@@ -2420,7 +2513,8 @@ export function App() {
                         <span className="mention-member-copy">
                           <strong>@{participant.username}</strong>
                           <small>
-                            {participant.type === "agent" ? "Agent" : "用户"} · {participant.status}
+                            {participant.type === "agent" ? "Agent" : "用户"} ·{" "}
+                            {participantStatusLabel(participant.status)}
                           </small>
                         </span>
                         <span
@@ -2446,118 +2540,128 @@ export function App() {
                 </div>
               </div>
             )}
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={draft}
-              onChange={(event) => {
-                setDraft(event.target.value);
-                if (!composingRef.current) {
-                  updateMentionContext(event.target.value, event.target.selectionStart);
-                }
-              }}
-              onCompositionStart={() => {
-                composingRef.current = true;
-              }}
-              onCompositionEnd={(event) => {
-                composingRef.current = false;
-                updateMentionContext(event.currentTarget.value, event.currentTarget.selectionStart);
-              }}
-              onSelect={(event) => {
-                if (!composingRef.current) {
+            <div className="composer-box">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={draft}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  if (!composingRef.current) {
+                    updateMentionContext(event.target.value, event.target.selectionStart);
+                  }
+                }}
+                onCompositionStart={() => {
+                  composingRef.current = true;
+                }}
+                onCompositionEnd={(event) => {
+                  composingRef.current = false;
                   updateMentionContext(
                     event.currentTarget.value,
                     event.currentTarget.selectionStart,
                   );
+                }}
+                onSelect={(event) => {
+                  if (!composingRef.current) {
+                    updateMentionContext(
+                      event.currentTarget.value,
+                      event.currentTarget.selectionStart,
+                    );
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    composingRef.current ||
+                    event.nativeEvent.isComposing ||
+                    event.nativeEvent.keyCode === 229
+                  ) {
+                    return;
+                  }
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    (event.metaKey || event.ctrlKey)
+                  ) {
+                    event.preventDefault();
+                    sendMessage();
+                    return;
+                  }
+                  if (mentionContext && event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setActiveMentionIndex((index) =>
+                      mentionSuggestions.length ? (index + 1) % mentionSuggestions.length : 0,
+                    );
+                    return;
+                  }
+                  if (mentionContext && event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setActiveMentionIndex((index) =>
+                      mentionSuggestions.length
+                        ? (index - 1 + mentionSuggestions.length) % mentionSuggestions.length
+                        : 0,
+                    );
+                    return;
+                  }
+                  if (mentionContext && event.key === "Escape") {
+                    event.preventDefault();
+                    setMentionContext(undefined);
+                    return;
+                  }
+                  if (
+                    mentionContext &&
+                    mentionSuggestions[activeMentionIndex] &&
+                    (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))
+                  ) {
+                    event.preventDefault();
+                    chooseMention(mentionSuggestions[activeMentionIndex]);
+                    return;
+                  }
+                  if (sendShortcut === "enter" && event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder="发送消息，输入 @ 选择成员…"
+                maxLength={4000}
+                aria-label="消息"
+                aria-autocomplete="list"
+                aria-controls={mentionContext ? "mention-suggestions" : undefined}
+                aria-expanded={Boolean(mentionContext)}
+                aria-activedescendant={
+                  mentionContext && mentionSuggestions[activeMentionIndex]
+                    ? `mention-option-${mentionSuggestions[activeMentionIndex].id}`
+                    : undefined
                 }
-              }}
-              onKeyDown={(event) => {
-                if (
-                  composingRef.current ||
-                  event.nativeEvent.isComposing ||
-                  event.nativeEvent.keyCode === 229
-                ) {
-                  return;
-                }
-                if (event.key === "Enter" && !event.shiftKey && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  sendMessage();
-                  return;
-                }
-                if (mentionContext && event.key === "ArrowDown") {
-                  event.preventDefault();
-                  setActiveMentionIndex((index) =>
-                    mentionSuggestions.length ? (index + 1) % mentionSuggestions.length : 0,
-                  );
-                  return;
-                }
-                if (mentionContext && event.key === "ArrowUp") {
-                  event.preventDefault();
-                  setActiveMentionIndex((index) =>
-                    mentionSuggestions.length
-                      ? (index - 1 + mentionSuggestions.length) % mentionSuggestions.length
-                      : 0,
-                  );
-                  return;
-                }
-                if (mentionContext && event.key === "Escape") {
-                  event.preventDefault();
-                  setMentionContext(undefined);
-                  return;
-                }
-                if (
-                  mentionContext &&
-                  mentionSuggestions[activeMentionIndex] &&
-                  (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))
-                ) {
-                  event.preventDefault();
-                  chooseMention(mentionSuggestions[activeMentionIndex]);
-                  return;
-                }
-                if (sendShortcut === "enter" && event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  sendMessage();
-                }
-              }}
-              placeholder="发送消息，输入 @ 选择成员…"
-              maxLength={4000}
-              aria-label="消息"
-              aria-autocomplete="list"
-              aria-controls={mentionContext ? "mention-suggestions" : undefined}
-              aria-expanded={Boolean(mentionContext)}
-              aria-activedescendant={
-                mentionContext && mentionSuggestions[activeMentionIndex]
-                  ? `mention-option-${mentionSuggestions[activeMentionIndex].id}`
-                  : undefined
-              }
-            />
-            <div className="composer-footer">
-              <span>
-                {sendShortcut === "modifier-enter" ? (
-                  <>
-                    <kbd>{modifierKeyLabel} + Enter</kbd> 发送 · <kbd>Enter</kbd> 换行
-                  </>
-                ) : (
-                  <>
-                    <kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行
-                  </>
-                )}
-              </span>
-              <div className="composer-actions">
-                {draft.length > 3600 && (
-                  <span className={`char-count ${draft.length > 3900 ? "danger" : ""}`}>
-                    {draft.length}/4000
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="composer-send"
-                  onClick={sendMessage}
-                  disabled={!draft.trim() || connectionState !== "online"}
-                >
-                  <span>发送</span>
-                  <Icon name="send" size={16} />
-                </button>
+              />
+              <div className="composer-footer">
+                <span>
+                  {sendShortcut === "modifier-enter" ? (
+                    <>
+                      <kbd>{modifierKeyLabel} + Enter</kbd> 发送 · <kbd>Enter</kbd> 换行
+                    </>
+                  ) : (
+                    <>
+                      <kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行
+                    </>
+                  )}
+                </span>
+                <div className="composer-actions">
+                  {draft.length > 3600 && (
+                    <span className={`char-count ${draft.length > 3900 ? "danger" : ""}`}>
+                      {draft.length}/4000
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="composer-send"
+                    onClick={sendMessage}
+                    disabled={!draft.trim() || connectionState !== "online"}
+                    title="发送"
+                  >
+                    <span className="sr-only">发送</span>
+                    <Icon name="arrow-up" size={18} />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2713,35 +2817,42 @@ export function App() {
                     </span>
                     <span className="member-copy">
                       <strong>{participant.username}</strong>
-                      <small>{agentProviderLabel(participant.provider)} · Offline</small>
+                      <small>
+                        {participant.type === "agent"
+                          ? `${agentProviderLabel(participant.provider)} · 离线`
+                          : "Human · 离线"}
+                      </small>
                     </span>
                     <span className="status-dot offline" aria-label="离线" />
                   </div>
                 ))}
               </div>
-              <button
-                type="button"
-                className="sidebar-agent-entry"
-                aria-label="接入 Agent"
-                aria-haspopup="dialog"
-                aria-expanded={agentDialogOpen}
-                onClick={(event) => openAgentDialog(event.currentTarget)}
-              >
-                <span className="sidebar-agent-entry-mark" aria-hidden="true">
+              <div className="member-invite" role="group" aria-label="添加成员">
+                <button
+                  type="button"
+                  className="member-invite-action"
+                  onClick={() => void copyInviteLink()}
+                >
+                  <Icon name={inviteCopied ? "check" : "user-plus"} size={16} />
+                  <span>
+                    <strong>{inviteCopied ? "已复制邀请链接" : "邀请成员"}</strong>
+                    <small>复制本房间链接，发给同事即可加入</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="member-invite-action sidebar-agent-entry"
+                  aria-label="接入 Agent"
+                  aria-haspopup="dialog"
+                  aria-expanded={agentDialogOpen}
+                  onClick={(event) => openAgentDialog(event.currentTarget)}
+                >
                   <Icon name="plug" size={16} />
-                </span>
-                <span className="sidebar-agent-entry-copy">
-                  <strong>接入 Agent</strong>
-                  <small>选择运行时并复制命令</small>
-                </span>
-                <Icon name="arrow-right" size={14} />
-              </button>
-              <div className="room-card">
-                <small>当前共享线程</small>
-                <strong># {currentRoomName}</strong>
-                <span>
-                  {messages.length} 条消息 · {online.length} 位在线
-                </span>
+                  <span>
+                    <strong>接入 Agent</strong>
+                    <small>选择运行时并复制接入命令</small>
+                  </span>
+                </button>
               </div>
             </>
           )}
@@ -2765,11 +2876,7 @@ export function App() {
             aria-describedby="agent-dialog-description"
           >
             <header className="agent-dialog-header">
-              <div className="agent-dialog-mark" aria-hidden="true">
-                <Icon name="plug" size={22} />
-              </div>
               <div>
-                <p className="eyebrow">BRING YOUR OWN AGENT</p>
                 <h2 id="agent-dialog-title">把 Agent 接入 Hive</h2>
                 <p id="agent-dialog-description">
                   三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。
@@ -2959,7 +3066,7 @@ export function App() {
                         <i />
                         <i />
                       </span>
-                      <small>TERMINAL</small>
+                      <small>终端</small>
                     </div>
                     <code>{selectedAgentCommand}</code>
                     <button type="button" disabled={!meta} onClick={() => void copyCommand()}>
@@ -3003,13 +3110,13 @@ export function App() {
                     <summary>查看连接信息</summary>
                     <dl>
                       <div>
-                        <dt>SERVER</dt>
+                        <dt>服务地址</dt>
                         <dd>
                           <code>{meta?.httpUrl ?? base}</code>
                         </dd>
                       </div>
                       <div>
-                        <dt>HIVE MCP</dt>
+                        <dt>Hive MCP</dt>
                         <dd>
                           <code>{meta?.mcpUrl ?? `${base}/mcp`}</code>
                         </dd>
@@ -3071,11 +3178,7 @@ export function App() {
             aria-labelledby="settings-dialog-title"
           >
             <header className="settings-dialog-header">
-              <div className="settings-dialog-mark" aria-hidden="true">
-                <Icon name="settings" size={20} />
-              </div>
               <div>
-                <p className="eyebrow">LOCAL PREFERENCES</p>
                 <h2 id="settings-dialog-title">偏好设置</h2>
               </div>
               <button
@@ -3130,7 +3233,6 @@ export function App() {
                 {settingsTab === "chat" && (
                   <section id="settings-panel-chat" role="tabpanel" aria-label="聊天与输入">
                     <div className="settings-panel-heading">
-                      <p className="eyebrow">CHAT & COMPOSER</p>
                       <h3>聊天与输入</h3>
                       <p>控制消息如何编辑、发送和显示。</p>
                     </div>
@@ -3141,7 +3243,6 @@ export function App() {
                           <h4>发送消息</h4>
                           <p>选择在输入框中发送消息的快捷键。</p>
                         </div>
-                        <span>KEYBOARD</span>
                       </div>
                       <div className="shortcut-selector" role="radiogroup" aria-label="发送快捷键">
                         <button
@@ -3234,7 +3335,6 @@ export function App() {
                 {settingsTab === "notifications" && (
                   <section id="settings-panel-notifications" role="tabpanel" aria-label="通知">
                     <div className="settings-panel-heading">
-                      <p className="eyebrow">SIGNALS & ALERTS</p>
                       <h3>通知</h3>
                       <p>只在你需要关注时发出清晰信号。</p>
                     </div>
@@ -3264,7 +3364,6 @@ export function App() {
                           <h4>消息通知</h4>
                           <p>页面不在前台时，通过系统通知提醒我。</p>
                         </div>
-                        <span>MESSAGES</span>
                       </div>
                       <div
                         className="shortcut-selector notification-modes"
@@ -3322,7 +3421,6 @@ export function App() {
                 {settingsTab === "appearance" && (
                   <section id="settings-panel-appearance" role="tabpanel" aria-label="外观">
                     <div className="settings-panel-heading">
-                      <p className="eyebrow">DISPLAY & MOTION</p>
                       <h3>外观</h3>
                       <p>调整界面气氛与信息密度，不影响其他成员。</p>
                     </div>
@@ -3333,7 +3431,6 @@ export function App() {
                           <h4>界面主题</h4>
                           <p>系统主题变化时可以自动跟随。</p>
                         </div>
-                        <span>THEME</span>
                       </div>
                       <div className="visual-choice-grid" role="radiogroup" aria-label="界面主题">
                         {(["system", "dark", "light"] as const).map((value) => (
@@ -3444,13 +3541,7 @@ export function App() {
             aria-labelledby="room-dialog-title"
           >
             <header className="room-dialog-header">
-              <div className="room-dialog-mark" aria-hidden="true">
-                <Icon name="hash" size={20} />
-              </div>
               <div>
-                <p className="eyebrow">
-                  {roomDialog.mode === "create" ? "NEW ROOM" : "ROOM SETTINGS"}
-                </p>
                 <h2 id="room-dialog-title">
                   {roomDialog.mode === "create" ? "新建房间" : `房间设置 · # ${roomDialog.room.id}`}
                 </h2>
