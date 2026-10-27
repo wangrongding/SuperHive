@@ -2104,7 +2104,6 @@ button.member:active {
 
 .message-body pre {
   margin: 0;
-  overflow-x: auto;
   padding: 11px 14px;
 }
 
@@ -2112,7 +2111,8 @@ button.member:active {
   display: block;
   color: #d7dcec;
   font: 12.5px/1.6 var(--mono);
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .message-body .hljs-comment,
