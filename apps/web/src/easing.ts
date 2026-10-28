@@ -39,3 +39,18 @@ export const easeOutQuint = cubicBezier(0.22, 1, 0.36, 1);
 
 // easeInOutCubic：慢起步、中段提速、慢收尾，适合长距离滚动（起步柔和不撞主线程高峰）
 export const easeInOutCubic = cubicBezier(0.65, 0, 0.35, 1);
+
+/**
+ * 动画时钟：按"实际播放过的帧时间"累计进度，每帧最多推进 maxStepMs。
+ * 墙钟会把主线程卡住的时间整段算进进度，恢复后第一帧就一次跳过去；
+ * 这里卡住只会让动画放慢，画面始终是连续的。
+ */
+export function createFrameClock(maxStepMs: number): (now: number) => number {
+  let elapsed = 0;
+  let lastFrame: number | undefined;
+  return (now) => {
+    if (lastFrame !== undefined) elapsed += Math.max(0, Math.min(now - lastFrame, maxStepMs));
+    lastFrame = now;
+    return elapsed;
+  };
+}

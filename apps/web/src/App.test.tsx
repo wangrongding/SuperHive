@@ -283,6 +283,11 @@ describe("App mention autocomplete", () => {
       username: "Alice",
     });
 
+    // 快照到达前还在加载：不能先闪出"空房间"欢迎页
+    const messageShadow = () =>
+      document.querySelector(".message-list")!.shadowRoot as unknown as HTMLElement;
+    expect(within(messageShadow()).queryByText(/协作什么？/)).toBeNull();
+
     const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
     act(() =>
       socket.serverEvent({
@@ -297,6 +302,8 @@ describe("App mention autocomplete", () => {
         latestSeq: 0,
       }),
     );
+    // 快照确认房间是空的，才显示欢迎页
+    expect(within(messageShadow()).getByText(/协作什么？/)).toBeTruthy();
 
     // 主题切换收在头像菜单里
     expect(screen.queryByRole("radiogroup", { name: "颜色主题" })).toBeNull();

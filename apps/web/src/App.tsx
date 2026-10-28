@@ -41,16 +41,33 @@ import {
 import { WhiteboardPanel, upsertWhiteboardEntry } from "./whiteboard";
 import { ActivityPanel, isInFlight, needsAttention, type ActivityView } from "./activity";
 import { LocalAgentList, LocalLaunch, providerInfo, useLocalAgents } from "./local-agents";
-import { easeInOutCubic, easeOutQuint } from "./easing";
+import { createFrameClock, easeInOutCubic, easeOutQuint } from "./easing";
 import { ShadowContent } from "./shadow-content";
 import { buildShareMarkdown, downloadFile, formatShareTimestamp, shareFilename } from "./share";
 
 // Markdown 渲染器（react-markdown + highlight.js）体积较大，拆成独立 chunk 且在应用启动时
 // 立即预加载：不阻塞首屏解析，又通常能赶在 WebSocket 快照到达前就绪，避免消息先以纯文本闪现
 const messageMarkdownModule = import("./message-markdown");
-const MessageMarkdown = lazy(() =>
+type MessageMarkdownComponent = (typeof import("./message-markdown"))["MessageMarkdown"];
+// 模块下载完成后同步渲染：React.lazy 第一次使用时总会挂起一轮（即使模块早已就绪），
+// 先显示纯文本占位再换成 Markdown，会让消息列表在刷新时多一次重排和高度跳变
+let loadedMessageMarkdown: MessageMarkdownComponent | undefined;
+void messageMarkdownModule.then((module) => {
+  loadedMessageMarkdown = module.MessageMarkdown;
+});
+const LazyMessageMarkdown = lazy(() =>
   messageMarkdownModule.then((module) => ({ default: module.MessageMarkdown })),
 );
+function MessageMarkdown({ content }: { content: string }) {
+  // 每个实例挂载时选定一次，避免模块就绪后组件类型改变导致整条消息重新挂载
+  const [Component] = useState<MessageMarkdownComponent | typeof LazyMessageMarkdown>(
+    () => loadedMessageMarkdown ?? LazyMessageMarkdown,
+  );
+  return <Component content={content} />;
+}
+
+/** 自绘滚动动画单帧最多推进的时间：约两帧，主线程卡顿时动画放慢而不是跳跃 */
+const MAX_FRAME_STEP_MS = 32;
 import { copyTextToClipboard } from "./clipboard";
 import { resolveServerBase } from "./server-url";
 
@@ -411,7 +428,7 @@ function ThemeSwitcher({
 function HiveLogo({ compact = false }: { compact?: boolean }) {
   return (
     <span className={`hive-logo ${compact ? "compact" : ""}`} aria-hidden="true">
-      <svg viewBox="0 0 48 48" fill="none">
+      <svg viewBox="0 0 48 48" width="40" height="40" fill="none">
         <path d="m24 3 18 10.5v21L24 45 6 34.5v-21L24 3Z" />
         <path d="m24 12 10 6v12l-10 6-10-6V18l10-6Z" />
         <circle cx="24" cy="24" r="2.75" />
@@ -656,6 +673,8 @@ export function App() {
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // 收到房间快照之前为 false：区分"还在加载"和"房间真的是空的"，避免欢迎页闪现
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [invocations, setInvocations] = useState<ReadonlyMap<string, Invocation>>(new Map());
   const [whiteboard, setWhiteboard] = useState<ReadonlyMap<string, WhiteboardEntry>>(new Map());
   const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("members");
@@ -963,7 +982,9 @@ export function App() {
     // 长距离用慢起步的 ease-in-out——起步柔和可避开首屏渲染高峰，也不会高速冲进未布局区域
     const duration = Math.min(1100, Math.max(550, 260 + initialDistance * 0.45));
     const easing = initialDistance > list.clientHeight * 1.5 ? easeInOutCubic : easeOutQuint;
-    const startTime = performance.now();
+    // 进度按实际播放过的帧时间累计而不是墙钟：主线程被长任务卡住后，恢复的第一帧不会把
+    // 落下的进度一次补上（实测曾冻住 528ms 后一帧跳 1800px），只会让动画放慢
+    const clock = createFrameClock(MAX_FRAME_STEP_MS);
     // 用户主动滚动（滚轮/触摸板/触屏）时动画立即让位：既是正确的交互，也避免动画与用户
     // 输入每帧互抢 scrollTop 引发布局风暴（实测该冲突可导致渲染进程崩溃）
     const detach = () => {
@@ -982,7 +1003,7 @@ export function App() {
     list.addEventListener("touchstart", stopForUserInput, { passive: true });
     const step = (now: number) => {
       const target = list.scrollHeight - list.clientHeight;
-      const progress = Math.min(1, (now - startTime) / duration);
+      const progress = Math.min(1, clock(now) / duration);
       const eased = easing(progress);
       list.scrollTo({ top: startY + (target - startY) * eased, behavior: "instant" });
       if (progress < 1) {
@@ -1003,25 +1024,10 @@ export function App() {
     const own = last.senderName.toLocaleLowerCase() === username.toLocaleLowerCase();
     if (nearBottomRef.current || own) {
       setPendingNewMessages(0);
-      if (previousCount === 0) {
-        // 首屏：等 Markdown 渲染器挂载、首次重排结束后再起步，动画开头不与主线程高峰抢帧；
-        // 等待期间用占位标记挡住贴底吸附，避免它抢先把列表钉到底
-        cancelAnimationFrame(bottomAnimationRef.current);
-        detachAnimationCancelRef.current?.();
-        bottomAnimationRef.current = -1;
-        let cancelled = false;
-        void messageMarkdownModule.then(() => {
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => {
-              if (!cancelled) scrollToBottom(true);
-            }),
-          );
-        });
-        return () => {
-          cancelled = true;
-        };
-      }
-      scrollToBottom(true);
+      // 首屏（刷新、切换房间）：在首帧绘制前直接定位到底部，和 Slack / ChatGPT 打开会话一样，
+      // 不从顶部播动画——那段动画正好落在启动渲染高峰里，任何长任务都会让它冻住再跳。
+      // 随后 Markdown 替换占位导致的高度变化由下方 ResizeObserver 继续贴底
+      scrollToBottom(previousCount !== 0);
     } else if (messages.length > previousCount) {
       setPendingNewMessages((current) => current + (messages.length - previousCount));
     }
@@ -1288,6 +1294,7 @@ export function App() {
       if (roomId === currentRoomId) return;
       markRoomRead(currentRoomId);
       setMessages([]);
+      setMessagesLoaded(false);
       setInvocations(new Map());
       setWhiteboard(new Map());
       setHighlightedMessageId(undefined);
@@ -1400,6 +1407,7 @@ export function App() {
           );
           setParticipants(event.participants);
           setMessages((current) => mergeMessages(current, event.messages));
+          setMessagesLoaded(true);
           // 快照里的调用与白板是服务端当前全集，直接替换（重连期间的变化也一并对齐）
           setInvocations(
             new Map((event.invocations ?? []).map((invocation) => [invocation.id, invocation])),
@@ -2424,7 +2432,7 @@ export function App() {
           >
             <ShadowContent host={shadowHost}>
               <div className="message-shadow-inner">
-                {messages.length === 0 && (
+                {messagesLoaded && messages.length === 0 && (
                   <div className="empty-state">
                     <HiveLogo />
                     <h2>今天在 #{currentRoomName} 协作什么？</h2>

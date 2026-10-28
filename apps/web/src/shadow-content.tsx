@@ -11,6 +11,29 @@ export function adaptCssForShadow(css: string): string {
     .replace(/\bhtml(\[[^\]]+\])/g, ":host($1)");
 }
 
+/**
+ * 同步读取文档样式：<style> 直接取文本，<link> 读已加载的 CSSOM 规则。
+ * 头部样式表会阻塞模块脚本执行，所以 React 挂载时它们早已就绪，无需重新下载。
+ * 任一样式表不可读（跨域、尚未加载）时返回 undefined，由调用方退回异步拉取。
+ */
+function readDocumentCssSync(): string | undefined {
+  let css = "";
+  for (const node of document.querySelectorAll('style, link[rel="stylesheet"]')) {
+    if (node.tagName === "STYLE") {
+      css += `${node.textContent ?? ""}\n`;
+      continue;
+    }
+    const sheet = (node as HTMLLinkElement).sheet;
+    if (!sheet) return undefined;
+    try {
+      for (const rule of sheet.cssRules) css += `${rule.cssText}\n`;
+    } catch {
+      return undefined;
+    }
+  }
+  return css;
+}
+
 async function collectDocumentCss(): Promise<string> {
   let css = "";
   for (const node of document.querySelectorAll('style, link[rel="stylesheet"]')) {
@@ -30,8 +53,8 @@ async function collectDocumentCss(): Promise<string> {
   return css;
 }
 
-async function syncStylesInto(shadow: ShadowRoot): Promise<void> {
-  const transformed = adaptCssForShadow(await collectDocumentCss());
+function applyCss(shadow: ShadowRoot, css: string): void {
+  const transformed = adaptCssForShadow(css);
   let styleElement = shadow.querySelector<HTMLStyleElement>("style[data-hive-shadow-styles]");
   if (!styleElement) {
     styleElement = document.createElement("style");
@@ -41,6 +64,11 @@ async function syncStylesInto(shadow: ShadowRoot): Promise<void> {
   if (styleElement.textContent !== transformed) {
     styleElement.textContent = transformed;
   }
+}
+
+/** 同步优先；只有样式表不可读时才异步拉取 */
+async function syncStylesInto(shadow: ShadowRoot): Promise<void> {
+  applyCss(shadow, readDocumentCssSync() ?? (await collectDocumentCss()));
 }
 
 function mirrorDataAttributes(host: HTMLElement): void {
@@ -81,15 +109,28 @@ export function ShadowContent({
       setFallback(true);
       return;
     }
-    void syncStylesInto(shadow);
     mirrorDataAttributes(host);
-    setRoot(shadow);
+    // 样式必须先于内容就位：否则内容会在无样式的 shadow root 里先渲染一帧
+    // （未设尺寸的 SVG 撑满宽度、列表高度暴涨），随后再塌回去，滚动位置跟着跳
+    let cancelled = false;
+    const css = readDocumentCssSync();
+    if (css !== undefined) {
+      applyCss(shadow, css);
+      setRoot(shadow);
+    } else {
+      void collectDocumentCss().then((fetched) => {
+        if (cancelled) return;
+        applyCss(shadow, fetched);
+        setRoot(shadow);
+      });
+    }
 
     const headObserver = new MutationObserver(() => void syncStylesInto(shadow));
     headObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
     const attrObserver = new MutationObserver(() => mirrorDataAttributes(host));
     attrObserver.observe(document.documentElement, { attributes: true });
     return () => {
+      cancelled = true;
       headObserver.disconnect();
       attrObserver.disconnect();
     };
