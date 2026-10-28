@@ -25,8 +25,10 @@ import type {
 } from "@ai-hive/protocol";
 import {
   applyMention,
+  draftMentions,
   filterMentionParticipants,
   findMentionContext,
+  splitDraftMentions,
   type MentionContext,
 } from "./mention-autocomplete";
 import { createClientMessageId } from "./client-id";
@@ -37,6 +39,8 @@ import {
   upsertInvocation,
 } from "./invocations";
 import { WhiteboardPanel, upsertWhiteboardEntry } from "./whiteboard";
+import { ActivityPanel, isInFlight, needsAttention, type ActivityView } from "./activity";
+import { LocalAgentList, LocalLaunch, providerInfo, useLocalAgents } from "./local-agents";
 import { easeInOutCubic, easeOutQuint } from "./easing";
 import { ShadowContent } from "./shadow-content";
 import { buildShareMarkdown, downloadFile, formatShareTimestamp, shareFilename } from "./share";
@@ -64,7 +68,7 @@ const storedDensityKey = "ai-hive.density";
 const storedMessageSizeKey = "ai-hive.message-size";
 const storedMembersCollapsedKey = "ai-hive.members-collapsed";
 const storedReduceMotionKey = "ai-hive.reduce-motion";
-type SelectableAgentProvider = "codex" | "claude" | "copilot" | "openclaw";
+type SelectableAgentProvider = "codex" | "claude" | "copilot" | "openclaw" | "opencode" | "omp";
 type AgentAccessMode = "read-only" | "workspace" | "full";
 type AgentSetupStep = 1 | 2 | 3;
 type MessageNotificationMode = "off" | "mentions" | "all";
@@ -81,6 +85,8 @@ type IconName =
   | "arrow-down"
   | "arrow-right"
   | "arrow-up"
+  | "at"
+  | "activity"
   | "bell"
   | "board"
   | "check"
@@ -94,6 +100,7 @@ type IconName =
   | "plug"
   | "plus"
   | "send"
+  | "search"
   | "settings"
   | "share"
   | "shield"
@@ -101,13 +108,22 @@ type IconName =
   | "user-plus"
   | "users";
 
-const selectableAgentProviders = ["codex", "claude", "copilot", "openclaw"] as const;
+const selectableAgentProviders = [
+  "codex",
+  "claude",
+  "copilot",
+  "opencode",
+  "omp",
+  "openclaw",
+] as const;
 
 const agentProviderDescriptions: Record<SelectableAgentProvider, string> = {
   codex: "OpenAI 编程 Agent",
   claude: "Anthropic CLI",
   copilot: "GitHub 编程助手",
   openclaw: "本地自主 Agent",
+  opencode: "开源终端 Agent，模型自选",
+  omp: "oh-my-pi 终端 Agent",
 };
 
 const agentAccessOptions: Array<{
@@ -245,6 +261,19 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     "arrow-down": <path d="M12 5v14m-5-5 5 5 5-5" />,
     "arrow-right": <path d="M5 12h14m-5-5 5 5-5 5" />,
     "arrow-up": <path d="M12 19V5m-6 6 6-6 6 6" />,
+    at: (
+      <>
+        <circle cx="12" cy="12" r="3.6" />
+        <path d="M15.6 12v1.4a2.6 2.6 0 0 0 5.2 0V12a8.8 8.8 0 1 0-3.4 7" />
+      </>
+    ),
+    activity: <path d="M3 12h4l2.5-6 5 12 2.5-6H21" />,
+    search: (
+      <>
+        <circle cx="11" cy="11" r="6.5" />
+        <path d="m20 20-4.4-4.4" />
+      </>
+    ),
     board: (
       <>
         <rect x="5" y="4" width="14" height="17" rx="2" />
@@ -402,6 +431,8 @@ function agentProviderLabel(provider?: string): string {
   if (provider === "claude") return "Claude Code";
   if (provider === "copilot") return "GitHub Copilot";
   if (provider === "openclaw") return "OpenClaw";
+  if (provider === "opencode") return "OpenCode";
+  if (provider === "omp") return "omp";
   if (provider === "echo") return "Echo";
   return provider || "Agent";
 }
@@ -412,6 +443,8 @@ function agentNameFor(ownerUsername: string, provider: SelectableAgentProvider):
     claude: "-claude",
     copilot: "-copilot",
     openclaw: "-openclaw",
+    opencode: "-opencode",
+    omp: "-omp",
   };
   const suffix = suffixes[provider];
   return `${ownerUsername.slice(0, 32 - suffix.length)}${suffix}`;
@@ -628,6 +661,28 @@ export function App() {
   const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("members");
   const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
   const [pendingJumpId, setPendingJumpId] = useState<string>();
+  // 跨房间入口：搜索、提及我、Agent 任务
+  const [activityView, setActivityView] = useState<ActivityView>();
+  const [mentionMessages, setMentionMessages] = useState<ChatMessage[]>([]);
+  const [activeInvocations, setActiveInvocations] = useState<ReadonlyMap<string, Invocation>>(
+    new Map(),
+  );
+  const [invocationMessages, setInvocationMessages] = useState<ReadonlyMap<string, ChatMessage>>(
+    new Map(),
+  );
+  // 切换房间后待定位的消息（在新房间快照到达后再滚动过去）
+  const [crossRoomJumpId, setCrossRoomJumpId] = useState<string>();
+  const [onlineInvocationIds, setOnlineInvocationIds] = useState<ReadonlySet<string>>(new Set());
+  const activityTriggerRef = useRef<HTMLElement | null>(null);
+  const globalEventsRef = useRef<{
+    onInvocation: (invocation: Invocation) => void;
+    onRoomActivity: () => void;
+    onSnapshot: () => void;
+  }>({
+    onInvocation: () => undefined,
+    onRoomActivity: () => undefined,
+    onSnapshot: () => undefined,
+  });
   const [draft, setDraft] = useState(() => {
     const storedUsername = localStorage.getItem(storedUsernameKey) ?? "";
     return storedUsername && storedBoolean(storedAutoSaveDraftKey, true)
@@ -732,6 +787,7 @@ export function App() {
   const nearBottomRef = useRef(true);
   const messageCountRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const membersCloseRef = useRef<HTMLButtonElement>(null);
   const roomsCloseRef = useRef<HTMLButtonElement>(null);
   const agentDialogRef = useRef<HTMLDivElement>(null);
@@ -747,6 +803,12 @@ export function App() {
   const userMenuRef = useRef<HTMLDivElement>(null);
   const lastPanelTriggerRef = useRef<HTMLButtonElement>(null);
   const base = useMemo(serverBase, []);
+  // Hive Server 就在这台电脑上时，可以直接在网页上拉起 Agent
+  const local = useLocalAgents(base, agentDialogOpen);
+  const localAgentNames = useMemo(
+    () => new Set(local.agents.map((agent) => agent.name.toLocaleLowerCase())),
+    [local.agents],
+  );
   const modifierKeyLabel = useMemo(platformModifierLabel, []);
   const mentionSuggestions = useMemo(
     () =>
@@ -1001,6 +1063,9 @@ export function App() {
 
   useLayoutEffect(() => {
     if (textareaRef.current) resizeComposer(textareaRef.current);
+    if (textareaRef.current && highlightRef.current) {
+      highlightRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
   }, [draft, username]);
 
   const closeMobilePanel = useCallback((restoreFocus = true) => {
@@ -1037,6 +1102,8 @@ export function App() {
   const openAgentDialog = useCallback((trigger: HTMLButtonElement) => {
     agentDialogTriggerRef.current = trigger;
     setAgentStep(1);
+    // 完全访问不跨次保留：每次打开都要重新明确选择最高权限
+    setAgentAccess((current) => (current === "full" ? "read-only" : current));
     setCommandCopied(false);
     setCopyError(undefined);
     setAgentDialogOpen(true);
@@ -1343,6 +1410,7 @@ export function App() {
           setConnectionState("online");
           setError(undefined);
           void refreshRooms().catch(() => undefined);
+          globalEventsRef.current.onSnapshot();
           if (beforeReconnect > 0)
             void catchUp(beforeReconnect).catch((reason: unknown) => setError(String(reason)));
         } else if (event.type === "message.deleted") {
@@ -1373,6 +1441,7 @@ export function App() {
             }
           }
         } else if (event.type === "invocation.updated") {
+          globalEventsRef.current.onInvocation(event.invocation);
           if (event.invocation.roomId !== currentRoomId) return;
           setInvocations((current) => upsertInvocation(current, event.invocation));
         } else if (event.type === "whiteboard.updated") {
@@ -1414,6 +1483,7 @@ export function App() {
             switchRoom("general");
           }
         } else if (event.type === "room.activity") {
+          globalEventsRef.current.onRoomActivity();
           setRooms((current) =>
             current.map((room) =>
               room.id === event.roomId
@@ -1495,6 +1565,158 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [pendingJumpId, timeline]);
 
+  const authorizedJson = useCallback(
+    async <T,>(path: string): Promise<T> => {
+      if (!meta) throw new Error("尚未连接 Hive Server。");
+      const response = await fetch(`${base}${path}`, {
+        headers: { Authorization: `Bearer ${meta.joinToken}` },
+      });
+      if (!response.ok) throw new Error(`请求失败 (${response.status})`);
+      return (await response.json()) as T;
+    },
+    [base, meta],
+  );
+
+  const refreshMentions = useCallback(async () => {
+    if (!username) return;
+    const payload = await authorizedJson<{ messages: ChatMessage[] }>(
+      `/api/mentions?username=${encodeURIComponent(username)}`,
+    );
+    setMentionMessages(payload.messages);
+  }, [authorizedJson, username]);
+
+  const refreshTasks = useCallback(async () => {
+    const payload = await authorizedJson<{
+      invocations: Invocation[];
+      messages: ChatMessage[];
+      onlineInvocationIds?: string[];
+    }>("/api/invocations");
+    setOnlineInvocationIds(new Set(payload.onlineInvocationIds ?? []));
+    setActiveInvocations(
+      new Map(payload.invocations.map((invocation) => [invocation.id, invocation])),
+    );
+    setInvocationMessages(new Map(payload.messages.map((message) => [message.id, message])));
+  }, [authorizedJson]);
+
+  const searchMessages = useCallback(
+    async (query: string) =>
+      (
+        await authorizedJson<{ messages: ChatMessage[] }>(
+          `/api/search?q=${encodeURIComponent(query)}`,
+        )
+      ).messages,
+    [authorizedJson],
+  );
+
+  // 跨房间数据随全局事件更新：调用状态直接合并，新的提及合并拉取（同一秒内多次活动只查一次）
+  useEffect(() => {
+    let mentionTimer: number | undefined;
+    let taskTimer: number | undefined;
+    const debounced = (timer: number | undefined, run: () => Promise<void>, delay: number) => {
+      window.clearTimeout(timer);
+      return window.setTimeout(() => void run().catch(() => undefined), delay);
+    };
+    globalEventsRef.current = {
+      onInvocation: (invocation) => {
+        setActiveInvocations((current) => {
+          const next = new Map(current);
+          if (isInFlight(invocation) || needsAttention(invocation))
+            next.set(invocation.id, invocation);
+          else next.delete(invocation.id);
+          return next;
+        });
+        taskTimer = debounced(taskTimer, refreshTasks, 1_000);
+      },
+      onRoomActivity: () => {
+        mentionTimer = debounced(mentionTimer, refreshMentions, 800);
+      },
+      onSnapshot: () => {
+        void refreshMentions().catch(() => undefined);
+        void refreshTasks().catch(() => undefined);
+      },
+    };
+    return () => {
+      window.clearTimeout(mentionTimer);
+      window.clearTimeout(taskTimer);
+    };
+  }, [refreshMentions, refreshTasks]);
+
+  const unreadMentionCount = useMemo(
+    () =>
+      mentionMessages.filter(
+        (message) =>
+          message.roomId !== currentRoomId && message.seq > (readSeqs[message.roomId] ?? 0),
+      ).length,
+    [currentRoomId, mentionMessages, readSeqs],
+  );
+  const taskCounts = useMemo(() => {
+    let attention = 0;
+    let inFlight = 0;
+    for (const invocation of activeInvocations.values()) {
+      if (needsAttention(invocation)) attention += 1;
+      else if (isInFlight(invocation)) inFlight += 1;
+    }
+    return { attention, inFlight };
+  }, [activeInvocations]);
+
+  function openActivity(view: ActivityView, trigger?: HTMLElement | null) {
+    activityTriggerRef.current = trigger ?? null;
+    closeMobilePanel(false);
+    setActivityView(view);
+    if (view === "mentions") void refreshMentions().catch(() => undefined);
+    if (view === "tasks") void refreshTasks().catch(() => undefined);
+  }
+
+  function closeActivity() {
+    setActivityView(undefined);
+    activityTriggerRef.current?.focus();
+  }
+
+  function markMentionsRead() {
+    setReadSeqs((current) => {
+      const next = { ...current };
+      for (const message of mentionMessages) {
+        if (message.seq > (next[message.roomId] ?? 0)) {
+          next[message.roomId] = message.seq;
+          localStorage.setItem(readSeqStorageKey(message.roomId), String(message.seq));
+        }
+      }
+      return next;
+    });
+  }
+
+  function openMessage(message: ChatMessage) {
+    if (message.roomId === currentRoomId) {
+      jumpToMessage(message.id);
+      return;
+    }
+    setCrossRoomJumpId(message.id);
+    switchRoom(message.roomId);
+  }
+
+  // 切到目标房间并拿到快照后再定位；不在最近加载的记录里时给出提示
+  useEffect(() => {
+    if (!crossRoomJumpId || messages.length === 0) return;
+    setCrossRoomJumpId(undefined);
+    if (messages.some((message) => message.id === crossRoomJumpId)) {
+      jumpToMessage(crossRoomJumpId);
+    } else {
+      setError("这条消息较早，不在最近加载的记录里。");
+    }
+  }, [crossRoomJumpId, messages]);
+
+  // ⌘K / Ctrl+K 打开搜索
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setActivityView((current) => (current === "search" ? undefined : "search"));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   if (!username) {
     return (
       <LoginDialog
@@ -1574,6 +1796,12 @@ export function App() {
   }
 
   function appendMention(usernameToMention: string) {
+    // 已经 @ 过就不再重复追加，只把焦点放回输入框
+    if (draftMentions(draft, usernameToMention)) {
+      setMentionContext(undefined);
+      window.requestAnimationFrame(() => textareaRef.current?.focus());
+      return;
+    }
     const separator = draft && !draft.endsWith(" ") ? " " : "";
     const nextValue = `${draft}${separator}@${usernameToMention} `;
     setDraft(nextValue);
@@ -1901,6 +2129,56 @@ export function App() {
             >
               <Icon name="plus" size={16} />
               <span>新建房间</span>
+            </button>
+            <button
+              type="button"
+              className={`sidebar-action ${activityView === "search" ? "active" : ""}`}
+              aria-label="搜索消息"
+              aria-haspopup="dialog"
+              onClick={(event) => openActivity("search", event.currentTarget)}
+            >
+              <Icon name="search" size={16} />
+              <span>搜索</span>
+              <kbd className="sidebar-shortcut" aria-hidden="true">
+                {modifierKeyLabel === "Cmd" ? "⌘K" : "Ctrl K"}
+              </kbd>
+            </button>
+            <button
+              type="button"
+              className={`sidebar-action ${activityView === "mentions" ? "active" : ""}`}
+              aria-label={
+                unreadMentionCount > 0 ? `提及我，${unreadMentionCount} 条未读` : "提及我"
+              }
+              aria-haspopup="dialog"
+              onClick={(event) => openActivity("mentions", event.currentTarget)}
+            >
+              <Icon name="at" size={16} />
+              <span>提及我</span>
+              {unreadMentionCount > 0 && (
+                <span className="sidebar-badge accent" aria-hidden="true">
+                  {unreadMentionCount > 99 ? "99+" : unreadMentionCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              className={`sidebar-action ${activityView === "tasks" ? "active" : ""}`}
+              aria-label={`Agent 任务${taskCounts.inFlight ? `，${taskCounts.inFlight} 个进行中` : ""}${taskCounts.attention ? `，${taskCounts.attention} 个需要处理` : ""}`}
+              aria-haspopup="dialog"
+              onClick={(event) => openActivity("tasks", event.currentTarget)}
+            >
+              <Icon name="activity" size={16} />
+              <span>Agent 任务</span>
+              {taskCounts.inFlight > 0 && (
+                <span className="sidebar-badge running" aria-hidden="true">
+                  {taskCounts.inFlight}
+                </span>
+              )}
+              {taskCounts.attention > 0 && (
+                <span className="sidebar-badge warning" aria-hidden="true">
+                  {taskCounts.attention}
+                </span>
+              )}
             </button>
           </nav>
           <div className="sidebar-section-label">
@@ -2541,98 +2819,112 @@ export function App() {
               </div>
             )}
             <div className="composer-box">
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                value={draft}
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  if (!composingRef.current) {
-                    updateMentionContext(event.target.value, event.target.selectionStart);
-                  }
-                }}
-                onCompositionStart={() => {
-                  composingRef.current = true;
-                }}
-                onCompositionEnd={(event) => {
-                  composingRef.current = false;
-                  updateMentionContext(
-                    event.currentTarget.value,
-                    event.currentTarget.selectionStart,
-                  );
-                }}
-                onSelect={(event) => {
-                  if (!composingRef.current) {
+              <div className="composer-input">
+                <div className="composer-highlight" ref={highlightRef} aria-hidden="true">
+                  {splitDraftMentions(draft).map((segment, index) =>
+                    segment.mention ? <mark key={index}>{segment.text}</mark> : segment.text,
+                  )}
+                  {/* 末尾换行需要占位，否则高亮层比输入框少一行 */}
+                  {"\u200b"}
+                </div>
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  value={draft}
+                  onScroll={(event) => {
+                    if (highlightRef.current) {
+                      highlightRef.current.scrollTop = event.currentTarget.scrollTop;
+                    }
+                  }}
+                  onChange={(event) => {
+                    setDraft(event.target.value);
+                    if (!composingRef.current) {
+                      updateMentionContext(event.target.value, event.target.selectionStart);
+                    }
+                  }}
+                  onCompositionStart={() => {
+                    composingRef.current = true;
+                  }}
+                  onCompositionEnd={(event) => {
+                    composingRef.current = false;
                     updateMentionContext(
                       event.currentTarget.value,
                       event.currentTarget.selectionStart,
                     );
+                  }}
+                  onSelect={(event) => {
+                    if (!composingRef.current) {
+                      updateMentionContext(
+                        event.currentTarget.value,
+                        event.currentTarget.selectionStart,
+                      );
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (
+                      composingRef.current ||
+                      event.nativeEvent.isComposing ||
+                      event.nativeEvent.keyCode === 229
+                    ) {
+                      return;
+                    }
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      (event.metaKey || event.ctrlKey)
+                    ) {
+                      event.preventDefault();
+                      sendMessage();
+                      return;
+                    }
+                    if (mentionContext && event.key === "ArrowDown") {
+                      event.preventDefault();
+                      setActiveMentionIndex((index) =>
+                        mentionSuggestions.length ? (index + 1) % mentionSuggestions.length : 0,
+                      );
+                      return;
+                    }
+                    if (mentionContext && event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setActiveMentionIndex((index) =>
+                        mentionSuggestions.length
+                          ? (index - 1 + mentionSuggestions.length) % mentionSuggestions.length
+                          : 0,
+                      );
+                      return;
+                    }
+                    if (mentionContext && event.key === "Escape") {
+                      event.preventDefault();
+                      setMentionContext(undefined);
+                      return;
+                    }
+                    if (
+                      mentionContext &&
+                      mentionSuggestions[activeMentionIndex] &&
+                      (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))
+                    ) {
+                      event.preventDefault();
+                      chooseMention(mentionSuggestions[activeMentionIndex]);
+                      return;
+                    }
+                    if (sendShortcut === "enter" && event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  placeholder="发送消息，输入 @ 选择成员…"
+                  maxLength={4000}
+                  aria-label="消息"
+                  aria-autocomplete="list"
+                  aria-controls={mentionContext ? "mention-suggestions" : undefined}
+                  aria-expanded={Boolean(mentionContext)}
+                  aria-activedescendant={
+                    mentionContext && mentionSuggestions[activeMentionIndex]
+                      ? `mention-option-${mentionSuggestions[activeMentionIndex].id}`
+                      : undefined
                   }
-                }}
-                onKeyDown={(event) => {
-                  if (
-                    composingRef.current ||
-                    event.nativeEvent.isComposing ||
-                    event.nativeEvent.keyCode === 229
-                  ) {
-                    return;
-                  }
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    (event.metaKey || event.ctrlKey)
-                  ) {
-                    event.preventDefault();
-                    sendMessage();
-                    return;
-                  }
-                  if (mentionContext && event.key === "ArrowDown") {
-                    event.preventDefault();
-                    setActiveMentionIndex((index) =>
-                      mentionSuggestions.length ? (index + 1) % mentionSuggestions.length : 0,
-                    );
-                    return;
-                  }
-                  if (mentionContext && event.key === "ArrowUp") {
-                    event.preventDefault();
-                    setActiveMentionIndex((index) =>
-                      mentionSuggestions.length
-                        ? (index - 1 + mentionSuggestions.length) % mentionSuggestions.length
-                        : 0,
-                    );
-                    return;
-                  }
-                  if (mentionContext && event.key === "Escape") {
-                    event.preventDefault();
-                    setMentionContext(undefined);
-                    return;
-                  }
-                  if (
-                    mentionContext &&
-                    mentionSuggestions[activeMentionIndex] &&
-                    (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))
-                  ) {
-                    event.preventDefault();
-                    chooseMention(mentionSuggestions[activeMentionIndex]);
-                    return;
-                  }
-                  if (sendShortcut === "enter" && event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    sendMessage();
-                  }
-                }}
-                placeholder="发送消息，输入 @ 选择成员…"
-                maxLength={4000}
-                aria-label="消息"
-                aria-autocomplete="list"
-                aria-controls={mentionContext ? "mention-suggestions" : undefined}
-                aria-expanded={Boolean(mentionContext)}
-                aria-activedescendant={
-                  mentionContext && mentionSuggestions[activeMentionIndex]
-                    ? `mention-option-${mentionSuggestions[activeMentionIndex].id}`
-                    : undefined
-                }
-              />
+                />
+              </div>
               <div className="composer-footer">
                 <span>
                   {sendShortcut === "modifier-enter" ? (
@@ -2785,7 +3077,15 @@ export function App() {
                         : participant.username.slice(0, 1).toUpperCase()}
                     </span>
                     <span className="member-copy">
-                      <strong>{participant.username}</strong>
+                      <strong>
+                        {participant.username}
+                        {participant.type === "agent" &&
+                          localAgentNames.has(participant.username.toLocaleLowerCase()) && (
+                            <span className="member-local-badge" title="由本机 Hive Server 启动">
+                              本机
+                            </span>
+                          )}
+                      </strong>
                       <small>
                         {participant.type === "agent"
                           ? `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
@@ -2859,6 +3159,30 @@ export function App() {
         </aside>
       </section>
 
+      {activityView && (
+        <ActivityPanel
+          view={activityView}
+          rooms={rooms}
+          mentions={mentionMessages}
+          readSeqs={readSeqs}
+          invocations={[...activeInvocations.values()]}
+          invocationMessages={invocationMessages}
+          isAgentOnline={(invocation) =>
+            invocation.roomId === currentRoomId
+              ? participants.some(
+                  (participant) =>
+                    participant.username === invocation.agentName &&
+                    participant.status !== "offline",
+                )
+              : onlineInvocationIds.has(invocation.id)
+          }
+          search={searchMessages}
+          onOpenMessage={openMessage}
+          onMarkMentionsRead={markMentionsRead}
+          onClose={closeActivity}
+        />
+      )}
+
       {agentDialogOpen && (
         <div className="agent-dialog-layer">
           <button
@@ -2879,7 +3203,9 @@ export function App() {
               <div>
                 <h2 id="agent-dialog-title">把 Agent 接入 Hive</h2>
                 <p id="agent-dialog-description">
-                  三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。
+                  {local.enabled
+                    ? "三步完成：选择 Agent、设置本机权限，然后一键在本机启动（也可以复制命令）。"
+                    : "三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。"}
                 </p>
               </div>
               <button
@@ -2894,7 +3220,8 @@ export function App() {
             </header>
 
             <ol className="agent-steps" aria-label="接入步骤">
-              {agentSetupSteps.map(({ step, label }) => {
+              {agentSetupSteps.map(({ step, label: baseLabel }) => {
+                const label = step === 3 && local.enabled ? "启动 Agent" : baseLabel;
                 const state =
                   step === agentStep ? "current" : step < agentStep ? "done" : "upcoming";
                 return (
@@ -2934,7 +3261,9 @@ export function App() {
                     ? "选择要接入的 Agent"
                     : agentStep === 2
                       ? `允许 ${agentProviderLabel(agentProvider)} 在本机做什么？`
-                      : "复制命令，到终端运行"}
+                      : local.enabled
+                        ? "在本机启动"
+                        : "复制命令，到终端运行"}
                 </h3>
                 {agentStep === 1 && <p>接入命令会根据所选 Agent 的运行环境自动调整。</p>}
                 {agentStep === 2 && (
@@ -2949,6 +3278,8 @@ export function App() {
                   </p>
                 )}
               </div>
+
+              {agentStep === 1 && <LocalAgentList local={local} />}
 
               {agentStep === 1 && (
                 <div
@@ -2969,7 +3300,12 @@ export function App() {
                       role="radio"
                       aria-checked={agentProvider === provider}
                       tabIndex={agentProvider === provider ? 0 : -1}
-                      className={agentProvider === provider ? "active" : ""}
+                      className={[
+                        agentProvider === provider ? "active" : "",
+                        providerInfo(local, provider)?.installed === false ? "unavailable" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                       onClick={() => setAgentProvider(provider)}
                       key={provider}
                     >
@@ -2978,7 +3314,15 @@ export function App() {
                       </span>
                       <span className="provider-copy">
                         <strong>{agentProviderLabel(provider)}</strong>
-                        <small>{agentProviderDescriptions[provider]}</small>
+                        <small>
+                          {(() => {
+                            const info = providerInfo(local, provider);
+                            if (!info) return agentProviderDescriptions[provider];
+                            return info.installed
+                              ? `${agentProviderDescriptions[provider]}${info.version ? ` · ${info.version}` : ""}`
+                              : "本机未安装";
+                          })()}
+                        </small>
                       </span>
                       <span className="provider-check" aria-hidden="true">
                         <Icon name="check" size={15} />
@@ -3029,6 +3373,12 @@ export function App() {
                       不会自动改写全局策略。
                     </p>
                   )}
+                  {agentProvider === "omp" && agentAccess === "workspace" && (
+                    <p className="openclaw-access-note">
+                      omp 不会把文件写入限制在当前目录内；需要目录隔离时请选择 OpenCode、Codex 或
+                      Claude Code。
+                    </p>
+                  )}
                   {fullAccessConfirmationOpen && agentAccess !== "full" && (
                     <div className="full-access-confirmation" role="alert">
                       <div>
@@ -3057,50 +3407,67 @@ export function App() {
                 </>
               )}
 
-              {agentStep === 3 && (
-                <>
-                  <div className="command">
-                    <div className="command-heading">
-                      <span className="terminal-dots" aria-hidden="true">
-                        <i />
-                        <i />
-                        <i />
-                      </span>
-                      <small>终端</small>
-                    </div>
-                    <code>{selectedAgentCommand}</code>
-                    <button type="button" disabled={!meta} onClick={() => void copyCommand()}>
-                      <Icon name={commandCopied ? "check" : "copy"} size={16} />
-                      <span>{commandCopied ? "已复制到剪贴板" : "复制命令"}</span>
-                    </button>
-                  </div>
-                  {copyError && (
-                    <p className="command-copy-error" role="alert">
-                      {copyError}
-                    </p>
-                  )}
-                  {meta && !meta.agentCommand.startsWith("npx") && (
-                    <p className="command-dev-note">
-                      开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码，
-                      而非已发布的 npm 包。
-                    </p>
-                  )}
-                  <ol className="agent-next-steps" aria-label="接入后的操作">
-                    <li>
-                      在 {agentProviderLabel(agentProvider)} 所在电脑的终端运行这条命令，Agent
-                      会加入所有房间并保持每个房间的独立上下文。
-                    </li>
-                    <li>
-                      在消息中输入 <code>@{agentNameFor(username, agentProvider)}</code>{" "}
-                      即可让它响应；没被 @ 时它只会旁听。
-                    </li>
-                    <li>
-                      终端按 <kbd>Ctrl + C</kbd> 即可让它离线。只想加入单个房间可在命令后追加{" "}
-                      <code>--room 房间ID</code>。
-                    </li>
-                  </ol>
-                </>
-              )}
+              {agentStep === 3 &&
+                (() => {
+                  // 复制命令这一整段：本机模式下折叠为"或复制命令"，否则直接展示
+                  const commandSection = (
+                    <>
+                      <div className="command">
+                        <div className="command-heading">
+                          <span className="terminal-dots" aria-hidden="true">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                          <small>终端</small>
+                        </div>
+                        <code>{selectedAgentCommand}</code>
+                        <button type="button" disabled={!meta} onClick={() => void copyCommand()}>
+                          <Icon name={commandCopied ? "check" : "copy"} size={16} />
+                          <span>{commandCopied ? "已复制到剪贴板" : "复制命令"}</span>
+                        </button>
+                      </div>
+                      {copyError && (
+                        <p className="command-copy-error" role="alert">
+                          {copyError}
+                        </p>
+                      )}
+                      {meta && !meta.agentCommand.startsWith("npx") && (
+                        <p className="command-dev-note">
+                          开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码，
+                          而非已发布的 npm 包。
+                        </p>
+                      )}
+                      <ol className="agent-next-steps" aria-label="接入后的操作">
+                        <li>
+                          在 {agentProviderLabel(agentProvider)} 所在电脑的终端运行这条命令，Agent
+                          会加入所有房间并保持每个房间的独立上下文。
+                        </li>
+                        <li>
+                          在消息中输入 <code>@{agentNameFor(username, agentProvider)}</code>{" "}
+                          即可让它响应；没被 @ 时它只会旁听。
+                        </li>
+                        <li>
+                          终端按 <kbd>Ctrl + C</kbd> 即可让它离线。只想加入单个房间可在命令后追加{" "}
+                          <code>--room 房间ID</code>。
+                        </li>
+                      </ol>
+                    </>
+                  );
+                  return local.enabled ? (
+                    <LocalLaunch
+                      local={local}
+                      provider={agentProvider}
+                      access={agentAccess}
+                      defaultName={agentNameFor(username, agentProvider)}
+                      providerLabel={agentProviderLabel(agentProvider)}
+                    >
+                      {commandSection}
+                    </LocalLaunch>
+                  ) : (
+                    commandSection
+                  );
+                })()}
             </div>
 
             <footer className="agent-dialog-footer">

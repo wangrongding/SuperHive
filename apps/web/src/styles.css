@@ -6,7 +6,9 @@
 @import "./styles/composer.css";
 @import "./styles/invocations.css";
 @import "./styles/whiteboard.css";
+@import "./styles/activity.css";
 @import "./styles/dialogs.css";
+@import "./styles/local-agents.css";
 @import "./styles/settings.css";
 @import "./styles/login.css";
 @import "./styles/share.css";

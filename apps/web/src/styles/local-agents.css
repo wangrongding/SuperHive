@@ -1,0 +1,350 @@
+/* 本机 Agent：接入面板里的一键启动表单、本机 Agent 列表，以及成员列表上的"本机"标记 */
+
+.local-agents {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  box-shadow: inset 0 0 0 1px var(--border-light);
+}
+
+.local-agents h4 {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.local-agents ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.local-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.local-agent-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.local-agent.running .local-agent-dot {
+  background: var(--success);
+}
+
+.local-agent.starting .local-agent-dot,
+.local-agent.restarting .local-agent-dot {
+  background: var(--warning);
+  animation: local-agent-pulse 1.2s ease-in-out infinite;
+}
+
+.local-agent.crashed .local-agent-dot {
+  background: var(--danger);
+}
+
+@keyframes local-agent-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.local-agent-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.local-agent-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-agent-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.local-agent-actions button {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  font-size: var(--text-xs);
+}
+
+.local-agent-actions button:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.local-agent-actions button.danger {
+  color: var(--danger);
+}
+
+.local-agent-logs {
+  max-height: 200px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.local-agent-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+/* ---------- 第 3 步：在本机启动 ---------- */
+.local-launch {
+  display: grid;
+  gap: 14px;
+}
+
+.local-launch-form {
+  display: grid;
+  gap: 10px;
+}
+
+.local-launch-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.local-launch-form label span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.local-launch-form input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.local-launch-form input:focus-visible {
+  border-color: var(--border-heavy);
+  outline: none;
+}
+
+/* ---------- 工作目录：输入框 + 服务端目录选择器 ---------- */
+.local-launch-cwd {
+  display: grid;
+  gap: 8px;
+}
+
+.local-launch-cwd-row {
+  display: flex;
+  gap: 8px;
+}
+
+.local-launch-cwd-row input {
+  min-width: 0;
+  flex: 1;
+}
+
+.local-launch-cwd-row button {
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.local-launch-cwd-row button:hover {
+  background: var(--bg-hover);
+}
+
+.directory-picker {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  box-shadow: inset 0 0 0 1px var(--border-light);
+}
+
+.directory-picker-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.directory-picker-bar code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directory-picker-bar button {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  font-size: var(--text-xs);
+}
+
+.directory-picker-bar button:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.directory-picker-bar button:disabled {
+  color: var(--text-tertiary);
+}
+
+.directory-picker-list {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.directory-picker-list button {
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+.directory-picker-list button:hover {
+  background: var(--bg-hover);
+}
+
+.directory-picker-empty {
+  padding: 6px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.directory-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.directory-picker-actions button {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  font-size: var(--text-sm);
+}
+
+.directory-picker-actions button.primary {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.local-launch-button {
+  height: 40px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.local-launch-button:hover:not(:disabled) {
+  background: var(--button-primary-hover);
+}
+
+.local-launch-button:disabled {
+  background: var(--bg-active);
+  color: var(--text-tertiary);
+}
+
+.local-launch-result {
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--warning-soft);
+  font-size: var(--text-sm);
+}
+
+.local-launch-result.running {
+  background: var(--success-soft);
+}
+
+.local-launch-result.crashed {
+  background: var(--danger-soft);
+}
+
+.local-launch-command summary {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.local-launch-command[open] summary {
+  margin-bottom: 10px;
+}
+
+/* 完全访问没有沙箱：表单里用醒目的危险色提示 */
+.local-launch-warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.provider-selector button.unavailable {
+  opacity: 0.55;
+}
+
+.member-local-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  vertical-align: 1px;
+}

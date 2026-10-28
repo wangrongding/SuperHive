@@ -62,3 +62,31 @@ export function applyMention(
     cursor: context.start + replacement.length + (hasWhitespaceAfter ? 1 : 0),
   };
 }
+
+// 与消息正文的高亮规则一致：@ 前不能紧贴用户名字符
+const mentionTokenPattern = /(?<![\p{L}\p{N}_])@[\p{L}\p{N}_.-]+/gu;
+
+export type DraftSegment = { text: string; mention: boolean };
+
+/** 把草稿切成普通文本与 @提及 片段，供输入框背后的高亮层渲染 */
+export function splitDraftMentions(value: string): DraftSegment[] {
+  const segments: DraftSegment[] = [];
+  let cursor = 0;
+  for (const match of value.matchAll(mentionTokenPattern)) {
+    if (match.index > cursor)
+      segments.push({ text: value.slice(cursor, match.index), mention: false });
+    segments.push({ text: match[0], mention: true });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < value.length) segments.push({ text: value.slice(cursor), mention: false });
+  return segments;
+}
+
+/** 草稿里是否已经 @ 了这个人（大小写不敏感，@bob 不算 @bobby） */
+export function draftMentions(value: string, username: string): boolean {
+  const normalized = `@${username}`.toLocaleLowerCase();
+  for (const match of value.matchAll(mentionTokenPattern)) {
+    if (match[0].toLocaleLowerCase() === normalized) return true;
+  }
+  return false;
+}

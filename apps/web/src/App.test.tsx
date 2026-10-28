@@ -3,7 +3,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Participant, ServerEvent } from "@ai-hive/protocol";
+import type {
+  LocalAgent,
+  ChatMessage,
+  Invocation,
+  Participant,
+  ServerEvent,
+} from "@ai-hive/protocol";
 import { App } from "./App";
 
 type RoomSnapshotEvent = Extract<ServerEvent, { type: "room.snapshot" }>;
@@ -100,10 +106,50 @@ const roomSummary = (id: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+const crossRoom: {
+  mentions: ChatMessage[];
+  invocations: Invocation[];
+  invocationMessages: ChatMessage[];
+  searchable: ChatMessage[];
+} = { mentions: [], invocations: [], invocationMessages: [], searchable: [] };
+
+/** 本机 Agent 接口的假实现；enabled 为 false 时 /api/local/session 返回 404（非本机） */
+const localApi: {
+  enabled: boolean;
+  agents: LocalAgent[];
+  requests: Array<{ url: string; method: string; owner: string | null; body?: unknown }>;
+} = { enabled: false, agents: [], requests: [] };
+
+function localAgent(overrides: Partial<LocalAgent> = {}): LocalAgent {
+  return {
+    id: "00000000-0000-4000-8000-0000000000e1",
+    provider: "opencode",
+    name: "Alice-opencode",
+    access: "read-only",
+    cwd: null,
+    model: null,
+    status: "starting",
+    pid: 4242,
+    startedAt: new Date().toISOString(),
+    lastExitCode: null,
+    lastError: null,
+    restarts: 0,
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  };
+}
+
 describe("App mention autocomplete", () => {
   beforeEach(() => {
     FakeWebSocket.instances.length = 0;
     FakeNotification.instances.length = 0;
+    crossRoom.mentions = [];
+    crossRoom.invocations = [];
+    crossRoom.invocationMessages = [];
+    crossRoom.searchable = [];
+    localApi.enabled = false;
+    localApi.agents = [];
+    localApi.requests = [];
     FakeNotification.permission = "default";
     FakeNotification.nextPermission = "granted";
     localStorage.clear();
@@ -124,6 +170,66 @@ describe("App mention autocomplete", () => {
             joinToken: "test-token",
             agentCommand:
               "npx --yes ai-hive@latest join --server http://10.0.0.8:8787 --name my-agent --token test-token",
+          });
+        }
+        if (url.includes("/api/local/")) {
+          if (!localApi.enabled) return jsonResponse({ error: "not found" }, 404);
+          const method = init?.method ?? "GET";
+          const owner = new Headers(init?.headers).get("X-Hive-Owner");
+          localApi.requests.push({
+            url,
+            method,
+            owner,
+            ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
+          });
+          if (url.endsWith("/api/local/session")) {
+            return jsonResponse({ enabled: true, ownerToken: "owner-secret" });
+          }
+          if (owner !== "owner-secret") return jsonResponse({ error: "unauthorized" }, 401);
+          if (url.includes("/api/local/directories")) {
+            const target = new URL(url).searchParams.get("path");
+            const launch = "/Users/alice/hive";
+            const current = target ?? launch;
+            return jsonResponse({
+              path: current,
+              parent: current === "/" ? null : current.replace(/\/[^/]+$/, "") || "/",
+              entries: [
+                { name: "apps", path: `${current}/apps` },
+                { name: "packages", path: `${current}/packages` },
+              ],
+              truncated: false,
+              defaults: { launch, home: "/Users/alice" },
+            });
+          }
+          if (url.endsWith("/api/local/providers")) {
+            return jsonResponse({
+              providers: [
+                { provider: "codex", command: "codex", installed: false, version: null },
+                { provider: "opencode", command: "opencode", installed: true, version: "1.19.4" },
+              ],
+            });
+          }
+          if (url.endsWith("/api/local/agents") && method === "POST") {
+            const body = JSON.parse(String(init!.body)) as { name: string };
+            const agent = localAgent({ name: body.name });
+            localApi.agents.push(agent);
+            return jsonResponse({ agent }, 201);
+          }
+          if (url.endsWith("/api/local/agents")) return jsonResponse({ agents: localApi.agents });
+        }
+        if (url.includes("/api/mentions")) {
+          return jsonResponse({ messages: crossRoom.mentions });
+        }
+        if (url.includes("/api/invocations")) {
+          return jsonResponse({
+            invocations: crossRoom.invocations,
+            messages: crossRoom.invocationMessages,
+          });
+        }
+        if (url.includes("/api/search")) {
+          const query = new URL(url).searchParams.get("q") ?? "";
+          return jsonResponse({
+            messages: crossRoom.searchable.filter((message) => message.content.includes(query)),
           });
         }
         if (/\/api\/rooms\/[^/]+\/messages/.test(url)) {
@@ -432,10 +538,29 @@ describe("App mention autocomplete", () => {
     const copilotRadio = screen.getByRole("radio", { name: /GitHub Copilot/ });
     copilotRadio.focus();
     await user.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /OpenClaw/ }));
-    expect(screen.getByRole("radio", { name: /OpenClaw/ }).getAttribute("aria-checked")).toBe(
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /OpenCode/ }));
+    expect(screen.getByRole("radio", { name: /OpenCode/ }).getAttribute("aria-checked")).toBe(
       "true",
     );
+    await nextStep();
+    await nextStep();
+    await user.click(screen.getByRole("button", { name: "复制命令" }));
+    expect(await navigator.clipboard.readText()).toContain("--provider opencode ");
+    expect(await navigator.clipboard.readText()).toContain("--name Alice-opencode");
+
+    // omp 的工作区档无法把写入限制在当前目录，需要明确提示
+    await user.click(screen.getByRole("button", { name: "返回第 1 步：选择 Agent" }));
+    await user.click(screen.getByRole("radio", { name: /omp/ }));
+    await nextStep();
+    await user.click(screen.getByRole("radio", { name: /^工作区/ }));
+    expect(screen.getByText(/omp 不会把文件写入限制在当前目录内/)).toBeTruthy();
+    await nextStep();
+    await user.click(screen.getByRole("button", { name: "复制命令" }));
+    expect(await navigator.clipboard.readText()).toContain("--provider omp ");
+    expect(await navigator.clipboard.readText()).toContain("--access workspace --cwd .");
+
+    await user.click(screen.getByRole("button", { name: "返回第 1 步：选择 Agent" }));
+    await user.click(screen.getByRole("radio", { name: /OpenClaw/ }));
     await nextStep();
     await nextStep();
     await user.click(screen.getByRole("button", { name: "复制命令" }));
@@ -684,7 +809,13 @@ describe("App mention autocomplete", () => {
     // 只有自己的消息有撤回入口
     const recallButtons = list().getAllByRole("button", { name: "撤回这条消息" });
     expect(recallButtons).toHaveLength(1);
-    expect(list().getByRole("button", { name: "在输入框中提及 backend-agent" })).toBeTruthy();
+    const mentionButton = list().getByRole("button", { name: "在输入框中提及 backend-agent" });
+    // 重复点击同一个人只 @ 一次
+    await user.click(mentionButton);
+    await user.click(mentionButton);
+    expect((screen.getByRole("textbox", { name: "消息" }) as HTMLTextAreaElement).value).toBe(
+      "@backend-agent ",
+    );
 
     // 二次确认：先取消，再确认
     await user.click(recallButtons[0]!);
@@ -972,6 +1103,106 @@ describe("App mention autocomplete", () => {
       }),
     );
     expect(screen.getByRole("alert").textContent).toContain("这次调用当前无法重试");
+
+    // Agent 判断无需回复：已完成但没有回复消息，状态上要写明，免得像是漏处理
+    act(() =>
+      socket.serverEvent({
+        type: "invocation.updated",
+        invocation: {
+          ...failed,
+          status: "completed",
+          detail: "无需回复",
+          finishedAt: new Date().toISOString(),
+          updatedAt: new Date(Date.now() + 2000).toISOString(),
+        },
+      }),
+    );
+    expect(within(chips).getByText("无需回复")).toBeTruthy();
+  });
+
+  it("launches an agent on this machine with one click when the page is local", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("ai-hive.username", "Alice");
+    localApi.enabled = true;
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "接入 Agent" }));
+    // 第 1 步标出本机装了哪些 CLI
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /Codex.*本机未安装/ })).toBeTruthy(),
+    );
+    expect(screen.getByRole("radio", { name: /OpenCode.*1\.19\.4/ })).toBeTruthy();
+
+    await user.click(screen.getByRole("radio", { name: /OpenCode/ }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("heading", { name: "在本机启动" })).toBeTruthy();
+    expect(screen.getByText("或复制命令，到其他终端运行")).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "Agent 名称" }) as HTMLInputElement).value).toBe(
+      "Alice-opencode",
+    );
+
+    await user.click(screen.getByRole("button", { name: "在本机启动" }));
+    const created = localApi.requests.find((request) => request.method === "POST");
+    expect(created).toMatchObject({
+      owner: "owner-secret",
+      body: { provider: "opencode", name: "Alice-opencode", access: "read-only" },
+    });
+    expect(await screen.findByText(/正在启动/)).toBeTruthy();
+
+    // 服务端报告已上线后提示可以 @ 了，成员列表也标出它由本机启动
+    localApi.agents = [localAgent({ status: "running" })];
+    const agent = participant("00000000-0000-4000-8000-0000000000a9", "Alice-opencode", "agent");
+    act(() => socket.serverEvent({ type: "presence.changed", participant: agent }));
+    await waitFor(() => expect(screen.getByText(/已上线/)).toBeTruthy(), { timeout: 4_000 });
+    expect(screen.getByTitle("由本机 Hive Server 启动")).toBeTruthy();
+
+    // 本机房主也可以一键启动完全访问：需要工作目录，并给出无沙箱警告
+    await user.click(screen.getByRole("button", { name: "返回第 2 步：设置权限" }));
+    await user.click(screen.getByRole("radio", { name: /^完全访问/ }));
+    await user.click(screen.getByRole("button", { name: "我了解风险，开启完全访问" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("heading", { name: "在本机启动" })).toBeTruthy();
+    expect(screen.getByRole("note").textContent).toContain("完全访问没有任何沙箱");
+    // 工作目录预填启动 Hive 的目录，不用手输
+    const cwdInput = () => screen.getByRole("textbox", { name: "工作目录" }) as HTMLInputElement;
+    await waitFor(() => expect(cwdInput().value).toBe("/Users/alice/hive"));
+
+    // 点"选择…"用服务端列目录，进子目录后确认
+    await user.click(screen.getByRole("button", { name: "选择…" }));
+    const picker = screen.getByRole("group", { name: "选择工作目录" });
+    // 家目录开头的路径显示成 ~/…，完整路径在 title 里
+    await waitFor(() => expect(within(picker).getByText("~/hive")).toBeTruthy());
+    expect(within(picker).getByText("~/hive").getAttribute("title")).toBe("/Users/alice/hive");
+    await user.click(within(picker).getByRole("button", { name: "apps" }));
+    await waitFor(() => expect(within(picker).getByText("~/hive/apps")).toBeTruthy());
+    await user.click(within(picker).getByRole("button", { name: "选择当前目录" }));
+    expect(cwdInput().value).toBe("/Users/alice/hive/apps");
+    expect(screen.queryByRole("group", { name: "选择工作目录" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "在本机启动" }));
+    expect(localApi.requests.filter((request) => request.method === "POST").at(-1)).toMatchObject({
+      body: { access: "full", cwd: "/Users/alice/hive/apps" },
+    });
+
+    // 完全访问不跨次保留：关掉再打开回到只读
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "接入 Agent" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("radio", { name: /^只读/ }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows the room whiteboard grouped by slot and keeps it in sync", async () => {
@@ -1081,5 +1312,91 @@ describe("App mention autocomplete", () => {
     });
     expect(within(panel).getByText("白板还是空的")).toBeTruthy();
     expect(within(panel).getByText("hive_board_update")).toBeTruthy();
+  });
+
+  it("opens search, mentions and agent tasks from the sidebar and jumps across rooms", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    const mention: ChatMessage = {
+      id: "00000000-0000-4000-8000-000000000101",
+      roomId: "frontend",
+      seq: 5,
+      senderId: "00000000-0000-4000-8000-000000000102",
+      senderName: "Bob",
+      senderType: "human",
+      content: "@Alice 登录页的设计稿好了",
+      mentions: ["Alice"],
+      traceId: "00000000-0000-4000-8000-000000000103",
+      hopCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    crossRoom.mentions = [mention];
+    crossRoom.searchable = [mention];
+    crossRoom.invocationMessages = [mention];
+    crossRoom.invocations = [
+      {
+        id: "00000000-0000-4000-8000-000000000104",
+        roomId: "frontend",
+        messageId: mention.id,
+        agentId: "00000000-0000-4000-8000-000000000105",
+        agentName: "frontend-agent",
+        requesterName: "Bob",
+        requesterType: "human",
+        status: "failed",
+        detail: "连续失败 3 次",
+        attempts: 1,
+        createdAt: mention.createdAt,
+        updatedAt: mention.createdAt,
+      },
+    ];
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self: participant("00000000-0000-4000-8000-000000000001", "Alice", "human"),
+        participants: [],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+
+    const mentionsEntry = await screen.findByRole("button", { name: "提及我，1 条未读" });
+    expect(await screen.findByRole("button", { name: "Agent 任务，1 个需要处理" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Agent 任务，1 个需要处理" }));
+    const tasks = screen.getByRole("dialog", { name: "Agent 任务" });
+    expect(within(tasks).getByText("@frontend-agent · 失败")).toBeTruthy();
+    expect(within(tasks).getByText("连续失败 3 次")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Agent 任务" })).toBeNull();
+
+    // ⌘K 打开搜索，输入后按 Enter 跳到原文所在房间
+    await user.keyboard("{Meta>}k{/Meta}");
+    const searchBox = await screen.findByRole("searchbox", { name: "搜索消息" });
+    await user.type(searchBox, "设计稿");
+    const searchDialog = screen.getByRole("dialog", { name: "搜索消息" });
+    await waitFor(() =>
+      expect(within(searchDialog).getByRole("option", { name: /Bob/ })).toBeTruthy(),
+    );
+    await user.keyboard("{Escape}");
+
+    await user.click(mentionsEntry);
+    const mentionsDialog = screen.getByRole("dialog", { name: "提及我" });
+    // 默认只列未读，读过的提及会离开列表
+    expect(
+      within(mentionsDialog).getByRole("button", { name: "未读 1" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    await user.click(within(mentionsDialog).getByRole("option", { name: /登录页的设计稿/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    act(() => FakeWebSocket.instances[1]!.open());
+    expect(JSON.parse(FakeWebSocket.instances[1]!.sent[0]!)).toMatchObject({
+      type: "participant.join",
+      roomId: "frontend",
+    });
+    expect(window.location.hash).toBe("#frontend");
   });
 });

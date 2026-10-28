@@ -67,7 +67,7 @@ export function formatElapsed(ms: number): string {
   return rest ? `${hours}小时${rest}分` : `${hours}小时`;
 }
 
-function invocationStatusLabel(invocation: Invocation, agentOnline: boolean): string {
+export function invocationStatusLabel(invocation: Invocation, agentOnline: boolean): string {
   switch (invocation.status) {
     case "queued":
       if (invocation.receivedAt) return "已送达，排队中";
@@ -158,7 +158,10 @@ export function InvocationChips({
             {invocation.status === "running" && invocation.progress && (
               <span className="invocation-progress">{invocation.progress}</span>
             )}
-            {(invocation.status === "blocked" || invocation.status === "failed") &&
+            {(invocation.status === "blocked" ||
+              invocation.status === "failed" ||
+              // 完成但没有回复消息：Agent 判断无需回复，标出来免得像是漏处理
+              (invocation.status === "completed" && !invocation.replyMessageId)) &&
               invocation.detail && <span className="invocation-progress">{invocation.detail}</span>}
             {invocation.status === "running" && (
               <ElapsedTime since={invocation.startedAt ?? invocation.updatedAt} />

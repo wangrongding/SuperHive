@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Participant } from "@ai-hive/protocol";
 import {
   applyMention,
+  draftMentions,
   filterMentionParticipants,
   findMentionContext,
+  splitDraftMentions,
 } from "./mention-autocomplete";
 
 function participant(
@@ -46,5 +48,23 @@ describe("mention autocomplete", () => {
     expect(
       applyMention("ask @fro about this", { start: 4, end: 8, query: "fro" }, "frontend-agent"),
     ).toEqual({ value: "ask @frontend-agent about this", cursor: 20 });
+  });
+});
+
+describe("draft mention highlighting", () => {
+  it("splits mentions out of the draft with the same rules as message bodies", () => {
+    expect(splitDraftMentions("@bob 看下 a@b.com，@前端-agent\n")).toEqual([
+      { text: "@bob", mention: true },
+      { text: " 看下 a@b.com，", mention: false },
+      { text: "@前端-agent", mention: true },
+      { text: "\n", mention: false },
+    ]);
+    expect(splitDraftMentions("")).toEqual([]);
+  });
+
+  it("detects an existing mention without matching longer names", () => {
+    expect(draftMentions("hi @Bob ", "bob")).toBe(true);
+    expect(draftMentions("hi @bobby ", "bob")).toBe(false);
+    expect(draftMentions("mail a@bob.com", "bob.com")).toBe(false);
   });
 });
