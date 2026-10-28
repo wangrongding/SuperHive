@@ -1,8 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { StateStore, type AgentState } from "./state-store.js";
+import { StateStore, agentWorkspaceDir, type AgentState } from "./state-store.js";
 
 describe("StateStore", () => {
   let directory: string | undefined;
@@ -67,5 +67,27 @@ describe("StateStore concurrent saves", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("agentWorkspaceDir", () => {
+  let directory: string | undefined;
+  afterEach(async () => {
+    if (directory) await rm(directory, { recursive: true, force: true });
+  });
+
+  it("reuses one empty directory per agent identity so provider sessions survive restarts", async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "hive-workspace-test-"));
+    const identity = { serverUrl: "http://localhost:8787", username: "Agent-A", provider: "omp" };
+
+    const first = agentWorkspaceDir(directory, identity);
+    const again = agentWorkspaceDir(directory, { ...identity, username: "agent-a" });
+    const other = agentWorkspaceDir(directory, { ...identity, provider: "opencode" });
+
+    expect(again).toBe(first);
+    expect(other).not.toBe(first);
+    expect(path.dirname(first)).toBe(path.join(directory, "workspaces"));
+    expect((await stat(first)).isDirectory()).toBe(true);
+    expect(await readdir(first)).toEqual([]);
   });
 });

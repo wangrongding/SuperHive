@@ -213,6 +213,41 @@ describe("AgentBridge", () => {
     expect(saved?.threadId).toBe("thread-1");
   });
 
+  it("stays silent on NO_REPLY but still completes and remembers the mention", async () => {
+    await startBridge(baseState());
+    const mention = chat({
+      senderName: "agent-b",
+      senderType: "agent",
+      content: "@agent-a 我这边结论和你一致",
+    });
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    // 全部由 Agent 唤醒时，结尾提醒可以不回
+    expect(responder.calls[0]!.prompt).toContain("只输出 NO_REPLY");
+
+    responder.finish("**NO_REPLY**");
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    expect(room.sent).toHaveLength(0);
+    const completed = room.reports.find((report) => report.status === "completed");
+    expect(completed).toMatchObject({ detail: "无需回复" });
+    expect(completed?.replyMessageId).toBeUndefined();
+    expect((await store.load())?.processedMessageIds).toContain(mention.id);
+  });
+
+  it("strips a stray NO_REPLY from a real answer and only reminds about it for agent triggers", async () => {
+    await startBridge(baseState());
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    expect(responder.calls[0]!.prompt).not.toContain("只输出 NO_REPLY");
+
+    responder.finish("已经改好了。\n\nNO_REPLY");
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    expect(room.sent[0]?.content).toBe("已经改好了。");
+  });
+
   it("merges a burst of mentions into one provider turn", async () => {
     await startBridge(baseState());
     const first = chat();
@@ -367,6 +402,27 @@ describe("AgentBridge", () => {
     expect(responder.calls[0]!.prompt).toContain("<room_members>");
     expect(responder.calls[1]!.prompt).not.toContain("<room_members>");
     expect(room.participantCalls).toBe(1);
+  });
+
+  it("re-injects the rules right away when they changed since the session last saw them", async () => {
+    await startBridge({
+      ...baseState(),
+      threadId: "thread-old",
+      briefTurns: 1,
+      lastFullPromptAt: new Date().toISOString(),
+      instructionsDigest: "rules-before-upgrade",
+    });
+    for (let turn = 0; turn < 2; turn += 1) {
+      const mention = chat();
+      room.messages.push(mention);
+      room.handlers.onMention(mention, mention.seq, false);
+      await waitUntil(() => responder.calls.length === turn + 1);
+      responder.finish();
+      await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    }
+    // 第一轮因规则变化发完整上下文，之后恢复增量
+    expect(responder.calls.map((call) => call.refreshInstructions)).toEqual([true, false]);
+    expect((await store.load())?.instructionsDigest).not.toBe("rules-before-upgrade");
   });
 
   it("picks the deepest trigger as the reply parent", () => {

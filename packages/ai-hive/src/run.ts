@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, statSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { AgentBridge } from "./bridge.js";
@@ -8,6 +8,8 @@ import { AgentManager, type StackHooks } from "./agent-manager.js";
 import { ClaudeCodeResponder } from "./claude-client.js";
 import { CodexResponder, type CodexTransport } from "./codex-responder.js";
 import { CopilotResponder } from "./copilot-client.js";
+import { createOmpResponder } from "./omp-client.js";
+import { createOpenCodeResponder } from "./opencode-client.js";
 import { OpenClawResponder } from "./openclaw-client.js";
 import {
   hiveMcpUrl,
@@ -22,7 +24,7 @@ import {
   type AgentProvider,
   type AgentResponder,
 } from "./responder.js";
-import { StateStore } from "./state-store.js";
+import { StateStore, agentWorkspaceDir } from "./state-store.js";
 
 const usage = `
 AI Hive Agent
@@ -35,10 +37,11 @@ AI Hive Agent
 选项：
   --room ID         只加入指定房间；省略时加入服务器上所有未归档房间，
                     并自动跟随房间的新建与归档
-  --provider NAME   codex、claude、copilot 或 openclaw（默认 codex）
+  --provider NAME   codex、claude、copilot、openclaw、opencode 或 omp（默认 codex）
   --access MODE     read-only、workspace 或 full（默认 read-only）
   --persona TEXT    Agent 的角色描述
-  --cwd PATH        Agent 工作目录（workspace/full 必填；只读默认使用空临时目录）
+  --cwd PATH        Agent 工作目录（workspace/full 必填；只读默认使用状态目录下
+                    该 Agent 专属的空目录）
   --state-dir PATH  Agent 状态目录（默认 ~/.ai-hive/agents）
   --codex PATH      Codex CLI 命令（默认 codex）
   --codex-transport MODE
@@ -50,8 +53,41 @@ AI Hive Agent
   --openclaw-local  强制 OpenClaw 使用 embedded agent，不连接 Gateway
   --openclaw-agent  OpenClaw 中已配置的 Agent ID
   --openclaw-configure-mcp  将当前 Hive MCP 身份保存到 OpenClaw 配置
-  --model NAME      provider 使用的可选模型
+  --opencode PATH   OpenCode CLI 命令（默认 opencode）
+  --omp PATH        omp（oh-my-pi）CLI 命令（默认 omp）
+  --model NAME      provider 使用的可选模型（opencode 为 provider/model 格式）
 `;
+
+/**
+ * 由本机 Hive Server 拉起时，Server 若被强制结束（kill -9、崩溃）不会通知子进程。
+ * 定期检查父进程是否还在，不在就主动离线退出，避免留下占着名字的孤儿 Agent。
+ */
+export function watchSupervisor(
+  pidValue: string | undefined,
+  onGone: () => void,
+  options: { intervalMs?: number; isAlive?: (pid: number) => boolean } = {},
+): (() => void) | undefined {
+  const pid = Number.parseInt(pidValue ?? "", 10);
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  const isAlive =
+    options.isAlive ??
+    ((target: number) => {
+      try {
+        process.kill(target, 0);
+        return true;
+      } catch (error) {
+        // EPERM 说明进程存在只是无权发信号
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    });
+  const timer = setInterval(() => {
+    if (isAlive(pid)) return;
+    clearInterval(timer);
+    onGone();
+  }, options.intervalMs ?? 2_000);
+  timer.unref();
+  return () => clearInterval(timer);
+}
 
 export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   const parsed = parseArgs({
@@ -75,6 +111,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       "openclaw-local": { type: "boolean" },
       "openclaw-agent": { type: "string" },
       "openclaw-configure-mcp": { type: "boolean" },
+      opencode: { type: "string", default: "opencode" },
+      omp: { type: "string", default: "omp" },
       model: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
@@ -87,7 +125,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   const serverUrl = parsed.values.server?.replace(/\/$/, "");
   const roomId = parsed.values.room;
   const username = parsed.values.name;
-  const token = parsed.values.token;
+  // 也可经环境变量传入：由本机 Hive Server 拉起时用它，避免 token 出现在进程参数里
+  const token = parsed.values.token ?? process.env.HIVE_AGENT_TOKEN;
   if (!serverUrl || !username || !token)
     throw new Error(`缺少 --server、--name 或 --token。\n${usage}`);
   new URL(serverUrl);
@@ -98,10 +137,18 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     throw new Error("name 含有不支持的字符。");
   }
   const providerValue = defaultProvider === "echo" ? "echo" : (parsed.values.provider ?? "codex");
-  const supportedProviders: AgentProvider[] = ["codex", "claude", "copilot", "openclaw", "echo"];
+  const supportedProviders: AgentProvider[] = [
+    "codex",
+    "claude",
+    "copilot",
+    "openclaw",
+    "opencode",
+    "omp",
+    "echo",
+  ];
   if (!supportedProviders.includes(providerValue as AgentProvider)) {
     throw new Error(
-      `不支持的 provider “${providerValue}”；当前可用：codex、claude、copilot、openclaw。`,
+      `不支持的 provider “${providerValue}”；当前可用：codex、claude、copilot、openclaw、opencode、omp。`,
     );
   }
   const provider = providerValue as AgentProvider;
@@ -121,19 +168,21 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     throw new Error(`--access ${access} 必须同时显式指定 --cwd，避免授权到错误目录。`);
   }
 
-  const cwd = parsed.values.cwd
-    ? path.resolve(parsed.values.cwd)
-    : mkdtempSync(path.join(tmpdir(), "ai-hive-agent-"));
-  if (!existsSync(cwd) || !statSync(cwd).isDirectory())
-    throw new Error(`cwd 不是可访问的目录：${cwd}`);
   const stateDir = path.resolve(
     parsed.values["state-dir"] ?? path.join(homedir(), ".ai-hive", "agents"),
   );
+  const cwd = parsed.values.cwd
+    ? path.resolve(parsed.values.cwd)
+    : agentWorkspaceDir(stateDir, { serverUrl, username, provider });
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory())
+    throw new Error(`cwd 不是可访问的目录：${cwd}`);
   const defaultPersonas: Record<AgentProvider, string> = {
     codex: "通用协作 Agent",
     claude: "通用协作 Agent",
     copilot: "通用协作 Agent",
     openclaw: "通用协作 Agent",
+    opencode: "通用协作 Agent",
+    omp: "通用协作 Agent",
     echo: "Echo 测试 Agent",
   };
   const persona = parsed.values.persona ?? defaultPersonas[provider];
@@ -142,6 +191,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     claude: parsed.values.claude,
     copilot: parsed.values.copilot,
     openclaw: parsed.values.openclaw,
+    opencode: parsed.values.opencode,
+    omp: parsed.values.omp,
     echo: "echo",
   };
   const providerLabels: Record<AgentProvider, string> = {
@@ -149,6 +200,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     claude: "Claude Code",
     copilot: "GitHub Copilot",
     openclaw: "OpenClaw",
+    opencode: "OpenCode",
+    omp: "omp",
     echo: "Echo",
   };
   const command = commands[provider];
@@ -190,6 +243,22 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
           cwd,
           local: parsed.values["openclaw-local"] ?? false,
           ...(parsed.values["openclaw-agent"] ? { agentId: parsed.values["openclaw-agent"] } : {}),
+          ...(parsed.values.model ? { model: parsed.values.model } : {}),
+        });
+      case "opencode":
+        return createOpenCodeResponder({
+          command,
+          cwd,
+          hive,
+          access,
+          ...(parsed.values.model ? { model: parsed.values.model } : {}),
+        });
+      case "omp":
+        return createOmpResponder({
+          command,
+          cwd,
+          hive,
+          access,
           ...(parsed.values.model ? { model: parsed.values.model } : {}),
         });
       case "codex":
@@ -277,14 +346,19 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   };
   console.log(`[hive] 状态目录：${stateDir}（每个房间一个状态文件）`);
   console.log(
-    `[hive] ${providerLabels[provider]} 命令工作目录：${cwd}${parsed.values.cwd ? "" : "（安全的空临时目录）"}`,
+    `[hive] ${providerLabels[provider]} 命令工作目录：${cwd}${parsed.values.cwd ? "" : "（该 Agent 专属的空目录，固定复用以便恢复会话）"}`,
   );
   console.log(
     `[hive] 本机权限：${access === "read-only" ? "只读" : access === "workspace" ? "工作区读写与命令" : "完全访问（无 Hive 沙箱）"}`,
   );
-  if (provider === "codex" || provider === "claude" || provider === "copilot") {
+  if (["codex", "claude", "copilot", "opencode", "omp"].includes(provider)) {
     console.log(
       `[hive] ${providerLabels[provider]} Hive MCP：已启用，将按需临时注入 ${hiveMcpUrl(hiveForLogs)}（仅当前 Agent 进程，不修改全局配置）`,
+    );
+  }
+  if (provider === "omp" && access === "workspace") {
+    console.warn(
+      "[hive] omp 不会把 write/edit 限制在工作目录内；workspace 档只是在只读工具之外再开放 edit、write、bash。需要目录隔离时请改用 opencode、codex 或 claude。",
     );
   }
   if (provider === "openclaw") {
@@ -311,4 +385,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       void stopAll().finally(() => process.exit(0));
     });
   }
+  watchSupervisor(process.env.HIVE_SUPERVISOR_PID, () => {
+    console.error("[hive] 拉起本 Agent 的 Hive Server 已退出，Agent 随之离线。");
+    void stopAll().finally(() => process.exit(0));
+  });
 }

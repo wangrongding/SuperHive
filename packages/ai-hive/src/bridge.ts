@@ -8,6 +8,7 @@ import {
   type WhiteboardEntry,
 } from "./hive-protocol.js";
 import { isCancelled, type AgentAccessMode, type AgentResponder } from "./responder.js";
+import { resolveReplyText } from "./silent-reply.js";
 import {
   buildDeveloperInstructions,
   buildMentionPrompt,
@@ -452,8 +453,9 @@ export class AgentBridge {
       if (reply.threadId) this.state.threadId = reply.threadId;
       this.notePromptSent(prompt);
 
-      const content = reply.text.trim().slice(0, 4000);
-      if (!content) throw new Error("Agent 回复为空。");
+      const resolved = resolveReplyText(reply.text);
+      const content = resolved.silent ? "" : resolved.text.slice(0, 4000);
+      if (!resolved.silent && !content) throw new Error("Agent 回复为空。");
       const live = active.messages.filter(
         (message) => !this.recalled.has(message.id) && !active.cancelled.has(message.id),
       );
@@ -464,6 +466,10 @@ export class AgentBridge {
       let replyMessageId: string | undefined = sentWithHiveTool?.id;
       if (live.length === 0) {
         this.log("[hive] 本轮的触发消息都已被撤回或停止，不再发送回复");
+      } else if (!sentWithHiveTool && resolved.silent) {
+        this.log(
+          `[hive] ${live.map((message) => `#${message.seq}`).join("、")} 无需回复，未发送消息`,
+        );
       } else if (!sentWithHiveTool) {
         const sent = await this.room.sendMessage({
           content,
@@ -490,9 +496,11 @@ export class AgentBridge {
       await this.store.save(this.state);
       this.reportAll(live, {
         status: "completed",
-        ...(replyMessageId ? { replyMessageId } : {}),
+        ...(replyMessageId ? { replyMessageId } : { detail: "无需回复" }),
       });
-      this.log(`[hive] 已回复 ${active.messages.map((message) => `#${message.seq}`).join("、")}`);
+      this.log(
+        `[hive] ${replyMessageId ? "已回复" : "已处理"} ${active.messages.map((message) => `#${message.seq}`).join("、")}`,
+      );
     } catch (error) {
       await this.handleBatchError(active, error);
     } finally {
@@ -563,6 +571,7 @@ export class AgentBridge {
     const lastFull = this.state.lastFullPromptAt ? Date.parse(this.state.lastFullPromptAt) : 0;
     const full =
       !this.state.threadId ||
+      this.state.instructionsDigest !== this.instructionsDigest() ||
       (this.state.briefTurns ?? 0) >= this.tuning.fullPromptEveryTurns ||
       Date.now() - lastFull >= this.tuning.fullPromptEveryMs;
     let whiteboard: WhiteboardEntry[] | undefined;
@@ -594,10 +603,15 @@ export class AgentBridge {
     };
   }
 
+  private instructionsDigest(): string {
+    return createHash("sha256").update(this.instructions).digest("hex").slice(0, 16);
+  }
+
   private notePromptSent(prompt: { full: boolean; whiteboardDigest?: string }): void {
     if (prompt.full) {
       this.state.briefTurns = 0;
       this.state.lastFullPromptAt = new Date().toISOString();
+      this.state.instructionsDigest = this.instructionsDigest();
     } else {
       this.state.briefTurns = (this.state.briefTurns ?? 0) + 1;
     }

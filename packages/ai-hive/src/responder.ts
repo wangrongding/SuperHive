@@ -1,4 +1,5 @@
-export type AgentProvider = "codex" | "claude" | "copilot" | "openclaw" | "echo";
+export type AgentProvider =
+  "codex" | "claude" | "copilot" | "openclaw" | "opencode" | "omp" | "echo";
 export type AgentAccessMode = "read-only" | "workspace" | "full";
 
 export type AgentReplyInput = {
@@ -10,7 +11,7 @@ export type AgentReplyInput = {
   /** 运行中的可读进度（正在执行的命令、调用的工具等），由 Bridge 节流后上报 */
   onProgress?: (progress: string) => void;
   /**
-   * 是否需要重新注入完整规则。只能把规则拼进用户消息的 Provider（Copilot、OpenClaw）
+   * 是否需要重新注入完整规则。只能把规则拼进用户消息的 Provider（Copilot、OpenClaw、ACP）
    * 据此避免每轮都把同一份长规则写进会话历史；新会话总是需要。
    */
   refreshInstructions?: boolean;

@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { createInterface } from "node:readline";
 import {
   CODEX_HIVE_TOOLS_APPROVAL_OVERRIDE,
   codexHiveMcpOverrides,
@@ -13,6 +11,12 @@ import {
   type AgentReplyInput,
   type AgentResponder,
 } from "./responder.js";
+import {
+  spawnStdioTransport,
+  type StdioExit,
+  type StdioTransport,
+  type StdioTransportFactory,
+} from "./stdio-transport.js";
 
 /**
  * 基于常驻 `codex app-server` 进程（stdio 上的换行分隔 JSON-RPC）的 Codex Responder。
@@ -22,28 +26,9 @@ import {
  * - 流式进度（item/started 通知）
  */
 
-/** 子进程退出信息；error 表示 spawn 本身失败（如 ENOENT） */
-export type AppServerExit = {
-  code: number | null;
-  signal: string | null;
-  error?: Error;
-  /** stderr 最近的一段输出，便于诊断 */
-  stderr: string;
-};
-
-/** 与 app-server 通信的最小传输抽象，测试中可注入假实现 */
-export type AppServerTransport = {
-  write(line: string): void;
-  onLine(listener: (line: string) => void): void;
-  onExit(listener: (exit: AppServerExit) => void): void;
-  kill(): void;
-};
-
-export type AppServerTransportFactory = (
-  command: string,
-  args: string[],
-  options: { cwd: string },
-) => AppServerTransport;
+export type AppServerExit = StdioExit;
+export type AppServerTransport = StdioTransport;
+export type AppServerTransportFactory = StdioTransportFactory;
 
 export type CodexAppServerResponderOptions = {
   command: string;
@@ -67,7 +52,6 @@ export type CodexAppServerResponderDependencies = {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const DEFAULT_INTERRUPT_GRACE_MS = 10_000;
-const STDERR_TAIL_LIMIT = 4_000;
 
 function packageVersion(): string {
   try {
@@ -144,46 +128,7 @@ export function isAppServerUnsupported(error: unknown): boolean {
   return false;
 }
 
-/** 默认传输：spawn 子进程，stdout 按行读取，stderr 透传并保留尾部 */
-export const spawnAppServerTransport: AppServerTransportFactory = (command, args, options) => {
-  const child = spawn(command, args, { cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"] });
-  const lineListeners: Array<(line: string) => void> = [];
-  const exitListeners: Array<(exit: AppServerExit) => void> = [];
-  let stderrTail = "";
-  let exited = false;
-  const emitExit = (exit: Omit<AppServerExit, "stderr">) => {
-    if (exited) return;
-    exited = true;
-    for (const listener of exitListeners) listener({ ...exit, stderr: stderrTail });
-  };
-
-  createInterface({ input: child.stdout! }).on("line", (line) => {
-    for (const listener of lineListeners) listener(line);
-  });
-  child.stderr!.on("data", (chunk: Buffer) => {
-    process.stderr.write(chunk);
-    stderrTail = (stderrTail + chunk.toString("utf8")).slice(-STDERR_TAIL_LIMIT);
-  });
-  // stdin 写入失败（进程已退出）时不要抛出未处理异常，退出事件会负责收尾
-  child.stdin!.on("error", () => undefined);
-  child.on("error", (error) => emitExit({ code: null, signal: null, error }));
-  child.on("close", (code, signal) => emitExit({ code, signal }));
-
-  return {
-    write(line) {
-      if (!exited && child.stdin!.writable) child.stdin!.write(`${line}\n`);
-    },
-    onLine(listener) {
-      lineListeners.push(listener);
-    },
-    onExit(listener) {
-      exitListeners.push(listener);
-    },
-    kill() {
-      if (!exited) child.kill("SIGTERM");
-    },
-  };
-};
+export const spawnAppServerTransport: AppServerTransportFactory = spawnStdioTransport;
 
 type PendingRequest = {
   method: string;

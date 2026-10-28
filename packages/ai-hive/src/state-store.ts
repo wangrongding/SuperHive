@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -23,7 +24,26 @@ export type AgentState = {
   lastFullPromptAt?: string;
   /** 上次放进 Prompt 的白板摘要指纹；白板没变就不重复发送 */
   whiteboardDigest?: string;
+  /** 会话里最近一次注入的规则指纹；规则变了（升级、改角色）就立即重新注入 */
+  instructionsDigest?: string;
 };
+
+/**
+ * 只读 Agent 的默认工作目录：每个 Agent 身份固定一个空目录，而不是每次启动随机创建。
+ * opencode、omp、Claude Code 等按工作目录存放会话，目录固定后重启才能恢复原会话。
+ */
+export function agentWorkspaceDir(
+  stateDir: string,
+  identity: { serverUrl: string; username: string; provider: string },
+): string {
+  const key = createHash("sha256")
+    .update(`${identity.serverUrl}\0${identity.username.toLocaleLowerCase()}\0${identity.provider}`)
+    .digest("hex")
+    .slice(0, 20);
+  const dir = path.join(stateDir, "workspaces", key);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
 
 export class StateStore {
   readonly filename: string;

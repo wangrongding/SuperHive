@@ -44,6 +44,23 @@ export function copilotHiveMcpConfig(connection: HiveMcpConnection): string {
   });
 }
 
+/** ACP `session/new` / `session/load` 里的 mcpServers 条目（HTTP 传输，headers 为名值对数组） */
+export type AcpMcpServer = {
+  type: "http";
+  name: string;
+  url: string;
+  headers: Array<{ name: string; value: string }>;
+};
+
+export function acpHiveMcpServer(connection: HiveMcpConnection): AcpMcpServer {
+  return {
+    type: "http",
+    name: "hive",
+    url: hiveMcpUrl(connection),
+    headers: Object.entries(hiveMcpHeaders(connection)).map(([name, value]) => ({ name, value })),
+  };
+}
+
 export function codexHiveMcpOverrides(connection: HiveMcpConnection): string[] {
   const headers = hiveMcpHeaders(connection);
   const headerTable = Object.entries(headers)
