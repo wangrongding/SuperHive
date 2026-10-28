@@ -904,4 +904,30 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
     expect(removed.type === "whiteboard.removed" && removed.entryId).toBe(entry.id);
     await mcp.client.close();
   });
+
+  it("serves cross-room search, mentions and active invocations", async () => {
+    const { app, join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    await join("helper", "agent");
+    alice.send({ type: "message.send", clientMessageId: "x1", content: "@helper 检查登录接口" });
+    await alice.next((event) => event.type === "invocation.updated");
+    const get = (url: string) =>
+      app
+        .inject({ method: "GET", url, headers: { Authorization: "Bearer test-token" } })
+        .then((response) => ({ status: response.statusCode, body: response.json() }));
+
+    expect((await get("/api/search?q=登录接口")).body.messages).toEqual([
+      expect.objectContaining({ content: "@helper 检查登录接口" }),
+    ]);
+    expect((await get("/api/search?q=")).status).toBe(400);
+    expect((await get("/api/mentions?username=helper")).body.messages).toHaveLength(1);
+    const active = (await get("/api/invocations")).body;
+    expect(active.invocations).toEqual([
+      expect.objectContaining({ agentName: "helper", status: "queued" }),
+    ]);
+    expect(active.messages[0].content).toBe("@helper 检查登录接口");
+    expect(active.onlineInvocationIds).toEqual([active.invocations[0].id]);
+    const unauthorized = await app.inject({ method: "GET", url: "/api/search?q=x" });
+    expect(unauthorized.statusCode).toBe(401);
+  });
 });

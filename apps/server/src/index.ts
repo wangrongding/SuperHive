@@ -1,7 +1,8 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { buildApp } from "./app.js";
+import type { AgentCli } from "./local-agents.js";
 
 const host = process.env.HIVE_HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.HIVE_PORT ?? "8787", 10);
@@ -23,12 +24,43 @@ const agentCommandPrefix =
   process.env.HIVE_AGENT_COMMAND ?? (isDevRuntime ? "pnpm agent" : "npx --yes ai-hive@latest");
 mkdirSync(path.dirname(databasePath), { recursive: true });
 
+/**
+ * 本机 Agent 用同一份 ai-hive CLI 拉起：开发时走 tsx 运行仓库源码，打包后用同包内的 dist/cli.js，
+ * 都不经过 npx，不依赖网络。HIVE_LOCAL_AGENTS=0 可整体关闭。
+ */
+// 开发模式下 pnpm 的 cwd 是 apps/server；本机 Agent 的默认工作目录应该是仓库根目录
+if (isDevRuntime && !process.env.HIVE_LAUNCH_DIR) {
+  process.env.HIVE_LAUNCH_DIR = path.resolve(import.meta.dirname, "../../..");
+}
+
+function localAgentCli(): AgentCli | undefined {
+  if (isDevRuntime) {
+    return {
+      command: process.execPath,
+      args: [
+        "--import",
+        import.meta.resolve("tsx"),
+        path.resolve(import.meta.dirname, "../../../packages/ai-hive/src/cli.ts"),
+      ],
+    };
+  }
+  const cli = path.resolve(import.meta.dirname, "../cli.js");
+  return existsSync(cli) ? { command: process.execPath, args: [cli] } : undefined;
+}
+const agentCli = process.env.HIVE_LOCAL_AGENTS === "0" ? undefined : localAgentCli();
+// 本机 Agent 走回环地址连接，不受局域网 IP 变化影响；只监听了指定网卡时用那个地址
+const loopbackHost = ["0.0.0.0", "::", "localhost", "127.0.0.1"].includes(host)
+  ? "127.0.0.1"
+  : host;
+const localServerUrl = `http://${loopbackHost.includes(":") ? `[${loopbackHost}]` : loopbackHost}:${port}`;
+
 const app = await buildApp({
   databasePath,
   publicUrl,
   agentCommandPrefix,
   ...(staticDir ? { staticDir } : {}),
   ...(instanceId ? { instanceId } : {}),
+  ...(agentCli ? { localAgents: { cli: agentCli, serverUrl: localServerUrl } } : {}),
   logger: true,
 });
 await app.listen({ host, port });

@@ -8,6 +8,8 @@ import {
   type Invocation,
   type InvocationBlockReason,
   type InvocationStatus,
+  type LocalAgentAccess,
+  type LocalAgentProvider,
   type Participant,
   type AgentProvider,
   type ParticipantStatus,
@@ -46,6 +48,41 @@ type MessageRow = {
   created_at: string;
   deleted_at: string | null;
 };
+
+type LocalAgentRow = {
+  id: string;
+  provider: LocalAgentProvider;
+  name: string;
+  access: LocalAgentAccess;
+  cwd: string | null;
+  model: string | null;
+  autostart: number;
+  created_at: string;
+};
+
+export type LocalAgentConfig = {
+  id: string;
+  provider: LocalAgentProvider;
+  name: string;
+  access: LocalAgentAccess;
+  cwd: string | null;
+  model: string | null;
+  autostart: boolean;
+  createdAt: string;
+};
+
+function mapLocalAgent(row: LocalAgentRow): LocalAgentConfig {
+  return {
+    id: row.id,
+    provider: row.provider,
+    name: row.name,
+    access: row.access,
+    cwd: row.cwd,
+    model: row.model,
+    autostart: row.autostart === 1,
+    createdAt: row.created_at,
+  };
+}
 
 type RoomRow = {
   id: string;
@@ -348,6 +385,18 @@ export class HiveDatabase {
         updated_at TEXT NOT NULL,
         UNIQUE(room_id, key)
       );
+
+      CREATE TABLE IF NOT EXISTS local_agents (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL UNIQUE,
+        access TEXT NOT NULL,
+        cwd TEXT,
+        model TEXT,
+        autostart INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+      );
     `);
     const participantColumns = this.db.pragma("table_info(participants)") as Array<{
       name: string;
@@ -365,6 +414,26 @@ export class HiveDatabase {
       this.db.exec("ALTER TABLE rooms ADD COLUMN agent_turn_allowance INTEGER NOT NULL DEFAULT 0");
       this.db.exec("ALTER TABLE rooms ADD COLUMN allowance_after_seq INTEGER NOT NULL DEFAULT 0");
     }
+    // 全文索引：trigram 分词可直接按子串匹配中文；外部内容表随 messages 触发器同步（撤回会清空正文）
+    const ftsExists = this.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'")
+      .get();
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content, content='messages', content_rowid='seq', tokenize='trigram'
+      );
+      CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.seq, new.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.seq, old.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF content ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.seq, old.content);
+        INSERT INTO messages_fts(rowid, content) VALUES (new.seq, new.content);
+      END;
+    `);
+    if (!ftsExists) this.db.exec("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')");
     const roomSeedTime = new Date().toISOString();
     this.db
       .prepare("INSERT OR IGNORE INTO rooms(id, name, created_at) VALUES('general', 'general', ?)")
@@ -938,5 +1007,113 @@ export class HiveDatabase {
         .prepare("DELETE FROM whiteboard_entries WHERE room_id = ? AND id = ?")
         .run(roomId, entryId).changes > 0
     );
+  }
+
+  /* ---------- 本机 Agent 配置（只存配置，进程状态由 LocalAgentSupervisor 维护） ---------- */
+
+  listLocalAgents(): LocalAgentConfig[] {
+    const rows = this.db
+      .prepare("SELECT * FROM local_agents ORDER BY created_at ASC, rowid ASC")
+      .all() as LocalAgentRow[];
+    return rows.map(mapLocalAgent);
+  }
+
+  createLocalAgent(
+    input: Omit<LocalAgentConfig, "id" | "createdAt" | "autostart">,
+  ): LocalAgentConfig {
+    const existing = this.db
+      .prepare("SELECT id FROM local_agents WHERE name_key = ?")
+      .get(input.name.toLocaleLowerCase());
+    if (existing)
+      throw new HiveError("LOCAL_AGENT_NAME_TAKEN", `本机已有名为 ${input.name} 的 Agent。`);
+    const config: LocalAgentConfig = {
+      ...input,
+      id: randomUUID(),
+      autostart: true,
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO local_agents(id, provider, name, name_key, access, cwd, model, autostart, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        config.id,
+        config.provider,
+        config.name,
+        config.name.toLocaleLowerCase(),
+        config.access,
+        config.cwd,
+        config.model,
+        1,
+        config.createdAt,
+      );
+    return config;
+  }
+
+  /** 手动停止的 Agent 不随服务重启自动拉起，再次启动后恢复 */
+  setLocalAgentAutostart(id: string, autostart: boolean): void {
+    this.db
+      .prepare("UPDATE local_agents SET autostart = ? WHERE id = ?")
+      .run(autostart ? 1 : 0, id);
+  }
+
+  deleteLocalAgent(id: string): boolean {
+    return this.db.prepare("DELETE FROM local_agents WHERE id = ?").run(id).changes > 0;
+  }
+
+  /**
+   * 跨房间搜索公共消息（不含已撤回）。3 个字符以上走 trigram 全文索引，更短的查询退回 LIKE。
+   * 结果按时间倒序，最多 limit 条。
+   */
+  searchMessages(query: string, limit = 50): ChatMessage[] {
+    const text = query.trim();
+    if (!text) return [];
+    if ([...text].length >= 3) {
+      const phrase = `"${text.replaceAll('"', '""')}"`;
+      const rows = this.db
+        .prepare(
+          `SELECT m.* FROM messages_fts f JOIN messages m ON m.seq = f.rowid
+           WHERE messages_fts MATCH ? AND m.deleted_at IS NULL
+           ORDER BY m.seq DESC LIMIT ?`,
+        )
+        .all(phrase, limit) as MessageRow[];
+      return rows.map(mapMessage);
+    }
+    const pattern = `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM messages WHERE deleted_at IS NULL AND content LIKE ? ESCAPE '\\'
+         ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(pattern, limit) as MessageRow[];
+    return rows.map(mapMessage);
+  }
+
+  /** 跨房间列出 @ 了某人的消息（不含撤回与本人发送），按时间倒序 */
+  listMentions(username: string, limit = 100): ChatMessage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM messages
+         WHERE deleted_at IS NULL AND lower(sender_name) != lower(?)
+           AND EXISTS (SELECT 1 FROM json_each(messages.mentions) WHERE lower(value) = lower(?))
+         ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(username, username, limit) as MessageRow[];
+    return rows.map(mapMessage);
+  }
+
+  /** 跨房间列出仍需关注的调用：进行中，以及最近 7 天内失败、被拦截或结果未知的 */
+  listActiveInvocations(limit = 200): Invocation[] {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM invocations
+         WHERE status IN ('queued', 'running')
+            OR (status IN ('failed', 'blocked', 'timed_out') AND updated_at >= ?)
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(since, limit) as InvocationRow[];
+    return rows.map(mapInvocation);
   }
 }

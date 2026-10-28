@@ -18,6 +18,8 @@ type ServiceStartOptions = {
   host: string;
   port: number;
   publicUrl?: string;
+  /** 仅在关闭时记录 false，restart 时沿用 */
+  localAgents?: false;
 };
 
 type ServiceState = {
@@ -41,6 +43,7 @@ const startUsage = `
   --data-dir PATH    数据、PID 和日志目录（默认 ~/.ai-hive）
   --public-url URL   对外访问地址；反向代理或多网卡时使用
   --token TOKEN      固定 Join Token；默认首次启动时自动生成
+  --no-local-agents  关闭网页上的"在本机启动 Agent"
   --foreground       在前台运行，不启动后台进程
 `;
 
@@ -62,6 +65,8 @@ const restartUsage = `
   --data-dir PATH    数据、PID 和日志目录（默认 ~/.ai-hive）
   --public-url URL   对外访问地址
   --token TOKEN      更新固定 Join Token
+  --no-local-agents  关闭网页上的"在本机启动 Agent"
+  --local-agents     重新开启网页上的"在本机启动 Agent"
   --foreground       重启后在前台运行
 `;
 
@@ -108,6 +113,7 @@ function readState(statePath: string): ServiceState | undefined {
             host: rawStartOptions.host,
             port: rawStartOptions.port,
             ...(rawStartOptions.publicUrl ? { publicUrl: rawStartOptions.publicUrl } : {}),
+            ...(rawStartOptions.localAgents === false ? { localAgents: false as const } : {}),
           }
         : undefined;
     return {
@@ -192,6 +198,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
       "data-dir": { type: "string" },
       "public-url": { type: "string" },
       token: { type: "string" },
+      "no-local-agents": { type: "boolean", default: false },
       foreground: { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
     },
@@ -247,6 +254,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
     HIVE_INSTANCE_ID: instanceId,
     ...(parsed.values["public-url"] ? { HIVE_PUBLIC_URL: parsed.values["public-url"] } : {}),
     ...(parsed.values.token ? { HIVE_TOKEN: parsed.values.token } : {}),
+    ...(parsed.values["no-local-agents"] ? { HIVE_LOCAL_AGENTS: "0" } : {}),
   };
 
   if (parsed.values.foreground) {
@@ -263,6 +271,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
         host: parsed.values.host,
         port,
         ...(parsed.values["public-url"] ? { publicUrl: parsed.values["public-url"] } : {}),
+        ...(parsed.values["no-local-agents"] ? { localAgents: false as const } : {}),
       },
     };
     writeState(servicePaths.statePath, state);
@@ -304,6 +313,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
       host: parsed.values.host,
       port,
       ...(parsed.values["public-url"] ? { publicUrl: parsed.values["public-url"] } : {}),
+      ...(parsed.values["no-local-agents"] ? { localAgents: false as const } : {}),
     },
   };
   writeState(servicePaths.statePath, state);
@@ -378,6 +388,8 @@ export async function restartService(args = process.argv.slice(3)): Promise<void
       "data-dir": { type: "string" },
       "public-url": { type: "string" },
       token: { type: "string" },
+      "no-local-agents": { type: "boolean" },
+      "local-agents": { type: "boolean" },
       foreground: { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
     },
@@ -396,6 +408,10 @@ export async function restartService(args = process.argv.slice(3)): Promise<void
   if (parsed.values["data-dir"]) startArgs.push("--data-dir", parsed.values["data-dir"]);
   if (publicUrl) startArgs.push("--public-url", publicUrl);
   if (parsed.values.token) startArgs.push("--token", parsed.values.token);
+  const localAgentsOff = parsed.values["local-agents"]
+    ? false
+    : (parsed.values["no-local-agents"] ?? previousOptions?.localAgents === false);
+  if (localAgentsOff) startArgs.push("--no-local-agents");
   if (parsed.values.foreground) startArgs.push("--foreground");
 
   await stopService(parsed.values["data-dir"] ? ["--data-dir", parsed.values["data-dir"]] : []);

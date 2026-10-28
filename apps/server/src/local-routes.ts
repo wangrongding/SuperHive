@@ -1,0 +1,137 @@
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { createLocalAgentRequestSchema, type LocalSessionResponse } from "@ai-hive/protocol";
+import { HiveError } from "./database.js";
+import { checkLocalRequest } from "./local-access.js";
+import { listDirectories } from "./local-directories.js";
+import type { LocalAgentSupervisor } from "./local-agents.js";
+
+/**
+ * 本机 Agent 的 HTTP 接口。每个请求都要同时满足：
+ * 1. 来自 Hive Server 所在电脑（checkLocalRequest）
+ * 2. 携带本次进程启动时生成的房主 token（X-Hive-Owner），它只经 /api/local/session 交给本机页面
+ * 公开的 join token 不能用来启动进程。
+ */
+
+const OWNER_HEADER = "x-hive-owner";
+
+const ERROR_STATUS: Record<string, number> = {
+  LOCAL_AGENT_NOT_FOUND: 404,
+  LOCAL_AGENT_NAME_TAKEN: 409,
+  LOCAL_AGENT_CWD_REQUIRED: 400,
+  LOCAL_AGENT_CWD_INVALID: 400,
+  LOCAL_DIRECTORY_INVALID: 400,
+  LOCAL_DIRECTORY_NOT_FOUND: 404,
+};
+
+export function registerLocalAgentRoutes(
+  app: FastifyInstance,
+  supervisor: LocalAgentSupervisor | undefined,
+): void {
+  const ownerToken = randomBytes(32).toString("hex");
+  const ownerBuffer = Buffer.from(ownerToken);
+
+  app.get("/api/local/session", async (request): Promise<LocalSessionResponse> => {
+    if (!supervisor) return { enabled: false, reason: "本机 Agent 已在服务端关闭" };
+    const check = checkLocalRequest(request);
+    if (!check.local) return { enabled: false, reason: check.reason };
+    return { enabled: true, ownerToken };
+  });
+
+  /** 返回 true 表示已拒绝并发出了响应 */
+  function deny(request: FastifyRequest, reply: FastifyReply): boolean {
+    if (!supervisor) {
+      void reply.code(404).send({ error: "本机 Agent 已在服务端关闭。" });
+      return true;
+    }
+    const check = checkLocalRequest(request);
+    if (!check.local) {
+      void reply.code(403).send({ error: check.reason });
+      return true;
+    }
+    const provided = request.headers[OWNER_HEADER];
+    const buffer = Buffer.from(typeof provided === "string" ? provided : "");
+    if (buffer.length !== ownerBuffer.length || !timingSafeEqual(buffer, ownerBuffer)) {
+      void reply.code(401).send({ error: "缺少或错误的房主凭证，请刷新页面。" });
+      return true;
+    }
+    return false;
+  }
+
+  function fail(reply: FastifyReply, error: unknown) {
+    if (error instanceof HiveError && ERROR_STATUS[error.code]) {
+      return reply.code(ERROR_STATUS[error.code]!).send({ error: error.message, code: error.code });
+    }
+    throw error;
+  }
+
+  app.get("/api/local/providers", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    return { providers: await supervisor!.providers() };
+  });
+
+  app.get<{ Querystring: { path?: string } }>("/api/local/directories", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    try {
+      return listDirectories(request.query.path);
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  app.get("/api/local/agents", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    return { agents: supervisor!.list() };
+  });
+
+  app.post("/api/local/agents", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    const parsed = createLocalAgentRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "参数不正确。" });
+    try {
+      return reply.code(201).send({ agent: supervisor!.create(parsed.data) });
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  for (const action of ["start", "stop", "restart"] as const) {
+    app.post<{ Params: { id: string } }>(
+      `/api/local/agents/:id/${action}`,
+      async (request, reply) => {
+        if (deny(request, reply)) return reply;
+        try {
+          const id = request.params.id;
+          const agent =
+            action === "start"
+              ? supervisor!.startAgent(id)
+              : action === "stop"
+                ? await supervisor!.stop(id)
+                : await supervisor!.restart(id);
+          return { agent };
+        } catch (error) {
+          return fail(reply, error);
+        }
+      },
+    );
+  }
+
+  app.delete<{ Params: { id: string } }>("/api/local/agents/:id", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    try {
+      await supervisor!.remove(request.params.id);
+      return reply.code(204).send();
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/local/agents/:id/logs", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    try {
+      return { lines: supervisor!.logs(request.params.id) };
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+}

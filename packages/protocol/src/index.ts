@@ -308,6 +308,90 @@ export const metaResponseSchema = z.object({
   agentCommand: z.string(),
 });
 
+/* ---------- 本机 Agent（仅 Hive Server 所在电脑上的房主可用） ---------- */
+
+/** 可以由本机一键启动的 Provider */
+export const localAgentProviderSchema = z.enum([
+  "codex",
+  "claude",
+  "copilot",
+  "opencode",
+  "omp",
+  "openclaw",
+]);
+export const localAgentAccessSchema = z.enum(["read-only", "workspace", "full"]);
+export const localAgentStatusSchema = z.enum([
+  "starting",
+  "running",
+  "restarting",
+  "stopped",
+  "crashed",
+]);
+
+export const createLocalAgentRequestSchema = z.object({
+  provider: localAgentProviderSchema,
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(32)
+    .regex(/^[\p{L}\p{N}_.-]+$/u),
+  access: localAgentAccessSchema,
+  /** workspace / full 必填：本机绝对路径 */
+  cwd: z.string().trim().min(1).max(4096).optional(),
+  model: z.string().trim().min(1).max(200).optional(),
+});
+
+export const localAgentSchema = z.object({
+  id: z.string().uuid(),
+  provider: localAgentProviderSchema,
+  name: z.string(),
+  access: localAgentAccessSchema,
+  cwd: z.string().nullable(),
+  model: z.string().nullable(),
+  status: localAgentStatusSchema,
+  pid: z.number().int().nullable(),
+  startedAt: z.string().datetime().nullable(),
+  lastExitCode: z.number().int().nullable(),
+  /** 最近一次非正常退出的原因（日志尾部），便于界面直接展示 */
+  lastError: z.string().nullable(),
+  restarts: z.number().int(),
+  createdAt: z.string().datetime(),
+});
+
+export const localSessionResponseSchema = z.discriminatedUnion("enabled", [
+  z.object({ enabled: z.literal(true), ownerToken: z.string() }),
+  z.object({ enabled: z.literal(false), reason: z.string() }),
+]);
+
+export const localProviderInfoSchema = z.object({
+  provider: localAgentProviderSchema,
+  command: z.string(),
+  installed: z.boolean(),
+  version: z.string().nullable(),
+});
+
+export const localProvidersResponseSchema = z.object({
+  providers: z.array(localProviderInfoSchema),
+});
+export const localDirectoryListingSchema = z.object({
+  path: z.string(),
+  /** 已在文件系统根目录时为 null */
+  parent: z.string().nullable(),
+  entries: z.array(z.object({ name: z.string(), path: z.string() })),
+  /** 子目录过多时只返回前若干条 */
+  truncated: z.boolean(),
+  defaults: z.object({
+    /** 启动 Hive 服务时所在的目录 */
+    launch: z.string(),
+    home: z.string(),
+  }),
+});
+
+export const localAgentsResponseSchema = z.object({ agents: z.array(localAgentSchema) });
+export const localAgentResponseSchema = z.object({ agent: localAgentSchema });
+export const localAgentLogsResponseSchema = z.object({ lines: z.array(z.string()) });
+
 export type ParticipantType = z.infer<typeof participantTypeSchema>;
 export type ParticipantStatus = z.infer<typeof participantStatusSchema>;
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
@@ -324,6 +408,14 @@ export type InvocationBlockReason = z.infer<typeof invocationBlockReasonSchema>;
 export type Invocation = z.infer<typeof invocationSchema>;
 export type WhiteboardSlot = z.infer<typeof whiteboardSlotSchema>;
 export type WhiteboardEntry = z.infer<typeof whiteboardEntrySchema>;
+export type LocalAgentProvider = z.infer<typeof localAgentProviderSchema>;
+export type LocalAgentAccess = z.infer<typeof localAgentAccessSchema>;
+export type LocalAgentStatus = z.infer<typeof localAgentStatusSchema>;
+export type CreateLocalAgentRequest = z.infer<typeof createLocalAgentRequestSchema>;
+export type LocalAgent = z.infer<typeof localAgentSchema>;
+export type LocalSessionResponse = z.infer<typeof localSessionResponseSchema>;
+export type LocalProviderInfo = z.infer<typeof localProviderInfoSchema>;
+export type LocalDirectoryListing = z.infer<typeof localDirectoryListingSchema>;
 
 const mentionPattern = /@([\p{L}\p{N}_.-]{1,32})/gu;
 

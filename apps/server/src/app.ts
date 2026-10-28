@@ -28,6 +28,8 @@ import {
   type CreateMessageInput,
 } from "./database.js";
 import { createHiveMcpServer, type InboxDigest } from "./hive-mcp.js";
+import { LocalAgentSupervisor, type LocalAgentSupervisorOptions } from "./local-agents.js";
+import { registerLocalAgentRoutes } from "./local-routes.js";
 
 type Connection = {
   socket: WebSocket;
@@ -48,6 +50,14 @@ export type BuildAppOptions = {
   /** 超时扫描使用的时钟；测试用来模拟时间流逝 */
   now?: () => number;
   staticDir?: string;
+  /**
+   * 本机 Agent：允许本机房主在网页上一键拉起 `ai-hive join` 子进程。
+   * 省略即关闭（测试默认关闭），由 index.ts 按运行方式注入 CLI 路径。
+   */
+  localAgents?: Omit<
+    LocalAgentSupervisorOptions,
+    "database" | "joinToken" | "isAgentOnline" | "isNameInUse"
+  >;
 };
 
 function participantKey(roomId: string, username: string): string {
@@ -79,6 +89,14 @@ const roomParamsSchema = z.object({
 const messagesQuerySchema = z.object({
   afterSeq: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(500).default(200),
+});
+const searchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+const mentionsQuerySchema = z.object({
+  username: z.string().trim().min(1).max(32),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
 });
 const roomsQuerySchema = z.object({
   includeArchived: z
@@ -151,14 +169,38 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     setStatus(connection, "offline");
   }
 
+  /** 任意房间里是否有这个名字的在线成员；agentsOnly 时只看 Agent */
+  function onlineAnywhere(username: string, agentsOnly: boolean): boolean {
+    const suffix = `:${username.toLocaleLowerCase()}`;
+    for (const [key, set] of onlineByName) {
+      if (!key.endsWith(suffix)) continue;
+      for (const connection of set) {
+        if (!agentsOnly || connection.participant?.type === "agent") return true;
+      }
+    }
+    return false;
+  }
+
+  const localAgents = options.localAgents
+    ? new LocalAgentSupervisor({
+        ...options.localAgents,
+        database,
+        joinToken,
+        isAgentOnline: (name) => onlineAnywhere(name, true),
+        isNameInUse: (name) => onlineAnywhere(name, false),
+      })
+    : undefined;
+  registerLocalAgentRoutes(app, localAgents);
+
   function onlineAgent(roomId: string, username: string): Connection | undefined {
     return [...(onlineByName.get(participantKey(roomId, username)) ?? [])].find(
       (connection) => connection.participant?.type === "agent",
     );
   }
 
+  // 推送给所有在线客户端：侧栏的跨房间"Agent 任务"计数需要实时更新，各房间视图按 roomId 自行过滤
   function emitInvocation(invocation: Invocation): Invocation {
-    broadcast(invocation.roomId, { type: "invocation.updated", invocation });
+    broadcastAll({ type: "invocation.updated", invocation });
     return invocation;
   }
 
@@ -573,6 +615,40 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     };
   });
 
+  app.get<{ Querystring: { q?: string; limit?: string } }>(
+    "/api/search",
+    async (request, reply) => {
+      const query = searchQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: "Invalid search query." });
+      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+      return { messages: database.searchMessages(query.data.q, query.data.limit) };
+    },
+  );
+
+  app.get<{ Querystring: { username?: string; limit?: string } }>(
+    "/api/mentions",
+    async (request, reply) => {
+      const query = mentionsQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: "Invalid mentions query." });
+      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+      return { messages: database.listMentions(query.data.username, query.data.limit) };
+    },
+  );
+
+  app.get("/api/invocations", async (request, reply) => {
+    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+    const invocations = database.listActiveInvocations();
+    // 附带触发消息，任务列表无需逐条再查
+    const messages = invocations
+      .map((invocation) => database.getMessage(invocation.messageId))
+      .filter((message): message is ChatMessage => Boolean(message && !message.deletedAt));
+    // 列表需要区分"排队中"与"等待上线"，附带各调用目标 Agent 当前是否在线
+    const onlineInvocationIds = invocations
+      .filter((invocation) => onlineAgent(invocation.roomId, invocation.agentName))
+      .map((invocation) => invocation.id);
+    return { invocations, messages, onlineInvocationIds };
+  });
+
   app.get<{ Params: { roomId: string } }>(
     "/api/rooms/:roomId/whiteboard",
     async (request, reply) => {
@@ -870,8 +946,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const invocationTimer = setInterval(sweepStaleInvocations, options.invocationSweepMs ?? 30_000);
   invocationTimer.unref();
 
+  app.addHook("onReady", async () => {
+    localAgents?.start();
+  });
+
   app.addHook("onClose", async () => {
     shuttingDown = true;
+    // 先让本机 Agent 正常离线，再关闭连接与数据库
+    await localAgents?.shutdown();
     clearInterval(heartbeatTimer);
     clearInterval(invocationTimer);
     for (const connection of connections) {

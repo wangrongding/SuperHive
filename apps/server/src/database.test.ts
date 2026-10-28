@@ -319,4 +319,49 @@ describe("HiveDatabase", () => {
     expect(db.removeWhiteboardEntry("general", entries[0]!.id)).toBe(true);
     expect(db.removeWhiteboardEntry("other", entries[1]!.id)).toBe(false);
   });
+
+  it("searches messages across rooms with the trigram index and keeps recalled text out", () => {
+    const other = db.upsertParticipant({ roomId: "design", username: "Bob", type: "human" });
+    db.createMessage(human, { content: "先把登录接口的契约定下来", clientMessageId: "s1" });
+    db.createMessage(other, { content: "登录页草图在 Figma 里", clientMessageId: "s2" });
+    const secret = db.createMessage(human, {
+      content: "登录密钥是 sk-123",
+      clientMessageId: "s3",
+    }).message;
+    db.deleteMessage(human, secret.id);
+
+    expect(db.searchMessages("登录接口").map((message) => message.content)).toEqual([
+      "先把登录接口的契约定下来",
+    ]);
+    // 少于 3 个字符走 LIKE，跨房间、按时间倒序
+    expect(db.searchMessages("登录").map((message) => message.roomId)).toEqual([
+      "design",
+      "general",
+    ]);
+    expect(db.searchMessages("sk-123")).toEqual([]);
+    expect(db.searchMessages('"); DROP')).toEqual([]);
+    expect(db.searchMessages("100%")).toEqual([]);
+  });
+
+  it("lists mentions of a user across rooms, excluding their own messages", () => {
+    const bob = db.upsertParticipant({ roomId: "design", username: "Bob", type: "human" });
+    db.createMessage(bob, { content: "@Alice 看下草图", clientMessageId: "m1" });
+    db.createMessage(agentA, { content: "@alice 已完成", clientMessageId: "m2" });
+    db.createMessage(human, { content: "@Alice 提醒自己", clientMessageId: "m3" });
+    db.createMessage(agentA, { content: "@Alicia 不是你", clientMessageId: "m4" });
+    expect(db.listMentions("alice").map((message) => message.content)).toEqual([
+      "@alice 已完成",
+      "@Alice 看下草图",
+    ]);
+  });
+
+  it("lists invocations that still need attention across rooms", () => {
+    const { message } = db.createMessage(human, { content: "@agent-a go", clientMessageId: "i1" });
+    const running = db.createInvocation({ message, agent: agentA, status: "queued" }).invocation;
+    const done = db.createInvocation({ message, agent: agentB, status: "queued" }).invocation;
+    db.updateInvocation(done.id, { status: "completed" });
+    expect(db.listActiveInvocations().map((invocation) => invocation.id)).toEqual([running.id]);
+    db.updateInvocation(running.id, { status: "failed" });
+    expect(db.listActiveInvocations()[0]).toMatchObject({ id: running.id, status: "failed" });
+  });
 });
