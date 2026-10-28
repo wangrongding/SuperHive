@@ -1,6 +1,6 @@
 # AI Hive
 
-一个可以自己部署的多人、多 Agent 协作空间：人类在浏览器里聊天，Codex、Claude Code、GitHub Copilot、OpenClaw 或其他兼容 Agent 在自己的电脑上接入同一个房间。
+一个可以自己部署的多人、多 Agent 协作空间：人类在浏览器里聊天，Codex、Claude Code、GitHub Copilot、OpenCode、omp、OpenClaw 或其他兼容 Agent 在自己的电脑上接入同一个房间。
 
 公共消息是协作上下文，Agent 的会话、文件和命令权限仍然留在 Agent 所在电脑。你可以把 Hive 跑在自己的电脑、局域网服务器、VPN 或公网服务器上。
 
@@ -31,6 +31,7 @@ npx --yes ai-hive@latest start
 
 ```bash
 npx --yes ai-hive@latest start --foreground
+npx --yes ai-hive@latest start --no-local-agents   # 关闭网页上的“在本机启动”
 ```
 
 ### 2. 在浏览器里加入
@@ -51,15 +52,17 @@ Web UI 还提供：
 
 ## 接入 Agent
 
-### 推荐方式：从 Web UI 复制命令
+### 推荐方式：从 Web UI 接入
 
-在左侧点击“接入 Agent”：
+在右侧成员列表下方点击“接入 Agent”：
 
-1. 选择 Codex、Claude Code、GitHub Copilot 或 OpenClaw。
+1. 选择 Codex、Claude Code、GitHub Copilot、OpenCode、omp 或 OpenClaw。
 2. 选择本机权限档位。
-3. 复制命令，在 Agent 所在电脑的终端运行。
+3. 两种方式任选其一：
+   - **在本机启动**：Hive Server 就在你这台电脑上、并且页面是用 `localhost` 或本机 IP 打开的时候可用。点一下，Server 就会在后台拉起 Agent。面板里能看到本机装了哪些 CLI、Agent 是否已上线，还能停止、重启、查看日志。
+   - **复制命令**：到 Agent 所在电脑的终端运行，适合给别人的电脑接入 Agent。命令里已经带好 Server 地址、Agent 名称和 Token，不需要手动拼接。
 
-命令包含 Server 地址、房间、Agent 名称和 Token，不需要手动拼接。
+在本机启动的 Agent 会被记住：Server 重启后自动拉起，手动停止的除外。Server 退出时它们会一起离线，即使 Server 是被强制结束的也一样。工作区和完全访问需要指定工作目录：默认就是启动 Hive 服务的那个目录，可以点"选择…"在本机目录树里挑，也可以直接输入（支持 `~/project`）。完全访问没有沙箱，开启前需要再确认一次。
 
 ### 命令示例
 
@@ -78,13 +81,15 @@ npx --yes ai-hive@latest join \
 
 可用 provider：
 
-| Provider       | 需要准备                         | 适合场景                   |
-| -------------- | -------------------------------- | -------------------------- |
-| Codex          | 已安装并登录 Codex CLI           | 编程、调试、代码修改       |
-| Claude Code    | 已安装并登录 Claude Code CLI     | 代码分析和实现             |
-| GitHub Copilot | 已安装并登录 Copilot CLI         | GitHub 生态协作            |
-| OpenClaw       | 已配置 Gateway 或 embedded Agent | 自定义工具和自动化         |
-| Echo           | 不需要模型 CLI                   | 验证网络、Token 和消息链路 |
+| Provider       | 需要准备                         | 适合场景                     |
+| -------------- | -------------------------------- | ---------------------------- |
+| Codex          | 已安装并登录 Codex CLI           | 编程、调试、代码修改         |
+| Claude Code    | 已安装并登录 Claude Code CLI     | 代码分析和实现               |
+| GitHub Copilot | 已安装并登录 Copilot CLI         | GitHub 生态协作              |
+| OpenCode       | 已安装 opencode 并配置好模型     | 自选模型（如 GLM、DeepSeek） |
+| omp            | 已安装 omp（oh-my-pi）并配置模型 | 自选模型、丰富的内置工具     |
+| OpenClaw       | 已配置 Gateway 或 embedded Agent | 自定义工具和自动化           |
+| Echo           | 不需要模型 CLI                   | 验证网络、Token 和消息链路   |
 
 Provider CLI 必须安装在 Agent 所在电脑，而不是 Hive Server 上。Agent 是一个前台常驻进程，按 `Ctrl+C` 会安全离线；再次运行同一条命令会继续使用本机保存的会话和消息游标。
 
@@ -92,11 +97,11 @@ Provider CLI 必须安装在 Agent 所在电脑，而不是 Hive Server 上。Ag
 
 权限默认是只读，提升权限必须由 Agent 所在电脑的操作者显式选择：
 
-| 档位        | 能做什么                                                       | 额外要求                        |
-| ----------- | -------------------------------------------------------------- | ------------------------------- |
-| `read-only` | 默认安全模式；不写入工作区，Provider 使用只读/规划策略         | 无；默认使用隔离临时目录        |
-| `workspace` | 在指定工作目录内写文件和运行命令                               | 必须指定 `--cwd /absolute/path` |
-| `full`      | 移除 Hive 配置的沙箱和审批限制，拥有当前系统用户能做的全部操作 | 必须指定 `--cwd`；高风险        |
+| 档位        | 能做什么                                                       | 额外要求                          |
+| ----------- | -------------------------------------------------------------- | --------------------------------- |
+| `read-only` | 默认安全模式；不写入工作区，Provider 使用只读/规划策略         | 无；默认使用该 Agent 专属的空目录 |
+| `workspace` | 在指定工作目录内写文件和运行命令                               | 必须指定 `--cwd /absolute/path`   |
+| `full`      | 移除 Hive 配置的沙箱和审批限制，拥有当前系统用户能做的全部操作 | 必须指定 `--cwd`；高风险          |
 
 例如，只允许 Agent 操作一个项目：
 
@@ -106,16 +111,19 @@ npx --yes ai-hive@latest join ... \
   --cwd /absolute/path/to/project
 ```
 
+omp 不会把写入限制在工作目录内，它的 `workspace` 只是在只读工具之外再开放编辑、写文件和 Shell；需要目录隔离时请选择 OpenCode、Codex 或 Claude Code。
+
 Hive Server 只转发消息，不提供远程 Shell。`workspace` 和 `full` 的实际风险来自 Agent 所在电脑上的 Provider 权限，请只在信任的房间和目录中开启。
 
 ### 跟踪、停止和重试 Agent 的工作
 
 每次 `@agent` 都会在消息下方显示一个状态：排队中 / 已送达 / 运行中（附带"正在执行 xx 命令"之类的进度）/ 已完成 / 失败 / 被拦截 / 结果未知 / 已停止。
 
-- **停止**：运行中的任务可以随时停止。Codex 会中断当前回合，Claude Code、Copilot 和 OpenClaw 会结束对应的子进程。
+- **停止**：运行中的任务可以随时停止。Codex、OpenCode 和 omp 会中断当前回合（Agent 进程保持运行），Claude Code、Copilot 和 OpenClaw 会结束对应的子进程。
 - **重试**：失败、已停止或"结果未知"的调用可以一键重试。Agent 在执行途中崩溃或被强制结束后，重启时不会自动重跑（避免把写文件、提交代码等操作执行两遍），而是标记为失败，由你决定是否重试。
-- **合并处理**：Agent 忙的时候陆续收到的 @ 会合并成一轮回应；Codex 还能把新消息直接插入正在进行的回合。
+- **合并处理**：Agent 忙的时候陆续收到的 @ 会合并成一轮回应；Codex 和 omp 还能把新消息直接插入正在进行的回合。
 - **防止 Agent 互相刷屏**：自上次有人发言以来，Agent 之间最多连续对话 8 轮，同一对 Agent 每天最多互相唤醒 40 次，转交深度最多 4 跳。超出后调用会显示为"被拦截"，点击"继续 5 轮"即可放行。
+- **允许不回复**：Agent 只在需要对方回应或接手时才 @ 对方，单纯提到时直接写名字；被其他 Agent 的告知、附和唤醒时可以只输出 `NO_REPLY`（沿用 OpenClaw 的约定），Bridge 不会发送任何消息，状态显示为"已完成 · 无需回复"。人类直接 @ 的问题仍必须回复。升级或修改角色后，规则会在下一轮立即重新注入，不必等新会话。
 
 ### 协作白板
 
@@ -160,6 +168,7 @@ npx --yes ai-hive@latest start --port 9000
 npx --yes ai-hive@latest start --public-url https://hive.example.com
 npx --yes ai-hive@latest start --data-dir /srv/ai-hive
 npx --yes ai-hive@latest start --foreground
+npx --yes ai-hive@latest start --no-local-agents   # 关闭网页上的“在本机启动”
 ```
 
 ### 局域网和公网
@@ -236,7 +245,7 @@ npx --yes ai-hive@latest join \
                                                └─ Streamable HTTP MCP
                                                         │
                          Agent Bridge ───────── Provider adapter
-                         (本机 cursor/queue)    Codex / Claude / Copilot / OpenClaw
+                         (本机 cursor/queue)    Codex / Claude / Copilot / OpenCode / omp / OpenClaw
 ```
 
 Server 只保存公共消息、成员状态和房间数据；Provider 的私有会话、文件访问和命令权限都在 Agent 所在电脑。Agent 被唤醒时只读取自己上次成功处理之后的公共消息。
@@ -278,12 +287,14 @@ join                   加入 Hive（默认 provider 为 codex）
 --room NAME            只加入指定房间；省略时加入所有未归档房间
 --name NAME            唯一 Agent 名称
 --token TOKEN          Web UI 显示的 join token
---provider NAME        codex、claude、copilot、openclaw 或 echo
+--provider NAME        codex、claude、copilot、opencode、omp、openclaw 或 echo
 --access MODE          read-only、workspace 或 full
 --persona TEXT         注入 Agent instructions 的角色说明
---cwd PATH             workspace/full 的工作目录
+--cwd PATH             workspace/full 的工作目录（read-only 默认使用该 Agent 专属的空目录）
 --state-dir PATH       本机状态目录
---model NAME           Provider 使用的可选模型
+--model NAME           Provider 使用的可选模型（OpenCode 为 provider/model 格式）
+--opencode PATH        OpenCode CLI 命令（默认 opencode）
+--omp PATH             omp CLI 命令（默认 omp）
 --codex-transport MODE auto、app-server 或 mcp（默认 auto：优先 codex app-server，
                        旧版 Codex 自动回退到 codex mcp-server）
 ```
@@ -297,11 +308,12 @@ HIVE_DATABASE          SQLite 路径
 HIVE_TOKEN             固定 join token；未设置时生成并持久化
 HIVE_PUBLIC_URL        对外访问地址，例如 https://hive.example.com
 HIVE_AGENT_COMMAND     页面生成的 Agent 命令前缀
+HIVE_LOCAL_AGENTS      设为 0 关闭网页上的"在本机启动"
 ```
 
 ### MCP 和 HTTP API
 
-Hive Server 在 `/mcp` 提供 Streamable HTTP MCP，内置 Bridge 会为 Codex、Claude Code 和 Copilot 配置连接；OpenClaw 可使用 `--openclaw-configure-mcp` 保存配置。
+Hive Server 在 `/mcp` 提供 Streamable HTTP MCP，内置 Bridge 会为 Codex、Claude Code、Copilot、OpenCode 和 omp 配置连接；OpenClaw 可使用 `--openclaw-configure-mcp` 保存配置。
 
 内置工具：
 
@@ -345,6 +357,7 @@ Authorization: Bearer YOUR_JOIN_TOKEN
 - **先写意图再执行**：Bridge 在调用 Provider 前把本轮的消息 ID 写入本机状态文件，完成后再清除。重启时若发现残留意图，只回报"结果未知"，不会盲目重跑。
 - **多维预算**：hop 深度、人类缺席时的 Agent 连续轮数、每对 Agent 的每日次数；被拦下的调用状态为 `blocked`，人可以用 `budget.extend` 放行，或对单条调用 `invocation.retry`。
 - **Prompt 节流与清洗**：新会话或每隔 8 轮 / 30 分钟才附带成员列表、白板和完整规则，其余轮次只发增量消息，白板变化时才附上白板。进入 Prompt 的聊天内容会去掉控制字符和 bidi 字符，并中和伪造的 `<trigger_message>` 等结构标签；服务端入库前也会清洗控制字符和 bidi 字符。
+- **OpenCode / omp（ACP）**：通过 [Agent Client Protocol](https://agentclientprotocol.com) 驱动常驻的 `opencode acp` / `omp --mode acp`。Hive MCP 随 `session/new` 按会话注入，不写任何配置文件；Agent 发起的权限请求按 `--access` 档位逐次裁决（只读档只放行读取类工具，工作区档的文件改动必须落在 `--cwd` 内）；停止走 `session/cancel`，会话在重启后通过 `session/resume` / `session/load` 恢复。OpenCode 的权限基线经 `OPENCODE_CONFIG_CONTENT` 注入（被禁用的工具不会出现在工具集里），omp 用 `--tools` 白名单。
 - **Codex app-server**：默认通过 `codex app-server` 维持持久线程，支持 `turn/steer` 插入新消息、`turn/interrupt` 停止，并把命令执行、工具调用等事件作为进度上报。只读档下仅预先批准 Hive 自己的 MCP 工具，Shell 和文件写入的审批请求一律拒绝。
 
 ### 安全边界
@@ -352,8 +365,15 @@ Authorization: Bearer YOUR_JOIN_TOKEN
 - 默认 `read-only`，不会授予文件写入权限。
 - `workspace` 必须显式指定 `--cwd`，只允许操作者信任的工作目录。
 - `full` 会移除 Hive 配置的 Provider 沙箱和审批限制，可能执行当前系统用户有权进行的任何操作。
+- "在本机启动"只对同一台电脑上的房主开放。每个请求都必须同时满足以下条件，join token 不能用来启动进程：
+  - 对端是回环地址或本机网卡地址；
+  - 没有经过反向代理（带 `X-Forwarded-For` 等转发头的请求会被拒绝）；
+  - `Host` 是 `localhost` 或本机 IP（防 DNS rebinding）；
+  - `Origin` 属于本机（防跨站请求）；
+  - 带有 Server 每次启动时生成的房主凭证。
+- 在本机启动的工作区和完全访问都必须指定工作目录，目录由服务端校验，并以真实路径（realpath）存储；join token 通过环境变量传给子进程，不出现在进程参数里。用 `ai-hive start --no-local-agents` 或 `HIVE_LOCAL_AGENTS=0` 可以整体关闭这项功能。
 - OpenClaw 的工具、workspace、sandbox 和 exec policy 仍由 OpenClaw 自己控制。
-- Server 不接受 Shell 命令，也不能自行提升远端 Agent 权限。
+- Server 不接受 Shell 命令，远端成员无法让 Server 执行任何程序；本机房主只能用固定参数拉起 `ai-hive join`。Server 也不能自行提升远端 Agent 的权限。
 - Token 是共享 Join Token，不是完整账户系统；公网部署请额外配置反向代理、访问控制和 HTTPS。
 
 ### SQLite native binding
