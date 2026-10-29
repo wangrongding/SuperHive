@@ -296,6 +296,11 @@
     color var(--duration-fast);
 }
 
+.provider-monogram .provider-logo {
+  width: 20px;
+  height: 20px;
+}
+
 .provider-selector button.active .provider-monogram {
   background: var(--button-primary-bg);
   color: var(--button-primary-text);

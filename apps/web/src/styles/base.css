@@ -192,6 +192,14 @@ kbd {
   letter-spacing: 0.02em;
 }
 
+/* Agent 头像里的厂商标识：按头像尺寸等比缩放，单色标识跟随文字色 */
+.provider-logo {
+  display: block;
+  width: 60%;
+  height: 60%;
+  flex: 0 0 auto;
+}
+
 /* 在线状态点 */
 .status-dot {
   width: 8px;

@@ -74,6 +74,7 @@ function MessageMarkdown({ content }: { content: string }) {
 /** 自绘滚动动画单帧最多推进的时间：约两帧，主线程卡顿时动画放慢而不是跳跃 */
 const MAX_FRAME_STEP_MS = 32;
 import { copyTextToClipboard } from "./clipboard";
+import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
 
 const storedUsernameKey = "ai-hive.username";
@@ -560,6 +561,13 @@ function avatarHue(name: string): number {
   return hash;
 }
 
+/** 头像内容：Agent 显示厂商标识（未知厂商回退为 "AI"），人类显示名字首字母 */
+function AvatarGlyph({ type, name, provider }: { type: string; name: string; provider?: string }) {
+  if (type !== "agent") return <>{name.slice(0, 1).toUpperCase()}</>;
+  const logo = providerLogoName(provider);
+  return logo ? <ProviderLogo provider={logo} /> : <>AI</>;
+}
+
 function avatarHueStyle(name: string): CSSProperties {
   return { "--avatar-hue": avatarHue(name) } as CSSProperties;
 }
@@ -677,6 +685,16 @@ export function App() {
   const [readSeqs, setReadSeqs] = useState<Record<string, number>>({});
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
+  // 消息本身不带 provider：按发送者名到成员表里查，离开房间的 Agent 回退为 "AI"
+  const agentProviderByName = useMemo(
+    () =>
+      new Map(
+        participants
+          .filter((participant) => participant.type === "agent")
+          .map((participant) => [participant.username.toLocaleLowerCase(), participant.provider]),
+      ),
+    [participants],
+  );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // 收到房间快照之前为 false：区分"还在加载"和"房间真的是空的"，避免欢迎页闪现
   const [messagesLoaded, setMessagesLoaded] = useState(false);
@@ -2511,9 +2529,13 @@ export function App() {
                           </span>
                         ) : (
                           <span className={`avatar ${message.senderType}`} aria-hidden="true">
-                            {message.senderType === "agent"
-                              ? "AI"
-                              : message.senderName.slice(0, 1).toUpperCase()}
+                            <AvatarGlyph
+                              type={message.senderType}
+                              name={message.senderName}
+                              provider={agentProviderByName.get(
+                                message.senderName.toLocaleLowerCase(),
+                              )}
+                            />
                           </span>
                         )}
                         <div className="message-content">
@@ -2736,9 +2758,11 @@ export function App() {
                     }
                   >
                     <span className={`share-card-avatar ${message.senderType}`}>
-                      {message.senderType === "agent"
-                        ? "AI"
-                        : message.senderName.slice(0, 1).toUpperCase()}
+                      <AvatarGlyph
+                        type={message.senderType}
+                        name={message.senderName}
+                        provider={agentProviderByName.get(message.senderName.toLocaleLowerCase())}
+                      />
                     </span>
                     <div className="share-card-body">
                       <header>
@@ -2812,9 +2836,11 @@ export function App() {
                           }
                           aria-hidden="true"
                         >
-                          {participant.type === "agent"
-                            ? "AI"
-                            : participant.username.slice(0, 1).toUpperCase()}
+                          <AvatarGlyph
+                            type={participant.type}
+                            name={participant.username}
+                            provider={participant.provider}
+                          />
                         </span>
                         <span className="mention-member-copy">
                           <strong>@{participant.username}</strong>
@@ -3106,9 +3132,11 @@ export function App() {
                       }
                       aria-hidden="true"
                     >
-                      {participant.type === "agent"
-                        ? "AI"
-                        : participant.username.slice(0, 1).toUpperCase()}
+                      <AvatarGlyph
+                        type={participant.type}
+                        name={participant.username}
+                        provider={participant.provider}
+                      />
                     </span>
                     <span className="member-copy">
                       <strong>
@@ -3145,9 +3173,11 @@ export function App() {
                       }
                       aria-hidden="true"
                     >
-                      {participant.type === "agent"
-                        ? "AI"
-                        : participant.username.slice(0, 1).toUpperCase()}
+                      <AvatarGlyph
+                        type={participant.type}
+                        name={participant.username}
+                        provider={participant.provider}
+                      />
                     </span>
                     <span className="member-copy">
                       <strong>{participant.username}</strong>
@@ -3344,7 +3374,7 @@ export function App() {
                       key={provider}
                     >
                       <span className="provider-monogram" aria-hidden="true">
-                        {agentProviderLabel(provider).slice(0, 2)}
+                        <ProviderLogo provider={provider} />
                       </span>
                       <span className="provider-copy">
                         <strong>{agentProviderLabel(provider)}</strong>
