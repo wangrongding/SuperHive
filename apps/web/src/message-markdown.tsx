@@ -5,7 +5,8 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { copyTextToClipboard } from "./clipboard";
 
-const mentionPattern = /(?<![\p{L}\p{N}_])(@[\p{L}\p{N}_.-]+)/gu;
+// @ 前紧贴 ASCII 字母数字时是邮箱，不高亮；中文后直接 @ 与服务端一样算提及
+const mentionPattern = /(?<![A-Za-z0-9_.])(@[\p{L}\p{N}_.-]+)/gu;
 
 interface MdNode {
   type: string;

@@ -29,6 +29,9 @@ describe("mention autocomplete", () => {
     expect(findMentionContext("hello @", 7)).toEqual({ start: 6, end: 7, query: "" });
     expect(findMentionContext("hello @fro", 10)).toEqual({ start: 6, end: 10, query: "fro" });
     expect(findMentionContext("mail a@b", 8)).toBeUndefined();
+    // 中文后不用先打空格
+    expect(findMentionContext("你好@", 3)).toEqual({ start: 2, end: 3, query: "" });
+    expect(findMentionContext("请@rd", 4)).toEqual({ start: 1, end: 4, query: "rd" });
     expect(findMentionContext("@agent done", 11)).toBeUndefined();
   });
 
@@ -66,5 +69,6 @@ describe("draft mention highlighting", () => {
     expect(draftMentions("hi @Bob ", "bob")).toBe(true);
     expect(draftMentions("hi @bobby ", "bob")).toBe(false);
     expect(draftMentions("mail a@bob.com", "bob.com")).toBe(false);
+    expect(draftMentions("你好@Bob 看下", "bob")).toBe(true);
   });
 });

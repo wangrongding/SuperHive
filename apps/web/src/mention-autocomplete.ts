@@ -7,6 +7,11 @@ export type MentionContext = {
 };
 
 const usernameCharacter = /[\p{L}\p{N}_.-]/u;
+/**
+ * @ 紧贴在这些字符后面时不当作提及（如邮箱 a@b.com）。只排除 ASCII 字母数字：
+ * 中文正文里习惯直接写「你好@rd-claude」，服务端也会照常唤醒，输入框和高亮要与之一致。
+ */
+const emailLocalCharacter = /[A-Za-z0-9_.]/;
 
 export function findMentionContext(value: string, cursor: number): MentionContext | undefined {
   const safeCursor = Math.max(0, Math.min(cursor, value.length));
@@ -15,7 +20,7 @@ export function findMentionContext(value: string, cursor: number): MentionContex
   if (atIndex < 0) return undefined;
 
   const characterBeforeAt = value[atIndex - 1];
-  if (characterBeforeAt && usernameCharacter.test(characterBeforeAt)) return undefined;
+  if (characterBeforeAt && emailLocalCharacter.test(characterBeforeAt)) return undefined;
 
   const query = beforeCursor.slice(atIndex + 1);
   if (query.length > 32 || [...query].some((character) => !usernameCharacter.test(character))) {
@@ -63,8 +68,8 @@ export function applyMention(
   };
 }
 
-// 与消息正文的高亮规则一致：@ 前不能紧贴用户名字符
-const mentionTokenPattern = /(?<![\p{L}\p{N}_])@[\p{L}\p{N}_.-]+/gu;
+// 与消息正文的高亮规则一致：@ 前不能紧贴 ASCII 字母数字（邮箱），中文后可以直接 @
+const mentionTokenPattern = /(?<![A-Za-z0-9_.])@[\p{L}\p{N}_.-]+/gu;
 
 export type DraftSegment = { text: string; mention: boolean };
 
