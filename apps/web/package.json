@@ -21,7 +21,7 @@
     "vite": "latest"
   },
   "devDependencies": {
-    "@ai-ins/vite": "^0.4.8",
+    "@ai-ins/vite": "^1.0.7",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "latest",

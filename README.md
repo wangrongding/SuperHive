@@ -274,7 +274,7 @@ pnpm test
 pnpm build
 ```
 
-开发环境接入了 `ai-ins`：按住 macOS `Option` 或 Windows/Linux `Alt` 点击 DOM 元素，可以定位对应源码。生产构建不会注入该面板。
+开发环境接入了 `ai-ins`：按住 macOS `Option` 或 Windows/Linux `Alt` 点选 DOM 元素，写下需求后会连同源码位置交给本机的 Agent CLI（Codex、Claude Code 等）直接改代码，热更新后即可看到结果。生产构建不会注入该面板。
 
 ### CLI 参数
 

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- 与侧边栏 HiveLogo 同一图形；线宽加粗以适配 16px 标签页图标 -->
+  <style>
+    .mark { color: #0d0d0d; }
+    @media (prefers-color-scheme: dark) {
+      .mark { color: #ececec; }
+    }
+  </style>
+  <g class="mark" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round">
+    <path d="m24 3 18 10.5v21L24 45 6 34.5v-21L24 3Z" />
+    <path d="m24 12 10 6v12l-10 6-10-6V18l10-6Z" opacity="0.45" />
+    <circle cx="24" cy="24" r="3.5" fill="currentColor" stroke="none" />
+  </g>
+</svg>
