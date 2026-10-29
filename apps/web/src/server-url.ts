@@ -9,3 +9,13 @@ export function resolveServerBase(input: {
   if (input.development) return `${input.protocol}//${input.hostname}:8787`;
   return input.origin;
 }
+
+/** Dev HTTP and WebSocket must use the same reachable endpoint, not a startup-time LAN IP. */
+export function resolveWebSocketUrl(input: {
+  serverBase: string;
+  development: boolean;
+  advertisedUrl: string;
+}): string {
+  if (!input.development) return input.advertisedUrl;
+  return `${input.serverBase.replace(/\/$/, "").replace(/^http/, "ws")}/ws`;
+}

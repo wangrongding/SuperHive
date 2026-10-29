@@ -200,6 +200,28 @@ describe("HiveDatabase", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("keeps an Agent's MCP inbox cursor across a database restart", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "hive-db-inbox-"));
+    const filename = path.join(directory, "hive.sqlite");
+    const first = new HiveDatabase(filename);
+    const agent = first.upsertParticipant({ roomId: "general", username: "helper", type: "agent" });
+    expect(first.getInboxCursor(agent.id)).toBeUndefined();
+    first.setInboxCursor(agent.id, 42);
+    first.close();
+
+    // 重连时按房间 + 用户名复用同一个参与者 id，游标随之找回
+    const second = new HiveDatabase(filename);
+    const rejoined = second.upsertParticipant({
+      roomId: "general",
+      username: "helper",
+      type: "agent",
+    });
+    expect(rejoined.id).toBe(agent.id);
+    expect(second.getInboxCursor(rejoined.id)).toBe(42);
+    second.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("seeds the general room and registers implicit rooms from existing data", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "hive-db-rooms-"));
     const filename = path.join(directory, "hive.sqlite");

@@ -691,30 +691,227 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
     const cancelled = invocationOf(
       await alice.next((event) => event.type === "invocation.updated"),
     );
-    expect(cancelled).toMatchObject({ status: "cancelled", detail: "Alice 已停止" });
+    expect(cancelled).toMatchObject({
+      status: "cancelling",
+      detail: "Alice 已请求停止，等待 helper 确认",
+    });
 
     const { peer: back } = await join("helper", "agent");
+    await back.next((event) => event.type === "agent.cancel");
+    back.send({ type: "invocation.report", messageId: queued.messageId, status: "cancelled" });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "cancelled",
+    );
     alice.send({ type: "invocation.retry", invocationId: queued.id });
     const retried = invocationOf(await alice.next((event) => event.type === "invocation.updated"));
     expect(retried).toMatchObject({ status: "queued", attempts: 2 });
     const redelivered = await back.next((event) => event.type === "agent.mentioned");
     expect(redelivered.type === "agent.mentioned" && redelivered.retry).toBe(true);
 
-    // 运行中被停止：服务端立即给出终态并通知 Agent 中断
+    // 运行中被停止：进入 cancelling 并通知 Agent 中断，确认后才是终态
     back.send({ type: "invocation.report", messageId: queued.messageId, status: "running" });
     await alice.next((event) => event.type === "invocation.updated");
     alice.send({ type: "invocation.cancel", invocationId: queued.id });
     const cancel = await back.next((event) => event.type === "agent.cancel");
     expect(cancel.type === "agent.cancel" && cancel.messageId).toBe(queued.messageId);
+    expect(
+      invocationOf(await alice.next((event) => event.type === "invocation.updated")),
+    ).toMatchObject({ status: "cancelling" });
+    back.send({ type: "invocation.report", messageId: queued.messageId, status: "cancelled" });
+    expect(
+      invocationOf(await alice.next((event) => event.type === "invocation.updated")),
+    ).toMatchObject({ status: "cancelled", detail: "helper 已确认停止" });
     // 迟到的 completed 不会覆盖终态
     back.send({ type: "invocation.report", messageId: queued.messageId, status: "completed" });
-    await alice.next((event) => event.type === "invocation.updated");
     await expect(alice.next((event) => event.type === "invocation.updated", 200)).rejects.toThrow();
 
     // Agent 不能管理调用，人不能伪造回报
     back.send({ type: "invocation.retry", invocationId: queued.id });
     const forbidden = await back.next((event) => event.type === "error");
     expect(forbidden.type === "error" && forbidden.code).toBe("FORBIDDEN");
+  });
+
+  it("keeps a started run cancelling until the agent confirms and refuses retries meanwhile", async () => {
+    const { join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agent } = await join("helper", "agent");
+    alice.send({ type: "message.send", clientMessageId: "m1", content: "@helper 长任务" });
+    const mention = await agent.next((event) => event.type === "agent.mentioned");
+    const messageId = mention.type === "agent.mentioned" ? mention.message.id : "";
+    const queued = invocationOf(await alice.next((event) => event.type === "invocation.updated"));
+    agent.send({ type: "invocation.report", messageId, status: "running" });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+    );
+
+    alice.send({ type: "invocation.cancel", invocationId: queued.id });
+    expect(
+      invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" && event.invocation.status === "cancelling",
+        ),
+      ).detail,
+    ).toContain("等待 helper 确认");
+    await agent.next((event) => event.type === "agent.cancel");
+
+    // 停止未确认前的心跳/进度不会把调用冲回 running
+    agent.send({ type: "invocation.report", messageId, status: "running", progress: "还在跑" });
+    expect(
+      invocationOf(await alice.next((event) => event.type === "invocation.updated")),
+    ).toMatchObject({ status: "cancelling" });
+
+    alice.send({ type: "invocation.retry", invocationId: queued.id });
+    const refused = await alice.next((event) => event.type === "error");
+    expect(refused.type === "error" && refused.code).toBe("INVOCATION_NOT_RETRYABLE");
+
+    // 重复停止只重发请求；Agent 断线重连后也会再次收到停止请求
+    alice.send({ type: "invocation.cancel", invocationId: queued.id });
+    await agent.next((event) => event.type === "agent.cancel");
+    await agent.closeAndWait();
+    const { peer: back } = await join("helper", "agent");
+    const resent = await back.next((event) => event.type === "agent.cancel");
+    expect(resent.type === "agent.cancel" && resent.messageId).toBe(messageId);
+
+    back.send({ type: "invocation.report", messageId, status: "cancelled" });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "cancelled",
+    );
+    alice.send({ type: "invocation.retry", invocationId: queued.id });
+    expect(
+      invocationOf(
+        await alice.next(
+          (event) => event.type === "invocation.updated" && event.invocation.status === "queued",
+        ),
+      ),
+    ).toMatchObject({ attempts: 2 });
+  });
+
+  it("does not trust a missing start report or uncertain recovery as stop confirmation", async () => {
+    const { join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agent } = await join("helper", "agent");
+    alice.send({ type: "message.send", clientMessageId: "race", content: "@helper work" });
+    const mention = await agent.next((event) => event.type === "agent.mentioned");
+    const messageId = mention.type === "agent.mentioned" ? mention.message.id : "";
+    const queued = invocationOf(await alice.next((event) => event.type === "invocation.updated"));
+    alice.send({ type: "invocation.cancel", invocationId: queued.id });
+    expect(
+      invocationOf(await alice.next((event) => event.type === "invocation.updated")).status,
+    ).toBe("cancelling");
+    agent.send({
+      type: "invocation.report",
+      messageId,
+      status: "uncertain",
+      detail: "old runtime unknown",
+    });
+    expect(
+      invocationOf(await alice.next((event) => event.type === "invocation.updated")).status,
+    ).toBe("cancelling");
+    alice.send({ type: "invocation.retry", invocationId: queued.id });
+    const error = await alice.next((event) => event.type === "error");
+    expect(error.type === "error" && error.code).toBe("INVOCATION_NOT_RETRYABLE");
+  });
+
+  it("does not dispatch mentions from a reply that arrives after a stop request", async () => {
+    const { join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agent } = await join("helper", "agent");
+    const { peer: other } = await join("reviewer", "agent");
+    alice.send({ type: "message.send", clientMessageId: "m1", content: "@helper 写完叫 reviewer" });
+    const mention = await agent.next((event) => event.type === "agent.mentioned");
+    const messageId = mention.type === "agent.mentioned" ? mention.message.id : "";
+    const queued = invocationOf(await alice.next((event) => event.type === "invocation.updated"));
+    agent.send({ type: "invocation.report", messageId, status: "running" });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+    );
+    alice.send({ type: "invocation.cancel", invocationId: queued.id });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "cancelling",
+    );
+
+    agent.send({
+      type: "message.send",
+      clientMessageId: "late-1",
+      content: "@reviewer 写好了",
+      parentMessageId: messageId,
+    });
+    await alice.next(
+      (event) => event.type === "message.created" && event.message.senderName === "helper",
+    );
+    expect(
+      invocationOf(await alice.next((event) => event.type === "invocation.updated")),
+    ).toMatchObject({ status: "cancelling", detail: expect.stringContaining("未再派发") });
+    await expect(other.next((event) => event.type === "agent.mentioned", 200)).rejects.toThrow();
+
+    // 已确认停止后的回复同样不再派发
+    alice.send({ type: "message.send", clientMessageId: "m2", content: "@helper 再来一个" });
+    const second = await agent.next((event) => event.type === "agent.mentioned");
+    const secondId = second.type === "agent.mentioned" ? second.message.id : "";
+    const secondInvocation = invocationOf(
+      await alice.next((event) => event.type === "invocation.updated"),
+    );
+    alice.send({ type: "invocation.cancel", invocationId: secondInvocation.id });
+    expect(
+      invocationOf(await alice.next((event) => event.type === "invocation.updated")),
+    ).toMatchObject({ status: "cancelling" });
+    agent.send({ type: "invocation.report", messageId: secondId, status: "cancelled" });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "cancelled",
+    );
+    agent.send({
+      type: "message.send",
+      clientMessageId: "late-2",
+      content: "@reviewer 还是写好了",
+      parentMessageId: secondId,
+    });
+    await alice.next(
+      (event) => event.type === "message.created" && event.message.content.includes("还是"),
+    );
+    await expect(other.next((event) => event.type === "agent.mentioned", 200)).rejects.toThrow();
+  });
+
+  it("chains an executing agent's parentless MCP send to its trigger without completing it", async () => {
+    const { app, port, join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agentA } = await join("agent-a", "agent");
+    const { peer: agentB } = await join("agent-b", "agent");
+    const mcpA = mcpClient(port, "agent-a");
+    await mcpA.connect();
+
+    alice.send({ type: "message.send", clientMessageId: "start", content: "@agent-a 开始" });
+    const mention = await agentA.next((event) => event.type === "agent.mentioned");
+    const trigger = mention.type === "agent.mentioned" ? mention.message : undefined;
+    agentA.send({ type: "invocation.report", messageId: trigger!.id, status: "running" });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+    );
+
+    // 执行中省略 parentMessageId：服务端补上触发消息，hop / trace 照常累计
+    const sent = await mcpA.client.callTool({
+      name: "hive_message_send",
+      arguments: { content: "@agent-b 帮我看下接口" },
+    });
+    expect(sent.isError).not.toBe(true);
+    const delegated = await agentB.next((event) => event.type === "agent.mentioned");
+    expect(delegated.type === "agent.mentioned" && delegated.message).toMatchObject({
+      parentMessageId: trigger!.id,
+      traceId: trigger!.traceId,
+      hopCount: trigger!.hopCount + 1,
+    });
+
+    // 中途的消息不代表这一轮结束：触发调用仍在执行，完成由 bridge 在轮末报告
+    const invocations = await app.inject({
+      method: "GET",
+      url: "/api/rooms/general/invocations",
+      headers: { authorization: "Bearer test-token" },
+    });
+    const own = (invocations.json() as { invocations: Invocation[] }).invocations.find(
+      (invocation) => invocation.messageId === trigger!.id,
+    );
+    expect(own?.status).toBe("running");
+    await mcpA.client.close();
   });
 
   it("blocks long agent-to-agent chains until a human extends the budget", async () => {
@@ -840,6 +1037,10 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       ),
     );
     expect(timedOut.detail).toContain("结果未知");
+    // 结果未知时可能仍在执行，不允许直接重试
+    alice.send({ type: "invocation.retry", invocationId: timedOut.id });
+    const refused = await alice.next((event) => event.type === "error");
+    expect(refused.type === "error" && refused.code).toBe("INVOCATION_NOT_RETRYABLE");
     agent.send({ type: "invocation.report", messageId, status: "completed" });
     expect(
       invocationOf(

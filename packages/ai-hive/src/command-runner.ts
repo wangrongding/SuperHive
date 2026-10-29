@@ -5,7 +5,12 @@ export type CommandResult = { stdout: string; stderr: string };
 export type CommandRunner = (
   command: string,
   args: string[],
-  options: { cwd: string; input?: string; signal?: AbortSignal },
+  options: {
+    cwd: string;
+    input?: string;
+    signal?: AbortSignal;
+    onStdout?: (chunk: string) => void;
+  },
 ) => Promise<CommandResult>;
 
 export const defaultCommandRunner: CommandRunner = (command, args, options) =>

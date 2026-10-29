@@ -6,7 +6,11 @@ import {
   type AppServerExit,
   type AppServerTransport,
 } from "./codex-app-server-client.js";
-import { AgentCancelledError } from "./responder.js";
+import {
+  AgentCancelledError,
+  AgentExecutionUncertainError,
+  AgentNonRetryableError,
+} from "./responder.js";
 
 const options = {
   command: "codex",
@@ -128,6 +132,124 @@ function setup(
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("CodexAppServerResponder", () => {
+  it("recognizes only initialize method-not-found as explicit unsupported", async () => {
+    const { responder } = setup({
+      initialize: (m, server) =>
+        server.emit({ id: m.id, error: { code: -32601, message: "private diagnostic" } }),
+    });
+    const error = await responder.reply({ instructions: "r", prompt: "p" }).catch((e) => e);
+    expect(error).toBeInstanceOf(CodexAppServerUnsupportedError);
+    expect(error.message).not.toContain("private diagnostic");
+  });
+
+  it("does not discard a resumable thread after an unrelated resume error", async () => {
+    const { responder, servers } = setup(
+      defaultHandlers({
+        "thread/resume": (m, server) =>
+          server.emit({ id: m.id, error: { code: -32000, message: "server overloaded" } }),
+      }),
+    );
+    await expect(
+      responder.reply({ instructions: "r", prompt: "p", threadId: "known" }),
+    ).rejects.toBeInstanceOf(AgentNonRetryableError);
+    expect(servers[0]!.methods()).not.toContain("thread/start");
+    expect(servers[0]!.methods()).not.toContain("turn/start");
+  });
+
+  it("does not replay a timed-out turn/start or accept its late reply as a new turn", async () => {
+    const { responder, servers, createTransport } = setup(
+      defaultHandlers({ "turn/start": () => {} }),
+      {},
+      { requestTimeoutMs: 10 },
+    );
+    await expect(responder.reply({ instructions: "r", prompt: "p" })).rejects.toBeInstanceOf(
+      AgentExecutionUncertainError,
+    );
+    const server = servers[0]!;
+    const sent = server.sent.find((m) => m.method === "turn/start")!;
+    server.emit({ id: sent.id, result: { turn: { id: "late" } } });
+    server.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-new",
+        turn: { id: "late", status: "completed", items: [agentMessage("late")] },
+      },
+    });
+    await expect(responder.reply({ instructions: "r", prompt: "new" })).rejects.toBeInstanceOf(
+      AgentNonRetryableError,
+    );
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    expect(server.methods().filter((m) => m === "turn/start")).toHaveLength(1);
+    await responder.close();
+  });
+
+  it("does not treat process death after cancel as stop confirmation", async () => {
+    const { responder, servers } = setup(
+      defaultHandlers({ "turn/start": ok({ turn: { id: "t" } }), "turn/interrupt": ok({}) }),
+    );
+    const controller = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "p", signal: controller.signal });
+    await flush();
+    controller.abort();
+    servers[0]!.exit();
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
+  });
+
+  it("requires a valid terminal status before acknowledging cancellation", async () => {
+    const { responder, servers } = setup(
+      defaultHandlers({ "turn/start": ok({ turn: { id: "t" } }), "turn/interrupt": ok({}) }),
+    );
+    const controller = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "p", signal: controller.signal });
+    await flush();
+    controller.abort();
+    servers[0]!.emit({
+      method: "turn/completed",
+      params: { threadId: "thread-new", turn: { id: "t", status: "inProgress" } },
+    });
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
+    await responder.close();
+  });
+
+  it("marks a lost steer acknowledgement uncertain, not safe to enqueue again", async () => {
+    const { responder } = setup(
+      defaultHandlers({ "turn/start": ok({ turn: { id: "t" } }), "turn/steer": () => {} }),
+      {},
+      { requestTimeoutMs: 10 },
+    );
+    const reply = responder.reply({ instructions: "r", prompt: "p" }).catch((e) => e);
+    await flush();
+    await expect(responder.steer("extra")).rejects.toBeInstanceOf(AgentExecutionUncertainError);
+    expect(await reply).toBeInstanceOf(AgentExecutionUncertainError);
+    await responder.close();
+  });
+
+  it("does not mistake a handshake timeout for unsupported transport", async () => {
+    const { responder } = setup({}, {}, { requestTimeoutMs: 10 });
+    const error = await responder.reply({ instructions: "r", prompt: "p" }).catch((e) => e);
+    expect(isAppServerUnsupported(error)).toBe(false);
+    expect(error.message).toContain("initialize");
+  });
+
+  it("does not acknowledge cancellation without a terminal event", async () => {
+    const { responder } = setup(
+      defaultHandlers({
+        "turn/start": ok({ turn: { id: "t" } }),
+        "turn/interrupt": ok({}),
+      }),
+      {},
+      { interruptGraceMs: 10 },
+    );
+    const controller = new AbortController();
+    const reply = responder
+      .reply({ instructions: "r", prompt: "p", signal: controller.signal })
+      .catch((e) => e);
+    await flush();
+    controller.abort();
+    expect((await reply).name).toBe("AgentExecutionUncertainError");
+    await responder.close();
+  });
+
   it("performs the handshake before starting a thread and turn", async () => {
     const { responder, servers, createTransport } = setup();
 
@@ -217,7 +339,7 @@ describe("CodexAppServerResponder", () => {
       "thread/start",
       "turn/start",
     ]);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("自动创建新会话"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("明确报告旧会话不存在"));
   });
 
   it("prefers the last final_answer over later commentary", async () => {
@@ -290,8 +412,8 @@ describe("CodexAppServerResponder", () => {
         },
       }),
     );
-    await expect(responder.reply({ instructions: "r", prompt: "p" })).rejects.toThrow(
-      "rate limited",
+    await expect(responder.reply({ instructions: "r", prompt: "p" })).rejects.toBeInstanceOf(
+      AgentNonRetryableError,
     );
     // 失败后可以继续下一回合
     expect((responder as any).active).toBeUndefined();
@@ -369,7 +491,7 @@ describe("CodexAppServerResponder", () => {
     });
   });
 
-  it("gives up waiting for the interrupt after the grace period", async () => {
+  it("reports unknown rather than stopped after the interrupt grace period", async () => {
     const handlers = defaultHandlers({
       "turn/start": (message, server) =>
         server.emit({ id: message.id, result: { turn: { id: "t" } } }),
@@ -380,7 +502,7 @@ describe("CodexAppServerResponder", () => {
     const reply = responder.reply({ instructions: "r", prompt: "p", signal: controller.signal });
     await flush();
     controller.abort();
-    await expect(reply).rejects.toBeInstanceOf(AgentCancelledError);
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
   });
 
   it("rejects immediately when the signal is already aborted", async () => {
@@ -525,35 +647,18 @@ describe("CodexAppServerResponder", () => {
     ]);
   });
 
-  it("rejects the active reply when the process dies and respawns on the next reply", async () => {
-    let first = true;
-    const handlers = defaultHandlers({
-      "turn/start": (message, server) => {
-        if (first) {
-          first = false;
-          server.emit({ id: message.id, result: { turn: { id: "t" } } });
-          return;
-        }
-        defaultHandlers()["turn/start"]!(message, server);
-      },
-    });
-    const { responder, servers, createTransport } = setup(handlers);
+  it("latches unknown execution after process death instead of respawning for another turn", async () => {
+    const { responder, servers, createTransport } = setup(
+      defaultHandlers({ "turn/start": ok({ turn: { id: "t" } }) }),
+    );
     const reply = responder.reply({ instructions: "r", prompt: "p", threadId: "thread-old" });
     await flush();
-    servers[0]!.exit({ code: 137, stderr: "killed by OOM" });
-    await expect(reply).rejects.toThrow(/意外退出.*code=137[\s\S]*killed by OOM/);
-
+    servers[0]!.exit({ code: 137, stderr: "Bearer private-token" });
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
     await expect(
       responder.reply({ instructions: "r", prompt: "p2", threadId: "thread-old" }),
-    ).resolves.toEqual({ text: "done", threadId: "thread-old" });
-    expect(createTransport).toHaveBeenCalledTimes(2);
-    // 新进程需要重新 resume 线程
-    expect(servers[1]!.methods()).toEqual([
-      "initialize",
-      "initialized",
-      "thread/resume",
-      "turn/start",
-    ]);
+    ).rejects.toBeInstanceOf(AgentNonRetryableError);
+    expect(createTransport).toHaveBeenCalledTimes(1);
   });
 
   it("reports a friendly error when the codex command is missing", async () => {
@@ -566,14 +671,15 @@ describe("CodexAppServerResponder", () => {
     await expect(reply.catch((e) => isAppServerUnsupported(e))).resolves.toBe(false);
   });
 
-  it("flags an old codex that exits before initialize as unsupported", async () => {
+  it("reports non-TTY startup without guessing unsupported protocol", async () => {
     const { responder, servers } = setup({});
     const reply = responder.reply({ instructions: "r", prompt: "p" });
     await flush();
     servers[0]!.exit({ code: 1, stderr: "Error: stdin is not a terminal" });
     const error = await reply.catch((e) => e);
-    expect(error).toBeInstanceOf(CodexAppServerUnsupportedError);
-    expect(isAppServerUnsupported(error)).toBe(true);
+    expect(error).toBeInstanceOf(AgentNonRetryableError);
+    expect(isAppServerUnsupported(error)).toBe(false);
+    expect(error.message).toContain("交互终端");
   });
 
   it("does not treat other early exits (e.g. config errors) as unsupported", async () => {
@@ -582,24 +688,27 @@ describe("CodexAppServerResponder", () => {
     await flush();
     servers[0]!.exit({ code: 1, stderr: "Error loading configuration: bad value" });
     const error = await reply.catch((e) => e);
-    expect(error.message).toContain("Error loading configuration");
+    expect(error.message).toContain("配置不兼容");
     expect(isAppServerUnsupported(error)).toBe(false);
   });
 
-  it("flags an initialize JSON-RPC error as unsupported", async () => {
+  it("does not classify general initialize RPC rejection as unsupported", async () => {
     const { responder } = setup({
       initialize: (message, server) =>
         server.emit({ id: message.id, error: { code: -32600, message: "bad request" } }),
     });
     const error = await responder.reply({ instructions: "r", prompt: "p" }).catch((e) => e);
-    expect(error).toBeInstanceOf(CodexAppServerUnsupportedError);
+    expect(error).toBeInstanceOf(AgentNonRetryableError);
+    expect(isAppServerUnsupported(error)).toBe(false);
+    expect(error.message).toContain("-32600");
   });
 
-  it("flags a handshake timeout as unsupported", async () => {
+  it("preserves initialize timeout as a non-retryable startup failure", async () => {
     const { responder, servers } = setup({}, {}, { requestTimeoutMs: 10 });
     const error = await responder.reply({ instructions: "r", prompt: "p" }).catch((e) => e);
-    expect(isAppServerUnsupported(error)).toBe(true);
+    expect(isAppServerUnsupported(error)).toBe(false);
     expect(servers[0]!.killed).toBe(true);
+    expect(error).toBeInstanceOf(AgentNonRetryableError);
   });
 
   it("close kills the process and rejects the active reply", async () => {
@@ -612,19 +721,18 @@ describe("CodexAppServerResponder", () => {
     const reply = responder.reply({ instructions: "r", prompt: "p" });
     await flush();
     await responder.close();
-    await expect(reply).rejects.toThrow("已关闭");
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
     expect(servers[0]!.killed).toBe(true);
   });
 });
 
 describe("isAppServerUnsupported", () => {
-  it("recognizes typical old-codex messages, including nested causes", () => {
-    expect(isAppServerUnsupported(new Error("error: unrecognized subcommand 'app-server'"))).toBe(
-      true,
-    );
+  it("accepts only a scoped explicit capability error, not arbitrary provider text", () => {
     expect(
-      isAppServerUnsupported(new Error("wrap", { cause: new Error("stdin is not a terminal") })),
+      isAppServerUnsupported(new CodexAppServerUnsupportedError("initialize unsupported")),
     ).toBe(true);
+    expect(isAppServerUnsupported(new Error("method not found"))).toBe(false);
+    expect(isAppServerUnsupported(new Error("stdin is not a terminal"))).toBe(false);
     expect(isAppServerUnsupported(new Error("HTTP 502"))).toBe(false);
   });
 });

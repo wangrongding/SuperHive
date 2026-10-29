@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { InvocationDetails } from "./invocation-details";
 import type { Invocation, Participant } from "@ai-hive/protocol";
 
 /** 被预算拦下但可以由人"续命"的原因；hop_limit 是硬上限，不提供继续操作 */
@@ -12,7 +13,6 @@ export function isExtendableBlock(invocation: Invocation): boolean {
 export function canRetryInvocation(invocation: Invocation): boolean {
   return (
     invocation.status === "failed" ||
-    invocation.status === "timed_out" ||
     invocation.status === "cancelled" ||
     (invocation.status === "blocked" && invocation.blockReason !== "hop_limit")
   );
@@ -68,7 +68,13 @@ export function formatElapsed(ms: number): string {
 }
 
 export function invocationStatusLabel(invocation: Invocation, agentOnline: boolean): string {
-  switch (invocation.status) {
+  const error = invocation.runtime?.lastError;
+  if (invocation.status === "running" && error && !error.recoveredAt) {
+    return error.code === 429
+      ? "服务限流 · HTTP 429"
+      : `API 异常${error.code ? ` · HTTP ${error.code}` : ""}`;
+  }
+  switch (invocation.status as string) {
     case "queued":
       if (invocation.receivedAt) return "已送达，排队中";
       return agentOnline ? "排队中" : "等待上线";
@@ -84,10 +90,15 @@ export function invocationStatusLabel(invocation: Invocation, agentOnline: boole
       return "结果未知";
     case "cancelled":
       return "已停止";
+    case "cancelling":
+      return "正在停止 · 待确认";
+    default:
+      return "状态待核实";
   }
 }
 
 function invocationHint(invocation: Invocation, agentOnline: boolean): string | undefined {
+  if (invocation.status === "cancelling") return "已请求停止，等待 Runtime 确认；确认前不能重试。";
   if (invocation.status === "timed_out") {
     return [invocation.detail, "长时间未收到结果，这不一定是失败，迟到的回复仍可能到达。"]
       .filter(Boolean)
@@ -119,6 +130,7 @@ export function InvocationChips({
   onRetry,
   onCancel,
   onExtend,
+  connectionState,
 }: {
   invocations: Invocation[];
   participants: Participant[];
@@ -127,121 +139,152 @@ export function InvocationChips({
   onRetry: (invocation: Invocation) => void;
   onCancel: (invocation: Invocation) => void;
   onExtend: () => void;
+  connectionState?: "online" | "connecting" | "offline";
 }) {
+  const [selectedId, setSelectedId] = useState<string>();
+  const selected = invocations.find((invocation) => invocation.id === selectedId);
   return (
-    <div className="invocation-row" role="list" aria-label="Agent 调用状态">
-      {invocations.map((invocation) => {
-        const agentOnline = participants.some(
-          (participant) =>
-            participant.id === invocation.agentId && participant.status !== "offline",
-        );
-        const label = invocationStatusLabel(invocation, agentOnline);
-        const rawHint = invocationHint(invocation, agentOnline);
-        const hint = rawHint === label ? undefined : rawHint;
-        const jumpTarget =
-          invocation.status === "completed" &&
-          invocation.replyMessageId &&
-          canJumpTo(invocation.replyMessageId)
-            ? invocation.replyMessageId
-            : undefined;
-        const summary = (
-          <>
-            <span className="invocation-indicator" aria-hidden="true">
-              {invocation.status === "completed" && (
-                <svg viewBox="0 0 24 24">
-                  <path d="m5 12 4 4L19 6" />
-                </svg>
+    <>
+      <div className="invocation-row" role="list" aria-label="Agent 调用状态">
+        {invocations.map((invocation) => {
+          const agentOnline = participants.some(
+            (participant) =>
+              participant.id === invocation.agentId && participant.status !== "offline",
+          );
+          const label = invocationStatusLabel(invocation, agentOnline);
+          const rawHint = invocationHint(invocation, agentOnline);
+          const hint = rawHint === label ? undefined : rawHint;
+          const jumpTarget =
+            invocation.status === "completed" &&
+            invocation.replyMessageId &&
+            canJumpTo(invocation.replyMessageId)
+              ? invocation.replyMessageId
+              : undefined;
+          const summary = (
+            <>
+              <span className="invocation-indicator" aria-hidden="true">
+                {invocation.status === "completed" && (
+                  <svg viewBox="0 0 24 24">
+                    <path d="m5 12 4 4L19 6" />
+                  </svg>
+                )}
+              </span>
+              <span className="invocation-agent">@{invocation.agentName}</span>
+              <span className="invocation-status">{label}</span>
+              {invocation.status === "running" && invocation.progress && (
+                <span className="invocation-progress">{invocation.progress}</span>
               )}
-            </span>
-            <span className="invocation-agent">@{invocation.agentName}</span>
-            <span className="invocation-status">{label}</span>
-            {invocation.status === "running" && invocation.progress && (
-              <span className="invocation-progress">{invocation.progress}</span>
-            )}
-            {(invocation.status === "blocked" ||
-              invocation.status === "failed" ||
-              // 完成但没有回复消息：Agent 判断无需回复，标出来免得像是漏处理
-              (invocation.status === "completed" && !invocation.replyMessageId)) &&
-              invocation.detail && <span className="invocation-progress">{invocation.detail}</span>}
-            {invocation.status === "running" && (
-              <ElapsedTime since={invocation.startedAt ?? invocation.updatedAt} />
-            )}
-            {invocation.attempts > 1 && (
-              <span className="invocation-attempts">第{invocation.attempts}次</span>
-            )}
-          </>
-        );
-        const ariaSummary = [
-          `@${invocation.agentName}`,
-          label,
-          invocation.attempts > 1 ? `第${invocation.attempts}次` : undefined,
-          hint,
-        ]
-          .filter(Boolean)
-          .join("，");
-        return (
-          <div
-            key={invocation.id}
-            role="listitem"
-            data-invocation-id={invocation.id}
-            className={`invocation-chip ${invocation.status}`}
-            title={hint}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {jumpTarget ? (
+              {(invocation.status === "blocked" ||
+                invocation.status === "failed" ||
+                // 完成但没有回复消息：Agent 判断无需回复，标出来免得像是漏处理
+                (invocation.status === "completed" && !invocation.replyMessageId)) &&
+                invocation.detail && (
+                  <span className="invocation-progress">{invocation.detail}</span>
+                )}
+              {invocation.status === "running" && (
+                <ElapsedTime since={invocation.startedAt ?? invocation.updatedAt} />
+              )}
+              {invocation.attempts > 1 && (
+                <span className="invocation-attempts">第{invocation.attempts}次</span>
+              )}
+            </>
+          );
+          const ariaSummary = [
+            `@${invocation.agentName}`,
+            label,
+            invocation.attempts > 1 ? `第${invocation.attempts}次` : undefined,
+            hint,
+          ]
+            .filter(Boolean)
+            .join("，");
+          return (
+            <div
+              key={invocation.id}
+              role="listitem"
+              data-invocation-id={invocation.id}
+              className={`invocation-chip ${invocation.status}`}
+              title={hint}
+              onClick={(event) => event.stopPropagation()}
+            >
               <button
                 type="button"
                 className="invocation-summary"
-                aria-label={`${ariaSummary}，跳到回复`}
-                onClick={() => onJump(jumpTarget)}
+                aria-label={`${ariaSummary}，查看调用详情`}
+                aria-haspopup="dialog"
+                onClick={() => setSelectedId(invocation.id)}
               >
                 {summary}
+                <span className="invocation-details-affordance" aria-hidden="true">
+                  详情 ›
+                </span>
               </button>
-            ) : (
-              <span className="invocation-summary">
-                {summary}
-                {hint &&
-                  invocation.status !== "running" &&
-                  invocation.status !== "blocked" &&
-                  invocation.status !== "failed" && (
-                    <span className="visually-hidden">，{hint}</span>
-                  )}
-              </span>
-            )}
-            {isExtendableBlock(invocation) ? (
-              <button
-                type="button"
-                className="invocation-action primary"
-                aria-label={`为 Agent 对话追加 5 轮，恢复 @${invocation.agentName}`}
-                onClick={onExtend}
-              >
-                继续 5 轮
-              </button>
-            ) : (
-              canRetryInvocation(invocation) && (
+              {jumpTarget && (
                 <button
                   type="button"
                   className="invocation-action"
-                  aria-label={`重试 @${invocation.agentName}`}
-                  onClick={() => onRetry(invocation)}
+                  aria-label={`${ariaSummary}，跳到回复`}
+                  onClick={() => onJump(jumpTarget)}
                 >
-                  重试
+                  查看回复
                 </button>
-              )
-            )}
-            {canCancelInvocation(invocation) && (
-              <button
-                type="button"
-                className="invocation-action subtle"
-                aria-label={`停止 @${invocation.agentName}`}
-                onClick={() => onCancel(invocation)}
-              >
-                停止
-              </button>
-            )}
-          </div>
-        );
-      })}
-    </div>
+              )}
+              {isExtendableBlock(invocation) ? (
+                <button
+                  type="button"
+                  className="invocation-action primary"
+                  aria-label={`为 Agent 对话追加 5 轮，恢复 @${invocation.agentName}`}
+                  onClick={onExtend}
+                >
+                  继续 5 轮
+                </button>
+              ) : (
+                canRetryInvocation(invocation) && (
+                  <button
+                    type="button"
+                    className="invocation-action"
+                    aria-label={`重试 @${invocation.agentName}`}
+                    onClick={() => onRetry(invocation)}
+                  >
+                    重试
+                  </button>
+                )
+              )}
+              {canCancelInvocation(invocation) && (
+                <button
+                  type="button"
+                  className="invocation-action subtle"
+                  aria-label={`停止 @${invocation.agentName}`}
+                  onClick={() => onCancel(invocation)}
+                >
+                  停止
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {selected && (
+        <InvocationDetails
+          invocation={selected}
+          label={invocationStatusLabel(
+            selected,
+            participants.some((p) => p.id === selected.agentId && p.status !== "offline"),
+          )}
+          agentOnline={participants.some(
+            (p) => p.id === selected.agentId && p.status !== "offline",
+          )}
+          connectionState={connectionState}
+          onClose={() => setSelectedId(undefined)}
+          {...(selected.replyMessageId && canJumpTo(selected.replyMessageId)
+            ? {
+                onJump: () => {
+                  setSelectedId(undefined);
+                  onJump(selected.replyMessageId!);
+                },
+              }
+            : {})}
+        />
+      )}
+    </>
   );
 }

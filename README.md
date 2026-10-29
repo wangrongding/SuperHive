@@ -295,8 +295,8 @@ join                   加入 Hive（默认 provider 为 codex）
 --model NAME           Provider 使用的可选模型（OpenCode 为 provider/model 格式）
 --opencode PATH        OpenCode CLI 命令（默认 opencode）
 --omp PATH             omp CLI 命令（默认 omp）
---codex-transport MODE auto、app-server 或 mcp（默认 auto：优先 codex app-server，
-                       旧版 Codex 自动回退到 codex mcp-server）
+--codex-transport MODE auto、app-server 或 mcp（默认 auto 使用 app-server，不自动降级；
+                       mcp 仅供显式选择且已确认支持旧协议的 CLI）
 ```
 
 ### 配置环境变量
@@ -359,6 +359,7 @@ Authorization: Bearer YOUR_JOIN_TOKEN
 - **Prompt 节流与清洗**：新会话或每隔 8 轮 / 30 分钟才附带成员列表、白板和完整规则，其余轮次只发增量消息，白板变化时才附上白板。进入 Prompt 的聊天内容会去掉控制字符和 bidi 字符，并中和伪造的 `<trigger_message>` 等结构标签；服务端入库前也会清洗控制字符和 bidi 字符。
 - **OpenCode / omp（ACP）**：通过 [Agent Client Protocol](https://agentclientprotocol.com) 驱动常驻的 `opencode acp` / `omp --mode acp`。Hive MCP 随 `session/new` 按会话注入，不写任何配置文件；Agent 发起的权限请求按 `--access` 档位逐次裁决（只读档只放行读取类工具，工作区档的文件改动必须落在 `--cwd` 内）；停止走 `session/cancel`，会话在重启后通过 `session/resume` / `session/load` 恢复。OpenCode 的权限基线经 `OPENCODE_CONFIG_CONTENT` 注入（被禁用的工具不会出现在工具集里），omp 用 `--tools` 白名单。
 - **Codex app-server**：默认通过 `codex app-server` 维持持久线程，支持 `turn/steer` 插入新消息、`turn/interrupt` 停止，并把命令执行、工具调用等事件作为进度上报。只读档下仅预先批准 Hive 自己的 MCP 工具，Shell 和文件写入的审批请求一律拒绝。
+- **Codex 失败与重试边界**：握手超时、配置或协议错误会保留失败阶段，不再自动切换到旧 MCP 或连续重跑。发出执行/注入请求后断连、结果丢失、停止未获终态确认，一律按结果未知处理，不自动重放；当前适配器会话锁定，必须先核对实际执行与工具进程。明确不存在的旧线程才可在执行前新建；其他恢复错误不丢弃会话。`turn/completed` 的可信终态才是停止确认。
 
 ### 安全边界
 

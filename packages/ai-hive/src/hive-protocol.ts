@@ -48,7 +48,14 @@ export type RoomSummary = {
 };
 
 export type InvocationStatus =
-  "queued" | "running" | "completed" | "failed" | "blocked" | "timed_out" | "cancelled";
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelling"
+  | "timed_out"
+  | "cancelled";
 
 /** 服务端对一次 @ 唤醒的追踪记录（Agent 侧只用到其中一部分字段） */
 export type Invocation = {
@@ -76,14 +83,26 @@ export type WhiteboardEntry = {
   updatedAt: string;
 };
 
+/** Keep in sync with runtimeEventSchema in @ai-hive/protocol; contains no arbitrary runtime text. */
+export type RuntimeEvent = {
+  kind: "capabilities" | "activity" | "provider_error" | "recovered";
+  observability?: "partial" | "full" | "heartbeat";
+  phase?: "starting" | "working" | "thinking" | "tool_running" | "tool_completed";
+  tool?: "read" | "write" | "search" | "command" | "collaboration" | "other";
+  code?: number;
+  retryAttempt?: number;
+  retryInMs?: number;
+};
+
 export type InvocationReport = {
   type: "invocation.report";
   messageId: string;
-  status: "received" | "running" | "completed" | "failed" | "cancelled";
+  status: "received" | "running" | "completed" | "failed" | "cancelled" | "uncertain";
   detail?: string;
   progress?: string;
   replyMessageId?: string;
   contextSeq?: number;
+  runtimeEvent?: RuntimeEvent;
 };
 
 export type ServerEvent =

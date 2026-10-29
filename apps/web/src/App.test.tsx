@@ -265,6 +265,27 @@ describe("App mention autocomplete", () => {
     vi.unstubAllGlobals();
   });
 
+  it("connects through the reachable dev server instead of an advertised stale LAN address", async () => {
+    localStorage.setItem("ai-hive.username", "Alice");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    // /api/meta advertises 10.0.0.8, but the page reaches the server through localhost.
+    expect(socket.url).toBe("ws://localhost:8787/ws");
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    expect(document.querySelector(".connection")?.classList.contains("online")).toBe(true);
+  });
+
   it("opens on @, excludes self, filters members, and supports arrows, Enter, and Tab", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -966,7 +987,7 @@ describe("App mention autocomplete", () => {
     const trigger = {
       ...messageBase,
       id: "00000000-0000-4000-8000-000000000010",
-      seq: 1,
+      seq: 2,
       senderId: self.id,
       senderName: "Alice",
       senderType: "human" as const,
@@ -976,7 +997,7 @@ describe("App mention autocomplete", () => {
     const plain = {
       ...messageBase,
       id: "00000000-0000-4000-8000-000000000030",
-      seq: 2,
+      seq: 1,
       senderId: self.id,
       senderName: "Alice",
       senderType: "human" as const,
@@ -1035,7 +1056,7 @@ describe("App mention autocomplete", () => {
         type: "room.snapshot",
         self,
         participants: [self, backend, frontend, reviewer],
-        messages: [trigger, plain, reply],
+        messages: [plain, trigger, reply],
         latestSeq: 3,
         invocations: [running, failed, blocked],
         whiteboard: [],
@@ -1054,6 +1075,28 @@ describe("App mention autocomplete", () => {
     expect(within(chips).getByText("Agent 之间已连续对话 8 轮")).toBeTruthy();
     // 只有触发了调用的消息才有状态行
     expect(list().getAllByRole("list", { name: "Agent 调用状态" })).toHaveLength(1);
+
+    await user.click(within(chips).getByRole("button", { name: /^@backend-agent.*查看调用详情$/ }));
+    const runtimeDialog = screen.getByRole("dialog", { name: "调用详情" });
+    act(() =>
+      socket.serverEvent({
+        type: "invocation.updated",
+        invocation: {
+          ...running,
+          runtime: {
+            observability: "partial",
+            lastHeartbeatAt: running.updatedAt,
+            lastRuntimeEventAt: running.updatedAt,
+            lastProgressAt: running.updatedAt,
+            lastError: { at: running.updatedAt, code: 503 },
+            history: [{ at: running.updatedAt, kind: "provider_error", code: 503 }],
+          },
+        },
+      }),
+    );
+    expect(within(runtimeDialog).getByText(/尚未确认恢复.*HTTP 503/)).toBeTruthy();
+    expect(within(runtimeDialog).getByText("部分事件可见")).toBeTruthy();
+    await user.click(within(runtimeDialog).getByRole("button", { name: "关闭调用详情" }));
 
     await user.click(within(chips).getByRole("button", { name: "停止 @backend-agent" }));
     expect(JSON.parse(socket.sent.at(-1)!)).toEqual({

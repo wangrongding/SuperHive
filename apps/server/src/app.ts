@@ -1,3 +1,4 @@
+import { observeRuntime } from "./runtime-observation.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import cors from "@fastify/cors";
@@ -106,7 +107,10 @@ const roomsQuerySchema = z.object({
 });
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: options.logger ?? false });
+  const app = Fastify({
+    logger: options.logger ?? false,
+    bodyLimit: LIMITS.maxClientPayloadBytes,
+  });
   const database = new HiveDatabase(options.databasePath ?? "./data/hive.sqlite");
   const joinToken = database.getOrCreateToken(options.token ?? process.env.HIVE_TOKEN);
   const connections = new Set<Connection>();
@@ -115,7 +119,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   let shuttingDown = false;
 
   await app.register(cors, { origin: true });
-  await app.register(websocket);
+  await app.register(websocket, { options: { maxPayload: LIMITS.maxClientPayloadBytes } });
 
   const configuredStaticDir =
     options.staticDir ?? path.resolve(import.meta.dirname, "../../web/dist");
@@ -253,28 +257,75 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return undefined;
   }
 
-  function completeFromReply(agent: Participant, reply: ChatMessage): void {
-    if (!reply.parentMessageId) return;
-    const invocation = database.getInvocationFor(reply.parentMessageId, agent.id);
-    if (!invocation || isTerminal(invocation)) return;
-    emitInvocation(
-      database.updateInvocation(invocation.id, {
-        status: "completed",
-        replyMessageId: reply.id,
-        finishedAt: new Date().toISOString(),
-        progress: null,
-        detail: invocation.status === "timed_out" ? "迟到的结果" : null,
-      }),
-    );
+  /**
+   * Agent 经 MCP 发消息却没带 parentMessageId 时，若它正在执行调用，就用触发消息补上 parent。
+   * hop / trace 预算只沿 parent 链累计，不能交给提示词规则自觉遵守——
+   * 否则执行中省略 parent 就能从 hop 0 另起一条链，绕过防循环上限。
+   * 合批时取传递深度最大的触发消息（同深度取最新），与 bridge 的 pickReplyParent 一致。
+   */
+  function inferExecutingParent(agent: Participant): ChatMessage | undefined {
+    let best: ChatMessage | undefined;
+    for (const invocation of database.listExecutingInvocations(agent.id)) {
+      const trigger = database.getMessage(invocation.messageId);
+      if (!trigger || trigger.roomId !== agent.roomId) continue;
+      if (
+        !best ||
+        trigger.hopCount > best.hopCount ||
+        (trigger.hopCount === best.hopCount && trigger.seq > best.seq)
+      ) {
+        best = trigger;
+      }
+    }
+    return best;
   }
 
-  function createAndDispatchMessage(participant: Participant, input: CreateMessageInput) {
+  /**
+   * Agent 带 parentMessageId 的回复同时推进对应调用。
+   * 返回 false 表示回复属于已被人停止的调用：消息照常展示，但不再据此唤醒其他 Agent。
+   * parent 由服务端推断时（见 inferExecutingParent）只做防循环记账，不推进完成：
+   * 执行中途的一条进度消息不代表这一轮结束，完成由 bridge 在轮末报告。
+   */
+  function completeFromReply(
+    agent: Participant,
+    reply: ChatMessage,
+    options: { inferredParent?: boolean } = {},
+  ): boolean {
+    if (!reply.parentMessageId) return true;
+    const invocation = database.getInvocationFor(reply.parentMessageId, agent.id);
+    if (!invocation) return true;
+    if (invocation.status === "cancelled") return false;
+    if (options.inferredParent) return invocation.status !== "cancelling";
+    if (isTerminal(invocation)) return true;
+    const stopping = invocation.status === "cancelling";
+    emitInvocation(
+      database.updateInvocation(invocation.id, {
+        status: stopping ? "cancelling" : "completed",
+        replyMessageId: reply.id,
+        ...(stopping ? {} : { finishedAt: new Date().toISOString() }),
+        progress: null,
+        detail: stopping
+          ? "停止期间收到回复，仍等待执行结束确认；回复中的 @ 未再派发"
+          : invocation.status === "timed_out"
+            ? "迟到的结果"
+            : null,
+      }),
+    );
+    return !stopping;
+  }
+
+  function createAndDispatchMessage(
+    participant: Participant,
+    input: CreateMessageInput,
+    options: { inferredParent?: boolean } = {},
+  ) {
     const result = database.createMessage(participant, input);
     if (!result.created) return result;
     const message = result.message;
     broadcast(participant.roomId, { type: "message.created", message });
     broadcastRoomActivity(participant.roomId);
-    if (participant.type === "agent") completeFromReply(participant, message);
+    if (participant.type === "agent" && !completeFromReply(participant, message, options)) {
+      return result;
+    }
     for (const mention of message.mentions) {
       if (mention.toLocaleLowerCase() === "all") continue;
       const agent = database.findParticipant(participant.roomId, mention);
@@ -308,6 +359,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       blockReason: null,
       detail,
       progress: null,
+      runtime: null,
       replyMessageId: null,
       receivedAt: null,
       startedAt: null,
@@ -317,9 +369,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   function retryInvocation(actor: Participant, invocationId: string): void {
     const invocation = invocationInRoom(actor, invocationId);
+    // 结果未知或停止未确认时，上一次执行可能仍在进行；此时重试会让同一任务并行跑两份
+    if (invocation.status === "timed_out" || invocation.status === "cancelling") {
+      throw new HiveError(
+        "INVOCATION_NOT_RETRYABLE",
+        "The previous run may still be in progress. Stop it and wait for the agent to confirm before retrying.",
+      );
+    }
     const retryable =
       invocation.status === "failed" ||
-      invocation.status === "timed_out" ||
       invocation.status === "cancelled" ||
       (invocation.status === "blocked" && invocation.blockReason !== "hop_limit");
     if (!retryable) {
@@ -337,19 +395,24 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     deliverMention(message, agent, true);
   }
 
+  /**
+   * 停止调用。尚未开始执行的直接给出终态；已开始的进入 cancelling，等 Agent 回报结束才算停下，
+   * 期间不允许重试。状态落库，服务端重启或 Agent 断线后仍保持，Agent 重连时会再次收到停止请求。
+   */
   function cancelInvocation(actor: Participant, invocationId: string): void {
     const invocation = invocationInRoom(actor, invocationId);
     if (isTerminal(invocation)) return;
-    // 立即给出终态，同时通知 Agent 中断；Agent 迟到的回报不会再改动终态
-    emitInvocation(
-      database.updateInvocation(invocation.id, {
-        status: "cancelled",
-        detail: `${actor.username} 已停止`,
-        progress: null,
-        finishedAt: new Date().toISOString(),
-      }),
-    );
     const target = onlineAgent(invocation.roomId, invocation.agentName);
+    if (invocation.status !== "cancelling") {
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          status: "cancelling",
+          detail: `${actor.username} 已请求停止，等待 ${invocation.agentName} 确认`,
+          progress: null,
+        }),
+      );
+    }
+    // 重复点击停止时只重发请求，不改动状态
     if (target) send(target.socket, { type: "agent.cancel", messageId: invocation.messageId });
   }
 
@@ -397,14 +460,35 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       );
       return;
     }
+    if (report.status === "uncertain") {
+      if (isTerminal(invocation)) return;
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          status: invocation.status === "cancelling" ? "cancelling" : "timed_out",
+          detail: report.detail ?? "执行结果未知，无法确认工具已停止；禁止自动重放。",
+          progress: null,
+        }),
+      );
+      return;
+    }
     if (report.status === "running") {
       if (isTerminal(invocation)) return;
+      // 停止未确认前的进度和心跳只更新运行观测，不把调用冲回 running
+      if (invocation.status === "cancelling") {
+        emitInvocation(
+          database.updateInvocation(invocation.id, {
+            runtime: observeRuntime(invocation.runtime, report.runtimeEvent, now),
+          }),
+        );
+        return;
+      }
       emitInvocation(
         database.updateInvocation(invocation.id, {
           status: "running",
           receivedAt: invocation.receivedAt ?? now,
           startedAt: invocation.startedAt ?? now,
           progress: report.progress ?? invocation.progress ?? null,
+          runtime: observeRuntime(invocation.runtime, report.runtimeEvent, now),
           detail: report.detail ?? null,
         }),
       );
@@ -413,13 +497,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (isTerminal(invocation)) return;
     emitInvocation(
       database.updateInvocation(invocation.id, {
-        status: report.status,
+        status: invocation.status === "cancelling" ? "cancelled" : report.status,
         finishedAt: now,
         progress: null,
-        detail: report.detail ?? (invocation.status === "timed_out" ? "迟到的结果" : null),
+        detail: report.detail ?? terminalDetail(invocation, report.status),
         ...(report.replyMessageId ? { replyMessageId: report.replyMessageId } : {}),
       }),
     );
+  }
+
+  function terminalDetail(invocation: Invocation, status: Invocation["status"]): string | null {
+    if (invocation.status === "cancelling") {
+      return status === "cancelled" ? `${invocation.agentName} 已确认停止` : "停止请求生效前已结束";
+    }
+    return invocation.status === "timed_out" ? "迟到的结果" : null;
   }
 
   function sweepStaleInvocations(): void {
@@ -444,8 +535,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
   }
 
-  /** Hive MCP 是无状态的，未读游标按 Agent 身份保存在内存里 */
-  const inboxCursors = new Map<string, number>();
+  /**
+   * Hive MCP 是无状态的，未读游标按 Agent 身份落库：放内存的话服务一重启就丢，
+   * 下次调用会把游标重置到最新，重启前后那段消息 Agent 就再也收不到了
+   */
+  const inboxCursors = {
+    get: (agentId: string) => database.getInboxCursor(agentId),
+    set: (agentId: string, seq: number) => database.setInboxCursor(agentId, seq),
+  };
 
   function takeInbox(agent: Participant): InboxDigest | undefined {
     const cursor = inboxCursors.get(agent.id);
@@ -538,7 +635,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         latestSeq: database.latestSeq(participant.roomId),
       }),
       listMembers: () => database.listParticipants(participant.roomId),
-      sendMessage: (input) => createAndDispatchMessage(participant, input).message,
+      sendMessage: (input) => {
+        if (input.parentMessageId) return createAndDispatchMessage(participant, input).message;
+        const parent = inferExecutingParent(participant);
+        return createAndDispatchMessage(
+          participant,
+          parent ? { ...input, parentMessageId: parent.id } : input,
+          { inferredParent: Boolean(parent) },
+        ).message;
+      },
       readWhiteboard: () => database.listWhiteboard(participant.roomId),
       updateWhiteboard: (input) => {
         const result = database.upsertWhiteboardEntry(participant, input);
@@ -747,7 +852,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
       const parsed = clientEventSchema.safeParse(json);
       if (!parsed.success) {
-        send(socket, { type: "error", code: "INVALID_EVENT", message: "Invalid client event." });
+        const messageTooLong = parsed.error.issues.some(
+          (issue) => issue.code === "too_big" && issue.path.join(".") === "content",
+        );
+        send(socket, {
+          type: "error",
+          code: messageTooLong ? "MESSAGE_TOO_LONG" : "INVALID_EVENT",
+          message: messageTooLong
+            ? `消息超过 ${LIMITS.maxMessageLength} 字符保护上限，请缩短正文或拆分发送。`
+            : "Invalid client event.",
+        });
         return;
       }
       const event = parsed.data;
@@ -820,6 +934,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             invocations: database.listInvocations(event.roomId),
             whiteboard: database.listWhiteboard(event.roomId),
           });
+          if (participant.type === "agent") {
+            for (const invocation of database.listCancellingInvocations(participant.id)) {
+              send(socket, { type: "agent.cancel", messageId: invocation.messageId });
+            }
+          }
           if (!existingParticipant) {
             broadcast(event.roomId, { type: "presence.changed", participant });
             broadcastRoomActivity(event.roomId);

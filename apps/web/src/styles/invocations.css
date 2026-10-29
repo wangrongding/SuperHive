@@ -288,3 +288,15 @@ button.invocation-summary:focus-visible {
     max-width: 18ch;
   }
 }
+
+.invocation-details-affordance {
+  margin-left: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .invocation-summary {
+    min-height: 44px;
+  }
+}

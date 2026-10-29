@@ -1,3 +1,5 @@
+import type { RuntimeEvent } from "./hive-protocol.js";
+
 export type AgentProvider =
   "codex" | "claude" | "copilot" | "openclaw" | "opencode" | "omp" | "echo";
 export type AgentAccessMode = "read-only" | "workspace" | "full";
@@ -10,6 +12,8 @@ export type AgentReplyInput = {
   signal?: AbortSignal;
   /** 运行中的可读进度（正在执行的命令、调用的工具等），由 Bridge 节流后上报 */
   onProgress?: (progress: string) => void;
+  /** Sanitized structured events; heartbeat is emitted separately by Bridge. */
+  onRuntimeEvent?: (event: RuntimeEvent) => void;
   /**
    * 是否需要重新注入完整规则。只能把规则拼进用户消息的 Provider（Copilot、OpenClaw、ACP）
    * 据此避免每轮都把同一份长规则写进会话历史；新会话总是需要。
@@ -33,6 +37,21 @@ export class AgentCancelledError extends Error {
   constructor(message = "已按请求停止。") {
     super(message);
     this.name = "AgentCancelledError";
+  }
+}
+
+/** Known failure that must be surfaced once, not automatically re-executed. */
+export class AgentNonRetryableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AgentNonRetryableError";
+  }
+}
+
+export class AgentExecutionUncertainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentExecutionUncertainError";
   }
 }
 

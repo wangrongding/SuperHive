@@ -45,8 +45,8 @@ AI Hive Agent
   --state-dir PATH  Agent 状态目录（默认 ~/.ai-hive/agents）
   --codex PATH      Codex CLI 命令（默认 codex）
   --codex-transport MODE
-                    auto、app-server 或 mcp（默认 auto：优先 app-server，
-                    旧版 Codex 自动回退到 mcp-server）
+                    auto、app-server 或 mcp（auto 使用 app-server，不自动降级；
+                    mcp 仅供显式选择且已确认支持旧协议的 CLI）
   --claude PATH     Claude Code CLI 命令（默认 claude）
   --copilot PATH    GitHub Copilot CLI 命令（默认 copilot）
   --openclaw PATH   OpenClaw CLI 命令（默认 openclaw）

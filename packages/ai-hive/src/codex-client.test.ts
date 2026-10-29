@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AgentExecutionUncertainError, AgentNonRetryableError } from "./responder.js";
 import { CodexMcpResponder, isMissingCodexThread } from "./codex-client.js";
 
 const options = {
@@ -29,6 +30,40 @@ const tools = [
 ];
 
 describe("CodexMcpResponder", () => {
+  it("latches unknown execution and never resends on a closed transport", async () => {
+    const callTool = vi.fn(async () => {
+      throw new Error("MCP error -32000: Connection closed");
+    });
+    const responder = new CodexMcpResponder(options, { client: { callTool }, tools });
+    await expect(responder.reply({ instructions: "r", prompt: "p" })).rejects.toBeInstanceOf(
+      AgentExecutionUncertainError,
+    );
+    await expect(responder.reply({ instructions: "r", prompt: "p" })).rejects.toBeInstanceOf(
+      AgentNonRetryableError,
+    );
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+  it("does not claim legacy cancellation is confirmed or replay an isError result", async () => {
+    const callTool = vi.fn(() => new Promise(() => {}));
+    const responder = new CodexMcpResponder(options, { client: { callTool }, tools });
+    const controller = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "p", signal: controller.signal });
+    await vi.waitFor(() => expect(callTool).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
+  });
+  it("does not treat an MCP isError result as a successful answer", async () => {
+    const callTool = vi.fn(async () => ({
+      isError: true,
+      content: [{ type: "text", text: "failed" }],
+    }));
+    const responder = new CodexMcpResponder(options, { client: { callTool }, tools });
+    await expect(responder.reply({ instructions: "r", prompt: "p" })).rejects.toBeInstanceOf(
+      AgentExecutionUncertainError,
+    );
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["read-only", "read-only", "untrusted"],
     ["workspace", "workspace-write", "never"],
@@ -105,7 +140,7 @@ describe("CodexMcpResponder", () => {
         prompt: "Shared context",
         threadId: "old-thread",
       }),
-    ).rejects.toThrow("HTTP 502");
+    ).rejects.toBeInstanceOf(AgentExecutionUncertainError);
     expect(callTool).toHaveBeenCalledTimes(1);
   });
 });

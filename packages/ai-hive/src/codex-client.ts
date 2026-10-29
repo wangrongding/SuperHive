@@ -1,3 +1,9 @@
+import { codexStartupFailure } from "./codex-errors.js";
+import {
+  AgentCancelledError,
+  AgentExecutionUncertainError,
+  AgentNonRetryableError,
+} from "./responder.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { codexHiveMcpOverrides, type HiveMcpConnection } from "./hive-mcp-config.js";
@@ -73,11 +79,14 @@ export function isMissingCodexThread(error: unknown): boolean {
     messages.push(current instanceof Error ? current.message : String(current));
     current = current instanceof Error ? current.cause : undefined;
   }
-  return /session not found for (?:thread|conversation)[_ ]?id/i.test(messages.join("\n"));
+  return /session not found for (?:thread|conversation)[_ ]?id|thread not found|no rollout found for thread/i.test(
+    messages.join("\n"),
+  );
 }
 
 export class CodexMcpResponder implements AgentResponder {
   private client: ToolCaller | undefined;
+  private executionUncertain = false;
   private transport: StdioClientTransport | undefined;
   private tools: Map<string, ToolDescription>;
   private readonly log: (message: string) => void;
@@ -97,30 +106,75 @@ export class CodexMcpResponder implements AgentResponder {
   }
 
   async reply(input: AgentReplyInput): Promise<AgentReply> {
+    if (input.signal?.aborted) throw new AgentCancelledError();
+    if (this.executionUncertain)
+      throw new AgentNonRetryableError(
+        "上次 Codex MCP 执行结果未知，会话已锁定；请先核对执行状态。",
+      );
     await this.ensureConnected();
+    if (input.signal?.aborted) throw new AgentCancelledError();
     const client = this.client!;
     if (input.threadId) {
       try {
-        const result = await client.callTool({
-          name: "codex-reply",
-          arguments: { threadId: input.threadId, prompt: input.prompt },
-        });
+        const result = await this.callTool(
+          client,
+          {
+            name: "codex-reply",
+            arguments: { threadId: input.threadId, prompt: input.prompt },
+          },
+          input.signal,
+        );
         if (result?.isError) {
           throw new Error(textFromResult(result) || "Codex 无法继续现有会话。");
         }
         return parseToolResult(result, input.threadId);
       } catch (error) {
-        if (!isMissingCodexThread(error)) throw error;
+        if (!isMissingCodexThread(error)) throw this.uncertain();
         this.log(`[hive] Codex 旧会话 ${input.threadId} 已失效，自动创建新会话继续处理。`);
       }
     }
 
-    return this.startThread(client, input);
+    try {
+      return await this.startThread(client, input);
+    } catch (error) {
+      if (error instanceof AgentNonRetryableError) throw error;
+      throw this.uncertain();
+    }
+  }
+
+  private callTool(
+    client: ToolCaller,
+    request: { name: string; arguments?: Record<string, unknown> },
+    signal?: AbortSignal,
+  ): Promise<any> {
+    if (signal?.aborted) return Promise.reject(new AgentCancelledError());
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(this.uncertain());
+      signal?.addEventListener("abort", onAbort, { once: true });
+      // A legacy tool call cannot prove cancellation; stop waiting, never claim it stopped.
+      Promise.resolve()
+        .then(() => {
+          if (signal?.aborted) throw this.uncertain();
+          return client.callTool(request);
+        })
+        .then(resolve, reject)
+        .finally(() => signal?.removeEventListener("abort", onAbort));
+    });
+  }
+
+  private uncertain(): AgentExecutionUncertainError {
+    this.executionUncertain = true;
+    return new AgentExecutionUncertainError(
+      "Codex MCP 执行请求已发送但结果不可确认；禁止自动重放。",
+    );
   }
 
   private async startThread(client: ToolCaller, input: AgentReplyInput): Promise<AgentReply> {
     const tool = this.tools.get("codex");
-    if (!tool) throw new Error("当前 codex mcp-server 没有暴露 codex 工具。");
+    if (!tool)
+      throw new AgentNonRetryableError(
+        "当前 codex mcp-server 没有暴露 codex 工具；未发送执行请求。",
+      );
     const properties = tool.inputSchema?.properties ?? {};
     const access = codexAccess(this.options.access);
     const arguments_: Record<string, unknown> = { prompt: input.prompt };
@@ -136,7 +190,12 @@ export class CodexMcpResponder implements AgentResponder {
     } else {
       arguments_.prompt = `${input.instructions}\n\n---\n\n${input.prompt}`;
     }
-    const result = await client.callTool({ name: "codex", arguments: arguments_ });
+    const result = await this.callTool(
+      client,
+      { name: "codex", arguments: arguments_ },
+      input.signal,
+    );
+    if (result?.isError) throw this.uncertain();
     return parseToolResult(result);
   }
 
@@ -159,11 +218,16 @@ export class CodexMcpResponder implements AgentResponder {
         `approval_policy="${access.approvalPolicy}"`,
         ...codexHiveMcpOverrides(this.options.hive).flatMap((override) => ["-c", override]),
       ],
-      stderr: "inherit",
+      stderr: "pipe",
     });
     const client = new Client({ name: "ai-hive-agent", version: "0.1.1" });
+    let stderr = "";
     try {
-      await client.connect(transport);
+      const connecting = client.connect(transport);
+      transport.stderr?.on("data", (chunk: Buffer) => {
+        stderr = (stderr + chunk.toString("utf8")).slice(-4000);
+      });
+      await connecting;
       const listed = await client.listTools();
       this.tools = new Map(
         listed.tools.map((tool) => [tool.name, tool as unknown as ToolDescription]),
@@ -177,12 +241,7 @@ export class CodexMcpResponder implements AgentResponder {
       this.client = client as unknown as ToolCaller;
     } catch (error) {
       await transport.close().catch(() => undefined);
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(
-          `找不到 Codex 命令 “${this.options.command}”。请先安装 Codex CLI 并完成登录。`,
-        );
-      }
-      throw error;
+      throw codexStartupFailure("mcp-server initialize/tools/list", error, stderr);
     }
   }
 }

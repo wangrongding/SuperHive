@@ -6,30 +6,31 @@ import type { AgentResponder } from "./responder.js";
 const hive = { serverUrl: "http://hive", roomId: "general", username: "agent", token: "t" };
 
 describe("CodexResponder", () => {
-  it("falls back to mcp-server once when app-server is unsupported", async () => {
+  it("never silently falls back, even after an explicit unsupported response", async () => {
+    const error = new CodexAppServerUnsupportedError("initialize unsupported");
     const appServer: AgentResponder = {
       reply: vi.fn(async () => {
-        throw new CodexAppServerUnsupportedError("unrecognized subcommand 'app-server'");
+        throw error;
       }),
-      steer: vi.fn(async () => true),
-      close: vi.fn(async () => undefined),
     };
-    const mcp: AgentResponder = { reply: vi.fn(async () => ({ text: "via mcp", threadId: "t1" })) };
-    const log = vi.fn();
+    const mcp = vi.fn();
+    const responder = new CodexResponder({ command: "codex", cwd: "/w", hive }, { appServer, mcp });
+    for (let i = 0; i < 2; i++)
+      await expect(responder.reply({ instructions: "i", prompt: "p" })).rejects.toBe(error);
+    expect(mcp).not.toHaveBeenCalled();
+  });
+
+  it("uses MCP only when explicitly selected", async () => {
+    const mcp: AgentResponder = { reply: vi.fn(async () => ({ text: "legacy" })) };
+    const appServer: AgentResponder = { reply: vi.fn() };
     const responder = new CodexResponder(
-      { command: "codex", cwd: "/w", hive, log },
+      { command: "codex", cwd: "/w", hive, transport: "mcp" },
       { appServer, mcp: () => mcp },
     );
     await expect(responder.reply({ instructions: "i", prompt: "p" })).resolves.toEqual({
-      text: "via mcp",
-      threadId: "t1",
+      text: "legacy",
     });
-    await responder.reply({ instructions: "i", prompt: "p2" });
-    expect(appServer.reply).toHaveBeenCalledTimes(1);
-    expect(mcp.reply).toHaveBeenCalledTimes(2);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("回退到 codex mcp-server"));
-    // mcp-server 不支持插入消息
-    await expect(responder.steer("x")).resolves.toBe(false);
+    expect(appServer.reply).not.toHaveBeenCalled();
   });
 
   it("does not hide real app-server errors behind a fallback", async () => {

@@ -1,5 +1,24 @@
 import { z } from "zod";
 
+export const LIMITS = {
+  maxHopCount: 4,
+  maxAgentMessagesPerTrace: 12,
+  maxAgentRepliesPerMinute: 6,
+  /** 防止误粘巨型文件；展示折叠和模型上下文预算与此保护上限分开。单位为 UTF-16 code units。 */
+  maxMessageLength: 100_000,
+  /** 容纳上限内正文的 UTF-8 / JSON 转义开销，同时限制传输层的内存占用。 */
+  maxClientPayloadBytes: 1_048_576,
+  /** 自上一条人类消息以来，房间内 Agent 发言触发其他 Agent 的最多轮数；人一发言即清零 */
+  maxConsecutiveAgentTurns: 8,
+  /** 同一对 Agent（发起方 → 目标）在一个房间里 24 小时内的最多唤醒次数 */
+  maxAgentPairTurnsPerDay: 40,
+  /** running 调用超过这么久没有任何回报，视为结果未知（timed_out） */
+  invocationStaleMs: 10 * 60_000,
+  /** Agent 在线却一直没确认收到 @，视为投递未被接收 */
+  invocationUnacknowledgedMs: 2 * 60_000,
+  maxWhiteboardEntriesPerSlot: 50,
+} as const;
+
 export const participantTypeSchema = z.enum(["human", "agent"]);
 export const participantStatusSchema = z.enum(["online", "offline", "busy"]);
 export const agentProviderSchema = z
@@ -29,7 +48,7 @@ export const chatMessageSchema = z.object({
   senderName: z.string(),
   senderType: participantTypeSchema,
   // 已撤回的消息正文会被清空，因此不要求 min(1)
-  content: z.string().max(4000),
+  content: z.string().max(LIMITS.maxMessageLength),
   mentions: z.array(z.string()),
   replyToMessageId: z.string().uuid().optional(),
   traceId: z.string().uuid(),
@@ -53,7 +72,7 @@ export const participantJoinEventSchema = z.object({
 export const messageSendEventSchema = z.object({
   type: z.literal("message.send"),
   clientMessageId: z.string().min(1).max(100),
-  content: z.string().trim().min(1).max(4000),
+  content: z.string().trim().min(1).max(LIMITS.maxMessageLength),
   replyToMessageId: z.string().uuid().optional(),
   parentMessageId: z.string().uuid().optional(),
 });
@@ -84,9 +103,44 @@ export const invocationStatusSchema = z.enum([
   "failed",
   "blocked",
   "timed_out",
+  "cancelling",
   "cancelled",
 ]);
 export const invocationBlockReasonSchema = z.enum(["hop_limit", "consecutive_limit", "pair_limit"]);
+
+/** Structured runtime telemetry: deliberately excludes raw errors, tool arguments and model text. */
+export const runtimeEventSchema = z
+  .object({
+    kind: z.enum(["capabilities", "activity", "provider_error", "recovered"]),
+    observability: z.enum(["partial", "full", "heartbeat"]).optional(),
+    phase: z.enum(["starting", "working", "thinking", "tool_running", "tool_completed"]).optional(),
+    tool: z.enum(["read", "write", "search", "command", "collaboration", "other"]).optional(),
+    code: z.number().int().min(100).max(599).optional(),
+    retryAttempt: z.number().int().min(1).max(1000).optional(),
+    retryInMs: z.number().int().min(0).max(86_400_000).optional(),
+  })
+  .strict();
+export const runtimeTimelineEntrySchema = runtimeEventSchema.extend({ at: z.string().datetime() });
+export const runtimeObservationSchema = z.object({
+  observability: z.enum(["partial", "full", "heartbeat"]),
+  lastHeartbeatAt: z.string().datetime(),
+  lastRuntimeEventAt: z.string().datetime().optional(),
+  lastProgressAt: z.string().datetime().optional(),
+  tool: z.enum(["read", "write", "search", "command", "collaboration", "other"]).optional(),
+  phase: z.enum(["starting", "working", "thinking", "tool_running", "tool_completed"]).optional(),
+  lastError: z
+    .object({
+      at: z.string().datetime(),
+      code: z.number().int().min(100).max(599).optional(),
+      retryAttempt: z.number().int().min(1).max(1000).optional(),
+      nextRetryAt: z.string().datetime().optional(),
+      recoveredAt: z.string().datetime().optional(),
+    })
+    .optional(),
+  history: z.array(runtimeTimelineEntrySchema).max(12),
+});
+export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
+export type RuntimeObservation = z.infer<typeof runtimeObservationSchema>;
 
 export const invocationSchema = z.object({
   id: z.string().uuid(),
@@ -100,6 +154,7 @@ export const invocationSchema = z.object({
   blockReason: invocationBlockReasonSchema.optional(),
   detail: z.string().max(500).optional(),
   progress: z.string().max(200).optional(),
+  runtime: runtimeObservationSchema.optional(),
   replyMessageId: z.string().uuid().optional(),
   attempts: z.number().int().min(1),
   createdAt: z.string().datetime(),
@@ -131,9 +186,10 @@ export const whiteboardEntrySchema = z.object({
 export const invocationReportEventSchema = z.object({
   type: z.literal("invocation.report"),
   messageId: z.string().uuid(),
-  status: z.enum(["received", "running", "completed", "failed", "cancelled"]),
+  status: z.enum(["received", "running", "completed", "failed", "cancelled", "uncertain"]),
   detail: z.string().trim().max(500).optional(),
   progress: z.string().trim().max(200).optional(),
+  runtimeEvent: runtimeEventSchema.optional(),
   replyMessageId: z.string().uuid().optional(),
   /** Agent 本轮已读到的公共消息 seq，Hive MCP 据此只附带之后的新消息 */
   contextSeq: z.number().int().nonnegative().optional(),
@@ -434,22 +490,6 @@ export function isMentioned(content: string, username: string): boolean {
   const normalized = username.toLocaleLowerCase();
   return parseMentions(content).some((mention) => mention.toLocaleLowerCase() === normalized);
 }
-
-export const LIMITS = {
-  maxHopCount: 4,
-  maxAgentMessagesPerTrace: 12,
-  maxAgentRepliesPerMinute: 6,
-  maxMessageLength: 4000,
-  /** 自上一条人类消息以来，房间内 Agent 发言触发其他 Agent 的最多轮数；人一发言即清零 */
-  maxConsecutiveAgentTurns: 8,
-  /** 同一对 Agent（发起方 → 目标）在一个房间里 24 小时内的最多唤醒次数 */
-  maxAgentPairTurnsPerDay: 40,
-  /** running 调用超过这么久没有任何回报，视为结果未知（timed_out） */
-  invocationStaleMs: 10 * 60_000,
-  /** Agent 在线却一直没确认收到 @，视为投递未被接收 */
-  invocationUnacknowledgedMs: 2 * 60_000,
-  maxWhiteboardEntriesPerSlot: 50,
-} as const;
 
 /**
  * 去掉可能扰乱终端、Prompt 边界或文本方向的不可见字符：C0/C1 控制符（保留换行与制表）、

@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ChatMessage, Participant, WhiteboardEntry } from "@ai-hive/protocol";
+import {
+  messageSendEventSchema,
+  type ChatMessage,
+  type Participant,
+  type WhiteboardEntry,
+} from "@ai-hive/protocol";
 import { z } from "zod";
 
 export type InboxDigest = {
@@ -135,9 +140,9 @@ export function createHiveMcpServer(context: HiveMcpContext): McpServer {
     {
       title: "Send a Hive room message",
       description:
-        "以当前已连接 Agent 身份向 Hive 房间发送一条公共消息。可在 content 中 @其他在线 Agent。主动消息省略 parentMessageId；回复或委派时传入触发消息 ID。",
+        "以当前已连接 Agent 身份向 Hive 房间发送一条公共消息。可在 content 中 @其他在线 Agent。回复或委派时传入触发消息 ID；执行调用期间省略时，服务端会自动挂到当前触发消息下，防循环上限照常生效。",
       inputSchema: {
-        content: z.string().trim().min(1).max(4000).describe("要发送到公共房间的文本"),
+        content: messageSendEventSchema.shape.content.describe("要发送到公共房间的文本"),
         clientMessageId: z
           .string()
           .min(1)

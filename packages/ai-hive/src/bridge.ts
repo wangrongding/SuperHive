@@ -7,7 +7,13 @@ import {
   type RoomSummary,
   type WhiteboardEntry,
 } from "./hive-protocol.js";
-import { isCancelled, type AgentAccessMode, type AgentResponder } from "./responder.js";
+import {
+  AgentExecutionUncertainError,
+  AgentNonRetryableError,
+  isCancelled,
+  type AgentAccessMode,
+  type AgentResponder,
+} from "./responder.js";
 import { resolveReplyText } from "./silent-reply.js";
 import {
   buildDeveloperInstructions,
@@ -63,6 +69,8 @@ export type BridgeTuning = {
   heartbeatMs?: number;
   /** 进度回报的最小间隔 */
   progressThrottleMs?: number;
+  /** 多久未收到 Runtime 新进度时提示待核实；只告警，不自动取消或重试 */
+  progressStaleMs?: number;
   /** 隔多少轮或多久重新发送一次完整上下文 */
   fullPromptEveryTurns?: number;
   fullPromptEveryMs?: number;
@@ -126,6 +134,7 @@ export class AgentBridge {
       maxBatchSize: 10,
       heartbeatMs: 60_000,
       progressThrottleMs: 3_000,
+      progressStaleMs: 120_000,
       fullPromptEveryTurns: 8,
       fullPromptEveryMs: 30 * 60_000,
       ...options.tuning,
@@ -204,9 +213,8 @@ export class AgentBridge {
     for (const messageId of inflight.messageIds) {
       this.room.report({
         messageId,
-        status: "failed",
-        detail:
-          "Agent 在处理途中意外退出，结果未知；为避免重复执行未自动重跑，可在界面中手动重试。",
+        status: "uncertain",
+        detail: "Agent 在处理途中意外退出，结果未知；未自动重跑，需先核对原执行与工具进程。",
       });
       this.rememberProcessed(messageId);
     }
@@ -218,9 +226,30 @@ export class AgentBridge {
     this.ownParticipantId = snapshot.self.id;
     this.log(`[hive] 已加入 #${this.options.roomId}，公共消息最新 seq=${snapshot.latestSeq}`);
     if (!this.stateExisted) {
+      // 首次加入不回放历史聊天，但服务端仍为本 Agent 挂着的 queued 调用要接着做，
+      // 否则这些 @ 永远没人处理，最后被扫成"结果未知"
+      const queued = new Set(
+        (snapshot.invocations ?? [])
+          .filter(
+            (invocation) =>
+              invocation.agentId === this.ownParticipantId && invocation.status === "queued",
+          )
+          .map((invocation) => invocation.messageId),
+      );
       this.state.lastProcessedSeq = snapshot.latestSeq;
       this.stateExisted = true;
       await this.store.save(this.state);
+      for (const message of snapshot.messages) {
+        if (queued.delete(message.id)) this.enqueue(message);
+      }
+      // 快照只带最近的消息；更早的提及拿不到原文，如实报告并交给人决定是否重试
+      for (const messageId of queued) {
+        this.room.report({
+          messageId,
+          status: "failed",
+          detail: "Agent 首次加入时这条提及已超出补拉范围，未处理；可手动重试。",
+        });
+      }
       return;
     }
     const known = new Map<string, Invocation>();
@@ -239,8 +268,8 @@ export class AgentBridge {
         ) {
           this.room.report({
             messageId: message.id,
-            status: "failed",
-            detail: "Agent 重新连接时这次处理已不在进行，结果未知；可在界面中手动重试。",
+            status: "uncertain",
+            detail: "Agent 重新连接时这次处理已不在进行，结果未知；需先核对原执行与工具进程。",
           });
           this.rememberProcessed(message.id);
         }
@@ -282,7 +311,16 @@ export class AgentBridge {
     if (this.isLocal(message.id) || !this.isEligible(message)) return;
     if (this.cancelledEarly.delete(message.id)) {
       this.rememberProcessed(message.id);
-      void this.store.save(this.state);
+      void this.store
+        .save(this.state)
+        .then(() => {
+          this.room.report({
+            messageId: message.id,
+            status: "cancelled",
+            detail: "任务在执行前被取消",
+          });
+        })
+        .catch(() => this.room.report({ messageId: message.id, status: "uncertain" }));
       return;
     }
     this.room.report({ messageId: message.id, status: "received" });
@@ -300,12 +338,53 @@ export class AgentBridge {
     let steered = false;
     try {
       steered = await this.responder.steer!(buildSteerPrompt(message));
-    } catch {
+    } catch (error) {
+      if (error instanceof AgentExecutionUncertainError) {
+        this.rememberProcessed(message.id);
+        await this.store.save(this.state);
+        this.room.report({
+          messageId: message.id,
+          status: "uncertain",
+          detail: "消息已尝试注入但未获确认；禁止退回队列或自动重放。",
+        });
+        return;
+      }
       steered = false;
     } finally {
       this.steering.delete(message.id);
     }
-    // 回合在注入期间已经结束时宁可再排队处理一次，也不能把消息算进一个没看到它的回复
+    if (this.cancelledEarly.delete(message.id)) {
+      if (steered && this.active === active && active.accepting) {
+        active.messages.push(message);
+        active.cancelled.add(message.id);
+      } else if (!steered) {
+        this.rememberProcessed(message.id);
+        await this.store.save(this.state);
+        this.room.report({
+          messageId: message.id,
+          status: "cancelled",
+          detail: "未注入的排队任务已移除",
+        });
+      } else {
+        this.room.report({
+          messageId: message.id,
+          status: "uncertain",
+          detail: "取消与注入并发，执行结果需核对",
+        });
+      }
+      return;
+    }
+    // A confirmed steer that races completion may already have run; never queue it twice.
+    if (steered && (this.active !== active || !active.accepting)) {
+      this.rememberProcessed(message.id);
+      await this.store.save(this.state);
+      this.room.report({
+        messageId: message.id,
+        status: "uncertain",
+        detail: "消息注入与回合结束并发，结果待核实；禁止自动重放。",
+      });
+      return;
+    }
     if (steered && this.active === active && active.accepting) {
       active.messages.push(message);
       this.log(`[hive] #${message.seq} 已注入正在进行的回合`);
@@ -348,7 +427,18 @@ export class AgentBridge {
       this.pending.splice(pendingIndex, 1);
       this.log(`[hive] 排队中的提及 ${messageId} 已被停止`);
       this.rememberProcessed(messageId);
-      void this.store.save(this.state);
+      void this.store
+        .save(this.state)
+        .then(() => {
+          this.room.report({ messageId, status: "cancelled", detail: "尚未执行的排队任务已移除" });
+        })
+        .catch(() =>
+          this.room.report({
+            messageId,
+            status: "uncertain",
+            detail: "无法持久化取消结果，需核对",
+          }),
+        );
       return;
     }
     const active = this.active;
@@ -416,18 +506,33 @@ export class AgentBridge {
 
       this.reportAll(active.messages, { status: "running", contextSeq: context.latestSeq });
       this.room.setTyping(true);
-      let lastProgressAt = 0;
+      // Bridge 存活不等于 Runtime 在推进；心跳不得刷新最后一次真实进度的时间。
+      let lastRuntimeProgressAt = Date.now();
+      let lastProgressReportAt: number | undefined;
+      let lastRuntimeReportAt: number | undefined;
       let lastProgress: string | undefined;
-      const reportProgress = (progress?: string) => {
-        lastProgressAt = Date.now();
-        if (progress) lastProgress = progress;
-        this.reportAll(active.messages, {
-          status: "running",
-          ...(lastProgress ? { progress: lastProgress } : {}),
-        });
+      let lastActivityKey: string | undefined;
+      let lastActivityReportAt: number | undefined;
+      const reportProgress = (progress: string) => {
+        lastProgressReportAt = Date.now();
+        this.reportAll(active.messages, { status: "running", progress: progress.slice(0, 200) });
       };
       heartbeat = setInterval(() => {
-        if (Date.now() - lastProgressAt >= this.tuning.heartbeatMs) reportProgress();
+        const now = Date.now();
+        if (
+          lastProgressReportAt !== undefined &&
+          now - lastProgressReportAt < this.tuning.heartbeatMs
+        ) {
+          return;
+        }
+        const idleMs = Math.max(0, now - lastRuntimeProgressAt);
+        const seconds = Math.floor(idleMs / 1000);
+        const elapsed =
+          seconds >= 60 ? `${Math.floor(seconds / 60)}分${seconds % 60}秒` : `${seconds}秒`;
+        const warning = idleMs >= this.tuning.progressStaleMs ? "，状态待核实" : "";
+        reportProgress(
+          `仅 Bridge 心跳；${elapsed}未收到 Runtime 新进度${warning}${lastProgress ? `；上次：${lastProgress}` : ""}`,
+        );
       }, this.tuning.heartbeatMs);
       heartbeat.unref?.();
 
@@ -441,11 +546,59 @@ export class AgentBridge {
         refreshInstructions: prompt.full,
         signal: active.controller.signal,
         onProgress: (progress) => {
-          if (Date.now() - lastProgressAt < this.tuning.progressThrottleMs) {
-            lastProgress = progress.slice(0, 200);
+          if (this.active !== active || active.controller.signal.aborted) return;
+          lastRuntimeProgressAt = Date.now();
+          lastProgress = progress.slice(0, 200);
+          if (
+            lastRuntimeReportAt !== undefined &&
+            lastRuntimeProgressAt - lastRuntimeReportAt < this.tuning.progressThrottleMs
+          ) {
             return;
           }
-          reportProgress(progress.slice(0, 200));
+          lastRuntimeReportAt = lastRuntimeProgressAt;
+          lastProgressReportAt = Date.now();
+          this.reportAll(active.messages, {
+            status: "running",
+            progress: lastProgress,
+            runtimeEvent: { kind: "activity", phase: "working" },
+          });
+        },
+        onRuntimeEvent: (event) => {
+          if (this.active !== active || active.controller.signal.aborted) return;
+          const now = Date.now();
+          if (event.kind === "activity" || event.kind === "recovered") lastRuntimeProgressAt = now;
+          if (event.kind === "activity") {
+            const key = `${event.phase}:${event.tool ?? ""}`;
+            if (
+              key === lastActivityKey &&
+              lastActivityReportAt !== undefined &&
+              now - lastActivityReportAt < this.tuning.progressThrottleMs
+            )
+              return;
+            lastActivityKey = key;
+            lastActivityReportAt = now;
+            lastProgress =
+              event.phase === "tool_running"
+                ? "Runtime 正在执行工具"
+                : event.phase === "tool_completed"
+                  ? "Runtime 工具已返回（不代表任务完成）"
+                  : event.phase === "starting"
+                    ? "正在启动 Runtime"
+                    : event.phase === "working"
+                      ? "收到 Runtime 执行事件"
+                      : "收到模型响应事件";
+          }
+          if (event.kind === "provider_error") lastProgress = "API 异常，等待恢复证据";
+          if (event.kind === "recovered") lastProgress = "收到模型恢复证据";
+          lastProgressReportAt = now;
+          this.reportAll(
+            active.messages.filter((message) => !active.cancelled.has(message.id)),
+            {
+              status: "running",
+              runtimeEvent: event,
+              ...(event.kind !== "capabilities" && lastProgress ? { progress: lastProgress } : {}),
+            },
+          );
         },
         ...(this.state.threadId ? { threadId: this.state.threadId } : {}),
       });
@@ -454,7 +607,7 @@ export class AgentBridge {
       this.notePromptSent(prompt);
 
       const resolved = resolveReplyText(reply.text);
-      const content = resolved.silent ? "" : resolved.text.slice(0, 4000);
+      const content = resolved.silent ? "" : resolved.text;
       if (!resolved.silent && !content) throw new Error("Agent 回复为空。");
       const live = active.messages.filter(
         (message) => !this.recalled.has(message.id) && !active.cancelled.has(message.id),
@@ -494,6 +647,13 @@ export class AgentBridge {
       delete this.state.inflight;
       // 先持久化"已处理"，再对外宣告完成：两步之间崩溃时宁可漏报，也不重复执行
       await this.store.save(this.state);
+      this.reportAll(
+        active.messages.filter((message) => active.cancelled.has(message.id)),
+        {
+          status: "cancelled",
+          detail: "本轮已结束，已停止的触发消息未发送回复",
+        },
+      );
       this.reportAll(live, {
         status: "completed",
         ...(replyMessageId ? { replyMessageId } : { detail: "无需回复" }),
@@ -513,6 +673,23 @@ export class AgentBridge {
 
   private async handleBatchError(active: ActiveBatch, error: unknown): Promise<void> {
     delete this.state.inflight;
+    if (error instanceof AgentExecutionUncertainError) {
+      // The provider may have completed side effects before its result stream was lost.
+      for (const message of active.messages) this.rememberProcessed(message.id);
+      await this.store.save(this.state);
+      this.reportAll(active.messages, {
+        status: "uncertain",
+        detail: "执行结果未知，已禁止自动重放；请先核对已执行操作与相关进程，再决定是否手动重试。",
+      });
+      return;
+    }
+    if (error instanceof AgentNonRetryableError) {
+      for (const message of active.messages) this.rememberProcessed(message.id);
+      await this.store.save(this.state);
+      this.reportAll(active.messages, { status: "failed", detail: error.message.slice(0, 500) });
+      this.log(`[hive] Codex 调用不可自动重试：${error.message}`);
+      return;
+    }
     if (isCancelled(error, active.controller.signal)) {
       this.log("[hive] 当前回合已停止");
       for (const message of active.messages) this.rememberProcessed(message.id);

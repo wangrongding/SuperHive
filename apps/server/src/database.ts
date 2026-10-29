@@ -1,3 +1,4 @@
+import { runtimeObservationSchema, type RuntimeObservation } from "@ai-hive/protocol";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import {
@@ -107,6 +108,7 @@ type InvocationRow = {
   block_reason: InvocationBlockReason | null;
   detail: string | null;
   progress: string | null;
+  runtime: string | null;
   reply_message_id: string | null;
   attempts: number;
   created_at: string;
@@ -137,6 +139,7 @@ export type InvocationPatch = {
   blockReason?: InvocationBlockReason | null;
   detail?: string | null;
   progress?: string | null;
+  runtime?: RuntimeObservation | null;
   replyMessageId?: string | null;
   attempts?: number;
   receivedAt?: string | null;
@@ -215,7 +218,15 @@ function mapMessage(row: MessageRow): ChatMessage {
 }
 
 function mapInvocation(row: InvocationRow): Invocation {
+  let runtime: RuntimeObservation | undefined;
+  try {
+    const parsed = runtimeObservationSchema.safeParse(JSON.parse(row.runtime ?? "null"));
+    if (parsed.success) runtime = parsed.data;
+  } catch {
+    /* A corrupt optional diagnostic field must not hide the invocation. */
+  }
   return {
+    ...(runtime ? { runtime } : {}),
     id: row.id,
     roomId: row.room_id,
     messageId: row.message_id,
@@ -404,6 +415,10 @@ export class HiveDatabase {
     if (!participantColumns.some((column) => column.name === "provider")) {
       this.db.exec("ALTER TABLE participants ADD COLUMN provider TEXT");
     }
+    const invocationColumns = this.db.pragma("table_info(invocations)") as Array<{ name: string }>;
+    if (!invocationColumns.some((column) => column.name === "runtime")) {
+      this.db.exec("ALTER TABLE invocations ADD COLUMN runtime TEXT");
+    }
     const messageColumns = this.db.pragma("table_info(messages)") as Array<{ name: string }>;
     if (!messageColumns.some((column) => column.name === "deleted_at")) {
       this.db.exec("ALTER TABLE messages ADD COLUMN deleted_at TEXT");
@@ -413,6 +428,10 @@ export class HiveDatabase {
       // 人为 Agent 互相对话追加的轮数；只在授予时的那条人类消息之后有效
       this.db.exec("ALTER TABLE rooms ADD COLUMN agent_turn_allowance INTEGER NOT NULL DEFAULT 0");
       this.db.exec("ALTER TABLE rooms ADD COLUMN allowance_after_seq INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!participantColumns.some((column) => column.name === "inbox_seq")) {
+      // Hive MCP 未读游标；NULL 表示该 Agent 还没建立过游标
+      this.db.exec("ALTER TABLE participants ADD COLUMN inbox_seq INTEGER");
     }
     // 全文索引：trigram 分词可直接按子串匹配中文；外部内容表随 messages 触发器同步（撤回会清空正文）
     const ftsExists = this.db
@@ -576,6 +595,18 @@ export class HiveDatabase {
         now,
       );
     return this.getParticipant(id)!;
+  }
+
+  /** Hive MCP 未读游标：未建立过时返回 undefined */
+  getInboxCursor(participantId: string): number | undefined {
+    const row = this.db
+      .prepare("SELECT inbox_seq FROM participants WHERE id = ?")
+      .get(participantId) as { inbox_seq: number | null } | undefined;
+    return row?.inbox_seq ?? undefined;
+  }
+
+  setInboxCursor(participantId: string, seq: number): void {
+    this.db.prepare("UPDATE participants SET inbox_seq = ? WHERE id = ?").run(seq, participantId);
   }
 
   getParticipant(id: string): Participant | undefined {
@@ -841,12 +872,31 @@ export class HiveDatabase {
     return row ? mapInvocation(row) : undefined;
   }
 
+  /** 已请求停止、尚未收到确认的调用：Agent 重新连接时需要再次下发停止请求 */
+  listCancellingInvocations(agentId: string): Invocation[] {
+    const rows = this.db
+      .prepare("SELECT * FROM invocations WHERE agent_id = ? AND status = 'cancelling'")
+      .all(agentId) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
+  /** Agent 当前正在执行（含停止中）的调用 */
+  listExecutingInvocations(agentId: string): Invocation[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM invocations WHERE agent_id = ? AND status IN ('running', 'cancelling')",
+      )
+      .all(agentId) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
   updateInvocation(id: string, patch: InvocationPatch): Invocation {
     const columns: Record<keyof InvocationPatch, string> = {
       status: "status",
       blockReason: "block_reason",
       detail: "detail",
       progress: "progress",
+      runtime: "runtime",
       replyMessageId: "reply_message_id",
       attempts: "attempts",
       receivedAt: "received_at",
@@ -858,7 +908,7 @@ export class HiveDatabase {
     for (const [key, column] of Object.entries(columns) as Array<[keyof InvocationPatch, string]>) {
       if (patch[key] === undefined) continue;
       assignments.push(`${column} = ?`);
-      values.push(patch[key]);
+      values.push(key === "runtime" && patch.runtime ? JSON.stringify(patch.runtime) : patch[key]);
     }
     this.db
       .prepare(`UPDATE invocations SET ${assignments.join(", ")} WHERE id = ?`)
@@ -874,7 +924,7 @@ export class HiveDatabase {
       .prepare(
         `SELECT * FROM invocations WHERE id IN (
            SELECT id FROM invocations WHERE room_id = ? ORDER BY created_at DESC LIMIT ?
-         ) OR (room_id = ? AND status IN ('queued', 'running', 'timed_out'))
+         ) OR (room_id = ? AND status IN ('queued', 'running', 'cancelling', 'timed_out'))
          ORDER BY created_at ASC`,
       )
       .all(roomId, limit, roomId) as InvocationRow[];
@@ -1109,7 +1159,7 @@ export class HiveDatabase {
     const rows = this.db
       .prepare(
         `SELECT * FROM invocations
-         WHERE status IN ('queued', 'running')
+         WHERE status IN ('queued', 'running', 'cancelling')
             OR (status IN ('failed', 'blocked', 'timed_out') AND updated_at >= ?)
          ORDER BY updated_at DESC LIMIT ?`,
       )

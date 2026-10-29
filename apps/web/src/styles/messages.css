@@ -765,3 +765,28 @@
     opacity: 1;
   }
 }
+
+/* 长消息折叠：只裁剪显示高度，正文仍完整渲染，复制与分享不受影响。
+   用 mask 渐隐而不是叠色块，自己和他人的气泡背景色不同也都适用 */
+.message-collapsible.collapsed .message-collapsible-content {
+  max-height: 22em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+.message-expand {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.message-expand:hover {
+  color: var(--text);
+  text-decoration: underline;
+}

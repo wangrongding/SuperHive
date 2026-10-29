@@ -15,7 +15,11 @@ export function needsAttention(invocation: Invocation): boolean {
 }
 
 export function isInFlight(invocation: Invocation): boolean {
-  return invocation.status === "queued" || invocation.status === "running";
+  return (
+    invocation.status === "queued" ||
+    invocation.status === "running" ||
+    invocation.status === "cancelling"
+  );
 }
 
 /** 列表预览只保留文字：去掉代码块、强调、行内代码、引用与列表等 Markdown 标记 */

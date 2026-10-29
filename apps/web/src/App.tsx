@@ -43,6 +43,11 @@ import { ActivityPanel, isInFlight, needsAttention, type ActivityView } from "./
 import { LocalAgentList, LocalLaunch, providerInfo, useLocalAgents } from "./local-agents";
 import { createFrameClock, easeInOutCubic, easeOutQuint } from "./easing";
 import { ShadowContent } from "./shadow-content";
+import {
+  CollapsibleMessage,
+  MAX_MESSAGE_LENGTH,
+  MESSAGE_LENGTH_WARNING_RATIO,
+} from "./collapsible-message";
 import { buildShareMarkdown, downloadFile, formatShareTimestamp, shareFilename } from "./share";
 
 // Markdown 渲染器（react-markdown + highlight.js）体积较大，拆成独立 chunk 且在应用启动时
@@ -69,7 +74,7 @@ function MessageMarkdown({ content }: { content: string }) {
 /** 自绘滚动动画单帧最多推进的时间：约两帧，主线程卡顿时动画放慢而不是跳跃 */
 const MAX_FRAME_STEP_MS = 32;
 import { copyTextToClipboard } from "./clipboard";
-import { resolveServerBase } from "./server-url";
+import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
 
 const storedUsernameKey = "ai-hive.username";
 const storedRoomKey = "ai-hive.room";
@@ -1385,7 +1390,13 @@ export function App() {
     const connect = () => {
       if (cancelled) return;
       setConnectionState("connecting");
-      const socket = new WebSocket(meta.wsUrl);
+      const socket = new WebSocket(
+        resolveWebSocketUrl({
+          serverBase: base,
+          development: import.meta.env.DEV,
+          advertisedUrl: meta.wsUrl,
+        }),
+      );
       socketRef.current = socket;
       socket.addEventListener("open", () => {
         socket.send(
@@ -1547,7 +1558,7 @@ export function App() {
       window.clearTimeout(reconnectTimerRef.current);
       socketRef.current?.close();
     };
-  }, [catchUp, currentRoomId, meta, refreshRooms, switchRoom, upsertRoom, username]);
+  }, [base, catchUp, currentRoomId, meta, refreshRooms, switchRoom, upsertRoom, username]);
 
   // 点击已完成的调用跳到 Agent 回复：等目标消息挂载（可能需要先扩大渲染窗口）后再滚动并短暂高亮
   useEffect(() => {
@@ -1770,10 +1781,13 @@ export function App() {
     localStorage.setItem(storedPresenceNotificationsKey, String(enabled));
   }
 
+  const draftTooLong = draft.trim().length > MAX_MESSAGE_LENGTH;
+
   function sendMessage() {
     const content = draft.trim();
     const socket = socketRef.current;
-    if (!content || socket?.readyState !== WebSocket.OPEN) return;
+    if (!content || content.length > MAX_MESSAGE_LENGTH) return;
+    if (socket?.readyState !== WebSocket.OPEN) return;
     socket.send(
       JSON.stringify({
         type: "message.send",
@@ -2535,17 +2549,23 @@ export function App() {
                             </p>
                           ) : (
                             <div className="message-body">
-                              <Suspense
-                                fallback={
-                                  <p className="message-body-fallback">{message.content}</p>
-                                }
+                              <CollapsibleMessage
+                                content={message.content}
+                                forceExpanded={shareMode}
                               >
-                                <MessageMarkdown content={message.content} />
-                              </Suspense>
+                                <Suspense
+                                  fallback={
+                                    <p className="message-body-fallback">{message.content}</p>
+                                  }
+                                >
+                                  <MessageMarkdown content={message.content} />
+                                </Suspense>
+                              </CollapsibleMessage>
                             </div>
                           )}
                           {invocationsByMessage.has(message.id) && (
                             <InvocationChips
+                              connectionState={connectionState}
                               invocations={invocationsByMessage.get(message.id) ?? []}
                               participants={participants}
                               canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
@@ -2921,7 +2941,6 @@ export function App() {
                     }
                   }}
                   placeholder="发送消息，输入 @ 选择成员…"
-                  maxLength={4000}
                   aria-label="消息"
                   aria-autocomplete="list"
                   aria-controls={mentionContext ? "mention-suggestions" : undefined}
@@ -2946,16 +2965,23 @@ export function App() {
                   )}
                 </span>
                 <div className="composer-actions">
-                  {draft.length > 3600 && (
-                    <span className={`char-count ${draft.length > 3900 ? "danger" : ""}`}>
-                      {draft.length}/4000
+                  {draftTooLong ? (
+                    <span className="char-count danger" role="alert">
+                      超出 {(draft.trim().length - MAX_MESSAGE_LENGTH).toLocaleString()}{" "}
+                      字，无法发送
                     </span>
+                  ) : (
+                    draft.length > MAX_MESSAGE_LENGTH * MESSAGE_LENGTH_WARNING_RATIO && (
+                      <span className="char-count">
+                        {draft.length.toLocaleString()}/{MAX_MESSAGE_LENGTH.toLocaleString()}
+                      </span>
+                    )
                   )}
                   <button
                     type="button"
                     className="composer-send"
                     onClick={sendMessage}
-                    disabled={!draft.trim() || connectionState !== "online"}
+                    disabled={!draft.trim() || draftTooLong || connectionState !== "online"}
                     title="发送"
                   >
                     <span className="sr-only">发送</span>

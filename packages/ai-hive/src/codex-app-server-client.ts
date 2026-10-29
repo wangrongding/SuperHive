@@ -1,3 +1,5 @@
+import { codexStartupFailure } from "./codex-errors.js";
+import { isMissingCodexThread } from "./codex-client.js";
 import { createRequire } from "node:module";
 import {
   CODEX_HIVE_TOOLS_APPROVAL_OVERRIDE,
@@ -6,6 +8,8 @@ import {
 } from "./hive-mcp-config.js";
 import {
   AgentCancelledError,
+  AgentExecutionUncertainError,
+  AgentNonRetryableError,
   type AgentAccessMode,
   type AgentReply,
   type AgentReplyInput,
@@ -93,39 +97,21 @@ export class AppServerRpcError extends Error {
 class RequestTimeoutError extends Error {
   constructor(method: string, timeoutMs: number) {
     super(`Codex app-server ${method} 超时（${timeoutMs}ms）。`);
+    this.name = "CodexRequestTimeoutError";
     this.name = "RequestTimeoutError";
   }
 }
 
-/** 当前 codex 不支持 app-server（版本过旧），调用方应回退到 CodexMcpResponder */
-export class CodexAppServerUnsupportedError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
+/** Explicit capability rejection only. It is not permission to try a different protocol. */
+export class CodexAppServerUnsupportedError extends AgentNonRetryableError {
+  constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "CodexAppServerUnsupportedError";
   }
 }
 
-const UNSUPPORTED_PATTERN =
-  /unrecognized subcommand|unexpected argument '?app-server|stdin is not a terminal|unknown variant `initialize`|method not found/i;
-
-/**
- * 判断错误是否意味着本机 codex 不支持 `app-server`。检测方式：
- * 1. 进程在 initialize 返回之前就退出，且 stderr 符合旧版特征（旧版 codex 会把 "app-server"
- *    当作提示词进入 TUI，因 stdin 不是终端报 "stdin is not a terminal" 退出；或 clap 报
- *    unrecognized subcommand）→ CodexAppServerUnsupportedError。其他握手前退出（如配置错误）不算；
- * 2. initialize 超时或返回 JSON-RPC 错误（协议不兼容）→ 同样包装为 CodexAppServerUnsupportedError；
- * 3. 兜底：错误消息（含 cause 链）匹配上述特征文本。
- * ENOENT（根本没装 codex）不算，回退也没有意义。
- */
 export function isAppServerUnsupported(error: unknown): boolean {
-  let current: unknown = error;
-  for (let depth = 0; depth < 4 && current; depth += 1) {
-    if (current instanceof CodexAppServerUnsupportedError) return true;
-    const message = current instanceof Error ? current.message : String(current);
-    if (UNSUPPORTED_PATTERN.test(message)) return true;
-    current = current instanceof Error ? current.cause : undefined;
-  }
-  return false;
+  return error instanceof CodexAppServerUnsupportedError;
 }
 
 export const spawnAppServerTransport: AppServerTransportFactory = spawnStdioTransport;
@@ -217,6 +203,7 @@ function textInput(text: string) {
 export class CodexAppServerResponder implements AgentResponder {
   private session: Session | undefined;
   private active: ActiveTurn | undefined;
+  private executionUncertain = false;
   private readonly log: (message: string) => void;
   private readonly createTransport: AppServerTransportFactory;
   private readonly requestTimeoutMs: number;
@@ -236,7 +223,12 @@ export class CodexAppServerResponder implements AgentResponder {
 
   async reply(input: AgentReplyInput): Promise<AgentReply> {
     if (input.signal?.aborted) throw new AgentCancelledError();
-    if (this.active) throw new Error("Codex 已有进行中的回合，请等待其结束后再发起新回合。");
+    if (this.executionUncertain)
+      throw new AgentNonRetryableError(
+        "上次 Codex 执行结果尚未确认，当前会话已锁定；请核对执行与工具进程，不能直接重放任务。",
+      );
+    if (this.active)
+      throw new AgentNonRetryableError("Codex 已有进行中的回合，请等待其结束后再发起新回合。");
 
     // 先占位，防止并发调用在握手期间重复进入
     const placeholder = { settled: false } as ActiveTurn;
@@ -250,7 +242,8 @@ export class CodexAppServerResponder implements AgentResponder {
       this.throwIfAborted(input.signal);
     } catch (error) {
       if (this.active === placeholder) this.active = undefined;
-      throw error;
+      if (error instanceof AgentCancelledError) throw error;
+      throw codexStartupFailure("app-server 会话准备", error);
     }
 
     return new Promise<AgentReply>((resolve, reject) => {
@@ -272,9 +265,14 @@ export class CodexAppServerResponder implements AgentResponder {
       const onAbort = () => {
         turn.cancelled = true;
         this.sendInterrupt(turn);
-        // 等待 turn/completed(interrupted)；超过宽限期仍未结束则直接放弃
+        // Only a terminal event acknowledges stop; an elapsed grace period is not proof.
         turn.graceTimer = setTimeout(() => {
-          this.finishTurn(turn, new AgentCancelledError());
+          this.finishTurn(
+            turn,
+            new AgentExecutionUncertainError(
+              "Codex 停止请求尚未收到结束确认，执行结果未知；禁止自动重放。",
+            ),
+          );
         }, this.interruptGraceMs);
       };
       input.signal?.addEventListener("abort", onAbort, { once: true });
@@ -292,13 +290,25 @@ export class CodexAppServerResponder implements AgentResponder {
       if (this.options.model) params.model = this.options.model;
       const onResult = (result: any) => {
         const turnId = result?.turn?.id;
-        if (typeof turnId === "string" && !turn.turnId) turn.turnId = turnId;
+        if (typeof turnId !== "string" || !turnId) {
+          this.finishTurn(
+            turn,
+            new AgentExecutionUncertainError("Codex turn/start 返回缺少回合标识，执行结果未知。"),
+          );
+          return;
+        }
+        if (!turn.turnId) turn.turnId = turnId;
         if (turn.cancelled) this.sendInterrupt(turn);
       };
       this.request(session, "turn/start", params, true, onResult).then(
         () => undefined,
-        (error: Error) => {
-          this.finishTurn(turn, turn.cancelled ? new AgentCancelledError() : error);
+        () => {
+          this.finishTurn(
+            turn,
+            new AgentExecutionUncertainError(
+              "Codex turn/start 已发送但未取得可信执行结果，可能仍在运行；禁止自动重放。",
+            ),
+          );
         },
       );
     });
@@ -319,10 +329,12 @@ export class CodexAppServerResponder implements AgentResponder {
       );
       return true;
     } catch (error) {
-      if (!(error instanceof AppServerRpcError)) {
-        this.log(`[hive] Codex 注入消息失败：${(error as Error).message}`);
-      }
-      return false;
+      if (error instanceof AppServerRpcError) return false;
+      const uncertain = new AgentExecutionUncertainError(
+        "Codex turn/steer 已发送但未确认是否接收；不能将同一消息退回队列重放。",
+      );
+      this.finishTurn(turn, uncertain);
+      throw uncertain;
     }
   }
 
@@ -346,7 +358,7 @@ export class CodexAppServerResponder implements AgentResponder {
       "turn/interrupt",
       { threadId: turn.threadId, turnId: turn.turnId },
       true,
-    ).catch((error: Error) => this.log(`[hive] Codex 中断回合失败：${error.message}`));
+    ).catch(() => this.log("[hive] Codex turn/interrupt 未获确认，仍需等待可信结束事件。"));
   }
 
   private finishTurn(turn: ActiveTurn, outcome: AgentReply | Error) {
@@ -354,6 +366,7 @@ export class CodexAppServerResponder implements AgentResponder {
     turn.settled = true;
     if (turn.graceTimer) clearTimeout(turn.graceTimer);
     if (this.active === turn) this.active = undefined;
+    if (outcome instanceof AgentExecutionUncertainError) this.executionUncertain = true;
     if (outcome instanceof Error) turn.reject(outcome);
     else turn.resolve(outcome);
   }
@@ -381,10 +394,8 @@ export class CodexAppServerResponder implements AgentResponder {
         session.loadedThreads.add(threadId);
         return threadId;
       } catch (error) {
-        if (!(error instanceof AppServerRpcError)) throw error;
-        this.log(
-          `[hive] Codex 旧会话 ${input.threadId} 已失效（${error.message}），自动创建新会话继续处理。`,
-        );
+        if (!(error instanceof AppServerRpcError) || !isMissingCodexThread(error)) throw error;
+        this.log("[hive] Codex 明确报告旧会话不存在，在发送执行请求前创建新会话。");
       }
     }
 
@@ -438,19 +449,15 @@ export class CodexAppServerResponder implements AgentResponder {
           true,
         );
       } catch (error) {
-        session.dead = true;
-        if (this.session === session) this.session = undefined;
+        this.teardown(session, error as Error);
         transport.kill();
-        const cause = error as Error;
-        // 只有协议层面的失败（initialize 返回错误或无响应超时）才视为不支持；
-        // 进程退出（ENOENT、配置错误等）已在 handleExit 中分类
-        if (!(cause instanceof AppServerRpcError) && !(cause instanceof RequestTimeoutError)) {
-          throw cause;
+        if (error instanceof AppServerRpcError && error.code === -32601) {
+          throw new CodexAppServerUnsupportedError(
+            "Codex app-server initialize 不受支持（JSON-RPC -32601）；请检查 CLI 版本，不会自动降级。",
+            { cause: error },
+          );
         }
-        throw new CodexAppServerUnsupportedError(
-          `当前 Codex 无法以 app-server 模式完成握手：${cause.message}`,
-          { cause },
-        );
+        throw codexStartupFailure("app-server initialize", error);
       }
       this.notify(session, "initialized");
       session.initialized = true;
@@ -616,16 +623,33 @@ export class CodexAppServerResponder implements AgentResponder {
 
   private completeTurn(turn: ActiveTurn, result: any) {
     const status = result?.status;
+    if (!["completed", "failed", "interrupted"].includes(status)) {
+      this.finishTurn(
+        turn,
+        new AgentExecutionUncertainError("Codex 未返回可信终态，结果未知；禁止自动重放。"),
+      );
+      return;
+    }
+    if (turn.cancelled && typeof result?.id !== "string") {
+      this.finishTurn(
+        turn,
+        new AgentExecutionUncertainError("Codex 结束事件缺少回合标识，不能确认停止。"),
+      );
+      return;
+    }
     if (turn.cancelled || (status === "interrupted" && turn.signal?.aborted)) {
       this.finishTurn(turn, new AgentCancelledError());
       return;
     }
     if (status === "failed") {
-      this.finishTurn(turn, new Error(result?.error?.message || "Codex 回合执行失败。"));
+      this.finishTurn(
+        turn,
+        new AgentNonRetryableError("Codex 回合已报告失败；可能已执行部分操作，不会自动重放。"),
+      );
       return;
     }
     if (status === "interrupted") {
-      this.finishTurn(turn, new Error("Codex 回合被中断"));
+      this.finishTurn(turn, new AgentNonRetryableError("Codex 回合被中断；不会自动重放。"));
       return;
     }
     let messages = turn.messages.filter(
@@ -638,7 +662,12 @@ export class CodexAppServerResponder implements AgentResponder {
     }
     const text = pickReplyText(messages);
     if (!text) {
-      this.finishTurn(turn, new Error("Codex 没有返回可发送的文本。"));
+      this.finishTurn(
+        turn,
+        new AgentExecutionUncertainError(
+          "Codex 已结束但没有返回可发送的文本，结果未知；禁止自动重放。",
+        ),
+      );
       return;
     }
     this.finishTurn(turn, { text, threadId: turn.threadId });
@@ -654,21 +683,13 @@ export class CodexAppServerResponder implements AgentResponder {
         { code: "ENOENT" },
       );
     } else {
-      const detail = exit.error
-        ? exit.error.message
-        : `code=${exit.code ?? "null"}${exit.signal ? `, signal=${exit.signal}` : ""}`;
-      const stderr = exit.stderr.trim() ? `\n${exit.stderr.trim().slice(-1_000)}` : "";
-      const message = `Codex app-server 意外退出（${detail}）。${stderr}`;
-      // 握手前退出且输出符合旧版特征才视为不支持；配置错误等其他原因如实上报
-      error =
-        !session.initialized && UNSUPPORTED_PATTERN.test(`${detail}\n${exit.stderr}`)
-          ? new CodexAppServerUnsupportedError(message)
-          : new Error(message);
+      const detail = `code=${exit.code ?? "null"}${exit.signal ? `, signal=${exit.signal}` : ""}`;
+      error = codexStartupFailure(`app-server 退出（${detail}）`, exit.error, exit.stderr);
     }
     this.teardown(session, error);
   }
 
-  /** 进程失效：拒绝所有挂起请求和进行中的回合，下次 reply 会重新启动并重新 resume 线程 */
+  /** A dead transport is not proof that submitted execution had no side effects. */
   private teardown(session: Session, error: Error) {
     session.dead = true;
     if (this.session === session) this.session = undefined;
@@ -679,7 +700,12 @@ export class CodexAppServerResponder implements AgentResponder {
     session.pending.clear();
     const turn = this.active;
     if (turn && turn.session === session) {
-      this.finishTurn(turn, turn.cancelled ? new AgentCancelledError() : error);
+      this.finishTurn(
+        turn,
+        new AgentExecutionUncertainError(
+          "Codex app-server 连接关闭，已发送回合的执行结果未知；禁止自动重放。",
+        ),
+      );
     }
   }
 }
