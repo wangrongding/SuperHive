@@ -115,13 +115,15 @@
 }
 
 /* ---------- 单条消息 ---------- */
+/* 左右负 margin 配内边距：选中态和跳转高亮的整行底色需要一点呼吸空间，
+   同时正文不位移 */
 .message {
   position: relative;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   column-gap: 12px;
-  margin-top: 18px;
-  padding: 2px 0;
+  margin: 18px -10px 0;
+  padding: 2px 10px;
   border-radius: var(--radius-lg);
 }
 
@@ -217,6 +219,20 @@
   font-style: italic;
 }
 
+/* 别人发的消息：左对齐、收缩到内容宽度的气泡，和自己的消息镜像。
+   收缩是为了让操作条能贴住气泡左上角，而不是停在正文列的右端 */
+.message:not(.own) > .message-content {
+  justify-self: start;
+  max-width: min(88%, 680px);
+}
+
+.message:not(.own) .message-body {
+  margin-top: 4px;
+  padding: 9px 16px;
+  border-radius: 20px;
+  background: var(--bg-subtle);
+}
+
 /* 自己发的消息：右对齐的灰色气泡，不重复显示头像和名字 */
 .message.own {
   grid-template-columns: minmax(0, 1fr);
@@ -254,11 +270,15 @@
 }
 
 /* ---------- 悬浮操作条 ---------- */
+/* 绝对定位的 grid 子项若指定了 grid placement，包含块就是那个 grid area 而不是整行。
+   借此把 left/right 的基准收敛到正文列，操作条才能贴住气泡边缘——
+   整行边缘到气泡可能隔着几百像素的空档 */
 .message-actions {
   position: absolute;
   z-index: 2;
+  grid-column: 2 / 3;
   top: -14px;
-  right: 0;
+  left: 0;
   display: flex;
   align-items: center;
   gap: 1px;
@@ -277,9 +297,16 @@
   pointer-events: auto;
 }
 
+/* 非合并消息的气泡上方有名字和时间，操作条再抬一截免得盖住 */
+.message:not(.grouped) .message-actions {
+  top: -30px;
+}
+
+/* 自己的消息是整行单列、右对齐，气泡右边缘就是列右边缘 */
 .message.own .message-actions {
-  right: auto;
-  left: 0;
+  grid-column: 1 / 2;
+  right: 0;
+  left: auto;
 }
 
 .message-action {
