@@ -30,6 +30,8 @@ export type ChatMessage = {
   createdAt: string;
   /** 已撤回：content 与 mentions 已被服务端清空 */
   deletedAt?: string;
+  /** topic：话题分隔（开启新话题或清空房间），之前的会话上下文应被丢弃 */
+  kind?: "topic";
 };
 
 export type MessagesResponse = {

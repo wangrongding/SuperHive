@@ -1,4 +1,5 @@
 import { observeRuntime } from "./runtime-observation.js";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import cors from "@fastify/cors";
@@ -194,7 +195,27 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         isNameInUse: (name) => onlineAnywhere(name, false),
       })
     : undefined;
-  registerLocalAgentRoutes(app, localAgents);
+  /**
+   * 清空房间：删除消息和调用记录后插入一条话题分隔，各 Agent 据此丢弃旧会话。
+   * 只经本机房主接口调用（见 local-routes.ts），操作人必须是该房间里的人类成员。
+   */
+  function clearRoom(roomId: string, username: string) {
+    if (!database.getRoom(roomId)) throw new HiveError("ROOM_NOT_FOUND", "房间不存在。");
+    const actor = database.findParticipant(roomId, username);
+    if (!actor || actor.type !== "human") {
+      throw new HiveError("NOT_A_MEMBER", "只有房间里的人类成员可以清空房间。");
+    }
+    const removed = database.clearRoom(roomId);
+    const message = database.createMessage(actor, {
+      content: `${actor.username} 清空了房间`,
+      clientMessageId: `room-clear-${randomUUID()}`,
+      kind: "topic",
+    }).message;
+    broadcast(roomId, { type: "room.cleared", message });
+    broadcastRoomActivity(roomId);
+    return removed;
+  }
+  registerLocalAgentRoutes(app, localAgents, { clearRoom });
 
   function onlineAgent(roomId: string, username: string): Connection | undefined {
     return [...(onlineByName.get(participantKey(roomId, username)) ?? [])].find(
@@ -628,9 +649,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const mcpServer = createHiveMcpServer({
       roomId: participant.roomId,
       username: participant.username,
+      // 只读当前话题：开启新话题或清空房间后，之前的消息不再作为 Agent 的上下文
       readMessages: (afterSeq, limit) => ({
         messages: database
-          .getMessages(participant.roomId, afterSeq, limit)
+          .getMessages(
+            participant.roomId,
+            Math.max(afterSeq, database.currentTopicSeq(participant.roomId) - 1),
+            limit,
+          )
           .filter((message) => !message.deletedAt),
         latestSeq: database.latestSeq(participant.roomId),
       }),
@@ -1007,6 +1033,23 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             message: hiveError?.message ?? "Could not handle the request.",
           });
         }
+        return;
+      }
+      if (event.type === "topic.start") {
+        // 只有人能开启新话题；Agent 不能借此清掉其他 Agent 的上下文
+        if (participant.type !== "human") {
+          send(socket, {
+            type: "error",
+            code: "TOPIC_FORBIDDEN",
+            message: "Only humans can start a new topic.",
+          });
+          return;
+        }
+        createAndDispatchMessage(participant, {
+          content: `${participant.username} 开启了新话题`,
+          clientMessageId: `topic-${randomUUID()}`,
+          kind: "topic",
+        });
         return;
       }
       if (event.type === "message.delete") {

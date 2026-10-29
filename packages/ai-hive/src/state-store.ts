@@ -26,6 +26,8 @@ export type AgentState = {
   whiteboardDigest?: string;
   /** 会话里最近一次注入的规则指纹；规则变了（升级、改角色）就立即重新注入 */
   instructionsDigest?: string;
+  /** 当前 Provider 会话所属话题的起点（话题分隔消息的 seq）；遇到更新的分隔就换新会话 */
+  topicSeq?: number;
 };
 
 /**

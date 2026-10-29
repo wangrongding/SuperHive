@@ -430,6 +430,12 @@
   color: var(--text);
 }
 
+.header-button:disabled {
+  color: var(--text-tertiary);
+  cursor: default;
+  background: transparent;
+}
+
 .members-drawer-toggle {
   display: none;
 }
@@ -877,7 +883,8 @@ button.member:hover {
     font-size: 11px;
   }
 
-  .share-fab span {
+  .share-fab span,
+  .new-topic span {
     display: none;
   }
 

@@ -26,6 +26,8 @@ export type LocalAgentsState = {
   remove(id: string): Promise<void>;
   logs(id: string): Promise<string[]>;
   directories(path?: string): Promise<LocalDirectoryListing>;
+  /** 清空房间的消息和调用记录（白板保留）；只有本机房主可用 */
+  clearRoom(roomId: string, username: string): Promise<void>;
 };
 
 const POLL_MS = 2_000;
@@ -145,6 +147,16 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     [request],
   );
 
+  const clearRoom = useCallback(
+    async (roomId: string, username: string) => {
+      await request(`/api/local/rooms/${encodeURIComponent(roomId)}/clear`, {
+        method: "POST",
+        body: JSON.stringify({ username }),
+      });
+    },
+    [request],
+  );
+
   return {
     enabled,
     reason: session && !session.enabled ? session.reason : undefined,
@@ -155,6 +167,7 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     remove,
     logs,
     directories,
+    clearRoom,
   };
 }
 

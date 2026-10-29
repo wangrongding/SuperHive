@@ -48,6 +48,7 @@ type MessageRow = {
   client_message_id: string | null;
   created_at: string;
   deleted_at: string | null;
+  kind: string | null;
 };
 
 type LocalAgentRow = {
@@ -179,6 +180,8 @@ export type CreateMessageInput = {
   clientMessageId: string;
   replyToMessageId?: string;
   parentMessageId?: string;
+  /** 只由服务端设置（开启新话题、清空房间），客户端的普通消息没有 kind */
+  kind?: "topic";
 };
 
 export type CreateMessageResult = { message: ChatMessage; created: boolean };
@@ -214,6 +217,7 @@ function mapMessage(row: MessageRow): ChatMessage {
     ...(row.client_message_id ? { clientMessageId: row.client_message_id } : {}),
     createdAt: row.created_at,
     ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
+    ...(row.kind === "topic" ? { kind: "topic" as const } : {}),
   };
 }
 
@@ -422,6 +426,9 @@ export class HiveDatabase {
     const messageColumns = this.db.pragma("table_info(messages)") as Array<{ name: string }>;
     if (!messageColumns.some((column) => column.name === "deleted_at")) {
       this.db.exec("ALTER TABLE messages ADD COLUMN deleted_at TEXT");
+    }
+    if (!messageColumns.some((column) => column.name === "kind")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN kind TEXT");
     }
     const roomColumns = this.db.pragma("table_info(rooms)") as Array<{ name: string }>;
     if (!roomColumns.some((column) => column.name === "agent_turn_allowance")) {
@@ -657,6 +664,28 @@ export class HiveDatabase {
     return rows.map(mapMessage);
   }
 
+  /** 当前话题的起点：最近一条话题分隔的 seq，没有则为 0 */
+  currentTopicSeq(roomId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COALESCE(MAX(seq), 0) AS seq FROM messages WHERE room_id = ? AND kind = 'topic'",
+      )
+      .get(roomId) as { seq: number };
+    return row.seq;
+  }
+
+  /**
+   * 清空房间的消息和调用记录；白板是跨话题的长期共识，保留。
+   * seq 由 AUTOINCREMENT 保证继续递增，Agent 记录的处理进度不会因此错乱。
+   */
+  clearRoom(roomId: string): { messages: number; invocations: number } {
+    return this.db.transaction(() => {
+      const invocations = this.db.prepare("DELETE FROM invocations WHERE room_id = ?").run(roomId);
+      const messages = this.db.prepare("DELETE FROM messages WHERE room_id = ?").run(roomId);
+      return { messages: messages.changes, invocations: invocations.changes };
+    })();
+  }
+
   getMessage(id: string): ChatMessage | undefined {
     const row = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as
       MessageRow | undefined;
@@ -730,14 +759,16 @@ export class HiveDatabase {
     const content = stripUnsafeCharacters(input.content).trim();
     if (!content) throw new HiveError("EMPTY_MESSAGE", "Message content is empty.");
     const id = randomUUID();
-    const mentions = parseMentions(content);
+    // 话题分隔只是界面上的分界线，不唤醒任何人
+    const mentions = input.kind === "topic" ? [] : parseMentions(content);
     const createdAt = new Date().toISOString();
     this.db
       .prepare(
         `INSERT INTO messages(
           id, room_id, sender_id, sender_name, sender_type, content, mentions,
-          reply_to_message_id, trace_id, parent_message_id, hop_count, client_message_id, created_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reply_to_message_id, trace_id, parent_message_id, hop_count, client_message_id, created_at,
+          kind
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -753,6 +784,7 @@ export class HiveDatabase {
         hopCount,
         input.clientMessageId,
         createdAt,
+        input.kind ?? null,
       );
     return { message: this.getMessage(id)!, created: true };
   }

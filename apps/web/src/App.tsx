@@ -753,6 +753,7 @@ export function App() {
   const [roomDialogError, setRoomDialogError] = useState<string>();
   const [roomDialogBusy, setRoomDialogBusy] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [inviteCopied, setInviteCopied] = useState(false);
   const userMenuHoverTimer = useRef<number | undefined>(undefined);
@@ -878,10 +879,25 @@ export function App() {
   // 渲染窗口：只挂载最近的一段消息，重房间切换时的同步提交成本与内存尖峰被限定为常量；
   // 更早的消息按需点击展开（数据仍全量在 messages 中，仅渲染被窗口化）
   const [visibleLimit, setVisibleLimit] = useState(25);
-  const hiddenCount = Math.max(0, messages.length - visibleLimit);
+  // 默认只显示当前话题（最近一条话题分隔之后）；更早的话题折叠，按需展开。
+  // 展开状态绑定到分隔消息本身：开启新话题或切换房间后自动重新折叠
+  const [expandedTopicId, setExpandedTopicId] = useState<string>();
+  const currentTopic = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]!.kind === "topic") return { index, id: messages[index]!.id };
+    }
+    return undefined;
+  }, [messages]);
+  const earlierTopicCount =
+    currentTopic && expandedTopicId !== currentTopic.id ? currentTopic.index : 0;
+  const topicMessages = useMemo(
+    () => (earlierTopicCount > 0 ? messages.slice(earlierTopicCount) : messages),
+    [messages, earlierTopicCount],
+  );
+  const hiddenCount = Math.max(0, topicMessages.length - visibleLimit);
   const timeline = useMemo(
-    () => buildTimeline(hiddenCount > 0 ? messages.slice(-visibleLimit) : messages),
-    [messages, visibleLimit, hiddenCount],
+    () => buildTimeline(hiddenCount > 0 ? topicMessages.slice(-visibleLimit) : topicMessages),
+    [topicMessages, visibleLimit, hiddenCount],
   );
   const invocationsByMessage = useMemo(() => groupInvocationsByMessage(invocations), [invocations]);
   const pausedInvocations = useMemo(
@@ -1192,6 +1208,7 @@ export function App() {
   const closeRoomDialog = useCallback(() => {
     setRoomDialog(undefined);
     setArchiveConfirmOpen(false);
+    setClearConfirmOpen(false);
     window.requestAnimationFrame(() => roomDialogTriggerRef.current?.focus());
   }, []);
 
@@ -1203,6 +1220,7 @@ export function App() {
       roomDialogTriggerRef.current = trigger;
       setRoomDialogError(undefined);
       setArchiveConfirmOpen(false);
+      setClearConfirmOpen(false);
       setRoomDialogId(dialog.mode === "manage" ? dialog.room.id : "");
       setRoomDialogName(dialog.mode === "manage" ? dialog.room.name : "");
       setRoomDialog(dialog);
@@ -1450,6 +1468,14 @@ export function App() {
           globalEventsRef.current.onSnapshot();
           if (beforeReconnect > 0)
             void catchUp(beforeReconnect).catch((reason: unknown) => setError(String(reason)));
+        } else if (event.type === "room.cleared") {
+          if (event.message.roomId !== currentRoomId) return;
+          // 房主清空了房间：本地的消息和调用记录一并丢弃，只留清空后的话题分隔
+          setMessages([event.message]);
+          setInvocations(new Map());
+          setPendingNewMessages(0);
+          setRecallCandidateId(undefined);
+          latestSeqRef.current = Math.max(latestSeqRef.current, event.message.seq);
         } else if (event.type === "message.deleted") {
           if (event.message.roomId !== currentRoomId) return;
           setMessages((current) => mergeMessages(current, [event.message]));
@@ -1917,6 +1943,7 @@ export function App() {
   function jumpToMessage(messageId: string) {
     const index = messages.findIndex((message) => message.id === messageId);
     if (index < 0) return;
+    if (currentTopic && index < currentTopic.index) setExpandedTopicId(currentTopic.id);
     const needed = messages.length - index;
     if (needed > visibleLimit) setVisibleLimit(needed + 10);
     setPendingJumpId(messageId);
@@ -2078,6 +2105,23 @@ export function App() {
         name,
       });
       upsertRoom(updated);
+      closeRoomDialog();
+    } catch (reason) {
+      setRoomDialogError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRoomDialogBusy(false);
+    }
+  }
+
+  function startNewTopic() {
+    sendClientEvent({ type: "topic.start" }, "无法开启新话题。");
+  }
+
+  async function clearRoom(room: RoomSummary) {
+    setRoomDialogBusy(true);
+    setRoomDialogError(undefined);
+    try {
+      await local.clearRoom(room.id, username);
       closeRoomDialog();
     } catch (reason) {
       setRoomDialogError(reason instanceof Error ? reason.message : String(reason));
@@ -2361,6 +2405,16 @@ export function App() {
             <div className="chat-header-actions">
               <button
                 type="button"
+                className="header-button new-topic"
+                disabled={messages.length === 0 || messages.at(-1)?.kind === "topic"}
+                title="开启新话题：房间里的 Agent 会丢弃之前的会话，从新会话开始；历史消息保留"
+                onClick={startNewTopic}
+              >
+                <Icon name="plus" size={16} />
+                <span>新话题</span>
+              </button>
+              <button
+                type="button"
                 className={`header-button share-fab ${shareMode ? "active" : ""}`}
                 aria-label={shareMode ? "退出分享模式" : "分享对话"}
                 aria-pressed={shareMode}
@@ -2484,7 +2538,7 @@ export function App() {
                     setScrollContentElement((current) => (current === element ? current : element));
                   }}
                 >
-                  {hiddenCount > 0 && (
+                  {hiddenCount > 0 ? (
                     <button
                       type="button"
                       className="load-earlier"
@@ -2492,6 +2546,17 @@ export function App() {
                     >
                       显示更早的 {Math.min(hiddenCount, 100)} 条消息（共隐藏 {hiddenCount} 条）
                     </button>
+                  ) : (
+                    earlierTopicCount > 0 &&
+                    currentTopic && (
+                      <button
+                        type="button"
+                        className="load-earlier"
+                        onClick={() => setExpandedTopicId(currentTopic.id)}
+                      >
+                        显示更早的话题（{earlierTopicCount} 条消息）
+                      </button>
+                    )
                   )}
                   {timeline.map(({ message, newDay, grouped }) => (
                     <Fragment key={message.id}>
@@ -2500,186 +2565,203 @@ export function App() {
                           <span>{dateDividerLabel(message.createdAt)}</span>
                         </div>
                       )}
-                      <article
-                        className={`message ${message.senderType} ${
-                          message.senderType === "human" &&
-                          message.senderName.toLocaleLowerCase() === username.toLocaleLowerCase()
-                            ? "own"
-                            : ""
-                        } ${grouped ? "grouped" : ""} ${
-                          shareMode && !message.deletedAt ? "selectable" : ""
-                        } ${selectedMessageIds.has(message.id) ? "selected" : ""} ${
-                          message.deletedAt ? "deleted" : ""
-                        } ${highlightedMessageId === message.id ? "highlighted" : ""}`}
-                        data-message-id={message.id}
-                        style={
-                          message.senderType === "human"
-                            ? avatarHueStyle(message.senderName)
-                            : undefined
-                        }
-                        onClick={
-                          shareMode && !message.deletedAt
-                            ? () => toggleMessageSelected(message.id)
-                            : undefined
-                        }
-                      >
-                        {grouped ? (
-                          <span className="hover-time" aria-hidden="true">
-                            {formatMessageTime(message.createdAt)}
+                      {message.kind === "topic" ? (
+                        <div
+                          className="topic-divider"
+                          role="separator"
+                          data-message-id={message.id}
+                        >
+                          <span>
+                            {message.content} · {formatMessageTime(message.createdAt)}
                           </span>
-                        ) : (
-                          <span className={`avatar ${message.senderType}`} aria-hidden="true">
-                            <AvatarGlyph
-                              type={message.senderType}
-                              name={message.senderName}
-                              provider={agentProviderByName.get(
-                                message.senderName.toLocaleLowerCase(),
-                              )}
-                            />
-                          </span>
-                        )}
-                        <div className="message-content">
-                          {!grouped && (
-                            <header>
-                              <strong>{message.senderName}</strong>
-                              {message.senderType === "agent" && <b>Agent</b>}
-                              <time dateTime={message.createdAt}>
-                                {formatMessageTime(message.createdAt)}
-                              </time>
-                              <button
-                                type="button"
-                                className="message-seq"
-                                title="复制序号引用（可用于在聊天中引用这条消息）"
-                                aria-label={`复制消息序号 #${message.seq}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void copySeqReference(message);
-                                }}
-                              >
-                                {copiedMessageId === `seq:${message.id}`
-                                  ? "已复制"
-                                  : `#${message.seq}`}
-                              </button>
-                            </header>
-                          )}
-                          {message.deletedAt ? (
-                            <p className="message-recalled">
-                              {message.senderName.toLocaleLowerCase() ===
-                              username.toLocaleLowerCase()
-                                ? "你撤回了一条消息"
-                                : `${message.senderName} 撤回了一条消息`}
-                            </p>
-                          ) : (
-                            <div className="message-body">
-                              <CollapsibleMessage
-                                content={message.content}
-                                forceExpanded={shareMode}
-                              >
-                                <Suspense
-                                  fallback={
-                                    <p className="message-body-fallback">{message.content}</p>
-                                  }
-                                >
-                                  <MessageMarkdown content={message.content} />
-                                </Suspense>
-                              </CollapsibleMessage>
-                            </div>
-                          )}
-                          {invocationsByMessage.has(message.id) && (
-                            <InvocationChips
-                              connectionState={connectionState}
-                              invocations={invocationsByMessage.get(message.id) ?? []}
-                              participants={participants}
-                              canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
-                              onJump={jumpToMessage}
-                              onRetry={retryInvocation}
-                              onCancel={cancelInvocation}
-                              onExtend={extendAgentBudget}
-                            />
-                          )}
+                          <small>之前的消息不再作为 Agent 的上下文</small>
                         </div>
-                        {message.deletedAt ? null : shareMode ? (
-                          <span
-                            className={`select-indicator ${
-                              selectedMessageIds.has(message.id) ? "on" : ""
-                            }`}
-                            role="checkbox"
-                            aria-checked={selectedMessageIds.has(message.id)}
-                            aria-label={`选择 ${message.senderName} 的消息`}
-                          >
-                            {selectedMessageIds.has(message.id) && <Icon name="check" size={12} />}
-                          </span>
-                        ) : (
-                          <div className="message-actions">
-                            {grouped && (
-                              <button
-                                type="button"
-                                className="message-action seq"
-                                title="复制序号引用"
-                                aria-label={`复制消息序号 #${message.seq}`}
-                                onClick={() => void copySeqReference(message)}
-                              >
-                                {copiedMessageId === `seq:${message.id}` ? "✓" : `#${message.seq}`}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="message-action"
-                              aria-label="复制消息原文"
-                              title="复制消息"
-                              onClick={() => void copyMessageContent(message)}
-                            >
-                              <Icon
-                                name={copiedMessageId === message.id ? "check" : "copy"}
-                                size={13}
+                      ) : (
+                        <article
+                          className={`message ${message.senderType} ${
+                            message.senderType === "human" &&
+                            message.senderName.toLocaleLowerCase() === username.toLocaleLowerCase()
+                              ? "own"
+                              : ""
+                          } ${grouped ? "grouped" : ""} ${
+                            shareMode && !message.deletedAt ? "selectable" : ""
+                          } ${selectedMessageIds.has(message.id) ? "selected" : ""} ${
+                            message.deletedAt ? "deleted" : ""
+                          } ${highlightedMessageId === message.id ? "highlighted" : ""}`}
+                          data-message-id={message.id}
+                          style={
+                            message.senderType === "human"
+                              ? avatarHueStyle(message.senderName)
+                              : undefined
+                          }
+                          onClick={
+                            shareMode && !message.deletedAt
+                              ? () => toggleMessageSelected(message.id)
+                              : undefined
+                          }
+                        >
+                          {grouped ? (
+                            <span className="hover-time" aria-hidden="true">
+                              {formatMessageTime(message.createdAt)}
+                            </span>
+                          ) : (
+                            <span className={`avatar ${message.senderType}`} aria-hidden="true">
+                              <AvatarGlyph
+                                type={message.senderType}
+                                name={message.senderName}
+                                provider={agentProviderByName.get(
+                                  message.senderName.toLocaleLowerCase(),
+                                )}
                               />
-                            </button>
-                            {message.senderName.toLocaleLowerCase() !==
-                            username.toLocaleLowerCase() ? (
+                            </span>
+                          )}
+                          <div className="message-content">
+                            {!grouped && (
+                              <header>
+                                <strong>{message.senderName}</strong>
+                                {message.senderType === "agent" && <b>Agent</b>}
+                                <time dateTime={message.createdAt}>
+                                  {formatMessageTime(message.createdAt)}
+                                </time>
+                                <button
+                                  type="button"
+                                  className="message-seq"
+                                  title="复制序号引用（可用于在聊天中引用这条消息）"
+                                  aria-label={`复制消息序号 #${message.seq}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void copySeqReference(message);
+                                  }}
+                                >
+                                  {copiedMessageId === `seq:${message.id}`
+                                    ? "已复制"
+                                    : `#${message.seq}`}
+                                </button>
+                              </header>
+                            )}
+                            {message.deletedAt ? (
+                              <p className="message-recalled">
+                                {message.senderName.toLocaleLowerCase() ===
+                                username.toLocaleLowerCase()
+                                  ? "你撤回了一条消息"
+                                  : `${message.senderName} 撤回了一条消息`}
+                              </p>
+                            ) : (
+                              <div className="message-body">
+                                <CollapsibleMessage
+                                  content={message.content}
+                                  forceExpanded={shareMode}
+                                >
+                                  <Suspense
+                                    fallback={
+                                      <p className="message-body-fallback">{message.content}</p>
+                                    }
+                                  >
+                                    <MessageMarkdown content={message.content} />
+                                  </Suspense>
+                                </CollapsibleMessage>
+                              </div>
+                            )}
+                            {invocationsByMessage.has(message.id) && (
+                              <InvocationChips
+                                connectionState={connectionState}
+                                invocations={invocationsByMessage.get(message.id) ?? []}
+                                participants={participants}
+                                canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
+                                onJump={jumpToMessage}
+                                onRetry={retryInvocation}
+                                onCancel={cancelInvocation}
+                                onExtend={extendAgentBudget}
+                              />
+                            )}
+                          </div>
+                          {message.deletedAt ? null : shareMode ? (
+                            <span
+                              className={`select-indicator ${
+                                selectedMessageIds.has(message.id) ? "on" : ""
+                              }`}
+                              role="checkbox"
+                              aria-checked={selectedMessageIds.has(message.id)}
+                              aria-label={`选择 ${message.senderName} 的消息`}
+                            >
+                              {selectedMessageIds.has(message.id) && (
+                                <Icon name="check" size={12} />
+                              )}
+                            </span>
+                          ) : (
+                            <div className="message-actions">
+                              {grouped && (
+                                <button
+                                  type="button"
+                                  className="message-action seq"
+                                  title="复制序号引用"
+                                  aria-label={`复制消息序号 #${message.seq}`}
+                                  onClick={() => void copySeqReference(message)}
+                                >
+                                  {copiedMessageId === `seq:${message.id}`
+                                    ? "✓"
+                                    : `#${message.seq}`}
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="message-action"
-                                aria-label={`在输入框中提及 ${message.senderName}`}
-                                title={`@${message.senderName}`}
-                                onClick={() => appendMention(message.senderName)}
+                                aria-label="复制消息原文"
+                                title="复制消息"
+                                onClick={() => void copyMessageContent(message)}
                               >
-                                @
+                                <Icon
+                                  name={copiedMessageId === message.id ? "check" : "copy"}
+                                  size={13}
+                                />
                               </button>
-                            ) : recallCandidateId === message.id ? (
-                              <span
-                                className="message-recall-confirm"
-                                role="group"
-                                aria-label="确认撤回"
-                              >
-                                <span>撤回这条消息？</span>
+                              {message.senderName.toLocaleLowerCase() !==
+                              username.toLocaleLowerCase() ? (
                                 <button
                                   type="button"
-                                  onClick={() => setRecallCandidateId(undefined)}
+                                  className="message-action"
+                                  aria-label={`在输入框中提及 ${message.senderName}`}
+                                  title={`@${message.senderName}`}
+                                  onClick={() => appendMention(message.senderName)}
                                 >
-                                  取消
+                                  @
                                 </button>
+                              ) : recallCandidateId === message.id ? (
+                                <span
+                                  className="message-recall-confirm"
+                                  role="group"
+                                  aria-label="确认撤回"
+                                >
+                                  <span>撤回这条消息？</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setRecallCandidateId(undefined)}
+                                  >
+                                    取消
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="danger"
+                                    onClick={() => recallMessage(message.id)}
+                                  >
+                                    撤回
+                                  </button>
+                                </span>
+                              ) : (
                                 <button
                                   type="button"
-                                  className="danger"
-                                  onClick={() => recallMessage(message.id)}
+                                  className="message-action danger"
+                                  aria-label="撤回这条消息"
+                                  title="撤回"
+                                  onClick={() => setRecallCandidateId(message.id)}
                                 >
-                                  撤回
+                                  <Icon name="undo" size={13} />
                                 </button>
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                className="message-action danger"
-                                aria-label="撤回这条消息"
-                                title="撤回"
-                                onClick={() => setRecallCandidateId(message.id)}
-                              >
-                                <Icon name="undo" size={13} />
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </article>
+                              )}
+                            </div>
+                          )}
+                        </article>
+                      )}
                     </Fragment>
                   ))}
                   {participants.some((participant) => participant.status === "busy") && (
@@ -4045,7 +4127,45 @@ export function App() {
                     </div>
                   </div>
                 )}
+              {roomDialog.mode === "manage" && clearConfirmOpen && (
+                <div className="room-archive-confirmation" role="alert">
+                  <div>
+                    <strong>确认清空 # {roomDialog.room.name}？</strong>
+                    <p>
+                      将删除这个房间的全部消息和 Agent
+                      调用记录，所有成员都会看到房间被清空，无法恢复。白板保留；房间里的 Agent
+                      会从新会话开始。
+                    </p>
+                  </div>
+                  <div className="room-archive-actions">
+                    <button type="button" onClick={() => setClearConfirmOpen(false)}>
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      disabled={roomDialogBusy}
+                      onClick={() => void clearRoom(roomDialog.room)}
+                    >
+                      确认清空
+                    </button>
+                  </div>
+                </div>
+              )}
               <footer className="room-dialog-footer">
+                {roomDialog.mode === "manage" && local.enabled && !roomDialog.room.archivedAt && (
+                  <button
+                    type="button"
+                    className="room-archive"
+                    disabled={roomDialogBusy}
+                    title="仅本机房主可用"
+                    onClick={() => {
+                      setArchiveConfirmOpen(false);
+                      setClearConfirmOpen(true);
+                    }}
+                  >
+                    清空房间
+                  </button>
+                )}
                 {roomDialog.mode === "manage" &&
                   (roomDialog.room.archivedAt ? (
                     <button
@@ -4062,7 +4182,10 @@ export function App() {
                       className="room-archive"
                       disabled={roomDialogBusy || roomDialog.room.id === "general"}
                       title={roomDialog.room.id === "general" ? "默认房间不能归档" : undefined}
-                      onClick={() => setArchiveConfirmOpen(true)}
+                      onClick={() => {
+                        setClearConfirmOpen(false);
+                        setArchiveConfirmOpen(true);
+                      }}
                     >
                       归档房间
                     </button>

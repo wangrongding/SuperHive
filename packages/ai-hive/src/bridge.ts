@@ -536,7 +536,7 @@ export class AgentBridge {
       }, this.tuning.heartbeatMs);
       heartbeat.unref?.();
 
-      const prompt = await this.buildPrompt(context.messages, messages);
+      const prompt = await this.buildPrompt(this.applyTopicBoundary(context.messages), messages);
       this.log(
         `[hive] 正在处理 ${messages.map((message) => `#${message.seq}`).join("、")}（来自 ${[...new Set(messages.map((message) => message.senderName))].join("、")}）`,
       );
@@ -738,6 +738,23 @@ export class AgentBridge {
       1_000 * 2 ** (attempt - 1),
     );
     timer.unref?.();
+  }
+
+  /**
+   * 有人开启了新话题（或房主清空了房间）：丢弃 Provider 旧会话，上下文只保留分隔之后的消息。
+   * 在每轮开始时检查而不是监听事件：Agent 离线期间发生的分隔，上线后第一轮同样生效。
+   */
+  private applyTopicBoundary(context: ChatMessage[]): ChatMessage[] {
+    const boundary = context.filter((message) => message.kind === "topic").at(-1);
+    if (!boundary) return context;
+    if (boundary.seq > (this.state.topicSeq ?? 0)) {
+      this.state.topicSeq = boundary.seq;
+      if (this.state.threadId) {
+        this.log(`[hive] #${boundary.seq} 开启了新话题，丢弃之前的会话，从新会话开始`);
+        delete this.state.threadId;
+      }
+    }
+    return context.filter((message) => message.seq > boundary.seq);
   }
 
   /** 决定这一轮发完整上下文还是只发增量，并按需附带白板 */

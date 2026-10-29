@@ -888,6 +888,83 @@ describe("App mention autocomplete", () => {
     expect(screen.getByRole("alert").textContent).toContain("只能撤回自己发送的消息");
   });
 
+  it("collapses earlier topics, starts a new topic, and follows a cleared room", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const base = {
+      roomId: "general",
+      mentions: [] as string[],
+      traceId: "00000000-0000-4000-8000-000000000011",
+      hopCount: 0,
+      createdAt: new Date().toISOString(),
+      senderId: self.id,
+      senderName: "Alice",
+      senderType: "human" as const,
+    };
+    const message = (seq: number, content: string, kind?: "topic") => ({
+      ...base,
+      id: `00000000-0000-4000-8000-${String(seq).padStart(12, "0")}`,
+      seq,
+      content,
+      ...(kind ? { kind } : {}),
+    });
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [
+          message(1, "旧话题的讨论"),
+          message(2, "Alice 开启了新话题", "topic"),
+          message(3, "新话题的讨论"),
+        ],
+        latestSeq: 3,
+      }),
+    );
+    const list = () =>
+      within(document.querySelector(".message-list")!.shadowRoot as unknown as HTMLElement);
+    await waitFor(() => expect(list().getByText("新话题的讨论")).toBeTruthy());
+    // 更早的话题默认折叠，分隔线说明之前的消息不再是 Agent 上下文
+    expect(list().queryByText("旧话题的讨论")).toBeNull();
+    const shadow = document.querySelector(".message-list")!.shadowRoot!;
+    expect(shadow.querySelector(".topic-divider")?.textContent).toContain("Alice 开启了新话题");
+    await user.click(list().getByRole("button", { name: "显示更早的话题（1 条消息）" }));
+    expect(list().getByText("旧话题的讨论")).toBeTruthy();
+
+    // 开启新话题：发出 topic.start；收到分隔后按钮置灰，之前的话题重新折叠
+    const newTopic = screen.getByRole("button", { name: "新话题" }) as HTMLButtonElement;
+    expect(newTopic.disabled).toBe(false);
+    await user.click(newTopic);
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "topic.start" });
+    act(() =>
+      socket.serverEvent({
+        type: "message.created",
+        message: message(4, "Alice 开启了新话题", "topic"),
+      }),
+    );
+    await waitFor(() => expect(newTopic.disabled).toBe(true));
+    expect(list().queryByText("新话题的讨论")).toBeNull();
+    expect(list().getByRole("button", { name: "显示更早的话题（3 条消息）" })).toBeTruthy();
+
+    // 房主清空了房间：本地只剩清空后的分隔
+    act(() =>
+      socket.serverEvent({
+        type: "room.cleared",
+        message: message(9, "Alice 清空了房间", "topic"),
+      }),
+    );
+    await waitFor(() => expect(list().getByText(/Alice 清空了房间/)).toBeTruthy());
+    expect(list().queryByRole("button", { name: /显示更早的话题/ })).toBeNull();
+    expect(list().queryByText("Alice 开启了新话题", { exact: false })).toBeNull();
+  });
+
   it("asks returning users to grant notification permission from an in-app prompt", async () => {
     const user = userEvent.setup();
     localStorage.setItem("ai-hive.username", "Alice");

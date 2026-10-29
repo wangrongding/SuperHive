@@ -434,6 +434,123 @@ describe("Hive WebSocket protocol", () => {
     expect(missing.type === "error" && missing.code).toBe("MESSAGE_NOT_FOUND");
   });
 
+  it("starts a new topic, scopes Agent reads to it, and lets the local owner clear the room", async () => {
+    const app = await buildApp({
+      databasePath: ":memory:",
+      token: "test-token",
+      staticDir: "/definitely-not-present",
+      localAgents: {
+        cli: { command: "/usr/bin/node", args: ["/opt/ai-hive/dist/cli.js"] },
+        serverUrl: "http://127.0.0.1:8787",
+        probe: async () => ({ installed: false, version: null }),
+      },
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    closeApp = () => app.close();
+    const port = (app.server.address() as AddressInfo).port;
+    const wsUrl = `ws://127.0.0.1:${port}/ws`;
+
+    const alice = await TestPeer.connect(wsUrl);
+    const agent = await TestPeer.connect(wsUrl);
+    peers.push(alice, agent);
+    for (const [peer, username, participantType] of [
+      [alice, "Alice", "human"],
+      [agent, "helper-agent", "agent"],
+    ] as const) {
+      peer.send({
+        type: "participant.join",
+        username,
+        participantType,
+        roomId: "general",
+        token: "test-token",
+      });
+      await peer.next((event) => event.type === "room.snapshot");
+    }
+
+    alice.send({ type: "message.send", clientMessageId: "old-1", content: "@helper-agent 旧话题" });
+    await agent.next((event) => event.type === "agent.mentioned");
+    const old = await alice.next((event) => event.type === "message.created");
+
+    // Agent 不能开启新话题
+    agent.send({ type: "topic.start" });
+    const forbidden = await agent.next((event) => event.type === "error");
+    expect(forbidden.type === "error" && forbidden.code).toBe("TOPIC_FORBIDDEN");
+
+    alice.send({ type: "topic.start" });
+    const topicEvent = await alice.next((event) => event.type === "message.created");
+    const topic = topicEvent.type === "message.created" ? topicEvent.message : undefined;
+    expect(topic).toMatchObject({ kind: "topic", senderName: "Alice", mentions: [] });
+    expect(topic!.content).toContain("开启了新话题");
+    alice.send({ type: "message.send", clientMessageId: "new-1", content: "新话题的第一条" });
+    await alice.next((event) => event.type === "message.created");
+
+    // MCP 只读到当前话题（分隔本身及之后），即使 Agent 要求从头读
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+      requestInit: {
+        headers: {
+          Authorization: "Bearer test-token",
+          "X-Hive-Room": "general",
+          "X-Hive-Agent-Name": "helper-agent",
+        },
+      },
+    });
+    const client = new Client({ name: "hive-mcp-test", version: "0.1.0" });
+    await client.connect(transport as unknown as Transport);
+    const read = await client.callTool({
+      name: "hive_room_read",
+      arguments: { afterSeq: 0, limit: 50 },
+    });
+    const contents = (
+      read.structuredContent as { messages: Array<{ content: string }> }
+    ).messages.map((message) => message.content);
+    expect(contents.some((content) => content.includes("旧话题"))).toBe(false);
+    expect(contents.at(-1)).toBe("新话题的第一条");
+    await client.close();
+
+    // 清空房间：需要本机房主凭证，操作人必须是房间里的人类成员
+    const session = (await app.inject({ method: "GET", url: "/api/local/session" })).json() as {
+      ownerToken: string;
+    };
+    const clear = (username: string, owner = session.ownerToken) =>
+      app.inject({
+        method: "POST",
+        url: "/api/local/rooms/general/clear",
+        headers: { "x-hive-owner": owner },
+        payload: { username },
+      });
+    expect((await clear("Alice", "test-token")).statusCode).toBe(401);
+    expect((await clear("helper-agent")).statusCode).toBe(403);
+    const cleared = await clear("Alice");
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().removed.messages).toBe(3);
+    for (const peer of [alice, agent]) {
+      const event = await peer.next((candidate) => candidate.type === "room.cleared");
+      expect(event.type === "room.cleared" && event.message).toMatchObject({ kind: "topic" });
+    }
+    const history = (await app
+      .inject({
+        method: "GET",
+        url: "/api/rooms/general/messages?afterSeq=0",
+        headers: { Authorization: "Bearer test-token" },
+      })
+      .then((response) => response.json())) as {
+      messages: Array<{ seq: number; content: string }>;
+    };
+    expect(history.messages).toHaveLength(1);
+    expect(history.messages[0]!.content).toContain("清空了房间");
+    // seq 继续递增，不复用：各 Agent 记录的处理进度不会因此错乱
+    const oldSeq = old.type === "message.created" ? old.message.seq : 0;
+    expect(history.messages[0]!.seq).toBeGreaterThan(oldSeq + 2);
+    const invocations = (await app
+      .inject({
+        method: "GET",
+        url: "/api/invocations?roomId=general",
+        headers: { Authorization: "Bearer test-token" },
+      })
+      .then((response) => response.json())) as { invocations: unknown[] };
+    expect(invocations.invocations).toEqual([]);
+  });
+
   it("manages the room registry and broadcasts cross-room activity", async () => {
     const app = await buildApp({
       databasePath: ":memory:",

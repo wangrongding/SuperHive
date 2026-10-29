@@ -57,6 +57,11 @@ export const chatMessageSchema = z.object({
   clientMessageId: z.string().min(1).max(100).optional(),
   createdAt: z.string().datetime(),
   deletedAt: z.string().datetime().optional(),
+  /**
+   * topic：话题分隔（有人开启了新话题，或房主清空了房间）。
+   * Agent 遇到它会丢弃之前的 Provider 会话，只把分隔之后的消息当作上下文。
+   */
+  kind: z.enum(["topic"]).optional(),
 });
 
 export const participantJoinEventSchema = z.object({
@@ -90,6 +95,8 @@ export const messageDeleteEventSchema = z.object({
   type: z.literal("message.delete"),
   messageId: z.string().uuid(),
 });
+/** 人开启新话题：服务端插入一条 kind=topic 的分隔消息 */
+export const topicStartEventSchema = z.object({ type: z.literal("topic.start") });
 
 /**
  * 一次 @ 唤醒对应一条 invocation：服务端在派发 agent.mentioned 时创建，
@@ -219,6 +226,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   typingEventSchema,
   messageAckEventSchema,
   messageDeleteEventSchema,
+  topicStartEventSchema,
   invocationReportEventSchema,
   invocationRetryEventSchema,
   invocationCancelEventSchema,
@@ -242,6 +250,11 @@ export const messageCreatedEventSchema = z.object({
 // 撤回后广播整条墓碑消息（content 已清空、deletedAt 已设置），客户端按 id 覆盖即可
 export const messageDeletedEventSchema = z.object({
   type: z.literal("message.deleted"),
+  message: chatMessageSchema,
+});
+/** 房主清空了房间：消息和调用记录已删除，message 是清空后插入的话题分隔 */
+export const roomClearedEventSchema = z.object({
+  type: z.literal("room.cleared"),
   message: chatMessageSchema,
 });
 export const agentMentionedEventSchema = z.object({
@@ -311,6 +324,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   roomSnapshotEventSchema,
   messageCreatedEventSchema,
   messageDeletedEventSchema,
+  roomClearedEventSchema,
   agentMentionedEventSchema,
   agentCancelEventSchema,
   invocationUpdatedEventSchema,

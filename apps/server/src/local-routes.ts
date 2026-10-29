@@ -22,11 +22,18 @@ const ERROR_STATUS: Record<string, number> = {
   LOCAL_AGENT_CWD_INVALID: 400,
   LOCAL_DIRECTORY_INVALID: 400,
   LOCAL_DIRECTORY_NOT_FOUND: 404,
+  ROOM_NOT_FOUND: 404,
+  NOT_A_MEMBER: 403,
+};
+
+export type LocalRoomActions = {
+  clearRoom: (roomId: string, username: string) => { messages: number; invocations: number };
 };
 
 export function registerLocalAgentRoutes(
   app: FastifyInstance,
   supervisor: LocalAgentSupervisor | undefined,
+  rooms: LocalRoomActions,
 ): void {
   const ownerToken = randomBytes(32).toString("hex");
   const ownerBuffer = Buffer.from(ownerToken);
@@ -125,6 +132,23 @@ export function registerLocalAgentRoutes(
       return fail(reply, error);
     }
   });
+
+  /** 清空房间：不可恢复，所以和启动进程一样只给本机房主 */
+  app.post<{ Params: { roomId: string }; Body: { username?: unknown } }>(
+    "/api/local/rooms/:roomId/clear",
+    async (request, reply) => {
+      if (deny(request, reply)) return reply;
+      const username = request.body?.username;
+      if (typeof username !== "string" || !username.trim()) {
+        return reply.code(400).send({ error: "缺少操作人。" });
+      }
+      try {
+        return { removed: rooms.clearRoom(request.params.roomId, username.trim()) };
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
 
   app.get<{ Params: { id: string } }>("/api/local/agents/:id/logs", async (request, reply) => {
     if (deny(request, reply)) return reply;

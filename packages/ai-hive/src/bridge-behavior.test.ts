@@ -465,6 +465,37 @@ describe("AgentBridge", () => {
     expect((await store.load())?.instructionsDigest).not.toBe("rules-before-upgrade");
   });
 
+  it("drops the provider session and old context when someone starts a new topic", async () => {
+    await startBridge({ ...baseState(), threadId: "thread-old" });
+    room.messages.push(chat({ content: "旧话题里讨论的方案 A", mentions: [] }));
+    const topic = chat({ kind: "topic", content: "Alice 开启了新话题", mentions: [] });
+    room.messages.push(topic);
+    room.messages.push(chat({ content: "新话题：改做方案 B", mentions: [] }));
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+
+    const first = responder.calls[0]!;
+    // 不再续用旧会话，并重新注入完整规则；上下文只剩分隔之后的消息
+    expect(first.threadId).toBeUndefined();
+    expect(first.refreshInstructions).toBe(true);
+    expect(first.prompt).toContain("方案 B");
+    expect(first.prompt).not.toContain("方案 A");
+    responder.finish("好的", "thread-new");
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    expect((await store.load())?.topicSeq).toBe(topic.seq);
+
+    // 同一个话题里的下一轮续用新会话，不会再次重置
+    const next = chat();
+    room.messages.push(next);
+    room.handlers.onMention(next, next.seq, false);
+    await waitUntil(() => responder.calls.length === 2);
+    expect(responder.calls[1]!.threadId).toBe("thread-new");
+    responder.finish();
+    await waitUntil(() => room.statuses(next.id).includes("completed"));
+  });
+
   it("reports heartbeat-only waiting without treating it as runtime progress or retrying", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     await startBridge(baseState());

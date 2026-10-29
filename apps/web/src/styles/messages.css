@@ -114,6 +114,37 @@
   background: var(--border-light);
 }
 
+/* 话题分隔：开启新话题或清空房间后的起点，之前的消息不再作为 Agent 上下文 */
+.topic-divider {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  margin: 28px 0 10px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.topic-divider > span {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  font-weight: var(--weight-medium);
+}
+
+.topic-divider > span::before,
+.topic-divider > span::after {
+  height: 1px;
+  flex: 1;
+  content: "";
+  background: var(--border);
+}
+
+.topic-divider > small {
+  color: var(--text-tertiary);
+}
+
 /* ---------- 单条消息 ---------- */
 /* 左右负 margin 配内边距：选中态和跳转高亮的整行底色需要一点呼吸空间，
    同时正文不位移 */
