@@ -35,7 +35,8 @@ import { createClientMessageId } from "./client-id";
 import {
   InvocationChips,
   groupInvocationsByMessage,
-  isExtendableBlock,
+  BUDGET_EXTEND_TURNS,
+  currentPausedInvocations,
   upsertInvocation,
 } from "./invocations";
 import { WhiteboardPanel, upsertWhiteboardEntry } from "./whiteboard";
@@ -178,7 +179,6 @@ const agentSetupSteps: Array<{ step: AgentSetupStep; label: string }> = [
 ];
 
 /** "继续"按钮一次追加的 Agent 互相对话轮数 */
-const budgetExtendTurns = 5;
 
 const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = [
   { id: "chat", label: "聊天与输入", description: "发送、草稿与时间" },
@@ -901,8 +901,8 @@ export function App() {
   );
   const invocationsByMessage = useMemo(() => groupInvocationsByMessage(invocations), [invocations]);
   const pausedInvocations = useMemo(
-    () => [...invocations.values()].filter(isExtendableBlock),
-    [invocations],
+    () => currentPausedInvocations(invocations.values(), messages),
+    [invocations, messages],
   );
   const whiteboardBlockedCount = useMemo(
     () => [...whiteboard.values()].filter((entry) => entry.slot === "blocked").length,
@@ -1933,7 +1933,7 @@ export function App() {
   }
 
   function extendAgentBudget() {
-    sendClientEvent({ type: "budget.extend", turns: budgetExtendTurns }, "无法继续 Agent 对话。");
+    sendClientEvent({ type: "budget.extend", turns: BUDGET_EXTEND_TURNS }, "无法继续 Agent 对话。");
   }
 
   function removeWhiteboardEntry(entry: WhiteboardEntry) {
@@ -2477,7 +2477,7 @@ export function App() {
                   </p>
                   <div className="notification-prompt-actions">
                     <button type="button" className="primary" onClick={extendAgentBudget}>
-                      继续 {budgetExtendTurns} 轮
+                      继续 {BUDGET_EXTEND_TURNS} 轮
                     </button>
                   </div>
                 </div>

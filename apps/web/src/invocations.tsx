@@ -1,12 +1,37 @@
 import { useEffect, useState } from "react";
 import { InvocationDetails } from "./invocation-details";
-import type { Invocation, Participant } from "@ai-hive/protocol";
+import type { ChatMessage, Invocation, Participant } from "@ai-hive/protocol";
 
-/** 被预算拦下但可以由人"续命"的原因；hop_limit 是硬上限，不提供继续操作 */
+/** 人点一次「继续」为当前 Agent 对话追加的轮数，同时放宽连续轮数、转交深度和单链条数 */
+export const BUDGET_EXTEND_TURNS = 10;
+
+/** 被预算拦下、可以由人点「继续」恢复的调用：三种预算都随追加的轮数一起放宽 */
 export function isExtendableBlock(invocation: Invocation): boolean {
   return (
     invocation.status === "blocked" &&
-    (invocation.blockReason === "consecutive_limit" || invocation.blockReason === "pair_limit")
+    (invocation.blockReason === "hop_limit" ||
+      invocation.blockReason === "consecutive_limit" ||
+      invocation.blockReason === "pair_limit")
+  );
+}
+
+/**
+ * 顶部「继续」提示只针对人最后一次发言之后被拦下的调用，与服务端追加额度的范围一致；
+ * 更早的拦截已经被人的发言越过，点「继续」也不会恢复，不再提示。
+ */
+export function currentPausedInvocations(
+  invocations: Iterable<Invocation>,
+  messages: readonly ChatMessage[],
+): Invocation[] {
+  let lastHumanSeq = 0;
+  const seqById = new Map<string, number>();
+  for (const message of messages) {
+    seqById.set(message.id, message.seq);
+    if (message.senderType === "human" && message.seq > lastHumanSeq) lastHumanSeq = message.seq;
+  }
+  return [...invocations].filter(
+    (invocation) =>
+      isExtendableBlock(invocation) && (seqById.get(invocation.messageId) ?? 0) >= lastHumanSeq,
   );
 }
 
@@ -232,10 +257,10 @@ export function InvocationChips({
                 <button
                   type="button"
                   className="invocation-action primary"
-                  aria-label={`为 Agent 对话追加 5 轮，恢复 @${invocation.agentName}`}
+                  aria-label={`为 Agent 对话追加 ${BUDGET_EXTEND_TURNS} 轮，恢复 @${invocation.agentName}`}
                   onClick={onExtend}
                 >
-                  继续 5 轮
+                  继续 {BUDGET_EXTEND_TURNS} 轮
                 </button>
               ) : (
                 canRetryInvocation(invocation) && (

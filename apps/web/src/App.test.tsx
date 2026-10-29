@@ -1186,14 +1186,14 @@ describe("App mention autocomplete", () => {
       invocationId: failed.id,
     });
     await user.click(
-      within(chips).getByRole("button", { name: "为 Agent 对话追加 5 轮，恢复 @reviewer-agent" }),
+      within(chips).getByRole("button", { name: "为 Agent 对话追加 10 轮，恢复 @reviewer-agent" }),
     );
-    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "budget.extend", turns: 5 });
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "budget.extend", turns: 10 });
 
     // 房间级提示同样可以续命
     const notice = screen.getByRole("status", { name: "Agent 连续对话已暂停" });
-    await user.click(within(notice).getByRole("button", { name: "继续 5 轮" }));
-    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "budget.extend", turns: 5 });
+    await user.click(within(notice).getByRole("button", { name: "继续 10 轮" }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "budget.extend", turns: 10 });
 
     // 被拦下的调用恢复后提示消失；运行中的调用完成后可以跳到回复
     act(() => {

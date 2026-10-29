@@ -60,15 +60,15 @@ describe("shouldProcessMention", () => {
     ).toBe(false);
   });
 
-  it("does not process mentions at the hop limit", () => {
+  it("leaves hop limits to the server, which may extend them for a human-approved discussion", () => {
     expect(
       shouldProcessMention({
-        message: message({ hopCount: 4 }),
+        message: message({ hopCount: 20 }),
         username: "agent-a",
         ownParticipantId: "self",
         processedMessageIds: [],
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("ignores recalled tombstones even when re-fetched after a reconnect", () => {

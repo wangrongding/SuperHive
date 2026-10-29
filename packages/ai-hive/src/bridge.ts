@@ -37,7 +37,6 @@ export function shouldProcessMention(input: {
   return (
     !input.message.deletedAt &&
     input.message.senderId !== input.ownParticipantId &&
-    input.message.hopCount < 4 &&
     isMentioned(input.message.content, input.username) &&
     !input.processedMessageIds.includes(input.message.id)
   );

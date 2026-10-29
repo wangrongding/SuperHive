@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Participant } from "@ai-hive/protocol";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LIMITS, type Participant } from "@ai-hive/protocol";
 import { HiveDatabase, HiveError } from "./database.js";
 
 describe("HiveDatabase", () => {
@@ -93,44 +93,58 @@ describe("HiveDatabase", () => {
     expect(db.latestSeq("general")).toBe(message.seq + 1);
   });
 
-  it("stops dispatch chains after hop four", () => {
-    const root = db.createMessage(human, {
-      content: "@agent-a start",
-      clientMessageId: "root",
-    }).message;
-    const one = db.createMessage(agentA, {
-      content: "@agent-b one",
-      clientMessageId: "hop-1",
-      parentMessageId: root.id,
-    }).message;
-    const two = db.createMessage(agentB, {
-      content: "@agent-a two",
-      clientMessageId: "hop-2",
-      parentMessageId: one.id,
-    }).message;
-    const three = db.createMessage(agentA, {
-      content: "@agent-b three",
-      clientMessageId: "hop-3",
-      parentMessageId: two.id,
-    }).message;
-    const four = db.createMessage(agentB, {
-      content: "@agent-a four",
-      clientMessageId: "hop-4",
-      parentMessageId: three.id,
-    }).message;
-    expect(four.hopCount).toBe(4);
+  it("stops dispatch chains at the hop limit", () => {
+    vi.useFakeTimers();
+    // 分批推进时间，只测深度，不触发每分钟发言上限
+    let tail = db.createMessage(human, { content: "start", clientMessageId: "hop-root" }).message;
+    for (let hop = 1; hop <= LIMITS.maxHopCount; hop += 1) {
+      vi.advanceTimersByTime(60_000);
+      tail = db.createMessage(hop % 2 ? agentA : agentB, {
+        content: `hop ${hop}`,
+        clientMessageId: `hop-${hop}`,
+        parentMessageId: tail.id,
+      }).message;
+    }
+    expect(tail.hopCount).toBe(LIMITS.maxHopCount);
     expect(() =>
-      db.createMessage(agentA, {
+      db.createMessage(tail.senderId === agentA.id ? agentB : agentA, {
         content: "too far",
-        clientMessageId: "hop-5",
-        parentMessageId: four.id,
+        clientMessageId: "hop-over",
+        parentMessageId: tail.id,
       }),
     ).toThrowError(/hop limit/i);
+    vi.useRealTimers();
   });
 
-  it("limits each agent to six replies per minute", () => {
+  it("extends the hop limit by the turns a human granted, until the next human message", () => {
+    vi.useFakeTimers();
+    let tail = db.createMessage(human, { content: "start", clientMessageId: "grant-root" }).message;
+    const send = (sender: Participant, id: string) => {
+      vi.advanceTimersByTime(60_000);
+      return db.createMessage(sender, {
+        content: id,
+        clientMessageId: id,
+        parentMessageId: tail.id,
+      }).message;
+    };
+    for (let hop = 1; hop <= LIMITS.maxHopCount; hop += 1)
+      tail = send(hop % 2 ? agentA : agentB, `grant-${hop}`);
+    const next = () => (tail.senderId === agentA.id ? agentB : agentA);
+    expect(() => send(next(), "grant-blocked")).toThrowError(/hop limit/i);
+
+    db.extendAgentTurns("general", 1);
+    tail = send(next(), "grant-extended");
+    expect(tail.hopCount).toBe(LIMITS.maxHopCount + 1);
+
+    // 人一发言，追加额度失效，旧链条恢复默认深度上限
+    db.createMessage(human, { content: "ok", clientMessageId: "grant-human" });
+    expect(() => send(next(), "grant-after-human")).toThrowError(/hop limit/i);
+    vi.useRealTimers();
+  });
+
+  it("limits each agent's replies per minute", () => {
     const root = db.createMessage(human, { content: "root", clientMessageId: "rate-root" }).message;
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < LIMITS.maxAgentRepliesPerMinute; index += 1) {
       db.createMessage(agentA, {
         content: `reply ${index}`,
         clientMessageId: `rate-${index}`,
@@ -139,19 +153,19 @@ describe("HiveDatabase", () => {
     }
     expect(() =>
       db.createMessage(agentA, {
-        content: "reply 7",
-        clientMessageId: "rate-7",
+        content: "one too many",
+        clientMessageId: "rate-over",
         parentMessageId: root.id,
       }),
     ).toThrowError(/rate limit/i);
   });
 
-  it("limits a trace to twelve agent messages", () => {
+  it("limits the agent messages in one trace", () => {
     const root = db.createMessage(human, {
       content: "root",
       clientMessageId: "trace-root",
     }).message;
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < LIMITS.maxAgentMessagesPerTrace; index += 1) {
       const agent = db.upsertParticipant({
         roomId: "general",
         username: `trace-agent-${index}`,
@@ -170,8 +184,8 @@ describe("HiveDatabase", () => {
     });
     expect(() =>
       db.createMessage(lastAgent, {
-        content: "reply 13",
-        clientMessageId: "trace-13",
+        content: "one too many",
+        clientMessageId: "trace-over",
         parentMessageId: root.id,
       }),
     ).toThrowError(/trace limit/i);
@@ -300,13 +314,19 @@ describe("HiveDatabase", () => {
     db.createMessage(human, { content: "start", clientMessageId: "h1" });
     db.createMessage(agentA, { content: "one", clientMessageId: "a1" });
     db.createMessage(agentB, { content: "two", clientMessageId: "b1" });
-    expect(db.agentTurnBudget("general")).toEqual({ used: 2, limit: 8 });
+    expect(db.agentTurnBudget("general")).toEqual({
+      used: 2,
+      limit: LIMITS.maxConsecutiveAgentTurns,
+    });
     expect(db.extendAgentTurns("general", 3)).toBe(3);
     expect(db.extendAgentTurns("general", 2)).toBe(5);
-    expect(db.agentTurnBudget("general").limit).toBe(13);
+    expect(db.agentTurnBudget("general").limit).toBe(LIMITS.maxConsecutiveAgentTurns + 5);
     // 人一发言，计数和追加额度都重新开始
     db.createMessage(human, { content: "继续", clientMessageId: "h2" });
-    expect(db.agentTurnBudget("general")).toEqual({ used: 0, limit: 8 });
+    expect(db.agentTurnBudget("general")).toEqual({
+      used: 0,
+      limit: LIMITS.maxConsecutiveAgentTurns,
+    });
   });
 
   it("creates one invocation per message and agent and counts pair turns", () => {

@@ -1,17 +1,20 @@
 import { z } from "zod";
 
 export const LIMITS = {
-  maxHopCount: 4,
-  maxAgentMessagesPerTrace: 12,
-  maxAgentRepliesPerMinute: 6,
+  /** 一条 Agent 转交链的最大深度；人追加轮数时同步放宽，人一发言即恢复默认 */
+  maxHopCount: 12,
+  /** 一条转交链内 Agent 消息总数；同样随人追加的轮数放宽 */
+  maxAgentMessagesPerTrace: 40,
+  /** 单个 Agent 每分钟最多发言条数，防止失控刷屏 */
+  maxAgentRepliesPerMinute: 12,
   /** 防止误粘巨型文件；展示折叠和模型上下文预算与此保护上限分开。单位为 UTF-16 code units。 */
   maxMessageLength: 100_000,
   /** 容纳上限内正文的 UTF-8 / JSON 转义开销，同时限制传输层的内存占用。 */
   maxClientPayloadBytes: 1_048_576,
   /** 自上一条人类消息以来，房间内 Agent 发言触发其他 Agent 的最多轮数；人一发言即清零 */
-  maxConsecutiveAgentTurns: 8,
+  maxConsecutiveAgentTurns: 16,
   /** 同一对 Agent（发起方 → 目标）在一个房间里 24 小时内的最多唤醒次数 */
-  maxAgentPairTurnsPerDay: 40,
+  maxAgentPairTurnsPerDay: 100,
   /** running 调用超过这么久没有任何回报，视为结果未知（timed_out） */
   invocationStaleMs: 10 * 60_000,
   /** Agent 在线却一直没确认收到 @，视为投递未被接收 */

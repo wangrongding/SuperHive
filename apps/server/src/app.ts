@@ -253,10 +253,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     message: ChatMessage,
     agent: Participant,
   ): { reason: InvocationBlockReason; detail: string } | undefined {
-    if (message.hopCount >= LIMITS.maxHopCount) {
+    const hopLimit = LIMITS.maxHopCount + database.turnAllowance(message.roomId);
+    if (message.hopCount >= hopLimit) {
       return {
         reason: "hop_limit",
-        detail: `Agent 之间的转交已达 ${LIMITS.maxHopCount} 跳上限，如需继续请由人重新 @。`,
+        detail: `Agent 之间的转交已达 ${hopLimit} 跳上限，点「继续」或由人重新 @ 即可续上。`,
       };
     }
     if (sender.type !== "agent") return undefined;

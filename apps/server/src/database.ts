@@ -729,7 +729,7 @@ export class HiveDatabase {
       if (parent.senderId === sender.id) {
         throw new HiveError("SELF_RESPONSE", "An agent cannot respond to its own message.");
       }
-      if (parent.hopCount >= LIMITS.maxHopCount) {
+      if (parent.hopCount >= LIMITS.maxHopCount + this.turnAllowance(sender.roomId)) {
         throw new HiveError("HOP_LIMIT", "This agent conversation has reached its hop limit.");
       }
     }
@@ -742,7 +742,7 @@ export class HiveDatabase {
           "SELECT COUNT(*) AS count FROM messages WHERE trace_id = ? AND sender_type = 'agent'",
         )
         .get(traceId) as { count: number };
-      if (traceCount.count >= LIMITS.maxAgentMessagesPerTrace) {
+      if (traceCount.count >= LIMITS.maxAgentMessagesPerTrace + this.turnAllowance(sender.roomId)) {
         throw new HiveError("TRACE_LIMIT", "This agent conversation has reached its trace limit.");
       }
       const since = new Date(Date.now() - 60_000).toISOString();
@@ -818,12 +818,20 @@ export class HiveDatabase {
         )
         .get(roomId, lastHumanSeq) as { count: number }
     ).count;
+    return { used, limit: LIMITS.maxConsecutiveAgentTurns + this.turnAllowance(roomId) };
+  }
+
+  /**
+   * 人为当前这段 Agent 对话追加的轮数。连续轮数、转交深度、单链条数共用这一份额度，
+   * 人点「继续」后三者一起放宽，不会出现轮数放开了却被深度卡住的情况；人一发言即失效。
+   */
+  turnAllowance(roomId: string): number {
     const room = this.db
       .prepare("SELECT agent_turn_allowance, allowance_after_seq FROM rooms WHERE id = ?")
       .get(roomId) as { agent_turn_allowance: number; allowance_after_seq: number } | undefined;
-    const allowance =
-      room && room.allowance_after_seq === lastHumanSeq ? room.agent_turn_allowance : 0;
-    return { used, limit: LIMITS.maxConsecutiveAgentTurns + allowance };
+    return room && room.allowance_after_seq === this.lastHumanSeq(roomId)
+      ? room.agent_turn_allowance
+      : 0;
   }
 
   /** 为当前这段 Agent 连续对话追加轮数；返回追加后的总额外轮数 */
@@ -968,7 +976,7 @@ export class HiveDatabase {
       .prepare(
         `SELECT i.* FROM invocations i JOIN messages m ON m.id = i.message_id
          WHERE i.room_id = ? AND i.status = 'blocked'
-           AND i.block_reason IN ('consecutive_limit', 'pair_limit') AND m.seq > ?
+           AND i.block_reason IN ('hop_limit', 'consecutive_limit', 'pair_limit') AND m.seq > ?
          ORDER BY m.seq ASC`,
       )
       .all(roomId, afterSeq) as InvocationRow[];

@@ -1130,6 +1130,26 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
     alice.send({ type: "invocation.retry", invocationId: blocked.id });
     const refused = await alice.next((event) => event.type === "error");
     expect(refused.type === "error" && refused.code).toBe("INVOCATION_NOT_RETRYABLE");
+
+    // 人点「继续」后深度上限随追加轮数一起放宽，被深度拦下的调用恢复投递，链条可以接着往下走
+    alice.send({ type: "budget.extend", turns: 2 });
+    const resumed = invocationOf(
+      await alice.next(
+        (event) => event.type === "invocation.updated" && event.invocation.id === blocked.id,
+      ),
+    );
+    expect(resumed).toMatchObject({ status: "queued", attempts: 2 });
+    const delivered = await agentA.next(
+      (event) => event.type === "agent.mentioned" && event.retry === true,
+    );
+    const last = delivered.type === "agent.mentioned" ? delivered.message : undefined;
+    expect(last?.hopCount).toBe(LIMITS.maxHopCount);
+    const reply = await mcpA.client.callTool({
+      name: "hive_message_send",
+      arguments: { content: "@agent-b 续上", parentMessageId: last!.id },
+    });
+    expect(reply.isError).not.toBe(true);
+    await agentB.next((event) => event.type === "agent.mentioned");
     await mcpA.client.close();
     await mcpB.client.close();
   });
