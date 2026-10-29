@@ -14,3 +14,6 @@ packages/ai-hive/web/
 ChatGPT.md
 .claude
 .ai-ins
+
+# 开发模式 supervisor 的运行状态
+.ai-hive-dev/

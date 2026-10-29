@@ -1,0 +1,75 @@
+/* 开发模式更新状态：浮在右下角，不挤占布局，失败时展开错误摘要 */
+.dev-status {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.12);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.dev-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.dev-status-ready .dev-status-dot {
+  background: var(--success);
+}
+
+.dev-status-failed {
+  border-color: var(--danger);
+}
+
+.dev-status-failed .dev-status-dot {
+  background: var(--danger);
+}
+
+.dev-status-pending .dev-status-dot,
+.dev-status-building .dev-status-dot,
+.dev-status-restarting .dev-status-dot {
+  animation: dev-status-pulse 1s ease-in-out infinite alternate;
+}
+
+.dev-status-meta {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.dev-status-error {
+  flex-basis: 100%;
+  max-height: 160px;
+  margin: 4px 0 0;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--danger-soft);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+@keyframes dev-status-pulse {
+  to {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dev-status-dot {
+    animation: none !important;
+  }
+}

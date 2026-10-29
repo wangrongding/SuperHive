@@ -1,0 +1,74 @@
+# Live development supervisor
+
+`pnpm dev` runs the dependency-free `dev.mjs` launcher, which runs the mutable
+`dev-supervisor.mjs` outside Hive Server and its managed Agents. Restart an older
+`pnpm dev` once to adopt the new launcher. Keep the root `dev` entry pointing to
+`node scripts/dev.mjs`; the bootstrap does not execute arbitrary replacement dev commands.
+
+- Web source changes use Vite HMR. Use the Vite URL (normally port 5188), not
+  the Server's previously built static UI.
+- Server, protocol and Bridge source/config changes are debounced for 1.5 seconds.
+  Each update stages the protocol build and checks Server + Bridge types before
+  stopping the old Server. Only successful checks publish the protocol output.
+- Server runs from source **without** its own `tsx watch`. The supervisor owns
+  restarts; Server continues to own its autostart-enabled local Agents.
+- A new Server must answer `/health` with its unique instance identity before
+  the generation becomes `ready`. This does not assert that every Agent has
+  finished connecting or that a previous task completed.
+- Atomic status writes follow `apps/web/src/dev-status.ts`. Diagnostics shown
+  on the public development page are bounded summaries; compiler/runtime output
+  remains in the local terminal.
+- Failed checks keep the previous Server. Runtime startup failures may leave
+  Server offline; Vite and the supervisor stay alive and another source edit
+  retries. There is no automatic rollback or replay of interrupted Agent tasks.
+- Generated output, databases, logs, status files and `node_modules` do not
+  trigger updates. Manual/remote Agents are not upgraded by this supervisor.
+- `Ctrl+C` stops the managed processes. Occupied ports cause an error, never a
+  kill of another dev instance. `HIVE_PORT`/`HIVE_HOST` still configure Server;
+  `HIVE_DEV_WEB_PORT` optionally changes Vite's port. For a non-default Server
+  endpoint, set the existing frontend setting `VITE_HIVE_SERVER` explicitly.
+- Runtime scripts under `scripts/` (excluding the fixed bootstrap and tests/smoke scripts), root
+  `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, and package manifests
+  under `apps/` / `packages/` are content-watched separately. A quiet 1.5 seconds
+  schedules one self-update, serialized against application builds.
+- Manifest/lock/workspace changes run `pnpm install --no-frozen-lockfile
+--prefer-offline --prod=false` first (non-interactive; three-minute timeout).
+  Runtime scripts are syntax-checked, then the supervisor is actually imported
+  in a short-lived child to validate ESM links and module evaluation before
+  shutdown (10-second limit; `--eval` does not activate its CLI main guard).
+  Failures retain the old processes where possible, publish `failed`, and retry
+  self-update after a real control-file edit. Ordinary source builds are resumed,
+  including queued edits. Their progress retains the control error, and even a
+  healthy rebuilt application is reported as `failed` with an explicit "application
+  updated, self-update still unresolved" message until a successful supervisor
+  handoff. Application success must not pretend a failed installation succeeded. Dependency installation modifies `node_modules` in place: failure is not
+  a dependency rollback and cannot guarantee all old lazy imports keep working.
+- pnpm owns the lockfile during installation. Its resulting lock content is
+  acknowledged without another reload; package/helper edits made concurrently
+  are retained. Avoid hand-editing the lockfile during an install. Network-only
+  recovery without a file edit does not trigger unlimited background retries.
+- A successful self-update writes `restarting`, stops all owned children and
+  exits with code 75. The launcher starts a fresh supervisor; its first healthy
+  generation continues from `status.json`. If replacement startup fails, the
+  launcher stays alive and waits for a code/config correction, not a crash loop.
+  Vite is briefly offline across this handoff, so page polling resumes when it
+  returns. `dev.mjs` itself is the fixed bootstrap, not a recursively self-modifying
+  entry point; edits to its own loop require a fresh terminal launch.
+
+Tests:
+
+```sh
+pnpm test:dev        # controller, real watcher/process/health integration
+pnpm test:dev:smoke  # isolated copy of the real app; compiles and boots Vite + Server
+```
+
+The smoke test edits only a temporary source copy, uses separate ephemeral ports
+and a temporary SQLite database, and disables local Agent startup. It checks all
+three backend source roots, frontend source, build/runtime failures, self-reload,
+manifest/lock changes, installer failure, source-build recovery without clearing
+control errors, real ESM-link validation, generation continuity and cleanup.
+The full-app smoke uses a mock installer because its dependency links reference
+the checkout; it must never install through those links. A separate regression
+runs real offline pnpm install in a dependency-free temporary project. Browser
+reload and live provider-task verification remain separate. Full app tests remain
+part of `pnpm test`.
