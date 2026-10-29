@@ -2666,6 +2666,7 @@ export function App() {
                               <InvocationChips
                                 connectionState={connectionState}
                                 invocations={invocationsByMessage.get(message.id) ?? []}
+                                allInvocations={invocations}
                                 participants={participants}
                                 canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
                                 onJump={jumpToMessage}

@@ -61,10 +61,13 @@ export function InvocationDetails({
   label,
   agentOnline,
   connectionState,
+  delegation,
   onClose,
   onJump,
 }: {
   invocation: Invocation;
+  /** 委派关系：上游是谁派来的，下游派出了哪些子任务 */
+  delegation?: { upstream?: string; downstream: string[]; continuation?: string } | undefined;
   label: string;
   agentOnline: boolean;
   connectionState?: "online" | "connecting" | "offline";
@@ -203,6 +206,37 @@ export function InvocationDetails({
               超过 2 分钟未收到新的执行进展，状态待核实；不会因此自动停止或重试。
             </p>
           )}
+        {delegation && (
+          <section aria-label="委派关系">
+            <h3>委派关系</h3>
+            <dl className="invocation-details-delegation">
+              {delegation.upstream && (
+                <div>
+                  <dt>来源</dt>
+                  <dd>{delegation.upstream}</dd>
+                </div>
+              )}
+              {delegation.continuation && (
+                <div>
+                  <dt>结果回执</dt>
+                  <dd>{delegation.continuation}</dd>
+                </div>
+              )}
+              {delegation.downstream.length > 0 && (
+                <div>
+                  <dt>派出的子任务</dt>
+                  <dd>
+                    <ul>
+                      {delegation.downstream.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </section>
+        )}
         <section aria-label="执行观测">
           <h3>
             执行观测{" "}

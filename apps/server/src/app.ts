@@ -10,6 +10,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   LIMITS,
   clientEventSchema,
+  parseMentions,
   createRoomRequestSchema,
   updateRoomRequestSchema,
   type ChatMessage,
@@ -24,6 +25,7 @@ import type { WebSocket } from "ws";
 import { z } from "zod";
 import { AGENT_INSTRUCTIONS } from "./agent-instructions.js";
 import {
+  CONTINUATION_READY_STATUSES,
   HiveDatabase,
   HiveError,
   TERMINAL_INVOCATION_STATUSES,
@@ -226,7 +228,102 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // 推送给所有在线客户端：侧栏的跨房间"Agent 任务"计数需要实时更新，各房间视图按 roomId 自行过滤
   function emitInvocation(invocation: Invocation): Invocation {
     broadcastAll({ type: "invocation.updated", invocation });
+    // 所有状态变更都经过这里：委派的子任务一结束就安排回执，放到下一拍避免在派发循环中重入
+    if (
+      invocation.continuation === "pending" &&
+      CONTINUATION_READY_STATUSES.includes(invocation.status)
+    ) {
+      setImmediate(() => deliverContinuation(invocation.id));
+    }
     return invocation;
+  }
+
+  /** 正被委派方 hive_wait 的子任务 ID 及等待者数量 */
+  const activeWaits = new Map<string, number>();
+
+  const continuationOutcome: Partial<Record<Invocation["status"], string>> = {
+    completed: "已完成",
+    failed: "失败",
+    cancelled: "已被停止",
+    timed_out: "结果未知（超时没有进展，不代表失败）",
+  };
+
+  /** 引用的正文里的 @ 换成全角，避免回执把原文中提到的成员再唤醒一遍 */
+  function quoteWithoutMentions(text: string, limit: number): string {
+    const quoted = text.replace(/@/g, "＠");
+    return quoted.length > limit ? `${quoted.slice(0, limit)}…（已截断，全文见原消息）` : quoted;
+  }
+
+  /**
+   * 子任务结束后，代被委派方给委派方发一条回执，把结果交回去：
+   * 委派方不必轮询，也不依赖被委派方记得回头 @ 它。回执沿委派消息挂链，预算照常计算。
+   * 先原子地占用回执状态再发消息，保证与 hive_wait、重启补发之间只回执一次。
+   */
+  function deliverContinuation(childId: string): void {
+    // 委派方正在 hive_wait 这个子任务：结果由等待直接交回，等待结束时再决定是否补发回执
+    if (activeWaits.has(childId)) return;
+    const child = database.getInvocation(childId);
+    if (
+      !child ||
+      child.continuation !== "pending" ||
+      !CONTINUATION_READY_STATUSES.includes(child.status)
+    ) {
+      return;
+    }
+    const delegation = database.getMessage(child.messageId);
+    const requester = child.requesterId ? database.getParticipant(child.requesterId) : undefined;
+    const delegate = database.getParticipant(child.agentId);
+    if (
+      !delegation ||
+      delegation.deletedAt ||
+      !requester ||
+      requester.type !== "agent" ||
+      !delegate
+    ) {
+      if (database.claimContinuation(child.id, "failed")) {
+        emitInvocation(database.getInvocation(child.id)!);
+      }
+      return;
+    }
+    if (!database.claimContinuation(child.id, "delivered")) return;
+    const reply = child.replyMessageId ? database.getMessage(child.replyMessageId) : undefined;
+    const lines = [
+      `@${requester.username} 📬 子任务回执（Hive 代 ${delegate.username} 发出）`,
+      `状态：${continuationOutcome[child.status] ?? child.status}`,
+      `委派内容：${quoteWithoutMentions(delegation.content, 300)}`,
+    ];
+    if (reply && !reply.deletedAt) {
+      lines.push(`结果（#${reply.seq}）：\n${quoteWithoutMentions(reply.content, 4000)}`);
+    } else if (child.detail) {
+      lines.push(`说明：${quoteWithoutMentions(child.detail, 500)}`);
+    }
+    lines.push(`子任务 ID：${child.id}`);
+    try {
+      createAndDispatchMessage(
+        delegate,
+        {
+          content: lines.join("\n"),
+          clientMessageId: `receipt-${child.id}`,
+          parentMessageId: delegation.id,
+          kind: "receipt",
+        },
+        { receipt: true },
+      );
+      emitInvocation(database.getInvocation(child.id)!);
+    } catch (error) {
+      // 链条深度、条数到顶这类错误重试也无济于事；限流等暂时性错误放回待发，由扫描重试
+      const permanent =
+        error instanceof HiveError &&
+        ["HOP_LIMIT", "TRACE_LIMIT", "PARENT_NOT_FOUND", "SELF_RESPONSE"].includes(error.code);
+      database.releaseContinuation(child.id, permanent ? "failed" : "pending");
+      emitInvocation(
+        database.updateInvocation(child.id, {
+          detail: permanent
+            ? `结果无法回执给 ${requester.username}：${error instanceof Error ? error.message : String(error)}`
+            : (child.detail ?? null),
+        }),
+      );
+    }
   }
 
   function isTerminal(invocation: Invocation): boolean {
@@ -338,16 +435,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   function createAndDispatchMessage(
     participant: Participant,
     input: CreateMessageInput,
-    options: { inferredParent?: boolean } = {},
+    options: { inferredParent?: boolean; delegateTo?: string; receipt?: boolean } = {},
   ) {
     const result = database.createMessage(participant, input);
     if (!result.created) return result;
     const message = result.message;
     broadcast(participant.roomId, { type: "message.created", message });
     broadcastRoomActivity(participant.roomId);
-    if (participant.type === "agent" && !completeFromReply(participant, message, options)) {
+    // 回执由服务端代发，不是被委派方的回复：既不推进子任务，也不因子任务已停止而吞掉对委派方的 @
+    if (
+      participant.type === "agent" &&
+      !options.receipt &&
+      !completeFromReply(participant, message, options)
+    ) {
       return result;
     }
+    // Agent 在执行中发出的 @ 记下上游调用，任务概览才能画出真实的委派关系
+    const parentInvocation =
+      participant.type === "agent" && message.parentMessageId
+        ? database.getInvocationFor(message.parentMessageId, participant.id)
+        : undefined;
     for (const mention of message.mentions) {
       if (mention.toLocaleLowerCase() === "all") continue;
       const agent = database.findParticipant(participant.roomId, mention);
@@ -358,6 +465,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         agent,
         status: blocked ? "blocked" : "queued",
         ...(blocked ? { blockReason: blocked.reason, detail: blocked.detail } : {}),
+        ...(parentInvocation ? { parentInvocationId: parentInvocation.id } : {}),
+        ...(options.delegateTo === agent.id ? { continuation: "pending" as const } : {}),
       });
       if (!created) continue;
       emitInvocation(invocation);
@@ -536,6 +645,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   function sweepStaleInvocations(): void {
+    // 服务重启前没来得及发出、或因限流暂时失败的回执，在这里补发
+    for (const invocation of database.listPendingContinuations())
+      deliverContinuation(invocation.id);
     for (const invocation of database.listStaleInvocations(options.now?.() ?? Date.now())) {
       if (invocation.status === "running") {
         emitInvocation(
@@ -595,6 +707,144 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       })),
       remaining: fresh.length - included.length,
     };
+  }
+
+  /**
+   * hive_invoke：以当前执行中的调用为上游发出委派消息，并为被委派方的调用登记待回执。
+   * 委派消息不推进调用方自己的调用——它只是中间动作，最终答复仍由调用方给出。
+   */
+  function delegate(
+    requester: Participant,
+    input: { agent: string; task: string; clientMessageId: string },
+  ) {
+    const target = database.findParticipant(requester.roomId, input.agent.replace(/^@/, ""));
+    if (!target || target.type !== "agent") {
+      throw new HiveError("AGENT_NOT_FOUND", `房间里没有名为 ${input.agent} 的 Agent。`);
+    }
+    if (target.id === requester.id) {
+      throw new HiveError("SELF_DELEGATION", "不能把子任务委派给自己。");
+    }
+    const parent = inferExecutingParent(requester);
+    const parentInvocation = parent
+      ? database.getInvocationFor(parent.id, requester.id)
+      : undefined;
+    if (parentInvocation) {
+      const waiting = [parentInvocation, ...database.invocationAncestors(parentInvocation.id)].find(
+        (invocation) => invocation.agentId === target.id && !isTerminal(invocation),
+      );
+      if (waiting) {
+        throw new HiveError(
+          "DELEGATION_CYCLE",
+          `${target.username} 正在等待这条委派链的结果，再委派给它会相互等待；请直接在回复里给出结论。`,
+        );
+      }
+    }
+    const name = target.username.toLocaleLowerCase();
+    const content = parseMentions(input.task).some(
+      (mention) => mention.toLocaleLowerCase() === name,
+    )
+      ? input.task
+      : `@${target.username} ${input.task}`;
+    const { message } = createAndDispatchMessage(
+      requester,
+      {
+        content,
+        clientMessageId: input.clientMessageId,
+        ...(parent ? { parentMessageId: parent.id } : {}),
+        kind: "delegation",
+      },
+      { inferredParent: true, delegateTo: target.id },
+    );
+    const invocation = database.getInvocationFor(message.id, target.id);
+    if (!invocation) {
+      throw new HiveError("DELEGATION_FAILED", "委派消息已发出，但没有为对方建立调用记录。");
+    }
+    const connection = onlineAgent(requester.roomId, target.username);
+    return {
+      invocation,
+      message,
+      targetOnline: Boolean(connection),
+      targetBusy: connection?.participant?.status === "busy",
+    };
+  }
+
+  /**
+   * hive_wait：轮询调用状态直到结束、被拦下或窗口用完。
+   * 调用方亲自拿到了结果，就把回执标成已取走，避免同一结果再唤醒它一次。
+   */
+  async function waitForInvocation(
+    caller: Participant,
+    input: { invocationId: string; timeoutMs: number; signal: AbortSignal },
+  ): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + input.timeoutMs;
+    const id = input.invocationId;
+    activeWaits.set(id, (activeWaits.get(id) ?? 0) + 1);
+    try {
+      return await pollInvocation(caller, input, deadline);
+    } finally {
+      const remaining = (activeWaits.get(id) ?? 1) - 1;
+      if (remaining > 0) activeWaits.set(id, remaining);
+      else activeWaits.delete(id);
+      // 等待中途被取消、或结束时没能取走结果：照常回执，不能让结果丢在半路
+      if (remaining <= 0) deliverContinuation(id);
+    }
+  }
+
+  async function pollInvocation(
+    caller: Participant,
+    input: { invocationId: string; signal: AbortSignal },
+    deadline: number,
+  ): Promise<Record<string, unknown>> {
+    for (;;) {
+      const invocation = database.getInvocation(input.invocationId);
+      if (!invocation || invocation.roomId !== caller.roomId) {
+        throw new HiveError("INVOCATION_NOT_FOUND", "当前房间没有这个调用。");
+      }
+      const summary = {
+        invocationId: invocation.id,
+        agent: invocation.agentName,
+        status: invocation.status,
+        ...(invocation.detail ? { detail: invocation.detail } : {}),
+      };
+      if (invocation.status === "blocked") {
+        return {
+          ...summary,
+          done: false,
+          needsHuman: true,
+          ...(invocation.blockReason ? { blockReason: invocation.blockReason } : {}),
+          note: "子任务被预算拦下，需要人在页面上点「继续」；放行后结果仍会回执给你。不要换个方式绕开。",
+        };
+      }
+      if (CONTINUATION_READY_STATUSES.includes(invocation.status)) {
+        if (
+          invocation.requesterId === caller.id &&
+          database.claimContinuation(invocation.id, "consumed")
+        ) {
+          emitInvocation(database.getInvocation(invocation.id)!);
+        }
+        const reply = invocation.replyMessageId
+          ? database.getMessage(invocation.replyMessageId)
+          : undefined;
+        return {
+          ...summary,
+          done: true,
+          ...(invocation.status === "timed_out"
+            ? { note: "结果未知：子任务超时没有进展，不代表失败。" }
+            : {}),
+          ...(reply && !reply.deletedAt
+            ? { reply: { seq: reply.seq, id: reply.id, content: reply.content } }
+            : {}),
+        };
+      }
+      if (Date.now() >= deadline || input.signal.aborted) {
+        return {
+          ...summary,
+          done: false,
+          note: "等待窗口已用完，子任务仍在进行；这不是失败，结束后会自动回执给你。",
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
   }
 
   app.get("/health", async () => ({
@@ -689,6 +939,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       takeInbox: () => takeInbox(participant),
       markRead: (seq) =>
         inboxCursors.set(participant.id, Math.max(inboxCursors.get(participant.id) ?? 0, seq)),
+      invoke: (input) => delegate(participant, input),
+      wait: (input) => waitForInvocation(participant, input),
     });
     const transport = new StreamableHTTPServerTransport();
     try {
@@ -1111,6 +1363,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.addHook("onReady", async () => {
     localAgents?.start();
+    for (const invocation of database.listPendingContinuations())
+      deliverContinuation(invocation.id);
   });
 
   app.addHook("onClose", async () => {

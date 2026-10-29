@@ -82,6 +82,105 @@ export function groupInvocationsByMessage(
   return groups;
 }
 
+const continuationLabels: Record<NonNullable<Invocation["continuation"]>, string> = {
+  pending: "结果待回执",
+  delivered: "结果已回执",
+  consumed: "结果已被取走",
+  failed: "回执失败",
+};
+
+export type DelegationView = {
+  /** 上游：谁派来的；relation 区分 hive_invoke 委派和普通 @ 转交 */
+  upstream?: { invocation?: Invocation; requesterName: string; relation: "委派" | "转交" };
+  downstream: Invocation[];
+  /** 子任务结果回执状态（只有 hive_invoke 委派的子任务才有） */
+  continuation?: string;
+};
+
+/**
+ * 从调用记录里还原委派关系：上游按 parentInvocationId 精确查找，下游是以它为上游的调用。
+ * 上游不在已加载的记录里时只给出发起方名字，不拼凑不存在的关系。
+ */
+export function delegationView(
+  invocation: Invocation,
+  all: Iterable<Invocation>,
+): DelegationView | undefined {
+  const list = [...all];
+  const downstream = list
+    .filter((candidate) => candidate.parentInvocationId === invocation.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const relation = invocation.continuation ? "委派" : "转交";
+  const upstream =
+    invocation.requesterType === "agent"
+      ? {
+          ...(invocation.parentInvocationId
+            ? {
+                invocation: list.find(
+                  (candidate) => candidate.id === invocation.parentInvocationId,
+                ),
+              }
+            : {}),
+          requesterName: invocation.requesterName,
+          relation,
+        }
+      : undefined;
+  if (!upstream && downstream.length === 0) return undefined;
+  return {
+    ...(upstream ? { upstream: upstream as NonNullable<DelegationView["upstream"]> } : {}),
+    downstream,
+    ...(invocation.continuation
+      ? { continuation: continuationLabels[invocation.continuation] }
+      : {}),
+  };
+}
+
+/** 调用详情里的委派关系，逐行展示上下游及其状态 */
+export function delegationLines(
+  invocation: Invocation,
+  all: Iterable<Invocation>,
+): { upstream?: string; downstream: string[]; continuation?: string } | undefined {
+  const view = delegationView(invocation, all);
+  if (!view) return undefined;
+  const upstream = view.upstream
+    ? view.upstream.invocation
+      ? `@${view.upstream.requesterName} ${view.upstream.relation}（上游调用：${invocationStatusLabel(view.upstream.invocation, true)}）`
+      : `@${view.upstream.requesterName} ${view.upstream.relation}（上游调用不在当前已加载的记录里）`
+    : undefined;
+  return {
+    ...(upstream ? { upstream } : {}),
+    downstream: view.downstream.map(
+      (child) =>
+        `@${child.agentName} · ${invocationStatusLabel(child, true)}${
+          child.continuation ? ` · ${continuationLabels[child.continuation]}` : ""
+        }`,
+    ),
+    ...(view.continuation ? { continuation: view.continuation } : {}),
+  };
+}
+
+/** 一句话概括委派关系，用于任务列表和调用状态行 */
+export function delegationSummary(
+  invocation: Invocation,
+  all: Iterable<Invocation>,
+): string | undefined {
+  const view = delegationView(invocation, all);
+  if (!view) return undefined;
+  const parts: string[] = [];
+  if (view.upstream) parts.push(`由 @${view.upstream.requesterName} ${view.upstream.relation}`);
+  if (view.continuation) parts.push(view.continuation);
+  if (view.downstream.length) {
+    const open = view.downstream.filter((child) =>
+      ["queued", "running", "cancelling", "blocked", "timed_out"].includes(child.status),
+    ).length;
+    parts.push(
+      open
+        ? `派出 ${view.downstream.length} 个子任务，${open} 个未结束`
+        : `派出的 ${view.downstream.length} 个子任务都已结束`,
+    );
+  }
+  return parts.join(" · ");
+}
+
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `${seconds}秒`;
@@ -156,8 +255,11 @@ export function InvocationChips({
   onCancel,
   onExtend,
   connectionState,
+  allInvocations,
 }: {
   invocations: Invocation[];
+  /** 房间里全部调用，用来展示委派关系；省略时只看本条消息的调用 */
+  allInvocations?: ReadonlyMap<string, Invocation>;
   participants: Participant[];
   canJumpTo: (messageId: string) => boolean;
   onJump: (messageId: string) => void;
@@ -177,8 +279,11 @@ export function InvocationChips({
               participant.id === invocation.agentId && participant.status !== "offline",
           );
           const label = invocationStatusLabel(invocation, agentOnline);
-          const rawHint = invocationHint(invocation, agentOnline);
-          const hint = rawHint === label ? undefined : rawHint;
+          const delegation = delegationSummary(invocation, allInvocations?.values() ?? invocations);
+          const rawHint = [invocationHint(invocation, agentOnline), delegation]
+            .filter(Boolean)
+            .join(" · ");
+          const hint = !rawHint || rawHint === label ? undefined : rawHint;
           const jumpTarget =
             invocation.status === "completed" &&
             invocation.replyMessageId &&
@@ -212,6 +317,7 @@ export function InvocationChips({
               {invocation.attempts > 1 && (
                 <span className="invocation-attempts">第{invocation.attempts}次</span>
               )}
+              {delegation && <span className="invocation-delegation">{delegation}</span>}
             </>
           );
           const ariaSummary = [
@@ -299,6 +405,7 @@ export function InvocationChips({
             (p) => p.id === selected.agentId && p.status !== "offline",
           )}
           connectionState={connectionState}
+          delegation={delegationLines(selected, allInvocations?.values() ?? invocations)}
           onClose={() => setSelectedId(undefined)}
           {...(selected.replyMessageId && canJumpTo(selected.replyMessageId)
             ? {

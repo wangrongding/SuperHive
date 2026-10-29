@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { LIMITS, type Invocation, type ServerEvent } from "@ai-hive/protocol";
 import WebSocket from "ws";
 import { buildApp } from "./app.js";
+import { HiveDatabase } from "./database.js";
 
 class TestPeer {
   readonly socket: WebSocket;
@@ -185,9 +189,11 @@ describe("Hive WebSocket protocol", () => {
     expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
       "hive_board_read",
       "hive_board_update",
+      "hive_invoke",
       "hive_members_list",
       "hive_message_send",
       "hive_room_read",
+      "hive_wait",
     ]);
     const members = await client.callTool({ name: "hive_members_list", arguments: {} });
     expect(JSON.stringify(members.structuredContent)).toContain("target-agent");
@@ -1186,6 +1192,239 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
         ),
       ),
     ).toMatchObject({ status: "completed", detail: "迟到的结果" });
+  });
+
+  describe("hive_invoke delegation", () => {
+    /** Alice @ planner，planner 开工后用 hive_invoke 把子任务派给 worker */
+    async function delegationRoom(sweepMs?: number) {
+      const room = await startRoom(sweepMs);
+      const { peer: alice } = await room.join("Alice", "human");
+      const { peer: planner } = await room.join("planner", "agent");
+      const { peer: worker } = await room.join("worker", "agent");
+      alice.send({ type: "message.send", clientMessageId: "root", content: "@planner 做个计划" });
+      const mentioned = await planner.next((event) => event.type === "agent.mentioned");
+      const trigger = mentioned.type === "agent.mentioned" ? mentioned.message : undefined;
+      planner.send({ type: "invocation.report", messageId: trigger!.id, status: "running" });
+      await alice.next(
+        (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+      );
+      const plannerMcp = mcpClient(room.port, "planner");
+      const workerMcp = mcpClient(room.port, "worker");
+      await plannerMcp.connect();
+      await workerMcp.connect();
+      const invoke = async (args: Record<string, unknown>) => {
+        const result = await plannerMcp.client.callTool({ name: "hive_invoke", arguments: args });
+        return {
+          result,
+          data: result.structuredContent as Record<string, unknown> & { invocationId: string },
+        };
+      };
+      return { ...room, alice, planner, worker, trigger: trigger!, plannerMcp, workerMcp, invoke };
+    }
+
+    it("delegates without completing the caller and returns the receipt to it", async () => {
+      const { alice, planner, worker, trigger, plannerMcp, workerMcp, invoke } =
+        await delegationRoom();
+      const { data } = await invoke({ agent: "worker", task: "统计一下测试数量" });
+      expect(data).toMatchObject({ status: "queued", targetOnline: true });
+
+      const delegated = await worker.next((event) => event.type === "agent.mentioned");
+      const delegation = delegated.type === "agent.mentioned" ? delegated.message : undefined;
+      expect(delegation).toMatchObject({
+        kind: "delegation",
+        content: "@worker 统计一下测试数量",
+        parentMessageId: trigger.id,
+      });
+      const child = invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" && event.invocation.id === data.invocationId,
+        ),
+      );
+      // 子调用记下了真实的上游，并登记了待回执
+      expect(child).toMatchObject({ continuation: "pending", requesterName: "planner" });
+      expect(child.parentInvocationId).toEqual(expect.any(String));
+
+      // worker 回复并结束：planner 收到一条代发的回执，正文里的 @ 不会再唤醒别人
+      const reply = await workerMcp.client.callTool({
+        name: "hive_message_send",
+        arguments: { content: "共 66 项，@Alice 请过目", parentMessageId: delegation!.id },
+      });
+      expect(reply.isError).not.toBe(true);
+      const receiptEvent = await planner.next(
+        (event) => event.type === "agent.mentioned" && event.message.kind === "receipt",
+      );
+      const receipt = receiptEvent.type === "agent.mentioned" ? receiptEvent.message : undefined;
+      expect(receipt?.content).toContain("子任务回执");
+      expect(receipt?.content).toContain("共 66 项，＠Alice 请过目");
+      expect(receipt?.mentions).toEqual(["planner"]);
+      expect(receipt?.parentMessageId).toBe(delegation!.id);
+      const delivered = invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" &&
+            event.invocation.id === data.invocationId &&
+            event.invocation.continuation === "delivered",
+        ),
+      );
+      expect(delivered.status).toBe("completed");
+
+      await plannerMcp.client.close();
+      await workerMcp.client.close();
+    });
+
+    it("hands the result to hive_wait instead of sending a second receipt", async () => {
+      const { planner, worker, plannerMcp, workerMcp, invoke } = await delegationRoom();
+      const { data } = await invoke({ agent: "worker", task: "快速检查", clientMessageId: "d1" });
+      const again = await invoke({ agent: "worker", task: "快速检查", clientMessageId: "d1" });
+      expect(again.data.invocationId).toBe(data.invocationId);
+
+      const delegated = await worker.next((event) => event.type === "agent.mentioned");
+      const delegation = delegated.type === "agent.mentioned" ? delegated.message : undefined;
+      const pending = await plannerMcp.client.callTool({
+        name: "hive_wait",
+        arguments: { invocationId: data.invocationId, timeoutSeconds: 1 },
+      });
+      expect(pending.structuredContent).toMatchObject({ done: false, status: "queued" });
+
+      const waiting = plannerMcp.client.callTool({
+        name: "hive_wait",
+        arguments: { invocationId: data.invocationId, timeoutSeconds: 10 },
+      });
+      await workerMcp.client.callTool({
+        name: "hive_message_send",
+        arguments: { content: "检查通过", parentMessageId: delegation!.id },
+      });
+      const done = await waiting;
+      expect(done.structuredContent).toMatchObject({
+        done: true,
+        status: "completed",
+        reply: { content: "检查通过" },
+      });
+      await expect(
+        planner.next(
+          (event) => event.type === "agent.mentioned" && event.message.kind === "receipt",
+          400,
+        ),
+      ).rejects.toThrow();
+
+      await plannerMcp.client.close();
+      await workerMcp.client.close();
+    });
+
+    it("sends a receipt still owed from before a restart", async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), "hive-receipt-"));
+      const databasePath = path.join(directory, "hive.sqlite");
+      const seed = new HiveDatabase(databasePath);
+      const human = seed.upsertParticipant({ roomId: "general", username: "Alice", type: "human" });
+      const planner = seed.upsertParticipant({
+        roomId: "general",
+        username: "planner",
+        type: "agent",
+      });
+      const worker = seed.upsertParticipant({
+        roomId: "general",
+        username: "worker",
+        type: "agent",
+      });
+      const root = seed.createMessage(human, {
+        content: "@planner go",
+        clientMessageId: "r",
+      }).message;
+      const delegation = seed.createMessage(planner, {
+        content: "@worker sub",
+        clientMessageId: "d",
+        parentMessageId: root.id,
+        kind: "delegation",
+      }).message;
+      const child = seed.createInvocation({
+        message: delegation,
+        agent: worker,
+        status: "queued",
+        continuation: "pending",
+      }).invocation;
+      seed.updateInvocation(child.id, { status: "failed", detail: "命令退出码 1" });
+      seed.close();
+
+      const app = await buildApp({ databasePath, token: "test-token", staticDir: "/nope" });
+      await app.ready();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await app.close();
+      const after = new HiveDatabase(databasePath);
+      const receipt = after
+        .getMessages("general", 0, 50)
+        .find((message) => message.kind === "receipt");
+      expect(receipt).toMatchObject({ senderName: "worker", mentions: ["planner"] });
+      expect(receipt?.content).toContain("命令退出码 1");
+      expect(after.getInvocation(child.id)?.continuation).toBe("delivered");
+      after.close();
+      rmSync(directory, { recursive: true, force: true });
+    });
+
+    it("refuses self and upstream delegation", async () => {
+      const { worker, plannerMcp, workerMcp, invoke } = await delegationRoom();
+      const self = await invoke({ agent: "planner", task: "自己做" });
+      expect(self.result.isError).toBe(true);
+
+      await invoke({ agent: "worker", task: "子任务" });
+      const delegated = await worker.next((event) => event.type === "agent.mentioned");
+      const delegation = delegated.type === "agent.mentioned" ? delegated.message : undefined;
+      worker.send({ type: "invocation.report", messageId: delegation!.id, status: "running" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const cycle = await workerMcp.client.callTool({
+        name: "hive_invoke",
+        arguments: { agent: "planner", task: "反过来帮我" },
+      });
+      expect(cycle.isError).toBe(true);
+      expect(JSON.stringify(cycle.content)).toContain("相互等待");
+
+      await plannerMcp.client.close();
+      await workerMcp.client.close();
+    });
+
+    it("returns immediately when the subtask is blocked by the budget", async () => {
+      const { plannerMcp, workerMcp, invoke } = await delegationRoom();
+      // 两个 Agent 轮流发言，耗尽「人上次发言以来的 Agent 连续发言」预算（避开单 Agent 每分钟上限）
+      for (let index = 0; index < LIMITS.maxConsecutiveAgentTurns; index += 1) {
+        const sent = await (index % 2 ? plannerMcp : workerMcp).client.callTool({
+          name: "hive_message_send",
+          arguments: { content: `进度 ${index}`, clientMessageId: `fill-${index}` },
+        });
+        expect(sent.isError).not.toBe(true);
+      }
+      const { data } = await invoke({ agent: "worker", task: "再做一件事" });
+      expect(data).toMatchObject({ status: "blocked", blockReason: "consecutive_limit" });
+      const waited = await plannerMcp.client.callTool({
+        name: "hive_wait",
+        arguments: { invocationId: data.invocationId, timeoutSeconds: 10 },
+      });
+      expect(waited.structuredContent).toMatchObject({ done: false, needsHuman: true });
+
+      await plannerMcp.client.close();
+      await workerMcp.client.close();
+    });
+
+    it("tells the delegator when the subtask outcome is unknown", async () => {
+      const { planner, worker, plannerMcp, workerMcp, invoke } = await delegationRoom();
+      const { data } = await invoke({ agent: "worker", task: "可能会卡住" });
+      const delegated = await worker.next((event) => event.type === "agent.mentioned");
+      const delegation = delegated.type === "agent.mentioned" ? delegated.message : undefined;
+      worker.send({
+        type: "invocation.report",
+        messageId: delegation!.id,
+        status: "uncertain",
+        detail: "进程中断，结果未知",
+      });
+      const receiptEvent = await planner.next(
+        (event) => event.type === "agent.mentioned" && event.message.kind === "receipt",
+      );
+      const receipt = receiptEvent.type === "agent.mentioned" ? receiptEvent.message : undefined;
+      expect(receipt?.content).toContain("结果未知");
+      expect(receipt?.content).toContain(data.invocationId);
+
+      await plannerMcp.client.close();
+      await workerMcp.client.close();
+    });
   });
 
   it("shares a throttled whiteboard and piggybacks new room messages on MCP results", async () => {

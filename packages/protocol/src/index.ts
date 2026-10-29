@@ -63,8 +63,10 @@ export const chatMessageSchema = z.object({
   /**
    * topic：话题分隔（有人开启了新话题，或房主清空了房间）。
    * Agent 遇到它会丢弃之前的 Provider 会话，只把分隔之后的消息当作上下文。
+   * delegation：Agent 经 hive_invoke 委派子任务时发出的消息；只是中间动作，不算这一轮的回复。
+   * receipt：子任务结束后服务端代被委派方发给委派方的结果回执。
    */
-  kind: z.enum(["topic"]).optional(),
+  kind: z.enum(["topic", "delegation", "receipt"]).optional(),
 });
 
 export const participantJoinEventSchema = z.object({
@@ -158,8 +160,21 @@ export const invocationSchema = z.object({
   messageId: z.string().uuid(),
   agentId: z.string().uuid(),
   agentName: z.string(),
+  /** 发起方成员 ID；同名成员改名或重建后仍能准确追溯 */
+  requesterId: z.string().uuid().optional(),
   requesterName: z.string(),
   requesterType: participantTypeSchema,
+  /**
+   * 发起这次调用时，发起方 Agent 正在执行的调用（委派或转交的上游）。
+   * 人直接发起的调用没有上游；任务概览据此画出真实的委派关系，而不是按名字拼凑。
+   */
+  parentInvocationId: z.string().uuid().optional(),
+  /**
+   * 经 hive_invoke 委派的子任务：结束后服务端自动把结果回执给委派方。
+   * pending=待回执；delivered=已发出回执消息；consumed=委派方已用 hive_wait 拿到结果；
+   * failed=回执无法投递（例如链条已到深度上限）。
+   */
+  continuation: z.enum(["pending", "delivered", "consumed", "failed"]).optional(),
   status: invocationStatusSchema,
   blockReason: invocationBlockReasonSchema.optional(),
   detail: z.string().max(500).optional(),

@@ -107,6 +107,20 @@ button.invocation-summary:focus-visible {
   content: "·";
 }
 
+/* 委派关系：来源与子任务进度，和次数一样用分隔点接在后面 */
+.invocation-delegation {
+  min-width: 0;
+  max-width: 36ch;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  text-overflow: ellipsis;
+}
+
+.invocation-delegation::before {
+  margin-right: 5px;
+  content: "·";
+}
+
 /* chip 内按钮：小号幽灵胶囊 */
 .invocation-action {
   min-height: 20px;

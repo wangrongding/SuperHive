@@ -111,6 +111,8 @@ type InvocationRow = {
   progress: string | null;
   runtime: string | null;
   reply_message_id: string | null;
+  parent_invocation_id: string | null;
+  continuation: InvocationContinuation | null;
   attempts: number;
   created_at: string;
   updated_at: string;
@@ -134,6 +136,16 @@ type WhiteboardRow = {
   created_at: string;
   updated_at: string;
 };
+
+export type InvocationContinuation = NonNullable<Invocation["continuation"]>;
+
+/** 子任务进入这些状态即可把结果回执给委派方；blocked 还可能被人放行，不算结束 */
+export const CONTINUATION_READY_STATUSES: readonly InvocationStatus[] = [
+  "completed",
+  "failed",
+  "cancelled",
+  "timed_out",
+];
 
 export type InvocationPatch = {
   status?: InvocationStatus;
@@ -180,8 +192,8 @@ export type CreateMessageInput = {
   clientMessageId: string;
   replyToMessageId?: string;
   parentMessageId?: string;
-  /** 只由服务端设置（开启新话题、清空房间），客户端的普通消息没有 kind */
-  kind?: "topic";
+  /** 只由服务端设置（开启新话题、清空房间、委派与回执），客户端的普通消息没有 kind */
+  kind?: NonNullable<ChatMessage["kind"]>;
 };
 
 export type CreateMessageResult = { message: ChatMessage; created: boolean };
@@ -217,7 +229,9 @@ function mapMessage(row: MessageRow): ChatMessage {
     ...(row.client_message_id ? { clientMessageId: row.client_message_id } : {}),
     createdAt: row.created_at,
     ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
-    ...(row.kind === "topic" ? { kind: "topic" as const } : {}),
+    ...(row.kind === "topic" || row.kind === "delegation" || row.kind === "receipt"
+      ? { kind: row.kind as NonNullable<ChatMessage["kind"]> }
+      : {}),
   };
 }
 
@@ -236,8 +250,11 @@ function mapInvocation(row: InvocationRow): Invocation {
     messageId: row.message_id,
     agentId: row.agent_id,
     agentName: row.agent_name,
+    requesterId: row.requester_id,
     requesterName: row.requester_name,
     requesterType: row.requester_type,
+    ...(row.parent_invocation_id ? { parentInvocationId: row.parent_invocation_id } : {}),
+    ...(row.continuation ? { continuation: row.continuation } : {}),
     status: row.status,
     ...(row.block_reason ? { blockReason: row.block_reason } : {}),
     ...(row.detail ? { detail: row.detail } : {}),
@@ -422,6 +439,11 @@ export class HiveDatabase {
     const invocationColumns = this.db.pragma("table_info(invocations)") as Array<{ name: string }>;
     if (!invocationColumns.some((column) => column.name === "runtime")) {
       this.db.exec("ALTER TABLE invocations ADD COLUMN runtime TEXT");
+    }
+    if (!invocationColumns.some((column) => column.name === "parent_invocation_id")) {
+      // 委派关系与子任务回执状态（见 Invocation.parentInvocationId / continuation）
+      this.db.exec("ALTER TABLE invocations ADD COLUMN parent_invocation_id TEXT");
+      this.db.exec("ALTER TABLE invocations ADD COLUMN continuation TEXT");
     }
     const messageColumns = this.db.pragma("table_info(messages)") as Array<{ name: string }>;
     if (!messageColumns.some((column) => column.name === "deleted_at")) {
@@ -869,6 +891,8 @@ export class HiveDatabase {
     status: "queued" | "blocked";
     blockReason?: InvocationBlockReason;
     detail?: string;
+    parentInvocationId?: string;
+    continuation?: "pending";
   }): { invocation: Invocation; created: boolean } {
     const existing = this.getInvocationFor(input.message.id, input.agent.id);
     if (existing) return { invocation: existing, created: false };
@@ -878,8 +902,9 @@ export class HiveDatabase {
       .prepare(
         `INSERT INTO invocations(
           id, room_id, message_id, agent_id, agent_name, requester_id, requester_name,
-          requester_type, status, block_reason, detail, attempts, created_at, updated_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+          requester_type, status, block_reason, detail, parent_invocation_id, continuation,
+          attempts, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       )
       .run(
         id,
@@ -893,6 +918,8 @@ export class HiveDatabase {
         input.status,
         input.blockReason ?? null,
         input.detail ?? null,
+        input.parentInvocationId ?? null,
+        input.continuation ?? null,
         now,
         now,
       );
@@ -910,6 +937,56 @@ export class HiveDatabase {
       .prepare("SELECT * FROM invocations WHERE message_id = ? AND agent_id = ?")
       .get(messageId, agentId) as InvocationRow | undefined;
     return row ? mapInvocation(row) : undefined;
+  }
+
+  /**
+   * 原子地把回执状态从 pending 推进到 next；返回 false 表示已被别处处理（例如 hive_wait 已取走结果），
+   * 用来保证同一个子任务的结果只回执一次。
+   */
+  claimContinuation(id: string, next: Exclude<InvocationContinuation, "pending">): boolean {
+    return (
+      this.db
+        .prepare(
+          "UPDATE invocations SET continuation = ?, updated_at = ? WHERE id = ? AND continuation = 'pending'",
+        )
+        .run(next, new Date().toISOString(), id).changes === 1
+    );
+  }
+
+  /** 回执发送失败时撤回占用：暂时性错误放回 pending 等扫描重试，永久性错误标为 failed */
+  releaseContinuation(id: string, next: "pending" | "failed"): void {
+    this.db
+      .prepare(
+        "UPDATE invocations SET continuation = ?, updated_at = ? WHERE id = ? AND continuation = 'delivered'",
+      )
+      .run(next, new Date().toISOString(), id);
+  }
+
+  /** 已结束但回执还没发出的子任务：服务重启或投递暂时失败后由扫描补发 */
+  listPendingContinuations(): Invocation[] {
+    const statuses = CONTINUATION_READY_STATUSES.map(() => "?").join(", ");
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM invocations WHERE continuation = 'pending' AND status IN (${statuses})
+         ORDER BY updated_at ASC`,
+      )
+      .all(...CONTINUATION_READY_STATUSES) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
+  /** 沿 parentInvocationId 向上的委派链（不含自身），用来拒绝会形成相互等待的委派 */
+  invocationAncestors(id: string): Invocation[] {
+    const chain: Invocation[] = [];
+    const seen = new Set<string>([id]);
+    let current = this.getInvocation(id)?.parentInvocationId;
+    while (current && !seen.has(current) && chain.length < 100) {
+      seen.add(current);
+      const invocation = this.getInvocation(current);
+      if (!invocation) break;
+      chain.push(invocation);
+      current = invocation.parentInvocationId;
+    }
+    return chain;
   }
 
   /** 已请求停止、尚未收到确认的调用：Agent 重新连接时需要再次下发停止请求 */

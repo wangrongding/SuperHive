@@ -142,6 +142,48 @@ describe("HiveDatabase", () => {
     vi.useRealTimers();
   });
 
+  it("claims a subtask receipt exactly once and lists receipts still owed", () => {
+    const root = db.createMessage(human, {
+      content: "@agent-a go",
+      clientMessageId: "c-root",
+    }).message;
+    const delegation = db.createMessage(agentA, {
+      content: "@agent-b sub",
+      clientMessageId: "c-delegate",
+      parentMessageId: root.id,
+      kind: "delegation",
+    }).message;
+    expect(delegation.kind).toBe("delegation");
+    const parent = db.createInvocation({
+      message: root,
+      agent: agentA,
+      status: "queued",
+    }).invocation;
+    const child = db.createInvocation({
+      message: delegation,
+      agent: agentB,
+      status: "queued",
+      parentInvocationId: parent.id,
+      continuation: "pending",
+    }).invocation;
+    expect(child).toMatchObject({
+      requesterId: agentA.id,
+      parentInvocationId: parent.id,
+      continuation: "pending",
+    });
+    expect(db.invocationAncestors(child.id).map((invocation) => invocation.id)).toEqual([
+      parent.id,
+    ]);
+    // 还没结束的子任务不欠回执
+    expect(db.listPendingContinuations()).toEqual([]);
+    db.updateInvocation(child.id, { status: "completed" });
+    expect(db.listPendingContinuations().map((invocation) => invocation.id)).toEqual([child.id]);
+
+    expect(db.claimContinuation(child.id, "consumed")).toBe(true);
+    expect(db.claimContinuation(child.id, "delivered")).toBe(false);
+    expect(db.listPendingContinuations()).toEqual([]);
+  });
+
   it("limits each agent's replies per minute", () => {
     const root = db.createMessage(human, { content: "root", clientMessageId: "rate-root" }).message;
     for (let index = 0; index < LIMITS.maxAgentRepliesPerMinute; index += 1) {

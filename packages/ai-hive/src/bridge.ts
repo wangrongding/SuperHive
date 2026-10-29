@@ -612,8 +612,9 @@ export class AgentBridge {
         (message) => !this.recalled.has(message.id) && !active.cancelled.has(message.id),
       );
       const messagesAfterReply = await this.room.fetchMessages(context.latestSeq);
+      // 经 hive_invoke 发出的委派只是中间动作，不能当成这一轮的回复，否则最终答复会被吞掉
       const sentWithHiveTool = messagesAfterReply.messages.find(
-        (message) => message.senderId === this.ownParticipantId,
+        (message) => message.senderId === this.ownParticipantId && message.kind !== "delegation",
       );
       let replyMessageId: string | undefined = sentWithHiveTool?.id;
       if (live.length === 0) {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatMessage, Invocation, RoomSummary } from "@ai-hive/protocol";
-import { invocationStatusLabel } from "./invocations";
+import { delegationSummary, invocationStatusLabel } from "./invocations";
 import { formatRelativeTime } from "./whiteboard";
 
 export type ActivityView = "search" | "mentions" | "tasks";
@@ -197,6 +197,9 @@ export function ActivityPanel({
       const message = invocationMessages.get(invocation.messageId);
       if (!message) return undefined;
       const online = isAgentOnline(invocation);
+      const delegation = delegationSummary(invocation, invocations);
+      const status = invocation.status === "running" ? invocation.progress : invocation.detail;
+      const detail = [status, delegation].filter(Boolean).join(" · ");
       return {
         key: invocation.id,
         message,
@@ -205,13 +208,7 @@ export function ActivityPanel({
             @{invocation.agentName} · {invocationStatusLabel(invocation, online)}
           </span>
         ),
-        ...(invocation.status === "running"
-          ? invocation.progress
-            ? { detail: invocation.progress }
-            : {}
-          : invocation.detail
-            ? { detail: invocation.detail }
-            : {}),
+        ...(detail ? { detail } : {}),
       };
     };
     return {
