@@ -28,6 +28,8 @@ export type AgentState = {
   instructionsDigest?: string;
   /** 当前 Provider 会话所属话题的起点（话题分隔消息的 seq）；遇到更新的分隔就换新会话 */
   topicSeq?: number;
+  /** 当前 Provider 会话所在的工作目录；房间换了工作区就换新会话 */
+  workspace?: string;
 };
 
 /**

@@ -13,6 +13,8 @@ export function buildDeveloperInstructions(input: {
   persona: string;
   serverRules: string;
   access?: AgentAccessMode;
+  /** 本房间实际使用的工作目录，以及房间工作区没有采用时的原因 */
+  workspace?: { cwd: string; note?: string };
 }): string {
   const access = input.access ?? "read-only";
   const localAccessRule =
@@ -25,7 +27,7 @@ export function buildDeveloperInstructions(input: {
 
 你的名称是：${input.agentName}
 你的角色描述是：${input.persona}
-
+${input.workspace && input.access !== "read-only" ? `你在本房间的工作目录：${input.workspace.cwd}\n` : ""}${input.workspace?.note ? `${input.workspace.note}\n` : ""}
 规则：
 
 1. 只有被明确 @ 时才回复。

@@ -3,6 +3,8 @@ import type { RoomSummary } from "./hive-protocol.js";
 export type ManagedStack = {
   start(): Promise<void>;
   stop(): Promise<void>;
+  /** 当前回合与排队都处理完时返回；重建前等它，避免打断正在执行的任务 */
+  whenIdle?(): Promise<void>;
 };
 
 export type StackHooks = {
@@ -12,7 +14,7 @@ export type StackHooks = {
 
 export type AgentManagerOptions = {
   listRooms: () => Promise<RoomSummary[]>;
-  createStack: (roomId: string, hooks: StackHooks) => ManagedStack;
+  createStack: (room: RoomSummary, hooks: StackHooks) => ManagedStack;
   log?: (message: string) => void;
   reconcileIntervalMs?: number;
 };
@@ -20,6 +22,9 @@ export type AgentManagerOptions = {
 type StackEntry = {
   stack: ManagedStack;
   starting: Promise<boolean>;
+  /** 建立这个房间时的工作区；房间工作区变了就在空闲后重建 */
+  workspace: string | undefined;
+  restarting?: boolean;
 };
 
 export class AgentManager {
@@ -37,7 +42,7 @@ export class AgentManager {
 
   async start(): Promise<string[]> {
     const rooms = (await this.options.listRooms()).filter((room) => !room.archivedAt);
-    await Promise.all(rooms.map((room) => this.spawn(room.id)));
+    await Promise.all(rooms.map((room) => this.spawn(room)));
     const joined = [...this.stacks.keys()];
     if (joined.length === 0) throw new Error("未能加入任何房间。");
     if (this.reconcileIntervalMs > 0) {
@@ -60,9 +65,10 @@ export class AgentManager {
     );
   }
 
-  private spawn(roomId: string): Promise<void> {
+  private spawn(room: RoomSummary): Promise<void> {
+    const roomId = room.id;
     if (this.stopping || this.stacks.has(roomId)) return Promise.resolve();
-    const stack = this.options.createStack(roomId, {
+    const stack = this.options.createStack(room, {
       onRoomsChanged: (room) => this.handleRoomsChanged(room),
       onArchived: () => void this.remove(roomId, "已归档"),
     });
@@ -79,8 +85,22 @@ export class AgentManager {
         return false;
       },
     );
-    this.stacks.set(roomId, { stack, starting });
+    this.stacks.set(roomId, { stack, starting, workspace: room.workspace });
     return starting.then(() => undefined);
+  }
+
+  /** 房间工作区变了：等这个房间空闲后重建（新的工作目录、新的 Provider 会话），其他房间不受影响 */
+  private async restart(room: RoomSummary): Promise<void> {
+    const entry = this.stacks.get(room.id);
+    if (!entry || entry.restarting) return;
+    entry.restarting = true;
+    await entry.starting;
+    await entry.stack.whenIdle?.();
+    if (this.stopping || this.stacks.get(room.id) !== entry) return;
+    this.stacks.delete(room.id);
+    await entry.stack.stop().catch(() => undefined);
+    this.log(`[hive] 房间 #${room.id} 的工作区已变更，重新加入`);
+    await this.spawn(room);
   }
 
   private async remove(roomId: string, reason: string): Promise<void> {
@@ -99,7 +119,13 @@ export class AgentManager {
   private handleRoomsChanged(room: RoomSummary): void {
     if (this.stopping) return;
     if (room.archivedAt) void this.remove(room.id, "已归档");
-    else void this.spawn(room.id);
+    else if (this.stacks.has(room.id)) this.maybeRestart(room);
+    else void this.spawn(room);
+  }
+
+  private maybeRestart(room: RoomSummary): void {
+    const entry = this.stacks.get(room.id);
+    if (entry && (entry.workspace ?? "") !== (room.workspace ?? "")) void this.restart(room);
   }
 
   private async reconcile(): Promise<void> {
@@ -109,7 +135,8 @@ export class AgentManager {
       const rooms = (await this.options.listRooms()).filter((room) => !room.archivedAt);
       const active = new Set(rooms.map((room) => room.id));
       for (const room of rooms) {
-        if (!this.stacks.has(room.id)) void this.spawn(room.id);
+        if (!this.stacks.has(room.id)) void this.spawn(room);
+        else this.maybeRestart(room);
       }
       for (const roomId of this.stacks.keys()) {
         if (!active.has(roomId)) void this.remove(roomId, "已归档");

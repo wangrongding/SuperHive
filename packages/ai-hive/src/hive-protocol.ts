@@ -61,6 +61,8 @@ export type RoomSummary = {
   createdAt: string;
   createdBy?: string;
   archivedAt?: string;
+  /** 房间工作区（Server 所在电脑上的路径） */
+  workspace?: string;
   onlineCount: number;
   latestSeq: number;
 };

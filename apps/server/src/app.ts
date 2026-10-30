@@ -43,7 +43,11 @@ import {
   type CreateMessageInput,
 } from "./database.js";
 import { createHiveMcpServer, type AttachmentReadResult, type InboxDigest } from "./hive-mcp.js";
-import { LocalAgentSupervisor, type LocalAgentSupervisorOptions } from "./local-agents.js";
+import {
+  LocalAgentSupervisor,
+  resolveWorkspace,
+  type LocalAgentSupervisorOptions,
+} from "./local-agents.js";
 import { registerLocalAgentRoutes } from "./local-routes.js";
 import { checkLocalRequest } from "./local-access.js";
 import {
@@ -2246,17 +2250,28 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     };
   });
 
+  /** 房间工作区必须是 Server 所在电脑上真实存在的目录，存解析后的真实路径 */
+  function roomWorkspace(input: string): string {
+    return resolveWorkspace(input);
+  }
+
   app.post("/api/rooms", async (request, reply) => {
     if (!adminOnly(request, reply)) return reply;
     const body = createRoomRequestSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "Invalid room payload." });
     try {
-      const room = database.createRoom(body.data);
+      const room = database.createRoom({
+        ...body.data,
+        ...(body.data.workspace ? { workspace: roomWorkspace(body.data.workspace) } : {}),
+      });
       broadcastAll({ type: "rooms.changed", room });
       return reply.code(201).send({ room });
     } catch (error) {
       if (error instanceof HiveError && error.code === "ROOM_EXISTS") {
         return reply.code(409).send({ error: error.message, code: error.code });
+      }
+      if (error instanceof HiveError && error.code.startsWith("LOCAL_AGENT_CWD")) {
+        return reply.code(400).send({ error: error.message, code: "ROOM_WORKSPACE_INVALID" });
       }
       throw error;
     }
@@ -2267,11 +2282,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
     if (!adminOnly(request, reply)) return reply;
     const body = updateRoomRequestSchema.safeParse(request.body);
-    if (!body.success || (body.data.name === undefined && body.data.archived === undefined)) {
+    if (
+      !body.success ||
+      (body.data.name === undefined &&
+        body.data.archived === undefined &&
+        body.data.workspace === undefined)
+    ) {
       return reply.code(400).send({ error: "Invalid room patch payload." });
     }
     try {
-      const room = database.updateRoom(params.data.roomId, body.data);
+      const room = database.updateRoom(params.data.roomId, {
+        ...body.data,
+        ...(body.data.workspace ? { workspace: roomWorkspace(body.data.workspace) } : {}),
+      });
       broadcastAll({ type: "rooms.changed", room });
       return { room };
     } catch (error) {
@@ -2280,6 +2303,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
       if (error instanceof HiveError && error.code === "ROOM_PROTECTED") {
         return reply.code(400).send({ error: error.message, code: error.code });
+      }
+      if (error instanceof HiveError && error.code.startsWith("LOCAL_AGENT_CWD")) {
+        return reply.code(400).send({ error: error.message, code: "ROOM_WORKSPACE_INVALID" });
       }
       throw error;
     }

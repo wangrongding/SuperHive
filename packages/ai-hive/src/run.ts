@@ -18,6 +18,8 @@ import {
   type HiveMcpConnection,
 } from "./hive-mcp-config.js";
 import { fetchRooms } from "./room-client.js";
+import type { RoomSummary } from "./hive-protocol.js";
+import { allowedWorkspaceRoots, resolveRoomWorkspace } from "./workspace.js";
 import {
   EchoResponder,
   type AgentAccessMode,
@@ -40,6 +42,7 @@ AI Hive Agent
   --provider NAME   codex、claude、copilot、openclaw、opencode 或 omp（默认 codex）
   --access MODE     read-only、workspace 或 full（默认 read-only）
   --persona TEXT    Agent 的角色描述
+  --allow-root PATH 允许跟随房间工作区切换到的目录（可重复）；默认只有 --cwd 及其上一级
   --cwd PATH        Agent 工作目录（workspace/full 必填；只读默认使用状态目录下
                     该 Agent 专属的空目录）
   --state-dir PATH  Agent 状态目录（默认 ~/.ai-hive/agents）
@@ -102,6 +105,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       access: { type: "string", default: "read-only" },
       persona: { type: "string" },
       cwd: { type: "string" },
+      "allow-root": { type: "string", multiple: true },
       "state-dir": { type: "string" },
       codex: { type: "string", default: "codex" },
       "codex-transport": { type: "string", default: "auto" },
@@ -217,7 +221,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       throw new Error(`Agent CLI 无法启动：${check.stderr || check.error?.message}`);
   }
 
-  function buildResponder(hive: HiveMcpConnection): AgentResponder {
+  function buildResponder(hive: HiveMcpConnection, cwd: string): AgentResponder {
     switch (provider) {
       case "echo":
         return new EchoResponder(username!);
@@ -273,7 +277,21 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     }
   }
 
-  function buildStack(stackRoomId: string, hooks?: Partial<StackHooks>): AgentBridge {
+  const allowedRoots = allowedWorkspaceRoots(cwd, parsed.values["allow-root"] ?? []);
+
+  function buildStack(room: RoomSummary, hooks?: Partial<StackHooks>): AgentBridge {
+    const stackRoomId = room.id;
+    const workspace = resolveRoomWorkspace({
+      roomWorkspace: room.workspace,
+      defaultCwd: cwd,
+      allowedRoots,
+      access,
+    });
+    if (room.workspace) {
+      console.log(
+        `[hive] #${stackRoomId} 工作目录：${workspace.cwd}${workspace.note ? `（${workspace.note}）` : ""}`,
+      );
+    }
     const hive: HiveMcpConnection = {
       serverUrl: serverUrl!,
       roomId: stackRoomId,
@@ -309,18 +327,23 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
         token: token!,
         access,
         attachmentCacheDir: path.join(stateDir, "attachments"),
-        cwd,
+        cwd: workspace.cwd,
+        ...(workspace.note ? { workspaceNote: workspace.note } : {}),
         ...(hooks?.onRoomsChanged ? { onRoomsChanged: hooks.onRoomsChanged } : {}),
         ...(hooks?.onArchived ? { onArchived: hooks.onArchived } : {}),
       },
       store,
-      buildResponder(hive),
+      buildResponder(hive, workspace.cwd),
     );
   }
 
   let stopAll: () => Promise<void>;
   if (roomId !== undefined) {
-    const bridge: AgentBridge = buildStack(roomId, {
+    // 单房间模式在启动时确定房间工作区；之后房间改了工作区需要重启 Agent
+    const room = (await fetchRooms(serverUrl, token).catch(() => [])).find(
+      (item) => item.id === roomId,
+    );
+    const bridge: AgentBridge = buildStack(room ?? ({ id: roomId } as RoomSummary), {
       onArchived: () => {
         console.error(`[hive] 已不能再访问房间 #${roomId}（归档、到期或被移除），Agent 退出。`);
         void bridge.stop().finally(() => process.exit(1));
@@ -331,7 +354,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   } else {
     const manager = new AgentManager({
       listRooms: () => fetchRooms(serverUrl, token),
-      createStack: (id, hooks) => buildStack(id, hooks),
+      createStack: (room, hooks) => buildStack(room, hooks),
     });
     const joined = await manager.start();
     console.log(

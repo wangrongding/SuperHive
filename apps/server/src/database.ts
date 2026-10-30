@@ -99,6 +99,7 @@ type RoomRow = {
   created_at: string;
   created_by: string | null;
   archived_at: string | null;
+  workspace: string | null;
   online_count: number;
   latest_seq: number;
 };
@@ -356,13 +357,14 @@ function mapRoom(row: RoomRow): RoomSummary {
     createdAt: row.created_at,
     ...(row.created_by ? { createdBy: row.created_by } : {}),
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    ...(row.workspace ? { workspace: row.workspace } : {}),
     onlineCount: row.online_count,
     latestSeq: row.latest_seq,
   };
 }
 
 const roomSummarySelect = `
-  SELECT r.id, r.name, r.created_at, r.created_by, r.archived_at,
+  SELECT r.id, r.name, r.created_at, r.created_by, r.archived_at, r.workspace,
          COALESCE(p.online_count, 0) AS online_count,
          COALESCE(m.latest_seq, 0) AS latest_seq
   FROM rooms r
@@ -527,6 +529,9 @@ export class HiveDatabase {
       this.db.exec("ALTER TABLE messages ADD COLUMN meta TEXT");
     }
     const roomColumns = this.db.pragma("table_info(rooms)") as Array<{ name: string }>;
+    if (!roomColumns.some((column) => column.name === "workspace")) {
+      this.db.exec("ALTER TABLE rooms ADD COLUMN workspace TEXT");
+    }
     if (!roomColumns.some((column) => column.name === "agent_turn_allowance")) {
       // 人为 Agent 互相对话追加的轮数；只在授予时的那条人类消息之后有效
       this.db.exec("ALTER TABLE rooms ADD COLUMN agent_turn_allowance INTEGER NOT NULL DEFAULT 0");
@@ -616,12 +621,21 @@ export class HiveDatabase {
     id: string;
     name?: string | undefined;
     createdBy?: string | undefined;
+    workspace?: string | undefined;
   }): RoomSummary {
     const existing = this.db.prepare("SELECT id FROM rooms WHERE id = ?").get(input.id);
     if (existing) throw new HiveError("ROOM_EXISTS", "A room with this id already exists.");
     this.db
-      .prepare("INSERT INTO rooms(id, name, created_at, created_by) VALUES(?, ?, ?, ?)")
-      .run(input.id, input.name ?? input.id, new Date().toISOString(), input.createdBy ?? null);
+      .prepare(
+        "INSERT INTO rooms(id, name, created_at, created_by, workspace) VALUES(?, ?, ?, ?, ?)",
+      )
+      .run(
+        input.id,
+        input.name ?? input.id,
+        new Date().toISOString(),
+        input.createdBy ?? null,
+        input.workspace ?? null,
+      );
     return this.getRoom(input.id)!;
   }
 
@@ -633,7 +647,11 @@ export class HiveDatabase {
 
   updateRoom(
     id: string,
-    patch: { name?: string | undefined; archived?: boolean | undefined },
+    patch: {
+      name?: string | undefined;
+      archived?: boolean | undefined;
+      workspace?: string | null | undefined;
+    },
   ): RoomSummary {
     const room = this.getRoom(id);
     if (!room) throw new HiveError("ROOM_NOT_FOUND", "Room not found.");
@@ -642,6 +660,9 @@ export class HiveDatabase {
     }
     if (patch.name !== undefined) {
       this.db.prepare("UPDATE rooms SET name = ? WHERE id = ?").run(patch.name, id);
+    }
+    if (patch.workspace !== undefined) {
+      this.db.prepare("UPDATE rooms SET workspace = ? WHERE id = ?").run(patch.workspace, id);
     }
     if (patch.archived === true) {
       this.db

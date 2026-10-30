@@ -463,6 +463,11 @@ export const roomSummarySchema = z.object({
   createdAt: z.string().datetime(),
   createdBy: z.string().max(32).optional(),
   archivedAt: z.string().datetime().optional(),
+  /**
+   * 房间工作区：Server 所在电脑上的目录。本机 Agent 在它允许的根目录内时，在这个房间改用这里作工作目录；
+   * 不在允许范围、或 Agent 在别的电脑上时，继续用 Agent 自己的目录。
+   */
+  workspace: z.string().max(4096).optional(),
   onlineCount: z.number().int().nonnegative(),
   latestSeq: z.number().int().nonnegative(),
 });
@@ -516,15 +521,25 @@ export const roomsResponseSchema = z.object({
   rooms: z.array(roomSummarySchema),
 });
 
+/** 房间工作区：绝对路径或 ~ 开头；null 表示清除 */
+export const roomWorkspaceSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4096)
+  .regex(/^(\/|~(\/|$))/, "请填写绝对路径（以 / 或 ~ 开头）");
+
 export const createRoomRequestSchema = z.object({
   id: roomIdSchema,
   name: z.string().trim().min(1).max(64).optional(),
   createdBy: z.string().trim().min(1).max(32).optional(),
+  workspace: roomWorkspaceSchema.optional(),
 });
 
 export const updateRoomRequestSchema = z.object({
   name: z.string().trim().min(1).max(64).optional(),
   archived: z.boolean().optional(),
+  workspace: roomWorkspaceSchema.nullable().optional(),
 });
 
 export const metaResponseSchema = z.object({

@@ -799,6 +799,7 @@ export function App({
   >();
   const [roomDialogId, setRoomDialogId] = useState("");
   const [roomDialogName, setRoomDialogName] = useState("");
+  const [roomDialogWorkspace, setRoomDialogWorkspace] = useState("");
   const [roomDialogError, setRoomDialogError] = useState<string>();
   const [roomDialogBusy, setRoomDialogBusy] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
@@ -928,6 +929,7 @@ export function App({
     [currentRoomId, rooms],
   );
   const currentRoomName = currentRoom?.name ?? currentRoomId;
+  const currentRoomWorkspace = currentRoom?.workspace;
   const visibleRooms = useMemo(
     () => rooms.filter((room) => showArchivedRooms || !room.archivedAt),
     [rooms, showArchivedRooms],
@@ -1302,6 +1304,7 @@ export function App({
       setClearConfirmOpen(false);
       setRoomDialogId(dialog.mode === "manage" ? dialog.room.id : "");
       setRoomDialogName(dialog.mode === "manage" ? dialog.room.name : "");
+      setRoomDialogWorkspace(dialog.mode === "manage" ? (dialog.room.workspace ?? "") : "");
       setRoomDialog(dialog);
     },
     [],
@@ -2203,7 +2206,10 @@ export function App({
       body: JSON.stringify(body),
     });
     if (response.status === 409) throw new Error("房间 ID 已存在，请换一个。");
-    if (!response.ok) throw new Error(`房间操作失败 (${response.status})`);
+    if (!response.ok) {
+      const failure = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(failure.error ?? `房间操作失败 (${response.status})`);
+    }
     const payload = (await response.json()) as { room: RoomSummary };
     return payload.room;
   }
@@ -2221,6 +2227,7 @@ export function App({
         id,
         name: roomDialogName.trim() || id,
         createdBy: username,
+        ...(roomDialogWorkspace.trim() ? { workspace: roomDialogWorkspace.trim() } : {}),
       });
       upsertRoom(room);
       closeRoomDialog();
@@ -2241,8 +2248,10 @@ export function App({
     setRoomDialogBusy(true);
     setRoomDialogError(undefined);
     try {
+      const workspace = roomDialogWorkspace.trim();
       const updated = await roomRequest(`/api/rooms/${encodeURIComponent(room.id)}`, "PATCH", {
         name,
+        ...(workspace !== (room.workspace ?? "") ? { workspace: workspace || null } : {}),
       });
       upsertRoom(updated);
       closeRoomDialog();
@@ -2546,6 +2555,15 @@ export function App({
               <h1>{currentRoomName}</h1>
               <span>
                 {online.length} 位在线 · {messages.length} 条消息
+                {currentRoomWorkspace && (
+                  <span
+                    className="chat-title-workspace"
+                    title={`房间工作区：${currentRoomWorkspace}`}
+                  >
+                    {" "}
+                    · {currentRoomWorkspace.split("/").filter(Boolean).at(-1)}
+                  </span>
+                )}
               </span>
             </div>
             <div className="chat-header-actions">
@@ -4501,6 +4519,24 @@ export function App({
                 />
                 <small>仅影响界面展示，可随时修改。</small>
               </label>
+              {isOwner && (
+                <label className="room-field">
+                  <span>工作区（可选）</span>
+                  <input
+                    value={roomDialogWorkspace}
+                    onChange={(event) => setRoomDialogWorkspace(event.target.value)}
+                    maxLength={4096}
+                    placeholder="例如 ~/Coding/my-project，留空用各 Agent 自己的目录"
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <small>
+                    这台电脑上的目录。本机 Agent
+                    在这个房间改在这里工作（需在它允许的范围内：启动目录及其上一级，或用
+                    --allow-root 追加）；修改后 Agent 等手上的任务做完再切换，并开始新会话。
+                  </small>
+                </label>
+              )}
               {roomDialogError && (
                 <p className="room-dialog-error" role="alert">
                   {roomDialogError}

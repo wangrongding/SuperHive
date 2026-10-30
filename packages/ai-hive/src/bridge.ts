@@ -136,6 +136,8 @@ export class AgentBridge {
       attachmentCacheDir?: string;
       /** Agent 工作目录：回复里声明的附件只允许来自这里 */
       cwd?: string;
+      /** 房间工作区没有采用时的原因，写进规则 */
+      workspaceNote?: string;
       onRoomsChanged?: (room: RoomSummary) => void;
       onArchived?: () => void;
       tuning?: BridgeTuning;
@@ -226,12 +228,35 @@ export class AgentBridge {
       persona: this.options.persona,
       serverRules,
       ...(this.options.access ? { access: this.options.access } : {}),
+      ...(this.options.cwd
+        ? {
+            workspace: {
+              cwd: this.options.cwd,
+              ...(this.options.workspaceNote ? { note: this.options.workspaceNote } : {}),
+            },
+          }
+        : {}),
     });
+    // 换了工作目录：旧会话（Codex 线程、Claude 续接）会沿用旧目录，丢掉它从新会话开始；消息游标保留
+    if (this.options.cwd && this.state.workspace !== this.options.cwd) {
+      if (this.state.threadId && this.state.workspace) {
+        this.log(`[hive] 房间工作目录已改为 ${this.options.cwd}，开始新的会话`);
+        delete this.state.threadId;
+      }
+      this.state.workspace = this.options.cwd;
+    }
     await this.recoverInterruptedExecution();
     this.room.start();
     this.log(
       `[hive] ${this.options.username} 正在连接 ${this.options.serverUrl}/${this.options.roomId}`,
     );
+  }
+
+  /** 没有正在执行、排队或待恢复的回合时返回；切换房间工作区前用它等这一轮做完 */
+  async whenIdle(pollMs = 500): Promise<void> {
+    while (!this.stopped && (this.active || this.pending.length > 0 || this.state?.inflight)) {
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
   }
 
   async stop(): Promise<void> {

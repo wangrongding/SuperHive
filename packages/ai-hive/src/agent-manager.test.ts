@@ -56,7 +56,8 @@ describe("AgentManager", () => {
     options: { reconcileIntervalMs?: number; makeStack?: (roomId: string) => FakeStack } = {},
   ): { manager: AgentManager; createStack: ReturnType<typeof vi.fn> } {
     const listRooms = typeof rooms === "function" ? rooms : async () => rooms;
-    const createStack = vi.fn((roomId: string, hooks: StackHooks): ManagedStack => {
+    const createStack = vi.fn((target: RoomSummary, hooks: StackHooks): ManagedStack => {
+      const roomId = target.id;
       const stack = options.makeStack?.(roomId) ?? fakeStack();
       stacks.set(roomId, stack);
       hooksByRoom.set(roomId, hooks);
@@ -184,5 +185,27 @@ describe("AgentManager", () => {
     await vi.waitFor(() => expect(stacks.get("dev")!.stop).toHaveBeenCalledTimes(1));
 
     await m.stop();
+  });
+
+  it("房间工作区变了：等该房间空闲后重建，名字变化不重建", async () => {
+    const idle = deferred<void>();
+    const { manager: m, createStack } = manager([room("general"), room("dev")], {
+      makeStack: (roomId) =>
+        roomId === "dev" ? fakeStack({ whenIdle: vi.fn(() => idle.promise) }) : fakeStack(),
+    });
+    await m.start();
+    const first = stacks.get("dev")!;
+    const hooks = hooksByRoom.get("general")!;
+    hooks.onRoomsChanged(room("dev", { name: "改名" }));
+    expect(createStack).toHaveBeenCalledTimes(2);
+
+    hooks.onRoomsChanged(room("dev", { workspace: "/work/dev" }));
+    hooks.onRoomsChanged(room("dev", { workspace: "/work/dev" }));
+    await Promise.resolve();
+    expect(first.stop).not.toHaveBeenCalled();
+    idle.resolve();
+    await vi.waitFor(() => expect(createStack).toHaveBeenCalledTimes(3));
+    expect(first.stop).toHaveBeenCalledTimes(1);
+    expect(createStack.mock.calls[2]?.[0]).toMatchObject({ id: "dev", workspace: "/work/dev" });
   });
 });
