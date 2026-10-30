@@ -30,8 +30,8 @@ export type ChatMessage = {
   createdAt: string;
   /** 已撤回：content 与 mentions 已被服务端清空 */
   deletedAt?: string;
-  /** topic：话题分隔（开启新话题或清空房间），之前的会话上下文应被丢弃；delegation：hive_invoke 发出的委派；receipt：子任务回执 */
-  kind?: "topic" | "delegation" | "receipt";
+  /** topic：话题分隔（开启新话题或清空房间），之前的会话上下文应被丢弃；delegation：hive_invoke 发出的委派；receipt：子任务回执；question：hive_ask_human 提的问题 */
+  kind?: "topic" | "delegation" | "receipt" | "question";
 };
 
 export type MessagesResponse = {
@@ -57,7 +57,8 @@ export type InvocationStatus =
   | "blocked"
   | "cancelling"
   | "timed_out"
-  | "cancelled";
+  | "cancelled"
+  | "waiting_human";
 
 /** 服务端对一次 @ 唤醒的追踪记录（Agent 侧只用到其中一部分字段） */
 export type Invocation = {

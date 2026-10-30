@@ -415,6 +415,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (invocation.status === "cancelled") return false;
     if (options.inferredParent) return invocation.status !== "cancelling";
     if (isTerminal(invocation)) return true;
+    // 提过问的调用等人回答才算结束；这一轮的回复只记下来，不把它推进到完成
+    if (invocation.status === "waiting_human") {
+      emitInvocation(database.updateInvocation(invocation.id, { replyMessageId: reply.id }));
+      return true;
+    }
     const stopping = invocation.status === "cancelling";
     emitInvocation(
       database.updateInvocation(invocation.id, {
@@ -450,17 +455,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ) {
       return result;
     }
+    // 人回复了 Agent 的提问：结束等待中的调用，并用这条回答重新唤醒提问的 Agent（不必再 @ 它）
+    const answered = participant.type === "human" ? answeredQuestion(message) : undefined;
+    const targets = [...message.mentions];
+    if (
+      answered &&
+      !targets.some((name) => name.toLocaleLowerCase() === answered.agentName.toLocaleLowerCase())
+    ) {
+      targets.push(answered.agentName);
+    }
     // Agent 在执行中发出的 @ 记下上游调用，任务概览才能画出真实的委派关系
     const parentInvocation =
       participant.type === "agent" && message.parentMessageId
         ? database.getInvocationFor(message.parentMessageId, participant.id)
         : undefined;
-    for (const mention of message.mentions) {
+    for (const mention of targets) {
       if (mention.toLocaleLowerCase() === "all") continue;
       const agent = database.findParticipant(participant.roomId, mention);
       if (!agent || agent.type !== "agent" || agent.id === participant.id) continue;
       const blocked = budgetBlock(participant, message, agent);
-      const { invocation, created } = database.createInvocation({
+      const { invocation: createdInvocation, created } = database.createInvocation({
         message,
         agent,
         status: blocked ? "blocked" : "queued",
@@ -469,10 +483,82 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         ...(options.delegateTo === agent.id ? { continuation: "pending" as const } : {}),
       });
       if (!created) continue;
+      let invocation = createdInvocation;
+      if (answered && answered.agentId === agent.id) {
+        if (database.adoptContinuation(answered.id, invocation.id)) {
+          invocation = database.getInvocation(invocation.id)!;
+        }
+        emitInvocation(
+          database.updateInvocation(answered.id, {
+            status: "completed",
+            finishedAt: answered.finishedAt ?? new Date().toISOString(),
+            progress: null,
+            detail: `${participant.username} 已回答（#${message.seq}），已续到新的调用`,
+          }),
+        );
+      }
       emitInvocation(invocation);
       if (!blocked) deliverMention(message, agent);
     }
     return result;
+  }
+
+  /** 这条消息回复的是 Agent 的提问且该调用仍在等人回答时，返回那个等待中的调用 */
+  function answeredQuestion(message: ChatMessage): Invocation | undefined {
+    if (!message.replyToMessageId) return undefined;
+    const question = database.getMessage(message.replyToMessageId);
+    if (
+      !question ||
+      question.kind !== "question" ||
+      question.deletedAt ||
+      question.roomId !== message.roomId ||
+      !question.parentMessageId
+    ) {
+      return undefined;
+    }
+    const invocation = database.getInvocationFor(question.parentMessageId, question.senderId);
+    return invocation?.status === "waiting_human" ? invocation : undefined;
+  }
+
+  /**
+   * hive_ask_human：Agent 在执行中需要人拍板时，发一条提问并把当前调用转为等人回答。
+   * 这一轮照常结束、不占进程；人回复提问后由服务端以回答重新唤醒它，等待期间不算卡住。
+   */
+  function askHuman(agent: Participant, input: { question: string; clientMessageId: string }) {
+    const parent = inferExecutingParent(agent);
+    const invocation = parent ? database.getInvocationFor(parent.id, agent.id) : undefined;
+    if (!parent || !invocation || invocation.status === "cancelling") {
+      throw new HiveError("NOT_EXECUTING", "只能在处理某条消息的过程中向人提问。");
+    }
+    const asker =
+      invocation.requesterType === "human"
+        ? `@${invocation.requesterName} `
+        : (() => {
+            // 委派链上的子任务：问链条源头的人，没有就不 @ 任何人，靠「等回答」收件箱提醒
+            const root = [invocation, ...database.invocationAncestors(invocation.id)].find(
+              (item) => item.requesterType === "human",
+            );
+            return root ? `@${root.requesterName} ` : "";
+          })();
+    const { message } = createAndDispatchMessage(
+      agent,
+      {
+        // 问题里的 @ 换成全角：提问只发给人，不能借机唤醒其他 Agent
+        content: `${asker}❓ ${quoteWithoutMentions(input.question, LIMITS.maxMessageLength - 200)}\n（回复这条消息即可把答案交给 ${agent.username}）`,
+        clientMessageId: input.clientMessageId,
+        parentMessageId: parent.id,
+        kind: "question",
+      },
+      { inferredParent: true },
+    );
+    const updated = emitInvocation(
+      database.updateInvocation(invocation.id, {
+        status: "waiting_human",
+        progress: null,
+        detail: `等人回答：${input.question.replace(/\s+/g, " ").slice(0, 480)}`,
+      }),
+    );
+    return { invocation: updated, message };
   }
 
   function invocationInRoom(participant: Participant, invocationId: string): Invocation {
@@ -533,6 +619,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   function cancelInvocation(actor: Participant, invocationId: string): void {
     const invocation = invocationInRoom(actor, invocationId);
     if (isTerminal(invocation)) return;
+    // 等人回答且这一轮已结束：没有在跑的执行需要确认，直接停下
+    if (invocation.status === "waiting_human" && invocation.finishedAt) {
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          status: "cancelled",
+          detail: `${actor.username} 不再回答，已停止`,
+        }),
+      );
+      return;
+    }
     const target = onlineAgent(invocation.roomId, invocation.agentName);
     if (invocation.status !== "cancelling") {
       emitInvocation(
@@ -604,8 +700,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     if (report.status === "running") {
       if (isTerminal(invocation)) return;
-      // 停止未确认前的进度和心跳只更新运行观测，不把调用冲回 running
-      if (invocation.status === "cancelling") {
+      // 停止未确认前、或提问后等人回答期间的进度和心跳只更新运行观测，不把调用冲回 running
+      if (invocation.status === "cancelling" || invocation.status === "waiting_human") {
         emitInvocation(
           database.updateInvocation(invocation.id, {
             runtime: observeRuntime(invocation.runtime, report.runtimeEvent, now),
@@ -626,6 +722,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return;
     }
     if (isTerminal(invocation)) return;
+    // 提问后这一轮正常结束：保持等人回答，只记下回复与结束时间；失败或停止照常落定
+    if (invocation.status === "waiting_human" && report.status === "completed") {
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          finishedAt: now,
+          ...(report.replyMessageId ? { replyMessageId: report.replyMessageId } : {}),
+        }),
+      );
+      return;
+    }
     emitInvocation(
       database.updateInvocation(invocation.id, {
         status: invocation.status === "cancelling" ? "cancelled" : report.status,
@@ -806,6 +912,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         status: invocation.status,
         ...(invocation.detail ? { detail: invocation.detail } : {}),
       };
+      if (invocation.status === "waiting_human") {
+        return {
+          ...summary,
+          done: false,
+          needsHuman: true,
+          note: "子任务在等人回答，人回复后它会继续，结果照常回执给你；不需要等，也不要替人回答。",
+        };
+      }
       if (invocation.status === "blocked") {
         return {
           ...summary,
@@ -940,6 +1054,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       markRead: (seq) =>
         inboxCursors.set(participant.id, Math.max(inboxCursors.get(participant.id) ?? 0, seq)),
       invoke: (input) => delegate(participant, input),
+      askHuman: (input) => askHuman(participant, input),
       wait: (input) => waitForInvocation(participant, input),
     });
     const transport = new StreamableHTTPServerTransport();

@@ -1,6 +1,13 @@
 import type { ChatMessage, Invocation } from "@ai-hive/protocol";
 import { describe, expect, it } from "vitest";
-import { currentPausedInvocations, delegationLines, delegationSummary } from "./invocations";
+import {
+  canCancelInvocation,
+  currentPausedInvocations,
+  delegationLines,
+  delegationSummary,
+  invocationStatusLabel,
+  waitingInvocationForQuestion,
+} from "./invocations";
 
 const now = new Date().toISOString();
 const message = (id: string, seq: number, senderType: "human" | "agent") =>
@@ -91,5 +98,42 @@ describe("delegation view", () => {
     expect(delegationLines(planner, [planner, worker])?.downstream).toEqual([
       "@worker · 进行中 · 结果待回执",
     ]);
+  });
+});
+
+describe("waiting for a human answer", () => {
+  const waiting = {
+    id: "w1",
+    messageId: "trigger",
+    agentId: "agent-1",
+    agentName: "helper",
+    status: "waiting_human",
+    attempts: 1,
+    createdAt: now,
+    updatedAt: now,
+  } as Invocation;
+  const question = {
+    id: "q1",
+    kind: "question",
+    parentMessageId: "trigger",
+    senderId: "agent-1",
+  } as ChatMessage;
+
+  it("找到提问对应的等待中调用，回答后或别人发的消息都不匹配", () => {
+    expect(waitingInvocationForQuestion(question, [waiting])?.id).toBe("w1");
+    expect(
+      waitingInvocationForQuestion(question, [{ ...waiting, status: "completed" }]),
+    ).toBeUndefined();
+    expect(
+      waitingInvocationForQuestion({ ...question, senderId: "other" }, [waiting]),
+    ).toBeUndefined();
+    expect(
+      waitingInvocationForQuestion({ ...question, kind: undefined }, [waiting]),
+    ).toBeUndefined();
+  });
+
+  it("显示为等你回答，并允许人放弃等待", () => {
+    expect(invocationStatusLabel(waiting, true)).toBe("等你回答");
+    expect(canCancelInvocation(waiting)).toBe(true);
   });
 });

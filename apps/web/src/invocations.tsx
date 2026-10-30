@@ -47,8 +47,29 @@ export function canCancelInvocation(invocation: Invocation): boolean {
   return (
     invocation.status === "queued" ||
     invocation.status === "running" ||
-    invocation.status === "timed_out"
+    invocation.status === "timed_out" ||
+    invocation.status === "waiting_human"
   );
+}
+
+/** Agent 的提问消息对应的、仍在等人回答的调用（提问挂在触发消息下，由提问的 Agent 发出） */
+export function waitingInvocationForQuestion(
+  question: ChatMessage,
+  invocations: Iterable<Invocation>,
+): Invocation | undefined {
+  if (question.kind !== "question" || !question.parentMessageId || question.deletedAt) {
+    return undefined;
+  }
+  for (const invocation of invocations) {
+    if (
+      invocation.status === "waiting_human" &&
+      invocation.messageId === question.parentMessageId &&
+      invocation.agentId === question.senderId
+    ) {
+      return invocation;
+    }
+  }
+  return undefined;
 }
 
 export function upsertInvocation(
@@ -170,7 +191,9 @@ export function delegationSummary(
   if (view.continuation) parts.push(view.continuation);
   if (view.downstream.length) {
     const open = view.downstream.filter((child) =>
-      ["queued", "running", "cancelling", "blocked", "timed_out"].includes(child.status),
+      ["queued", "running", "cancelling", "blocked", "timed_out", "waiting_human"].includes(
+        child.status,
+      ),
     ).length;
     parts.push(
       open
@@ -216,6 +239,8 @@ export function invocationStatusLabel(invocation: Invocation, agentOnline: boole
       return "已停止";
     case "cancelling":
       return "正在停止 · 待确认";
+    case "waiting_human":
+      return "等你回答";
     default:
       return "状态待核实";
   }
@@ -232,6 +257,9 @@ function invocationHint(invocation: Invocation, agentOnline: boolean): string | 
     return `${invocation.agentName} 当前离线，上线后会自动收到这条消息。`;
   }
   if (invocation.status === "running") return invocation.progress ?? invocation.detail;
+  if (invocation.status === "waiting_human") {
+    return [invocation.detail, "回复它的提问即可继续"].filter(Boolean).join(" · ");
+  }
   return invocation.detail;
 }
 
@@ -306,6 +334,7 @@ export function InvocationChips({
               )}
               {(invocation.status === "blocked" ||
                 invocation.status === "failed" ||
+                invocation.status === "waiting_human" ||
                 // 完成但没有回复消息：Agent 判断无需回复，标出来免得像是漏处理
                 (invocation.status === "completed" && !invocation.replyMessageId)) &&
                 invocation.detail && (

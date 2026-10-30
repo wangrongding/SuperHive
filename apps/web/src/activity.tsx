@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { ChatMessage, Invocation, RoomSummary } from "@ai-hive/protocol";
+import type { ChatMessage, Invocation, Participant, RoomSummary } from "@ai-hive/protocol";
 import { delegationSummary, invocationStatusLabel } from "./invocations";
 import { formatRelativeTime } from "./whiteboard";
 
 export type ActivityView = "search" | "mentions" | "tasks";
 
-/** 需要人处理的调用：失败、被拦截、结果未知 */
+/** 需要人处理的调用：失败、被拦截、结果未知、等人回答 */
 export function needsAttention(invocation: Invocation): boolean {
   return (
     invocation.status === "failed" ||
     invocation.status === "blocked" ||
-    invocation.status === "timed_out"
+    invocation.status === "timed_out" ||
+    invocation.status === "waiting_human"
   );
 }
 
@@ -20,6 +21,107 @@ export function isInFlight(invocation: Invocation): boolean {
     invocation.status === "running" ||
     invocation.status === "cancelling"
   );
+}
+
+export type AgentRuntimeState = "offline" | "idle" | "working" | "attention" | "waiting";
+
+export type AgentRuntimeRow = {
+  participant: Participant;
+  state: AgentRuntimeState;
+  /** 最近一条进行中或需要处理的调用，决定状态行上展示的进度 */
+  current?: Invocation;
+  inFlight: number;
+  attention: number;
+};
+
+const runtimeStateOrder: Record<AgentRuntimeState, number> = {
+  waiting: 0,
+  attention: 1,
+  working: 2,
+  idle: 3,
+  offline: 4,
+};
+
+/**
+ * 当前房间每个 Agent 一行：等你回答最先，其次需要处理、工作中、空闲、离线。
+ * 只统计未结束的调用；离线的 Agent 即使有排队任务也显示离线，上线后会自动收到。
+ */
+export function agentRuntimeRows(
+  participants: readonly Participant[],
+  invocations: Iterable<Invocation>,
+): AgentRuntimeRow[] {
+  const byAgent = new Map<string, Invocation[]>();
+  for (const invocation of invocations) {
+    if (!needsAttention(invocation) && !isInFlight(invocation)) continue;
+    const list = byAgent.get(invocation.agentId);
+    if (list) list.push(invocation);
+    else byAgent.set(invocation.agentId, [invocation]);
+  }
+  return participants
+    .filter((participant) => participant.type === "agent")
+    .map((participant) => {
+      const open = (byAgent.get(participant.id) ?? []).sort((a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt),
+      );
+      const attention = open.filter(needsAttention);
+      const inFlight = open.filter(isInFlight);
+      const waiting = attention.find((invocation) => invocation.status === "waiting_human");
+      const state: AgentRuntimeState = waiting
+        ? "waiting"
+        : attention.length > 0
+          ? "attention"
+          : participant.status === "offline"
+            ? "offline"
+            : inFlight.some((invocation) => invocation.status !== "queued") ||
+                participant.status === "busy"
+              ? "working"
+              : "idle";
+      const current = waiting ?? attention[0] ?? inFlight[0];
+      return {
+        participant,
+        state,
+        ...(current ? { current } : {}),
+        inFlight: inFlight.length,
+        attention: attention.length,
+      };
+    })
+    .sort(
+      (a, b) =>
+        runtimeStateOrder[a.state] - runtimeStateOrder[b.state] ||
+        a.participant.username.localeCompare(b.participant.username),
+    );
+}
+
+/**
+ * 按委派关系把调用排成树：子任务紧跟在上游后面并带缩进深度。
+ * 上游不在列表里的调用当作根，保持原有顺序；有环时按首次出现截断，不会死循环。
+ */
+export function orderByDelegation(
+  invocations: readonly Invocation[],
+): { invocation: Invocation; depth: number }[] {
+  const ids = new Set(invocations.map((invocation) => invocation.id));
+  const children = new Map<string, Invocation[]>();
+  const roots: Invocation[] = [];
+  for (const invocation of invocations) {
+    const parent = invocation.parentInvocationId;
+    if (parent && parent !== invocation.id && ids.has(parent)) {
+      const list = children.get(parent);
+      if (list) list.push(invocation);
+      else children.set(parent, [invocation]);
+    } else roots.push(invocation);
+  }
+  const ordered: { invocation: Invocation; depth: number }[] = [];
+  const seen = new Set<string>();
+  const visit = (invocation: Invocation, depth: number) => {
+    if (seen.has(invocation.id)) return;
+    seen.add(invocation.id);
+    ordered.push({ invocation, depth });
+    for (const child of children.get(invocation.id) ?? []) visit(child, depth + 1);
+  };
+  for (const root of roots) visit(root, 0);
+  // 互相指向形成的环没有根，按原顺序补上
+  for (const invocation of invocations) visit(invocation, 0);
+  return ordered;
 }
 
 /** 列表预览只保留文字：去掉代码块、强调、行内代码、引用与列表等 Markdown 标记 */
@@ -62,6 +164,8 @@ type ResultItem = {
   unread?: boolean;
   badge?: ReactNode;
   detail?: string;
+  /** 委派树里的缩进层级 */
+  depth?: number;
 };
 
 function ResultList({
@@ -88,7 +192,19 @@ function ResultList({
       {items.map((item, localIndex) => {
         const index = offset + localIndex;
         return (
-          <li key={item.key} role="presentation">
+          <li
+            key={item.key}
+            role="presentation"
+            className={item.depth ? "activity-child" : undefined}
+            style={
+              item.depth
+                ? ({
+                    paddingLeft: `${Math.min(item.depth, 4) * 18}px`,
+                    "--child-indent": `${Math.min(item.depth, 4) * 18 - 12}px`,
+                  } as React.CSSProperties)
+                : undefined
+            }
+          >
             <button
               type="button"
               role="option"
@@ -119,6 +235,77 @@ function ResultList({
   );
 }
 
+const runtimeStateLabels: Record<AgentRuntimeState, string> = {
+  waiting: "等你回答",
+  attention: "需要处理",
+  working: "工作中",
+  idle: "空闲",
+  offline: "离线",
+};
+
+/** 当前房间 Agent 一览：谁在干嘛、谁卡住了，点击跳到它正在处理的消息 */
+function AgentRuntimeList({
+  rows,
+  messageFor,
+  onOpen,
+}: {
+  rows: AgentRuntimeRow[];
+  messageFor: (invocation: Invocation) => ChatMessage | undefined;
+  onOpen: (message: ChatMessage) => void;
+}) {
+  return (
+    <section aria-label="成员状态">
+      <h3 className="activity-section-label">成员状态 · 当前房间</h3>
+      <ul className="agent-runtime-list">
+        {rows.map((row) => {
+          const message = row.current ? messageFor(row.current) : undefined;
+          const counts = [
+            row.attention ? `${row.attention} 个需处理` : undefined,
+            row.inFlight ? `${row.inFlight} 个进行中` : undefined,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          const current = row.current
+            ? [
+                invocationStatusLabel(row.current, row.state !== "offline"),
+                row.current.status === "running" ? row.current.progress : row.current.detail,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            : undefined;
+          const content = (
+            <>
+              <span className={`agent-runtime-dot ${row.state}`} aria-hidden="true" />
+              <strong>@{row.participant.username}</strong>
+              <span className={`agent-runtime-state ${row.state}`}>
+                {runtimeStateLabels[row.state]}
+              </span>
+              {counts && <span className="agent-runtime-counts">{counts}</span>}
+              {current && <span className="agent-runtime-current">{current}</span>}
+            </>
+          );
+          return (
+            <li key={row.participant.id}>
+              {message ? (
+                <button
+                  type="button"
+                  className="agent-runtime-row"
+                  aria-label={`@${row.participant.username} ${runtimeStateLabels[row.state]}，跳到当前任务`}
+                  onClick={() => onOpen(message)}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div className="agent-runtime-row">{content}</div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export function ActivityPanel({
   view,
   rooms,
@@ -127,6 +314,7 @@ export function ActivityPanel({
   invocations,
   invocationMessages,
   isAgentOnline,
+  participants = [],
   search,
   onOpenMessage,
   onMarkMentionsRead,
@@ -139,6 +327,8 @@ export function ActivityPanel({
   invocations: Invocation[];
   invocationMessages: ReadonlyMap<string, ChatMessage>;
   isAgentOnline: (invocation: Invocation) => boolean;
+  /** 当前房间成员，用来展示每个 Agent 的运行状态 */
+  participants?: readonly Participant[];
   search: (query: string) => Promise<ChatMessage[]>;
   onOpenMessage: (message: ChatMessage) => void;
   onMarkMentionsRead: () => void;
@@ -193,7 +383,13 @@ export function ActivityPanel({
 
   const taskItems = useMemo(() => {
     const sorted = [...invocations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    const toItem = (invocation: Invocation): ResultItem | undefined => {
+    const toItem = ({
+      invocation,
+      depth,
+    }: {
+      invocation: Invocation;
+      depth: number;
+    }): ResultItem | undefined => {
       const message = invocationMessages.get(invocation.messageId);
       if (!message) return undefined;
       const online = isAgentOnline(invocation);
@@ -209,13 +405,26 @@ export function ActivityPanel({
           </span>
         ),
         ...(detail ? { detail } : {}),
+        ...(depth ? { depth } : {}),
       };
     };
+    const tree = (list: Invocation[]) =>
+      orderByDelegation(list).map(toItem).filter(Boolean) as ResultItem[];
     return {
-      attention: sorted.filter(needsAttention).map(toItem).filter(Boolean) as ResultItem[],
-      inFlight: sorted.filter(isInFlight).map(toItem).filter(Boolean) as ResultItem[],
+      waiting: tree(sorted.filter((invocation) => invocation.status === "waiting_human")),
+      attention: tree(
+        sorted.filter(
+          (invocation) => needsAttention(invocation) && invocation.status !== "waiting_human",
+        ),
+      ),
+      inFlight: tree(sorted.filter(isInFlight)),
     };
   }, [invocationMessages, invocations, isAgentOnline]);
+
+  const agentRows = useMemo(
+    () => (view === "tasks" ? agentRuntimeRows(participants, invocations) : []),
+    [invocations, participants, view],
+  );
 
   const isUnread = (message: ChatMessage) => message.seq > (readSeqs[message.roomId] ?? 0);
   const unreadMentions = mentions.filter(isUnread).length;
@@ -230,7 +439,7 @@ export function ActivityPanel({
             message,
             unread: isUnread(message),
           }))
-        : [...taskItems.attention, ...taskItems.inFlight];
+        : [...taskItems.waiting, ...taskItems.attention, ...taskItems.inFlight];
 
   const activate = (message: ChatMessage) => {
     onOpenMessage(message);
@@ -351,17 +560,37 @@ export function ActivityPanel({
               <ResultList items={items} {...listProps} />
             ))}
 
+          {view === "tasks" && agentRows.length > 0 && (
+            <AgentRuntimeList
+              rows={agentRows}
+              messageFor={(invocation) => invocationMessages.get(invocation.messageId)}
+              onOpen={activate}
+            />
+          )}
+
           {view === "tasks" &&
             (items.length === 0 ? (
               <p className="activity-empty">当前没有进行中或需要处理的 Agent 调用。</p>
             ) : (
               <>
+                {taskItems.waiting.length > 0 && (
+                  <section aria-label="等你回答">
+                    <h3 className="activity-section-label">
+                      等你回答 · {taskItems.waiting.length}
+                    </h3>
+                    <ResultList items={taskItems.waiting} {...listProps} />
+                  </section>
+                )}
                 {taskItems.attention.length > 0 && (
                   <section aria-label="需要处理">
                     <h3 className="activity-section-label">
                       需要处理 · {taskItems.attention.length}
                     </h3>
-                    <ResultList items={taskItems.attention} {...listProps} />
+                    <ResultList
+                      items={taskItems.attention}
+                      {...listProps}
+                      offset={taskItems.waiting.length}
+                    />
                   </section>
                 )}
                 {taskItems.inFlight.length > 0 && (
@@ -370,7 +599,7 @@ export function ActivityPanel({
                     <ResultList
                       items={taskItems.inFlight}
                       {...listProps}
-                      offset={taskItems.attention.length}
+                      offset={taskItems.waiting.length + taskItems.attention.length}
                     />
                   </section>
                 )}

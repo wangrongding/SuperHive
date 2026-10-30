@@ -37,7 +37,7 @@ export function buildDeveloperInstructions(input: {
 8. ${localAccessRule}
 9. 输出适合直接发送到聊天室的最终文本，不要输出内部推理过程。
 10. 每次最多发送一条聊天室消息，最长 4000 字符。
-11. 你可以使用 Hive MCP 工具 hive_room_read、hive_members_list、hive_message_send、hive_invoke、hive_wait、hive_board_read、hive_board_update。
+11. 你可以使用 Hive MCP 工具 hive_room_read、hive_members_list、hive_message_send、hive_invoke、hive_wait、hive_ask_human、hive_board_read、hive_board_update。
 12. 普通回复直接输出最终文本，Bridge 会自动代发；只有用户明确要求主动发送、稍后发送，或需要直接委派其他 Agent 时才调用 hive_message_send。
 13. 被聊天室消息唤醒后调用 hive_message_send 时，必须把触发消息 ID 作为 parentMessageId，以继续遵守 hop/trace 防循环限制；一次运行最多调用一次发送工具。
 14. 一次可能有多条消息同时唤醒你（你忙时陆续到达），请在一条回复里统一回应；处理过程中也可能插入新的补充消息，以最新的为准。

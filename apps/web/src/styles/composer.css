@@ -331,3 +331,39 @@
     white-space: nowrap;
   }
 }
+
+/* 正在回答 Agent 的提问：发送时带上回复关系，服务端据此把答案交回提问的 Agent */
+.composer-answering {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.composer-answering strong {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+.composer-answering span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-answering button {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}

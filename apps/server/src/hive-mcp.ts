@@ -63,6 +63,11 @@ export type HiveMcpContext = {
     targetOnline: boolean;
     targetBusy: boolean;
   };
+  /** 向人提问：发出提问消息，当前调用转为等人回答 */
+  askHuman: (input: { question: string; clientMessageId: string }) => {
+    invocation: Invocation;
+    message: ChatMessage;
+  };
   /** 短时等待一个调用结束；超时只说明还没结束，不改变子任务状态 */
   wait: (input: {
     invocationId: string;
@@ -260,6 +265,45 @@ export function createHiveMcpServer(context: HiveMcpContext): McpServer {
           signal: extra.signal,
         });
         return toolResult(result, context.takeInbox());
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "hive_ask_human",
+    {
+      title: "Ask a human to decide",
+      description:
+        "需要人拍板、补充信息或授权才能继续时，向人提一个问题。服务端会发出一条提问消息，你当前的任务转为「等人回答」，不会因为超时被判为卡住。提问后用一两句话说明你在等什么、已经做到哪里，然后结束本轮即可，不要原地等待或轮询；人回复这条提问后，服务端会带着回答重新唤醒你继续。只用于确实需要人决定的事，能自己判断的不要问；问题要具体，最好给出选项和你的建议。",
+      inputSchema: {
+        question:
+          messageSendEventSchema.shape.content.describe("要人回答的具体问题，可附上选项与你的建议"),
+        clientMessageId: z
+          .string()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("可选幂等键；重试同一次提问时复用"),
+      },
+    },
+    async ({ question, clientMessageId }) => {
+      try {
+        const result = context.askHuman({
+          question,
+          clientMessageId: clientMessageId ?? randomUUID(),
+        });
+        return toolResult(
+          {
+            asked: true,
+            questionMessageId: result.message.id,
+            invocationId: result.invocation.id,
+            status: result.invocation.status,
+            note: "已提问。简短说明你在等什么后结束本轮；人回复后会带着回答重新唤醒你。",
+          },
+          context.takeInbox(),
+        );
       } catch (error) {
         return toolError(error);
       }

@@ -229,7 +229,10 @@ function mapMessage(row: MessageRow): ChatMessage {
     ...(row.client_message_id ? { clientMessageId: row.client_message_id } : {}),
     createdAt: row.created_at,
     ...(row.deleted_at ? { deletedAt: row.deleted_at } : {}),
-    ...(row.kind === "topic" || row.kind === "delegation" || row.kind === "receipt"
+    ...(row.kind === "topic" ||
+    row.kind === "delegation" ||
+    row.kind === "receipt" ||
+    row.kind === "question"
       ? { kind: row.kind as NonNullable<ChatMessage["kind"]> }
       : {}),
   };
@@ -962,6 +965,36 @@ export class HiveDatabase {
       .run(next, new Date().toISOString(), id);
   }
 
+  /**
+   * 子任务提问后由人的回答续上：待回执连同委派方、上游一起交给回答触发的新调用，
+   * 旧调用不再回执——否则委派方会先收到一句"在等人回答"的中间结果。
+   */
+  adoptContinuation(fromId: string, toId: string): boolean {
+    return this.db.transaction(() => {
+      const from = this.db.prepare("SELECT * FROM invocations WHERE id = ?").get(fromId) as
+        InvocationRow | undefined;
+      if (!from || from.continuation !== "pending") return false;
+      const now = new Date().toISOString();
+      this.db
+        .prepare("UPDATE invocations SET continuation = NULL, updated_at = ? WHERE id = ?")
+        .run(now, fromId);
+      this.db
+        .prepare(
+          `UPDATE invocations SET continuation = 'pending', requester_id = ?, requester_name = ?,
+             requester_type = ?, parent_invocation_id = ?, updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          from.requester_id,
+          from.requester_name,
+          from.requester_type,
+          from.parent_invocation_id,
+          now,
+          toId,
+        );
+      return true;
+    })();
+  }
+
   /** 已结束但回执还没发出的子任务：服务重启或投递暂时失败后由扫描补发 */
   listPendingContinuations(): Invocation[] {
     const statuses = CONTINUATION_READY_STATUSES.map(() => "?").join(", ");
@@ -997,11 +1030,13 @@ export class HiveDatabase {
     return rows.map(mapInvocation);
   }
 
-  /** Agent 当前正在执行（含停止中）的调用 */
+  /** Agent 当前正在执行（含停止中、提问后本轮尚未结束）的调用 */
   listExecutingInvocations(agentId: string): Invocation[] {
     const rows = this.db
       .prepare(
-        "SELECT * FROM invocations WHERE agent_id = ? AND status IN ('running', 'cancelling')",
+        `SELECT * FROM invocations WHERE agent_id = ?
+           AND (status IN ('running', 'cancelling')
+             OR (status = 'waiting_human' AND finished_at IS NULL))`,
       )
       .all(agentId) as InvocationRow[];
     return rows.map(mapInvocation);
@@ -1041,7 +1076,7 @@ export class HiveDatabase {
       .prepare(
         `SELECT * FROM invocations WHERE id IN (
            SELECT id FROM invocations WHERE room_id = ? ORDER BY created_at DESC LIMIT ?
-         ) OR (room_id = ? AND status IN ('queued', 'running', 'cancelling', 'timed_out'))
+         ) OR (room_id = ? AND status IN ('queued', 'running', 'cancelling', 'timed_out', 'waiting_human'))
          ORDER BY created_at ASC`,
       )
       .all(roomId, limit, roomId) as InvocationRow[];
@@ -1276,7 +1311,7 @@ export class HiveDatabase {
     const rows = this.db
       .prepare(
         `SELECT * FROM invocations
-         WHERE status IN ('queued', 'running', 'cancelling')
+         WHERE status IN ('queued', 'running', 'cancelling', 'waiting_human')
             OR (status IN ('failed', 'blocked', 'timed_out') AND updated_at >= ?)
          ORDER BY updated_at DESC LIMIT ?`,
       )

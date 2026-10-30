@@ -247,6 +247,45 @@ describe("AgentBridge", () => {
     ]);
   });
 
+  it("processes a server-dispatched answer that does not @ the agent", async () => {
+    await startBridge(baseState());
+    // 人回复了 Agent 的提问：正文没有 @，但服务端已为它派发
+    const answer = chat({ content: "A", mentions: [] });
+    room.messages.push(answer);
+    room.handlers.onMention(answer, answer.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    responder.finish("收到，开始提交");
+    await waitUntil(() => room.statuses(answer.id).includes("completed"));
+    expect(room.sent[0]).toMatchObject({ content: "收到，开始提交", parentMessageId: answer.id });
+  });
+
+  it("still posts the final answer after asking a human with hive_ask_human", async () => {
+    await startBridge(baseState());
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    // 本轮中途经 hive_ask_human 发出的提问不是这一轮的回复
+    room.messages.push(
+      chat({
+        senderId: SELF,
+        senderName: "agent-a",
+        senderType: "agent",
+        content: "@Alice ❓ 发正式环境吗？",
+        mentions: ["Alice"],
+        kind: "question",
+      }),
+    );
+    responder.finish("在等 Alice 确认环境，确认后继续");
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    expect(room.sent).toEqual([
+      expect.objectContaining({
+        content: "在等 Alice 确认环境，确认后继续",
+        parentMessageId: mention.id,
+      }),
+    ]);
+  });
+
   it("stays silent on NO_REPLY but still completes and remembers the mention", async () => {
     await startBridge(baseState());
     const mention = chat({

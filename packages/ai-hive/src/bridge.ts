@@ -33,11 +33,16 @@ export function shouldProcessMention(input: {
   username: string;
   ownParticipantId: string;
   processedMessageIds: string[];
+  /**
+   * 服务端已为本 Agent 建立了这条消息的调用（例如人回答了它的提问、没有再 @ 它）：
+   * 服务端是派发的权威，正文里没有 @ 也要处理。
+   */
+  invited?: boolean;
 }): boolean {
   return (
     !input.message.deletedAt &&
     input.message.senderId !== input.ownParticipantId &&
-    isMentioned(input.message.content, input.username) &&
+    (input.invited === true || isMentioned(input.message.content, input.username)) &&
     !input.processedMessageIds.includes(input.message.id)
   );
 }
@@ -149,7 +154,7 @@ export class AgentBridge {
       },
       {
         onSnapshot: (snapshot) => this.onSnapshot(snapshot),
-        onMention: (message, _latestSeq, retry) => this.enqueue(message, { retry }),
+        onMention: (message, _latestSeq, retry) => this.enqueue(message, { retry, invited: true }),
         onCancel: (messageId) => this.cancel(messageId),
         onMessageDeleted: (message) => this.onRecalled(message.id),
         ...(this.options.onRoomsChanged ? { onRoomsChanged: this.options.onRoomsChanged } : {}),
@@ -239,7 +244,7 @@ export class AgentBridge {
       this.stateExisted = true;
       await this.store.save(this.state);
       for (const message of snapshot.messages) {
-        if (queued.delete(message.id)) this.enqueue(message);
+        if (queued.delete(message.id)) this.enqueue(message, { invited: true });
       }
       // 快照只带最近的消息；更早的提及拿不到原文，如实报告并交给人决定是否重试
       for (const messageId of queued) {
@@ -257,8 +262,8 @@ export class AgentBridge {
     }
     const missed = await this.room.fetchMessages(this.state.lastProcessedSeq);
     for (const message of missed.messages) {
-      if (!this.isEligible(message)) continue;
       const invocation = known.get(message.id);
+      if (!this.isEligible(message, Boolean(invocation))) continue;
       // 服务端是调用状态的权威：被拦下、已停止或已结束的提及不再补做
       if (snapshot.invocations && invocation && invocation.status !== "queued") {
         if (
@@ -274,17 +279,18 @@ export class AgentBridge {
         }
         continue;
       }
-      this.enqueue(message);
+      this.enqueue(message, { invited: Boolean(invocation) });
     }
     await this.store.save(this.state);
   }
 
-  private isEligible(message: ChatMessage): boolean {
+  private isEligible(message: ChatMessage, invited = false): boolean {
     return shouldProcessMention({
       message,
       username: this.options.username,
       ownParticipantId: this.ownParticipantId,
       processedMessageIds: this.state.processedMessageIds,
+      invited,
     });
   }
 
@@ -296,7 +302,10 @@ export class AgentBridge {
     );
   }
 
-  private enqueue(message: ChatMessage, options: { retry?: boolean } = {}): void {
+  private enqueue(
+    message: ChatMessage,
+    options: { retry?: boolean; invited?: boolean } = {},
+  ): void {
     if (this.stopped) return;
     if (options.retry) {
       // 人显式重试：忽略本地"已处理/已停止"记录，重新开始计数和幂等键
@@ -307,7 +316,7 @@ export class AgentBridge {
       this.attempts.delete(message.id);
       this.executionIds.delete(message.id);
     }
-    if (this.isLocal(message.id) || !this.isEligible(message)) return;
+    if (this.isLocal(message.id) || !this.isEligible(message, options.invited)) return;
     if (this.cancelledEarly.delete(message.id)) {
       this.rememberProcessed(message.id);
       void this.store
@@ -612,9 +621,12 @@ export class AgentBridge {
         (message) => !this.recalled.has(message.id) && !active.cancelled.has(message.id),
       );
       const messagesAfterReply = await this.room.fetchMessages(context.latestSeq);
-      // 经 hive_invoke 发出的委派只是中间动作，不能当成这一轮的回复，否则最终答复会被吞掉
+      // 经 hive_invoke 发出的委派、hive_ask_human 提的问题只是中间动作，不能当成这一轮的回复，否则最终答复会被吞掉
       const sentWithHiveTool = messagesAfterReply.messages.find(
-        (message) => message.senderId === this.ownParticipantId && message.kind !== "delegation",
+        (message) =>
+          message.senderId === this.ownParticipantId &&
+          message.kind !== "delegation" &&
+          message.kind !== "question",
       );
       let replyMessageId: string | undefined = sentWithHiveTool?.id;
       if (live.length === 0) {

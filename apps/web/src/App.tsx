@@ -38,6 +38,7 @@ import {
   BUDGET_EXTEND_TURNS,
   currentPausedInvocations,
   upsertInvocation,
+  waitingInvocationForQuestion,
 } from "./invocations";
 import { WhiteboardPanel, upsertWhiteboardEntry } from "./whiteboard";
 import { ActivityPanel, isInFlight, needsAttention, type ActivityView } from "./activity";
@@ -706,6 +707,8 @@ export function App() {
   // 跨房间入口：搜索、提及我、Agent 任务
   const [activityView, setActivityView] = useState<ActivityView>();
   const [mentionMessages, setMentionMessages] = useState<ChatMessage[]>([]);
+  // 正在回答的 Agent 提问；发送时作为 replyToMessageId
+  const [answering, setAnswering] = useState<ChatMessage>();
   const [activeInvocations, setActiveInvocations] = useState<ReadonlyMap<string, Invocation>>(
     new Map(),
   );
@@ -1832,15 +1835,24 @@ export function App() {
     const socket = socketRef.current;
     if (!content || content.length > MAX_MESSAGE_LENGTH) return;
     if (socket?.readyState !== WebSocket.OPEN) return;
+    // 回答提问时带上回复关系：服务端据此把答案交回提问的 Agent，不必再 @ 它
+    const replyTo = answering && answering.roomId === currentRoomId ? answering.id : undefined;
     socket.send(
       JSON.stringify({
         type: "message.send",
         clientMessageId: createClientMessageId(),
         content,
+        ...(replyTo ? { replyToMessageId: replyTo } : {}),
       }),
     );
     setDraft("");
     setMentionContext(undefined);
+    setAnswering(undefined);
+  }
+
+  function answerQuestion(question: ChatMessage) {
+    setAnswering(question);
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
   function updateMentionContext(value: string, cursor: number | null) {
@@ -2587,7 +2599,9 @@ export function App() {
                             shareMode && !message.deletedAt ? "selectable" : ""
                           } ${selectedMessageIds.has(message.id) ? "selected" : ""} ${
                             message.deletedAt ? "deleted" : ""
-                          } ${highlightedMessageId === message.id ? "highlighted" : ""}`}
+                          } ${highlightedMessageId === message.id ? "highlighted" : ""} ${
+                            message.kind === "question" ? "question" : ""
+                          }`}
                           data-message-id={message.id}
                           style={
                             message.senderType === "human"
@@ -2662,6 +2676,20 @@ export function App() {
                                 </CollapsibleMessage>
                               </div>
                             )}
+                            {!shareMode &&
+                              waitingInvocationForQuestion(message, invocations.values()) && (
+                                <button
+                                  type="button"
+                                  className="question-answer"
+                                  aria-label={`回答 ${message.senderName} 的提问`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    answerQuestion(message);
+                                  }}
+                                >
+                                  {answering?.id === message.id ? "正在回答…" : "回答"}
+                                </button>
+                              )}
                             {invocationsByMessage.has(message.id) && (
                               <InvocationChips
                                 connectionState={connectionState}
@@ -2953,6 +2981,20 @@ export function App() {
                     <kbd>Esc</kbd> 关闭
                   </span>
                 </div>
+              </div>
+            )}
+            {answering && answering.roomId === currentRoomId && (
+              <div className="composer-answering" role="status">
+                <strong>回答 @{answering.senderName} 的提问</strong>
+                <span>{answering.content.replace(/\s+/g, " ")}</span>
+                <button
+                  type="button"
+                  aria-label="取消回答"
+                  title="取消回答，改为普通消息"
+                  onClick={() => setAnswering(undefined)}
+                >
+                  ×
+                </button>
               </div>
             )}
             <div className="composer-box">
@@ -3323,6 +3365,7 @@ export function App() {
                 )
               : onlineInvocationIds.has(invocation.id)
           }
+          participants={participants}
           search={searchMessages}
           onOpenMessage={openMessage}
           onMarkMentionsRead={markMentionsRead}

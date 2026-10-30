@@ -65,8 +65,9 @@ export const chatMessageSchema = z.object({
    * Agent 遇到它会丢弃之前的 Provider 会话，只把分隔之后的消息当作上下文。
    * delegation：Agent 经 hive_invoke 委派子任务时发出的消息；只是中间动作，不算这一轮的回复。
    * receipt：子任务结束后服务端代被委派方发给委派方的结果回执。
+   * question：Agent 经 hive_ask_human 向人提的问题；人回复它即可把答案交回并唤醒提问的 Agent。
    */
-  kind: z.enum(["topic", "delegation", "receipt"]).optional(),
+  kind: z.enum(["topic", "delegation", "receipt", "question"]).optional(),
 });
 
 export const participantJoinEventSchema = z.object({
@@ -117,6 +118,11 @@ export const invocationStatusSchema = z.enum([
   "timed_out",
   "cancelling",
   "cancelled",
+  /**
+   * Agent 经 hive_ask_human 提了问题、在等人回答：不计入卡住超时，轮次结束后也保持此状态；
+   * 人回复问题消息后转为 completed，并以回答消息重新唤醒该 Agent。
+   */
+  "waiting_human",
 ]);
 export const invocationBlockReasonSchema = z.enum(["hop_limit", "consecutive_limit", "pair_limit"]);
 

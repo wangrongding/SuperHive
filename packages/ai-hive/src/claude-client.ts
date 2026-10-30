@@ -31,6 +31,7 @@ export class ClaudeCodeResponder implements AgentResponder {
       "hive_message_send",
       "hive_invoke",
       "hive_wait",
+      "hive_ask_human",
       "hive_board_read",
       "hive_board_update",
     ]

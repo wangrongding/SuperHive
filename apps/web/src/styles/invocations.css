@@ -224,6 +224,24 @@ button.invocation-summary:focus-visible {
   color: var(--text-secondary);
 }
 
+/* 等你回答：蓝底，提醒是人在卡着它，而不是它出了问题 */
+.invocation-chip.waiting_human {
+  background: var(--accent-soft);
+}
+
+.invocation-chip.waiting_human .invocation-indicator {
+  background: var(--accent);
+}
+
+.invocation-chip.waiting_human .invocation-status {
+  color: var(--accent);
+}
+
+.invocation-chip.waiting_human .invocation-progress {
+  max-width: 34ch;
+  color: var(--text-secondary);
+}
+
 /* 已停止：无底色，仅保留虚线轮廓 */
 .invocation-chip.cancelled {
   border-color: var(--border);

@@ -187,6 +187,7 @@ describe("Hive WebSocket protocol", () => {
 
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
+      "hive_ask_human",
       "hive_board_read",
       "hive_board_update",
       "hive_invoke",
@@ -1361,6 +1362,65 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       rmSync(directory, { recursive: true, force: true });
     });
 
+    it("carries the receipt over to the answer when a subtask asks a human", async () => {
+      const { alice, planner, worker, workerMcp, invoke } = await delegationRoom();
+      const { data } = await invoke({ agent: "worker", task: "上线前确认" });
+      const delegated = await worker.next((event) => event.type === "agent.mentioned");
+      const delegation = delegated.type === "agent.mentioned" ? delegated.message : undefined;
+      worker.send({ type: "invocation.report", messageId: delegation!.id, status: "running" });
+      const asked = await workerMcp.client.callTool({
+        name: "hive_ask_human",
+        arguments: { question: "可以上线吗？" },
+      });
+      const questionId = (asked.structuredContent as { questionMessageId: string })
+        .questionMessageId;
+      const question = await alice.next(
+        (event) => event.type === "message.created" && event.message.id === questionId,
+      );
+      // 委派链上的子任务问的是链条源头的人
+      expect(question.type === "message.created" && question.message.mentions).toEqual(["Alice"]);
+      worker.send({ type: "invocation.report", messageId: delegation!.id, status: "completed" });
+
+      alice.send({
+        type: "message.send",
+        clientMessageId: "go",
+        content: "可以",
+        replyToMessageId: questionId,
+      });
+      const woken = await worker.next(
+        (event) => event.type === "agent.mentioned" && event.message.content === "可以",
+      );
+      const answer = woken.type === "agent.mentioned" ? woken.message : undefined;
+      const parked = invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" &&
+            event.invocation.id === data.invocationId &&
+            event.invocation.status === "completed",
+        ),
+      );
+      // 旧调用不再回执，回执交给回答触发的新调用
+      expect(parked.continuation).toBeUndefined();
+      const resumed = invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" && event.invocation.messageId === answer!.id,
+        ),
+      );
+      expect(resumed).toMatchObject({ continuation: "pending", requesterName: "planner" });
+
+      await workerMcp.client.callTool({
+        name: "hive_message_send",
+        arguments: { content: "已上线", parentMessageId: answer!.id },
+      });
+      const receiptEvent = await planner.next(
+        (event) => event.type === "agent.mentioned" && event.message.kind === "receipt",
+      );
+      expect(receiptEvent.type === "agent.mentioned" && receiptEvent.message.content).toContain(
+        "已上线",
+      );
+    });
+
     it("refuses self and upstream delegation", async () => {
       const { worker, plannerMcp, workerMcp, invoke } = await delegationRoom();
       const self = await invoke({ agent: "planner", task: "自己做" });
@@ -1424,6 +1484,138 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
 
       await plannerMcp.client.close();
       await workerMcp.client.close();
+    });
+  });
+
+  describe("hive_ask_human", () => {
+    /** Alice @ helper，helper 开工后向人提问 */
+    async function askRoom() {
+      const room = await startRoom();
+      const { peer: alice } = await room.join("Alice", "human");
+      const { peer: helper } = await room.join("helper", "agent");
+      alice.send({ type: "message.send", clientMessageId: "root", content: "@helper 发布一下" });
+      const mentioned = await helper.next((event) => event.type === "agent.mentioned");
+      const trigger = mentioned.type === "agent.mentioned" ? mentioned.message : undefined;
+      helper.send({ type: "invocation.report", messageId: trigger!.id, status: "running" });
+      await alice.next(
+        (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+      );
+      const helperMcp = mcpClient(room.port, "helper");
+      await helperMcp.connect();
+      const ask = async (question: string) => {
+        const result = await helperMcp.client.callTool({
+          name: "hive_ask_human",
+          arguments: { question },
+        });
+        return {
+          result,
+          data: result.structuredContent as Record<string, unknown> & {
+            questionMessageId: string;
+            invocationId: string;
+          },
+        };
+      };
+      return { ...room, alice, helper, trigger: trigger!, helperMcp, ask };
+    }
+
+    it("parks the invocation until a human replies, then wakes the agent with the answer", async () => {
+      const { app, alice, helper, trigger, helperMcp, ask } = await askRoom();
+      const { data } = await ask("发到 @worker 的测试环境还是正式环境？建议测试环境");
+      expect(data).toMatchObject({ asked: true, status: "waiting_human" });
+
+      const question = await alice.next(
+        (event) => event.type === "message.created" && event.message.kind === "question",
+      );
+      const questionMessage = question.type === "message.created" ? question.message : undefined;
+      // 问题发给人：@ 了发起人，问题里的 @ 被换成全角，不会唤醒别的 Agent
+      expect(questionMessage).toMatchObject({
+        parentMessageId: trigger.id,
+        mentions: ["Alice"],
+      });
+      expect(questionMessage?.content).toContain("＠worker");
+
+      // 这一轮的心跳与结束都不把调用冲回 running / completed
+      helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+      helper.send({ type: "invocation.report", messageId: trigger.id, status: "completed" });
+      const parked = invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" &&
+            event.invocation.id === data.invocationId &&
+            Boolean(event.invocation.finishedAt),
+        ),
+      );
+      expect(parked.status).toBe("waiting_human");
+      expect(parked.detail).toContain("等人回答");
+
+      // 人直接回复提问（不必 @ helper）：旧调用完成，helper 被回答重新唤醒
+      alice.send({
+        type: "message.send",
+        clientMessageId: "answer",
+        content: "测试环境",
+        replyToMessageId: questionMessage!.id,
+      });
+      const woken = await helper.next(
+        (event) => event.type === "agent.mentioned" && event.message.content === "测试环境",
+      );
+      expect(woken.type).toBe("agent.mentioned");
+      const done = invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" &&
+            event.invocation.id === data.invocationId &&
+            event.invocation.status === "completed",
+        ),
+      );
+      expect(done.detail).toContain("已回答");
+      const answerMessage = woken.type === "agent.mentioned" ? woken.message : undefined;
+      const port = (app.server.address() as AddressInfo).port;
+      const invocations = (await (
+        await fetch(`http://127.0.0.1:${port}/api/rooms/general/invocations`, {
+          headers: { Authorization: "Bearer test-token" },
+        })
+      ).json()) as { invocations: Invocation[] };
+      expect(
+        invocations.invocations.find((item) => item.messageId === answerMessage?.id),
+      ).toMatchObject({ agentName: "helper", status: "queued" });
+
+      await helperMcp.client.close();
+    });
+
+    it("refuses questions outside an executing invocation and lets a human stop waiting", async () => {
+      const room = await startRoom();
+      await room.join("helper", "agent");
+      const idle = mcpClient(room.port, "helper");
+      await idle.connect();
+      const refused = await idle.client.callTool({
+        name: "hive_ask_human",
+        arguments: { question: "随便问问" },
+      });
+      expect(refused.isError).toBe(true);
+      await idle.client.close();
+      closeApp = undefined;
+      await room.app.close();
+
+      const { alice, helper, trigger, helperMcp, ask } = await askRoom();
+      const { data } = await ask("要不要继续？");
+      helper.send({ type: "invocation.report", messageId: trigger.id, status: "completed" });
+      await alice.next(
+        (event) =>
+          event.type === "invocation.updated" &&
+          event.invocation.id === data.invocationId &&
+          Boolean(event.invocation.finishedAt),
+      );
+      alice.send({ type: "invocation.cancel", invocationId: data.invocationId });
+      const cancelled = invocationOf(
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" &&
+            event.invocation.id === data.invocationId &&
+            event.invocation.status === "cancelled",
+        ),
+      );
+      expect(cancelled.detail).toContain("不再回答");
+      await helperMcp.client.close();
     });
   });
 
