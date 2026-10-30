@@ -85,6 +85,8 @@ import {
   GuestMemberActions,
   InviteDialog,
 } from "./invite-dialog";
+import { ImDialog } from "./im-dialog";
+import { IM_CHANNEL_LABELS } from "./im-api";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
 
@@ -129,6 +131,7 @@ type IconName =
   | "external"
   | "hash"
   | "logout"
+  | "message"
   | "more"
   | "panel-right"
   | "plug"
@@ -346,6 +349,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
       </>
     ),
     shield: <path d="M12 3 5 6v5c0 4.6 2.9 8 7 10 4.1-2 7-5.4 7-10V6l-7-3Zm-3 9 2 2 4-4" />,
+    message: <path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4 3.5V6a1 1 0 0 1 1-1z" />,
     "user-plus": (
       <>
         <circle cx="10" cy="8" r="3.5" />
@@ -707,6 +711,7 @@ export function App({
   const authToken = meta?.joinToken ?? guest?.token;
   const isOwner = Boolean(meta?.joinToken);
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [imDialogOpen, setImDialogOpen] = useState(false);
   const [guestAgentDialogOpen, setGuestAgentDialogOpen] = useState(false);
   const [accessNow, setAccessNow] = useState(() => Date.now());
   useEffect(() => {
@@ -2707,6 +2712,11 @@ export function App({
                               <header>
                                 <strong>{message.senderName}</strong>
                                 {message.senderType === "agent" && <b>Agent</b>}
+                                {message.via && (
+                                  <span className="message-via">
+                                    来自{IM_CHANNEL_LABELS[message.via.channel]}
+                                  </span>
+                                )}
                                 <time dateTime={message.createdAt}>
                                   {formatMessageTime(message.createdAt)}
                                 </time>
@@ -3475,6 +3485,20 @@ export function App({
                     </span>
                   </button>
                 )}
+                {isOwner && (
+                  <button
+                    type="button"
+                    className="member-invite-action"
+                    aria-haspopup="dialog"
+                    onClick={() => setImDialogOpen(true)}
+                  >
+                    <Icon name="message" size={16} />
+                    <span>
+                      <strong>连接 IM</strong>
+                      <small>扫码接入飞书或微信，在手机上给房间发消息</small>
+                    </span>
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -3513,6 +3537,15 @@ export function App({
           roomId={currentRoomId}
           linkFor={(token) => `${inviteLink()}?invite=${token}`}
           onClose={() => setInviteDialogOpen(false)}
+        />
+      )}
+      {imDialogOpen && isOwner && authToken && (
+        <ImDialog
+          base={base}
+          adminToken={authToken}
+          roomId={currentRoomId}
+          ownerName={username}
+          onClose={() => setImDialogOpen(false)}
         />
       )}
       {guestAgentDialogOpen && guest && (

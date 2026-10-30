@@ -2,6 +2,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { buildApp } from "./app.js";
+import { feishuDriver } from "./im/feishu.js";
+import type { ImChannelDriver } from "./im/types.js";
+
 import type { AgentCli } from "./local-agents.js";
 
 const host = process.env.HIVE_HOST ?? "0.0.0.0";
@@ -54,8 +57,18 @@ const loopbackHost = ["0.0.0.0", "::", "localhost", "127.0.0.1"].includes(host)
   : host;
 const localServerUrl = `http://${loopbackHost.includes(":") ? `[${loopbackHost}]` : loopbackHost}:${port}`;
 
+// 个人微信走非官方通道：HIVE_IM_WECHAT=0 时整体不加载（网页上也不显示这个选项）
+const imDrivers: Partial<Record<"feishu" | "wechat", ImChannelDriver>> = {
+  feishu: feishuDriver,
+  ...(process.env.HIVE_IM_WECHAT === "0"
+    ? {}
+    : { wechat: (await import("./im/wechat.js")).wechatDriver }),
+};
+
 const app = await buildApp({
   databasePath,
+  imDrivers,
+  imKeyPath: path.join(path.dirname(databasePath), "im-secret.key"),
   publicUrl,
   agentCommandPrefix,
   ...(staticDir ? { staticDir } : {}),

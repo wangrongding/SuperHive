@@ -67,6 +67,13 @@ export const participantSchema = z.object({
   access: participantAccessSchema.optional(),
 });
 
+/** 外部 IM 渠道：飞书（含 Lark）与个人微信 */
+export const imChannelSchema = z.enum(["feishu", "wechat"]);
+/** 经外部 IM 发进房间的消息：发言者仍是本人，这里只标记来源，供界面显示「来自飞书」 */
+export const messageViaSchema = z.object({
+  channel: imChannelSchema,
+});
+
 /** 提问的选项：key 由服务端按顺序分配（A、B、C…），刷新或重连后保持不变 */
 export const questionOptionSchema = z.object({
   key: z.string().regex(/^[A-Z]$/),
@@ -113,6 +120,8 @@ export const chatMessageSchema = z.object({
   question: questionSpecSchema.optional(),
   /** 经网页点选提交的答案；手打的回答没有这个字段，正文照样是答案 */
   answer: questionAnswerSchema.optional(),
+  /** 经飞书、微信等外部 IM 发来的消息 */
+  via: messageViaSchema.optional(),
 });
 
 export const participantJoinEventSchema = z.object({
@@ -490,6 +499,66 @@ export const inviteSchema = z.object({
   token: z.string().optional(),
 });
 
+/**
+ * 房间的 IM 连接：房主扫码把飞书机器人或个人微信接进来，之后在 IM 里发的消息以房主本人身份进入房间，
+ * 由此发起的任务结果和需要房主回答的提问再回到原来的 IM 会话。
+ */
+export const imConnectionStatusSchema = z.enum(["connecting", "connected", "paused", "error"]);
+export const imConnectionSchema = z.object({
+  id: z.string().uuid(),
+  roomId: z.string(),
+  channel: imChannelSchema,
+  /** 消息以这个房间成员的身份发进房间（扫码的房主本人） */
+  ownerName: z.string(),
+  /** 机器人或账号的显示名，如「AI Hive 助手」 */
+  label: z.string(),
+  status: imConnectionStatusSchema,
+  detail: z.string().optional(),
+  createdAt: z.string().datetime(),
+  /** 最近一次从 IM 收到房主消息的时间 */
+  lastInboundAt: z.string().datetime().optional(),
+});
+export const imLoginStatusSchema = z.enum([
+  "starting",
+  "waiting_scan",
+  "scanned",
+  "need_code",
+  "connecting",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+export const imLoginViewSchema = z.object({
+  id: z.string().uuid(),
+  channel: imChannelSchema,
+  roomId: z.string(),
+  status: imLoginStatusSchema,
+  /** 待扫描的二维码（data URL）与它对应的链接 */
+  qrDataUrl: z.string().optional(),
+  qrUrl: z.string().optional(),
+  expiresAt: z.string().datetime().optional(),
+  error: z.string().optional(),
+  connectionId: z.string().uuid().optional(),
+});
+export const imChannelsInfoSchema = z.object({
+  feishu: z.object({ enabled: z.boolean() }),
+  /** 个人微信走非官方的 iLink 通道：默认不显示，需房主确认风险后启用；HIVE_IM_WECHAT=0 可整体关闭 */
+  wechat: z.object({ enabled: z.boolean() }),
+});
+export const startImLoginRequestSchema = z.object({
+  channel: imChannelSchema,
+  /** 房主在这个房间里的名字：IM 里发的消息以它的身份进入房间 */
+  ownerName: z.string().trim().min(1).max(32),
+  /** 个人微信必须显式确认风险 */
+  acceptRisk: z.boolean().optional(),
+});
+export const submitImLoginCodeRequestSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{4,8}$/),
+});
+
 export const createInviteRequestSchema = z.object({
   expiresInMinutes: inviteDurationSchema,
   allowAgents: z.boolean().default(false),
@@ -609,6 +678,10 @@ export type ParticipantType = z.infer<typeof participantTypeSchema>;
 export type ParticipantStatus = z.infer<typeof participantStatusSchema>;
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
 export type Participant = z.infer<typeof participantSchema>;
+export type ImChannel = z.infer<typeof imChannelSchema>;
+export type ImConnection = z.infer<typeof imConnectionSchema>;
+export type ImLoginView = z.infer<typeof imLoginViewSchema>;
+export type ImChannelsInfo = z.infer<typeof imChannelsInfoSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 export type QuestionSpec = z.infer<typeof questionSpecSchema>;
 export type QuestionAnswer = z.infer<typeof questionAnswerSchema>;

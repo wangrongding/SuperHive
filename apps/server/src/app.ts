@@ -17,6 +17,9 @@ import {
   createInviteRequestSchema,
   redeemInviteRequestSchema,
   renewAccessRequestSchema,
+  startImLoginRequestSchema,
+  submitImLoginCodeRequestSchema,
+  type ImChannel,
   type ChatMessage,
   type ClientEvent,
   type Invocation,
@@ -46,6 +49,10 @@ import {
   type AccessSession,
   type ResolvedSession,
 } from "./access-store.js";
+import { ImHub } from "./im/im-hub.js";
+import { ImStore } from "./im/im-store.js";
+import { SecretBox } from "./im/secret-box.js";
+import type { ImChannelDriver } from "./im/types.js";
 
 /**
  * admin：持有共享 join token 的房主与其 Agent（房主页面只在 Server 所在电脑上拿到它）；
@@ -75,6 +82,12 @@ export type BuildAppOptions = {
   /** 检查访客会话到期的间隔；测试可调小 */
   accessSweepMs?: number;
   staticDir?: string;
+  /**
+   * 外部 IM 渠道（飞书、个人微信）的驱动；省略即不提供「连接 IM」（测试默认关闭），由 index.ts 注入。
+   */
+  imDrivers?: Partial<Record<ImChannel, ImChannelDriver>>;
+  /** IM 凭据加密密钥文件；省略时用进程内随机密钥（重启后已保存的连接需要重新扫码） */
+  imKeyPath?: string;
   /**
    * 本机 Agent：允许本机房主在网页上一键拉起 `ai-hive join` 子进程。
    * 省略即关闭（测试默认关闭），由 index.ts 按运行方式注入 CLI 路径。
@@ -138,6 +151,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const database = new HiveDatabase(options.databasePath ?? "./data/hive.sqlite");
   const joinToken = database.getOrCreateToken(options.token ?? process.env.HIVE_TOKEN);
   const access = new AccessStore(database.connection());
+  const imStore = new ImStore(database.connection(), SecretBox.open(options.imKeyPath));
   const clock = () => options.now?.() ?? Date.now();
   const connections = new Set<Connection>();
   const onlineByName = new Map<string, Set<Connection>>();
@@ -663,6 +677,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const message = result.message;
     broadcast(participant.roomId, { type: "message.created", message });
     broadcastRoomActivity(participant.roomId);
+    imHub.onMessageCreated(message);
     // 回执由服务端代发，不是被委派方的回复：既不推进子任务，也不因子任务已停止而吞掉对委派方的 @
     if (
       participant.type === "agent" &&
@@ -1299,6 +1314,144 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
+
+  /* ---------- 外部 IM：房主扫码把飞书 / 个人微信接进房间 ---------- */
+
+  const imHub = new ImHub({
+    store: imStore,
+    drivers: options.imDrivers ?? {},
+    getRoom: (roomId) => database.getRoom(roomId),
+    listRoomIds: () => database.listRooms(false).map((room) => room.id),
+    findParticipant: (roomId, username) => database.findParticipant(roomId, username),
+    getMessage: (id) => database.getMessage(id),
+    post: (owner, input) => createAndDispatchMessage(owner, input).message,
+    choose: (owner, questionMessageId, selected, clientMessageId) =>
+      submitAnswer(owner, { type: "question.answer", questionMessageId, selected, clientMessageId })
+        .message,
+    isWaiting: (questionId) => Boolean(waitingForQuestion(questionId)),
+    webUrl: (roomId) =>
+      options.publicUrl ? `${options.publicUrl.replace(/\/$/, "")}/#${roomId}` : undefined,
+    onConnectionsChanged: () => undefined,
+    log: (message, detail) => app.log.warn({ detail }, message),
+    ...(options.now ? { now: options.now } : {}),
+  });
+
+  const imErrorStatus: Record<string, number> = {
+    IM_DISABLED: 400,
+    IM_NOT_FOUND: 404,
+    IM_NO_CODE: 409,
+    NOT_A_MEMBER: 400,
+  };
+
+  function imError(
+    reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+    error: unknown,
+  ) {
+    if (error instanceof HiveError && imErrorStatus[error.code]) {
+      return reply
+        .code(imErrorStatus[error.code]!)
+        .send({ error: error.message, code: error.code });
+    }
+    throw error;
+  }
+
+  app.get("/api/im/channels", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    return imHub.channels();
+  });
+
+  app.get<{ Params: { roomId: string } }>("/api/rooms/:roomId/im", async (request, reply) => {
+    const params = roomParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+    if (!adminOnly(request, reply)) return reply;
+    return { connections: imHub.list(params.data.roomId) };
+  });
+
+  app.post<{ Params: { roomId: string } }>(
+    "/api/rooms/:roomId/im/login",
+    async (request, reply) => {
+      const params = roomParamsSchema.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+      if (!adminOnly(request, reply)) return reply;
+      const body = startImLoginRequestSchema.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "Invalid IM login payload." });
+      const room = database.getRoom(params.data.roomId);
+      if (!room || room.archivedAt) {
+        return reply.code(404).send({ error: "房间不存在或已归档。", code: "ROOM_NOT_FOUND" });
+      }
+      if (body.data.channel === "wechat" && !body.data.acceptRisk) {
+        return reply
+          .code(400)
+          .send({ error: "连接个人微信前需要确认风险。", code: "IM_RISK_NOT_ACCEPTED" });
+      }
+      const owner = database.findParticipant(room.id, body.data.ownerName);
+      // 访客不能把自己的 IM 接进来冒充房主：只有房主本人（非访客的人类成员）能作为发言身份
+      if (!owner || owner.type !== "human" || guestSessionOf(owner)) {
+        return reply
+          .code(400)
+          .send({ error: "需要以房主本人在这个房间里的身份连接。", code: "NOT_A_MEMBER" });
+      }
+      try {
+        return reply.code(201).send(imHub.startLogin(room.id, body.data.channel, owner.username));
+      } catch (error) {
+        return imError(reply, error);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>("/api/im/logins/:id", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    const view = imHub.getLogin(request.params.id);
+    if (!view)
+      return reply.code(404).send({ error: "扫码会话不存在或已过期。", code: "IM_NOT_FOUND" });
+    return view;
+  });
+
+  app.post<{ Params: { id: string } }>("/api/im/logins/:id/code", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    const body = submitImLoginCodeRequestSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "配对码格式不对。" });
+    try {
+      const view = imHub.submitCode(request.params.id, body.data.code);
+      if (!view)
+        return reply.code(404).send({ error: "扫码会话不存在或已过期。", code: "IM_NOT_FOUND" });
+      return view;
+    } catch (error) {
+      return imError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/im/logins/:id", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    const view = imHub.cancelLogin(request.params.id);
+    if (!view)
+      return reply.code(404).send({ error: "扫码会话不存在或已过期。", code: "IM_NOT_FOUND" });
+    return view;
+  });
+
+  app.post<{ Params: { id: string; action: string } }>(
+    "/api/im/connections/:id/:action",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      try {
+        if (request.params.action === "pause") return await imHub.pause(request.params.id);
+        if (request.params.action === "resume") return await imHub.resume(request.params.id);
+        return reply.code(404).send({ error: "Unknown action." });
+      } catch (error) {
+        return imError(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>("/api/im/connections/:id", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    try {
+      await imHub.remove(request.params.id);
+      return { ok: true };
+    } catch (error) {
+      return imError(reply, error);
+    }
+  });
 
   app.get("/health", async () => ({
     status: "ok",
@@ -2144,6 +2297,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.addHook("onReady", async () => {
     localAgents?.start();
+    imHub.start();
     for (const invocation of database.listPendingContinuations())
       deliverContinuation(invocation.id);
   });
@@ -2152,6 +2306,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     shuttingDown = true;
     // 先让本机 Agent 正常离线，再关闭连接与数据库
     await localAgents?.shutdown();
+    await imHub.close();
     clearInterval(heartbeatTimer);
     clearInterval(invocationTimer);
     clearInterval(accessTimer);

@@ -5,6 +5,7 @@ import {
   LIMITS,
   parseMentions,
   stripUnsafeCharacters,
+  messageViaSchema,
   questionAnswerSchema,
   questionSpecSchema,
   type ChatMessage,
@@ -203,6 +204,8 @@ export type CreateMessageInput = {
   question?: QuestionSpec;
   /** 点选提交的答案（由服务端校验后生成） */
   answer?: QuestionAnswer;
+  /** 经外部 IM 发来的消息（由服务端的 IM 连接设置） */
+  via?: NonNullable<ChatMessage["via"]>;
 };
 
 export type CreateMessageResult = { message: ChatMessage; created: boolean };
@@ -249,15 +252,17 @@ function mapMessage(row: MessageRow): ChatMessage {
 }
 
 /** 损坏或不认识的元数据只当作没有：消息正文仍是唯一的语义来源 */
-function parseMessageMeta(raw: string | null): Pick<ChatMessage, "question" | "answer"> {
+function parseMessageMeta(raw: string | null): Pick<ChatMessage, "question" | "answer" | "via"> {
   if (!raw) return {};
   try {
-    const value = JSON.parse(raw) as { question?: unknown; answer?: unknown };
+    const value = JSON.parse(raw) as { question?: unknown; answer?: unknown; via?: unknown };
     const question = questionSpecSchema.safeParse(value.question);
     const answer = questionAnswerSchema.safeParse(value.answer);
+    const via = messageViaSchema.safeParse(value.via);
     return {
       ...(question.success ? { question: question.data } : {}),
       ...(answer.success ? { answer: answer.data } : {}),
+      ...(via.success ? { via: via.data } : {}),
     };
   } catch {
     return {};
@@ -845,10 +850,11 @@ export class HiveDatabase {
         input.clientMessageId,
         createdAt,
         input.kind ?? null,
-        input.question || input.answer
+        input.question || input.answer || input.via
           ? JSON.stringify({
               ...(input.question ? { question: input.question } : {}),
               ...(input.answer ? { answer: input.answer } : {}),
+              ...(input.via ? { via: input.via } : {}),
             })
           : null,
       );
