@@ -530,6 +530,11 @@ export class HiveDatabase {
     this.db.prepare("UPDATE participants SET status = 'offline'").run();
   }
 
+  /** 供同库的其他存储（如限时邀请）建表与读写 */
+  connection(): Database.Database {
+    return this.db;
+  }
+
   close(): void {
     this.db.close();
   }

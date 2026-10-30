@@ -172,6 +172,22 @@ describe("App mention autocomplete", () => {
               "npx --yes ai-hive@latest join --server http://10.0.0.8:8787 --name my-agent --token test-token",
           });
         }
+        if (url.includes("/invites")) {
+          if (init?.method === "POST") {
+            return jsonResponse({
+              token: "hvi_test",
+              invite: {
+                id: "00000000-0000-4000-8000-000000000999",
+                roomId: "general",
+                createdAt: new Date().toISOString(),
+                expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+                allowAgents: false,
+                uses: 0,
+              },
+            });
+          }
+          return jsonResponse({ invites: [] });
+        }
         if (url.includes("/api/local/")) {
           if (!localApi.enabled) return jsonResponse({ error: "not found" }, 404);
           const method = init?.method ?? "GET";
@@ -341,9 +357,19 @@ describe("App mention autocomplete", () => {
     const membersPanel = screen.getByLabelText("成员列表");
     // 添加成员的入口（邀请人类、接入 Agent）位于成员列表下方
     expect(within(membersPanel).getByRole("button", { name: "接入 Agent" })).toBeTruthy();
+    // 邀请成员：选有效期后生成限时链接并复制
     await user.click(within(membersPanel).getByRole("button", { name: /邀请成员/ }));
-    expect(await navigator.clipboard.readText()).toBe(`${window.location.origin}/#general`);
-    expect(within(membersPanel).getByRole("button", { name: /已复制邀请链接/ })).toBeTruthy();
+    const inviteDialog = await screen.findByRole("dialog", { name: /邀请成员/ });
+    expect(within(inviteDialog).getByRole("radio", { name: "24 小时" })).toHaveProperty(
+      "ariaChecked",
+      "true",
+    );
+    await user.click(within(inviteDialog).getByRole("button", { name: "生成并复制链接" }));
+    expect(await within(inviteDialog).findByText("已复制邀请链接")).toBeTruthy();
+    expect(await navigator.clipboard.readText()).toBe(
+      `${window.location.origin}/#general?invite=hvi_test`,
+    );
+    await user.click(within(inviteDialog).getByRole("button", { name: "关闭" }));
     const membersTrigger = screen.getByRole("button", { name: "打开成员列表" });
     await user.click(membersTrigger);
     expect(membersPanel.classList.contains("mobile-open")).toBe(true);

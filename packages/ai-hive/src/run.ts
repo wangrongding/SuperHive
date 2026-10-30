@@ -320,7 +320,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   if (roomId !== undefined) {
     const bridge: AgentBridge = buildStack(roomId, {
       onArchived: () => {
-        console.error(`[hive] 房间 #${roomId} 已归档，Agent 退出。`);
+        console.error(`[hive] 已不能再访问房间 #${roomId}（归档、到期或被移除），Agent 退出。`);
         void bridge.stop().finally(() => process.exit(1));
       },
     });

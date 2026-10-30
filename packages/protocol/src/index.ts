@@ -25,6 +25,8 @@ export const LIMITS = {
   maxQuestionOptionLength: 64,
   /** 点选回答里「其它」输入的长度上限 */
   maxQuestionOtherLength: 2000,
+  /** 邀请与续期的最长时长（分钟），超过请选「永久」 */
+  maxInviteMinutes: 365 * 24 * 60,
 } as const;
 
 export const participantTypeSchema = z.enum(["human", "agent"]);
@@ -36,6 +38,22 @@ export const agentProviderSchema = z
   .max(32)
   .regex(/^[A-Za-z0-9_.-]+$/);
 
+/**
+ * 凭限时邀请进入的访客（及其带入的 Agent）的访问期限；房主和本机 Agent 没有这个字段。
+ * expiresAt 为 null 表示永久（仍可被房主撤销）。
+ */
+export const participantAccessSchema = z.object({
+  kind: z.literal("guest"),
+  sessionId: z.string().uuid(),
+  expiresAt: z.string().datetime().nullable(),
+  /** 访客带入的 Agent：带它进来的访客名字；它随访客一起到期或被移除 */
+  sponsorName: z.string().optional(),
+  /** 已到期或被移除：留在离线列表里（下次可能再被邀请），但不能再访问 */
+  ended: z.boolean().optional(),
+  /** 被房主移除或所在链接被撤销（区别于自然到期）：不能续期，只能重新邀请 */
+  revoked: z.boolean().optional(),
+});
+
 export const participantSchema = z.object({
   id: z.string().uuid(),
   roomId: z.string().min(1).max(64),
@@ -46,6 +64,7 @@ export const participantSchema = z.object({
   provider: agentProviderSchema.optional(),
   joinedAt: z.string().datetime(),
   lastSeenAt: z.string().datetime(),
+  access: participantAccessSchema.optional(),
 });
 
 /** 提问的选项：key 由服务端按顺序分配（A、B、C…），刷新或重连后保持不变 */
@@ -162,7 +181,16 @@ export const invocationStatusSchema = z.enum([
    */
   "waiting_human",
 ]);
-export const invocationBlockReasonSchema = z.enum(["hop_limit", "consecutive_limit", "pair_limit"]);
+/**
+ * guest_approval：访客（或访客带入的 Agent）@ 了房主的 Agent。房主的 Agent 可能拥有本机完全权限，
+ * 不能让远程访客直接驱动，需房主点「批准」（即重试）后才派发；邀请时勾选「允许调度 Agent」可免批准。
+ */
+export const invocationBlockReasonSchema = z.enum([
+  "hop_limit",
+  "consecutive_limit",
+  "pair_limit",
+  "guest_approval",
+]);
 
 /** Structured runtime telemetry: deliberately excludes raw errors, tool arguments and model text. */
 export const runtimeEventSchema = z
@@ -437,9 +465,61 @@ export const metaResponseSchema = z.object({
   httpUrl: z.string().url(),
   wsUrl: z.string().url(),
   mcpUrl: z.string().url(),
-  joinToken: z.string(),
-  agentCommand: z.string(),
+  /** 只返回给 Server 所在电脑上的房主；远程访问者凭邀请兑换的会话访问 */
+  joinToken: z.string().optional(),
+  agentCommand: z.string().optional(),
 });
+
+/* ---------- 限时邀请（房主发给其他人类） ---------- */
+
+/** 邀请时长：分钟数；null 表示永久 */
+export const inviteDurationSchema = z.number().int().min(1).max(LIMITS.maxInviteMinutes).nullable();
+
+export const inviteSchema = z.object({
+  id: z.string().uuid(),
+  roomId: z.string(),
+  createdAt: z.string().datetime(),
+  /** 统一截止时间：链接兑换和兑换后的访问都不能超过它；null 为永久 */
+  expiresAt: z.string().datetime().nullable(),
+  /** 允许访客直接 @ 房主的 Agent 干活（否则需房主逐次批准） */
+  allowAgents: z.boolean(),
+  /** 有效期内不限次数：已凭它加入的人数 */
+  uses: z.number().int().nonnegative(),
+  revokedAt: z.string().datetime().optional(),
+  /** 邀请令牌，只出现在房主的邀请列表里，用来再次复制链接 */
+  token: z.string().optional(),
+});
+
+export const createInviteRequestSchema = z.object({
+  expiresInMinutes: inviteDurationSchema,
+  allowAgents: z.boolean().default(false),
+});
+export const renewAccessRequestSchema = z.object({ expiresInMinutes: inviteDurationSchema });
+export const redeemInviteRequestSchema = z.object({
+  token: z.string().min(16).max(200),
+  username: z.string().trim().min(1).max(32),
+});
+export const createGuestAgentRequestSchema = z.object({
+  username: z.string().trim().min(1).max(32),
+});
+
+/** 当前访问者的身份：本机房主、凭邀请进入的访客，或尚无访问权 */
+export const accessResponseSchema = z.discriminatedUnion("role", [
+  z.object({ role: z.literal("owner"), joinToken: z.string(), ownerToken: z.string() }),
+  z.object({
+    role: z.literal("guest"),
+    kind: z.enum(["human", "agent"]),
+    sessionId: z.string().uuid(),
+    roomId: z.string(),
+    username: z.string(),
+    expiresAt: z.string().datetime().nullable(),
+    allowAgents: z.boolean(),
+  }),
+  z.object({
+    role: z.literal("none"),
+    reason: z.enum(["no_invite", "expired", "revoked"]),
+  }),
+]);
 
 /* ---------- 本机 Agent（仅 Hive Server 所在电脑上的房主可用） ---------- */
 
@@ -538,6 +618,9 @@ export type ServerEvent = z.infer<typeof serverEventSchema>;
 export type MessagesResponse = z.infer<typeof messagesResponseSchema>;
 export type RoomsResponse = z.infer<typeof roomsResponseSchema>;
 export type MetaResponse = z.infer<typeof metaResponseSchema>;
+export type ParticipantAccess = z.infer<typeof participantAccessSchema>;
+export type Invite = z.infer<typeof inviteSchema>;
+export type AccessResponse = z.infer<typeof accessResponseSchema>;
 export type InvocationStatus = z.infer<typeof invocationStatusSchema>;
 export type InvocationBlockReason = z.infer<typeof invocationBlockReasonSchema>;
 export type Invocation = z.infer<typeof invocationSchema>;

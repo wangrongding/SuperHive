@@ -232,7 +232,7 @@ export function invocationStatusLabel(invocation: Invocation, agentOnline: boole
     case "failed":
       return "失败";
     case "blocked":
-      return "已暂停";
+      return invocation.blockReason === "guest_approval" ? "等房主批准" : "已暂停";
     case "timed_out":
       return "结果未知";
     case "cancelled":
@@ -284,7 +284,10 @@ export function InvocationChips({
   onExtend,
   connectionState,
   allInvocations,
+  isOwner = true,
 }: {
+  /** 访客看不到「批准」：访客的请求只能由房主放行 */
+  isOwner?: boolean;
   invocations: Invocation[];
   /** 房间里全部调用，用来展示委派关系；省略时只看本条消息的调用 */
   allInvocations?: ReadonlyMap<string, Invocation>;
@@ -398,14 +401,15 @@ export function InvocationChips({
                   继续 {BUDGET_EXTEND_TURNS} 轮
                 </button>
               ) : (
-                canRetryInvocation(invocation) && (
+                canRetryInvocation(invocation) &&
+                (invocation.blockReason !== "guest_approval" || isOwner) && (
                   <button
                     type="button"
-                    className="invocation-action"
-                    aria-label={`重试 @${invocation.agentName}`}
+                    className={`invocation-action ${invocation.blockReason === "guest_approval" ? "primary" : ""}`}
+                    aria-label={`${invocation.blockReason === "guest_approval" ? "批准" : "重试"} @${invocation.agentName}`}
                     onClick={() => onRetry(invocation)}
                   >
-                    重试
+                    {invocation.blockReason === "guest_approval" ? "批准" : "重试"}
                   </button>
                 )
               )}

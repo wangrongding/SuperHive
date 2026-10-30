@@ -163,6 +163,14 @@ export class AgentBridge {
           if (error instanceof RoomClientError && error.code === "ROOM_ARCHIVED") {
             this.options.onArchived?.();
           }
+          // 凭限时邀请带入的 Agent：访客到期或被房主移除后不再重连，直接离开这个房间
+          if (
+            error instanceof RoomClientError &&
+            (error.code === "SESSION_EXPIRED" || error.code === "SESSION_REVOKED")
+          ) {
+            this.log("[hive] 访问期限已到或已被房主移除，离开这个房间。");
+            this.options.onArchived?.();
+          }
         },
       },
     );

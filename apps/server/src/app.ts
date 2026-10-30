@@ -13,6 +13,10 @@ import {
   parseMentions,
   createRoomRequestSchema,
   updateRoomRequestSchema,
+  createGuestAgentRequestSchema,
+  createInviteRequestSchema,
+  redeemInviteRequestSchema,
+  renewAccessRequestSchema,
   type ChatMessage,
   type ClientEvent,
   type Invocation,
@@ -34,10 +38,25 @@ import {
 import { createHiveMcpServer, type InboxDigest } from "./hive-mcp.js";
 import { LocalAgentSupervisor, type LocalAgentSupervisorOptions } from "./local-agents.js";
 import { registerLocalAgentRoutes } from "./local-routes.js";
+import { checkLocalRequest } from "./local-access.js";
+import {
+  AccessStore,
+  expiresAtFrom,
+  isGuestToken,
+  type AccessSession,
+  type ResolvedSession,
+} from "./access-store.js";
+
+/**
+ * admin：持有共享 join token 的房主与其 Agent（房主页面只在 Server 所在电脑上拿到它）；
+ * guest：凭限时邀请进入的访客或访客带入的 Agent，只能访问一个房间，到期或被移除即失效。
+ */
+type Principal = { kind: "admin" } | { kind: "guest"; resolved: ResolvedSession };
 
 type Connection = {
   socket: WebSocket;
   participant?: Participant;
+  principal?: Principal;
   lastHeartbeat: number;
 };
 
@@ -53,6 +72,8 @@ export type BuildAppOptions = {
   invocationSweepMs?: number;
   /** 超时扫描使用的时钟；测试用来模拟时间流逝 */
   now?: () => number;
+  /** 检查访客会话到期的间隔；测试可调小 */
+  accessSweepMs?: number;
   staticDir?: string;
   /**
    * 本机 Agent：允许本机房主在网页上一键拉起 `ai-hive join` 子进程。
@@ -116,6 +137,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   const database = new HiveDatabase(options.databasePath ?? "./data/hive.sqlite");
   const joinToken = database.getOrCreateToken(options.token ?? process.env.HIVE_TOKEN);
+  const access = new AccessStore(database.connection());
+  const clock = () => options.now?.() ?? Date.now();
   const connections = new Set<Connection>();
   const onlineByName = new Map<string, Set<Connection>>();
   const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 45_000;
@@ -137,9 +160,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
   }
 
+  /** 跨房间事件涉及的房间；访客只能收到自己房间的 */
+  function eventRoomId(event: ServerEvent): string | undefined {
+    if (event.type === "invocation.updated") return event.invocation.roomId;
+    if (event.type === "rooms.changed") return event.room.id;
+    if (event.type === "room.activity") return event.roomId;
+    return undefined;
+  }
+
   function broadcastAll(event: ServerEvent): void {
+    const roomId = eventRoomId(event);
     for (const connection of connections) {
-      if (connection.participant) send(connection.socket, event);
+      if (!connection.participant) continue;
+      if (
+        connection.principal?.kind === "guest" &&
+        connection.principal.resolved.session.roomId !== roomId
+      ) {
+        continue;
+      }
+      send(connection.socket, event);
     }
   }
 
@@ -157,7 +196,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!current || current.status === status) return;
     const participant = database.setParticipantStatus(current.id, status);
     connection.participant = participant;
-    broadcast(participant.roomId, { type: "presence.changed", participant });
+    broadcast(participant.roomId, {
+      type: "presence.changed",
+      participant: withAccess(participant),
+    });
     if ((current.status === "offline") !== (status === "offline")) {
       broadcastRoomActivity(participant.roomId);
     }
@@ -218,6 +260,180 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return removed;
   }
   registerLocalAgentRoutes(app, localAgents, { clearRoom });
+
+  /* ---------- 访问控制：房主（join token）与限时访客 ---------- */
+
+  function principalForToken(token: string | undefined): Principal | undefined {
+    if (!token) return undefined;
+    if (token === joinToken) return { kind: "admin" };
+    if (!isGuestToken(token)) return undefined;
+    const resolved = access.resolveToken(token, clock());
+    return resolved?.state === "active" ? { kind: "guest", resolved } : undefined;
+  }
+
+  function bearerToken(request: { headers: { authorization?: string | undefined } }) {
+    const header = request.headers.authorization;
+    return header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+  }
+
+  function requestPrincipal(request: { headers: { authorization?: string | undefined } }) {
+    return principalForToken(bearerToken(request));
+  }
+
+  function canAccessRoom(principal: Principal, roomId: string): boolean {
+    return principal.kind === "admin" || principal.resolved.session.roomId === roomId;
+  }
+
+  /** 没有凭证 401；凭证有效但不属于这个房间 403。返回 undefined 时已经回复了错误 */
+  function guard(
+    request: { headers: { authorization?: string | undefined } },
+    reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+    roomId?: string,
+  ): Principal | undefined {
+    const principal = requestPrincipal(request);
+    if (!principal) {
+      reply.code(401).send({ error: "Unauthorized", code: "UNAUTHORIZED" });
+      return undefined;
+    }
+    if (roomId !== undefined && !canAccessRoom(principal, roomId)) {
+      reply.code(403).send({ error: "这个凭证不能访问该房间。", code: "ROOM_FORBIDDEN" });
+      return undefined;
+    }
+    return principal;
+  }
+
+  function adminOnly(
+    request: { headers: { authorization?: string | undefined } },
+    reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+  ): boolean {
+    const principal = guard(request, reply);
+    if (!principal) return false;
+    if (principal.kind !== "admin") {
+      reply.code(403).send({ error: "只有房主可以执行这个操作。", code: "OWNER_ONLY" });
+      return false;
+    }
+    return true;
+  }
+
+  /** 成员最近的访客会话（同类型）；房主与本机 Agent 没有 */
+  function guestSessionOf(participant: Pick<Participant, "roomId" | "username" | "type">) {
+    const session = access.latestSessionFor(participant.roomId, participant.username);
+    return session && session.kind === participant.type
+      ? access.resolve(session, clock())
+      : undefined;
+  }
+
+  /** 成员信息附上访客期限，成员列表据此显示剩余时间 */
+  function withAccess(participant: Participant): Participant {
+    const resolved = guestSessionOf(participant);
+    if (!resolved) return participant;
+    return {
+      ...participant,
+      access: {
+        kind: "guest",
+        sessionId: resolved.session.id,
+        expiresAt: resolved.expiresAt,
+        ...(resolved.sponsor ? { sponsorName: resolved.sponsor.username } : {}),
+        ...(resolved.state !== "active" ? { ended: true } : {}),
+        ...(resolved.state === "revoked" ? { revoked: true } : {}),
+      },
+    };
+  }
+
+  /** 到期或被移除的访客留在离线列表里（带「已到期」标记），房主可续期，访客下次也可能再加入 */
+  function participantsOf(roomId: string): Participant[] {
+    return database.listParticipants(roomId).map(withAccess);
+  }
+
+  const endedMessages = {
+    expired: { code: "SESSION_EXPIRED", message: "你的访问期限已到，请联系房主续期或重新邀请。" },
+    revoked: { code: "SESSION_REVOKED", message: "房主已把你移出这个房间。" },
+  } as const;
+
+  /** 断开访客会话（及其带入的 Agent）的所有连接，并刷新成员列表里的期限 */
+  function endSessionConnections(sessionIds: string[], reason: "expired" | "revoked"): void {
+    const ids = new Set(sessionIds);
+    for (const connection of [...connections]) {
+      if (connection.principal?.kind !== "guest") continue;
+      if (!ids.has(connection.principal.resolved.session.id)) continue;
+      send(connection.socket, { type: "error", ...endedMessages[reason] });
+      connection.socket.close(4401, reason);
+      disconnect(connection);
+    }
+  }
+
+  /** 访客或其 Agent 的期限变化后，推送最新的成员信息 */
+  function refreshAccessPresence(sessionIds: string[]): void {
+    for (const id of sessionIds) {
+      const session = access.getSession(id);
+      if (!session) continue;
+      const participant = database.findParticipant(session.roomId, session.username);
+      if (participant) {
+        broadcast(session.roomId, {
+          type: "presence.changed",
+          participant: withAccess(participant),
+        });
+      }
+    }
+  }
+
+  /** 连接上的访客会话是否仍有效；失效时断开并返回 false */
+  function ensureActive(connection: Connection): boolean {
+    if (connection.principal?.kind !== "guest") return true;
+    const current = access.getSession(connection.principal.resolved.session.id);
+    const resolved = current ? access.resolve(current, clock()) : undefined;
+    if (resolved?.state === "active") {
+      connection.principal = { kind: "guest", resolved };
+      return true;
+    }
+    const reason = resolved?.state === "expired" ? "expired" : "revoked";
+    send(connection.socket, { type: "error", ...endedMessages[reason] });
+    connection.socket.close(4401, reason);
+    disconnect(connection);
+    return false;
+  }
+
+  function sweepExpiredAccess(): void {
+    const expired = new Set<string>();
+    for (const connection of [...connections]) {
+      if (connection.principal?.kind !== "guest") continue;
+      const id = connection.principal.resolved.session.id;
+      if (!ensureActive(connection)) expired.add(id);
+    }
+    if (expired.size) refreshAccessPresence([...expired]);
+  }
+
+  /** 兑换邀请时：同名的有效成员不能被顶替；曾经的访客到期或被移除后，可以用同名重新加入 */
+  function isNameTaken(roomId: string, username: string): boolean {
+    // 同一链接多人共用：已兑换但还没连上的访客也占着名字
+    const pending = access.latestSessionFor(roomId, username);
+    if (pending && access.resolve(pending, clock()).state === "active") return true;
+    const existing = database.findParticipant(roomId, username);
+    if (!existing) return false;
+    const resolved = guestSessionOf(existing);
+    return !(existing.type === "human" && resolved && resolved.state !== "active");
+  }
+
+  function sessionView(resolved: ResolvedSession) {
+    return {
+      role: "guest" as const,
+      kind: resolved.session.kind,
+      sessionId: resolved.session.id,
+      roomId: resolved.session.roomId,
+      username: resolved.session.username,
+      expiresAt: resolved.expiresAt,
+      allowAgents: resolved.allowAgents,
+    };
+  }
+
+  function guestAgentCommand(
+    request: Parameters<typeof requestPublicUrl>[0],
+    session: AccessSession,
+    token: string,
+  ) {
+    const prefix = options.agentCommandPrefix ?? "npx --yes ai-hive@latest";
+    return `${prefix} join --server ${requestPublicUrl(request, options.publicUrl)} --room ${session.roomId} --name ${session.username} --token ${token}`;
+  }
 
   function onlineAgent(roomId: string, username: string): Connection | undefined {
     return [...(onlineByName.get(participantKey(roomId, username)) ?? [])].find(
@@ -469,11 +685,23 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       participant.type === "agent" && message.parentMessageId
         ? database.getInvocationFor(message.parentMessageId, participant.id)
         : undefined;
+    // 访客（及其 Agent）发出的 @：房主的 Agent 可能有本机完全权限，未获授权时等房主批准
+    const senderGuest = options.receipt ? undefined : guestSessionOf(participant);
     for (const mention of targets) {
       if (mention.toLocaleLowerCase() === "all") continue;
       const agent = database.findParticipant(participant.roomId, mention);
       if (!agent || agent.type !== "agent" || agent.id === participant.id) continue;
-      const blocked = budgetBlock(participant, message, agent);
+      const needsApproval =
+        senderGuest &&
+        !senderGuest.allowAgents &&
+        !guestSessionOf(agent) &&
+        !(answered && answered.agentId === agent.id);
+      const blocked = needsApproval
+        ? {
+            reason: "guest_approval" as const,
+            detail: `${participant.username} 是访客，@ 房主的 Agent 需要房主批准后才会派发。`,
+          }
+        : budgetBlock(participant, message, agent);
       const { invocation: createdInvocation, created } = database.createInvocation({
         message,
         agent,
@@ -712,7 +940,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         "The trigger message is no longer available.",
       );
     }
-    emitInvocation(resetForRedelivery(invocation, `${actor.username} 请求重试`));
+    emitInvocation(
+      resetForRedelivery(
+        invocation,
+        invocation.blockReason === "guest_approval"
+          ? `${actor.username} 已批准`
+          : `${actor.username} 请求重试`,
+      ),
+    );
     deliverMention(message, agent, true);
   }
 
@@ -1072,6 +1307,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.get("/agent.md", async (_request, reply) => {
     return reply.type("text/markdown; charset=utf-8").send(AGENT_INSTRUCTIONS);
   });
+  /**
+   * 共享 join token 等同房主权限，只交给 Server 所在电脑上的页面（或已持有它的请求）；
+   * 远程访问者拿不到它，只能凭限时邀请兑换的访客会话进入。
+   */
+  function isOwnerRequest(
+    request: Parameters<typeof checkLocalRequest>[0] & {
+      headers: { authorization?: string | undefined };
+    },
+  ): boolean {
+    return checkLocalRequest(request).local || bearerToken(request) === joinToken;
+  }
+
   app.get("/api/meta", async (request) => {
     const httpUrl = requestPublicUrl(request, options.publicUrl);
     const wsUrl = httpUrl.replace(/^http/, "ws") + "/ws";
@@ -1082,22 +1329,233 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       httpUrl,
       wsUrl,
       mcpUrl: `${httpUrl}/mcp`,
-      joinToken,
-      agentCommand: `${agentCommandPrefix} join --server ${httpUrl} --name my-agent --token ${joinToken}`,
+      ...(isOwnerRequest(request)
+        ? {
+            joinToken,
+            agentCommand: `${agentCommandPrefix} join --server ${httpUrl} --name my-agent --token ${joinToken}`,
+          }
+        : {}),
     };
   });
 
-  function authorized(request: { headers: { authorization?: string | undefined } }): boolean {
-    return request.headers.authorization === `Bearer ${joinToken}`;
-  }
+  /** 当前访问者是谁：本机房主、有效访客，或没有访问权（含已到期、已被移除） */
+  app.get("/api/access", async (request) => {
+    const token = bearerToken(request);
+    // 带着访客凭证来的按访客对待，即使是在 Server 所在电脑上打开
+    if (!(token && isGuestToken(token)) && isOwnerRequest(request)) {
+      return { role: "owner", joinToken };
+    }
+    const resolved = token && isGuestToken(token) ? access.resolveToken(token, clock()) : undefined;
+    if (!resolved) return { role: "none", reason: "no_invite" };
+    if (resolved.state !== "active") return { role: "none", reason: resolved.state };
+    return sessionView(resolved);
+  });
+
+  /** 兑换前预览邀请：只透露房间和截止时间，不消耗邀请 */
+  app.get<{ Querystring: { token?: string } }>("/api/invites/preview", async (request, reply) => {
+    const token = request.query.token;
+    const invite = token ? access.peekInvite(token) : undefined;
+    if (!invite) return reply.code(404).send({ error: "邀请链接无效。", code: "INVITE_INVALID" });
+    const state = invite.revokedAt
+      ? "revoked"
+      : invite.expiresAt && Date.parse(invite.expiresAt) <= clock()
+        ? "expired"
+        : "valid";
+    return { roomId: invite.roomId, expiresAt: invite.expiresAt, state };
+  });
+
+  const inviteErrorStatus: Record<string, number> = {
+    INVITE_INVALID: 404,
+    INVITE_REVOKED: 410,
+    INVITE_EXPIRED: 410,
+    USERNAME_TAKEN: 409,
+    INVALID_NAME: 400,
+  };
+
+  app.post("/api/invites/redeem", async (request, reply) => {
+    const body = redeemInviteRequestSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "Invalid redeem payload." });
+    if (!/^[\p{L}\p{N}_.-]+$/u.test(body.data.username)) {
+      return reply.code(400).send({
+        error: "名字只能包含字母、数字、点、下划线和连字符。",
+        code: "INVALID_NAME",
+      });
+    }
+    try {
+      const { session, token } = access.redeemInvite(
+        body.data.token,
+        body.data.username,
+        clock(),
+        isNameTaken,
+      );
+      return { token, ...sessionView(access.resolve(session, clock())) };
+    } catch (error) {
+      if (error instanceof HiveError && inviteErrorStatus[error.code]) {
+        return reply
+          .code(inviteErrorStatus[error.code]!)
+          .send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
+  });
+
+  app.post<{ Params: { roomId: string } }>("/api/rooms/:roomId/invites", async (request, reply) => {
+    const params = roomParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+    if (!adminOnly(request, reply)) return reply;
+    const body = createInviteRequestSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "Invalid invite payload." });
+    const room = database.getRoom(params.data.roomId);
+    if (!room || room.archivedAt) {
+      return reply.code(404).send({ error: "房间不存在或已归档。", code: "ROOM_NOT_FOUND" });
+    }
+    const created = access.createInvite({
+      roomId: room.id,
+      expiresAt: expiresAtFrom(body.data.expiresInMinutes, clock()),
+      allowAgents: body.data.allowAgents,
+    });
+    return reply.code(201).send(created);
+  });
+
+  app.get<{ Params: { roomId: string } }>("/api/rooms/:roomId/invites", async (request, reply) => {
+    const params = roomParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+    if (!adminOnly(request, reply)) return reply;
+    return { invites: access.listInvites(params.data.roomId) };
+  });
+
+  /** 撤销邀请：链接失效，凭它进来的人和他们的 Agent 立即被断开 */
+  app.delete<{ Params: { inviteId: string } }>("/api/invites/:inviteId", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    try {
+      const invite = access.revokeInvite(request.params.inviteId);
+      const sessions = access.sessionsOfInvite(invite.id);
+      endSessionConnections(sessions, "revoked");
+      refreshAccessPresence(sessions);
+      return { invite };
+    } catch (error) {
+      if (error instanceof HiveError) return reply.code(404).send({ error: error.message });
+      throw error;
+    }
+  });
+
+  /** 续期邀请：链接与凭它进来的所有人一起延到新的截止时间 */
+  app.post<{ Params: { inviteId: string } }>(
+    "/api/invites/:inviteId/renew",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      const body = renewAccessRequestSchema.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "Invalid renew payload." });
+      try {
+        const invite = access.renewInvite(
+          request.params.inviteId,
+          expiresAtFrom(body.data.expiresInMinutes, clock()),
+        );
+        refreshAccessPresence(access.sessionsOfInvite(invite.id));
+        return { invite };
+      } catch (error) {
+        if (error instanceof HiveError) {
+          return reply
+            .code(error.code === "INVITE_NOT_FOUND" ? 404 : 409)
+            .send({ error: error.message, code: error.code });
+        }
+        throw error;
+      }
+    },
+  );
+
+  /** 房主为访客续期；访客带入的 Agent 跟着一起延长 */
+  app.post<{ Params: { sessionId: string } }>(
+    "/api/guests/:sessionId/renew",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      const body = renewAccessRequestSchema.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "Invalid renew payload." });
+      try {
+        const session = access.renew(
+          request.params.sessionId,
+          expiresAtFrom(body.data.expiresInMinutes, clock()),
+        );
+        refreshAccessPresence(access.familyOf(session.id));
+        return { session: sessionView(access.resolve(session, clock())) };
+      } catch (error) {
+        if (error instanceof HiveError) {
+          return reply
+            .code(error.code === "SESSION_NOT_FOUND" ? 404 : 409)
+            .send({ error: error.message, code: error.code });
+        }
+        throw error;
+      }
+    },
+  );
+
+  /** 房主移除访客：立即断开访客与其 Agent，之后都连不上；历史消息保留 */
+  app.delete<{ Params: { sessionId: string } }>(
+    "/api/guests/:sessionId",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      try {
+        const session = access.revoke(request.params.sessionId);
+        const family = access.familyOf(session.id);
+        endSessionConnections(family, "revoked");
+        refreshAccessPresence(family);
+        return { session: sessionView(access.resolve(session, clock())) };
+      } catch (error) {
+        if (error instanceof HiveError) return reply.code(404).send({ error: error.message });
+        throw error;
+      }
+    },
+  );
+
+  /** 访客为自己带入一个 Agent：同房间、同期限，访客到期或被移除时一起失效 */
+  app.post("/api/guest-agents", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    if (principal.kind !== "guest" || principal.resolved.session.kind !== "human") {
+      return reply
+        .code(403)
+        .send({ error: "只有访客本人可以为自己带入 Agent。", code: "GUEST_ONLY" });
+    }
+    const body = createGuestAgentRequestSchema.safeParse(request.body);
+    if (!body.success || !/^[\p{L}\p{N}_.-]+$/u.test(body.data.username)) {
+      return reply.code(400).send({
+        error: "Agent 名字只能包含字母、数字、点、下划线和连字符。",
+        code: "INVALID_NAME",
+      });
+    }
+    const sponsor = principal.resolved.session;
+    if (database.findParticipant(sponsor.roomId, body.data.username)) {
+      return reply
+        .code(409)
+        .send({ error: "房间里已经有这个名字了，请换一个。", code: "USERNAME_TAKEN" });
+    }
+    const { session, token } = access.createAgentSession(sponsor, body.data.username);
+    return reply.code(201).send({
+      token,
+      command: guestAgentCommand(request, session, token),
+      ...sessionView(access.resolve(session, clock())),
+    });
+  });
 
   function connectedMcpAgent(request: {
     headers: Record<string, string | string[] | undefined>;
   }): Participant | undefined {
-    if (!authorized(request)) return undefined;
+    const principal = principalForToken(
+      bearerToken(request as { headers: { authorization?: string } }),
+    );
+    if (!principal) return undefined;
     const roomId = headerString(request.headers["x-hive-room"]);
     const username = headerString(request.headers["x-hive-agent-name"]);
     if (!roomId || !username) return undefined;
+    // 访客 Agent 的凭证只代表它自己：房间与名字都必须对上，访客本人的凭证不能用来调 Agent 工具
+    if (
+      principal.kind === "guest" &&
+      (principal.resolved.session.kind !== "agent" ||
+        principal.resolved.session.roomId !== roomId ||
+        principal.resolved.session.username.toLocaleLowerCase() !== username.toLocaleLowerCase())
+    ) {
+      return undefined;
+    }
     const connection = onlineAgent(roomId, username);
     return connection?.participant?.type === "agent" ? connection.participant : undefined;
   }
@@ -1129,7 +1587,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           .filter((message) => !message.deletedAt),
         latestSeq: database.latestSeq(participant.roomId),
       }),
-      listMembers: () => database.listParticipants(participant.roomId),
+      listMembers: () => participantsOf(participant.roomId),
       sendMessage: (input) => {
         if (input.parentMessageId) return createAndDispatchMessage(participant, input).message;
         const parent = inferExecutingParent(participant);
@@ -1211,7 +1669,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!params.success || !query.success) {
       return reply.code(400).send({ error: "Invalid room or query parameters." });
     }
-    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+    if (!guard(request, reply, params.data.roomId)) return reply;
     return {
       messages: database.getMessages(params.data.roomId, query.data.afterSeq, query.data.limit),
       latestSeq: database.latestSeq(params.data.roomId),
@@ -1223,8 +1681,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     async (request, reply) => {
       const query = searchQuerySchema.safeParse(request.query);
       if (!query.success) return reply.code(400).send({ error: "Invalid search query." });
-      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
-      return { messages: database.searchMessages(query.data.q, query.data.limit) };
+      const principal = guard(request, reply);
+      if (!principal) return reply;
+      return {
+        messages: database
+          .searchMessages(query.data.q, query.data.limit)
+          .filter((message) => canAccessRoom(principal, message.roomId)),
+      };
     },
   );
 
@@ -1233,14 +1696,22 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     async (request, reply) => {
       const query = mentionsQuerySchema.safeParse(request.query);
       if (!query.success) return reply.code(400).send({ error: "Invalid mentions query." });
-      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
-      return { messages: database.listMentions(query.data.username, query.data.limit) };
+      const principal = guard(request, reply);
+      if (!principal) return reply;
+      return {
+        messages: database
+          .listMentions(query.data.username, query.data.limit)
+          .filter((message) => canAccessRoom(principal, message.roomId)),
+      };
     },
   );
 
   app.get("/api/invocations", async (request, reply) => {
-    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
-    const invocations = database.listActiveInvocations();
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    const invocations = database
+      .listActiveInvocations()
+      .filter((invocation) => canAccessRoom(principal, invocation.roomId));
     // 附带触发消息，任务列表无需逐条再查
     const messages = invocations
       .map((invocation) => database.getMessage(invocation.messageId))
@@ -1257,7 +1728,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     async (request, reply) => {
       const params = roomParamsSchema.safeParse(request.params);
       if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
-      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+      if (!guard(request, reply, params.data.roomId)) return reply;
       return { entries: database.listWhiteboard(params.data.roomId) };
     },
   );
@@ -1267,7 +1738,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     async (request, reply) => {
       const params = roomParamsSchema.safeParse(request.params);
       if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
-      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+      if (!guard(request, reply, params.data.roomId)) return reply;
       return { invocations: database.listInvocations(params.data.roomId) };
     },
   );
@@ -1277,20 +1748,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     async (request, reply) => {
       const params = roomParamsSchema.safeParse(request.params);
       if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
-      if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
-      return { participants: database.listParticipants(params.data.roomId) };
+      if (!guard(request, reply, params.data.roomId)) return reply;
+      return { participants: participantsOf(params.data.roomId) };
     },
   );
 
   app.get<{ Querystring: { includeArchived?: string } }>("/api/rooms", async (request, reply) => {
     const query = roomsQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid query parameters." });
-    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
-    return { rooms: database.listRooms(query.data.includeArchived) };
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    return {
+      rooms: database
+        .listRooms(query.data.includeArchived)
+        .filter((room) => canAccessRoom(principal, room.id)),
+    };
   });
 
   app.post("/api/rooms", async (request, reply) => {
-    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+    if (!adminOnly(request, reply)) return reply;
     const body = createRoomRequestSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "Invalid room payload." });
     try {
@@ -1308,7 +1784,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.patch<{ Params: { roomId: string } }>("/api/rooms/:roomId", async (request, reply) => {
     const params = roomParamsSchema.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
-    if (!authorized(request)) return reply.code(401).send({ error: "Unauthorized" });
+    if (!adminOnly(request, reply)) return reply;
     const body = updateRoomRequestSchema.safeParse(request.body);
     if (!body.success || (body.data.name === undefined && body.data.archived === undefined)) {
       return reply.code(400).send({ error: "Invalid room patch payload." });
@@ -1369,11 +1845,43 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           send(socket, { type: "error", code: "ALREADY_JOINED", message: "Already joined." });
           return;
         }
-        if (event.token !== joinToken) {
-          send(socket, { type: "error", code: "UNAUTHORIZED", message: "Invalid join token." });
+        const principal = principalForToken(event.token);
+        if (!principal) {
+          // 区分「从没被邀请」和「访问已到期 / 被移除」，后者给出明确原因
+          const ended = isGuestToken(event.token)
+            ? access.resolveToken(event.token, clock())
+            : undefined;
+          send(
+            socket,
+            ended && ended.state !== "active"
+              ? { type: "error", ...endedMessages[ended.state] }
+              : { type: "error", code: "UNAUTHORIZED", message: "Invalid join token." },
+          );
           socket.close(1008, "Unauthorized");
           return;
         }
+        if (principal.kind === "guest") {
+          const session = principal.resolved.session;
+          if (
+            session.roomId !== event.roomId ||
+            session.kind !== event.participantType ||
+            session.username.toLocaleLowerCase() !== event.username.toLocaleLowerCase()
+          ) {
+            send(socket, {
+              type: "error",
+              code: "ROOM_FORBIDDEN",
+              message: `这个邀请只能以 ${session.username} 的身份进入 #${session.roomId}。`,
+            });
+            socket.close(1008, "Forbidden");
+            return;
+          }
+          if (!database.getRoom(session.roomId)) {
+            send(socket, { type: "error", code: "ROOM_NOT_FOUND", message: "房间不存在。" });
+            socket.close(1008, "Room not found");
+            return;
+          }
+        }
+        connection.principal = principal;
         if (!/^[\p{L}\p{N}_.-]+$/u.test(event.username) || !/^[A-Za-z0-9_-]+$/.test(event.roomId)) {
           send(socket, {
             type: "error",
@@ -1425,8 +1933,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           onlineByName.set(key, activeConnections);
           send(socket, {
             type: "room.snapshot",
-            self: participant,
-            participants: database.listParticipants(event.roomId),
+            self: withAccess(participant),
+            participants: participantsOf(event.roomId),
             messages: database.getRecentMessages(event.roomId),
             latestSeq: database.latestSeq(event.roomId),
             invocations: database.listInvocations(event.roomId),
@@ -1438,7 +1946,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             }
           }
           if (!existingParticipant) {
-            broadcast(event.roomId, { type: "presence.changed", participant });
+            broadcast(event.roomId, {
+              type: "presence.changed",
+              participant: withAccess(participant),
+            });
             broadcastRoomActivity(event.roomId);
           }
         } catch (error) {
@@ -1456,6 +1967,37 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (!participant) {
         send(socket, { type: "error", code: "NOT_JOINED", message: "Join the room first." });
         return;
+      }
+      // 访客每次操作前都复核期限：到期或被移除后，已建立的连接也不能再收发
+      if (!ensureActive(connection)) return;
+      const guest = connection.principal?.kind === "guest";
+      const ownerOnly =
+        event.type === "topic.start" ||
+        event.type === "budget.extend" ||
+        event.type === "whiteboard.remove";
+      if (guest && ownerOnly) {
+        send(socket, {
+          type: "error",
+          code: "OWNER_ONLY",
+          message: "访客不能开启新话题、追加轮数或删除白板事项。",
+        });
+        return;
+      }
+      if (guest && (event.type === "invocation.retry" || event.type === "invocation.cancel")) {
+        const invocation = database.getInvocation(event.invocationId);
+        // 访客只能管自己发起的调用；房主批准访客的请求不能由访客自己点
+        if (
+          !invocation ||
+          invocation.requesterId !== participant.id ||
+          (event.type === "invocation.retry" && invocation.blockReason === "guest_approval")
+        ) {
+          send(socket, {
+            type: "error",
+            code: "OWNER_ONLY",
+            message: "访客只能重试或停止自己发起、且无需房主批准的调用。",
+          });
+          return;
+        }
       }
 
       if (event.type === "presence.heartbeat") {
@@ -1596,6 +2138,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   );
   heartbeatTimer.unref();
   const invocationTimer = setInterval(sweepStaleInvocations, options.invocationSweepMs ?? 30_000);
+  // 到点就断开访客，不等它下一次操作；每次操作和重连时也会复核
+  const accessTimer = setInterval(sweepExpiredAccess, options.accessSweepMs ?? 10_000);
   invocationTimer.unref();
 
   app.addHook("onReady", async () => {
@@ -1610,6 +2154,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     await localAgents?.shutdown();
     clearInterval(heartbeatTimer);
     clearInterval(invocationTimer);
+    clearInterval(accessTimer);
     for (const connection of connections) {
       if (connection.participant)
         database.setParticipantStatus(connection.participant.id, "offline");

@@ -78,6 +78,13 @@ function MessageMarkdown({ content }: { content: string }) {
 const MAX_FRAME_STEP_MS = 32;
 import { copyTextToClipboard } from "./clipboard";
 import { QuestionOptions } from "./question-options";
+import type { GuestAccess } from "./access-gate";
+import {
+  GuestAccessBadge,
+  GuestAgentDialog,
+  GuestMemberActions,
+  InviteDialog,
+} from "./invite-dialog";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
 
@@ -483,7 +490,7 @@ function agentCommandFor(
   access: AgentAccessMode,
 ): string {
   const agentName = agentNameFor(ownerUsername, provider);
-  return meta.agentCommand
+  return (meta.agentCommand ?? "")
     .replace(" join ", ` join --provider ${provider} `)
     .replace("--room general ", "")
     .replace("--name my-agent", `--name ${agentName}`)
@@ -510,7 +517,7 @@ function moveRadioSelection(
   radios[next]?.focus();
 }
 
-function serverBase(): string {
+export function serverBase(): string {
   return resolveServerBase({
     configured: import.meta.env.VITE_HIVE_SERVER as string | undefined,
     development: import.meta.env.DEV,
@@ -680,10 +687,33 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
   );
 }
 
-export function App() {
+export function App({
+  guest,
+  ownerToken,
+  onAccessLost,
+}: {
+  /** 凭限时邀请进入的访客：只能在这个房间、以这个名字活动 */
+  guest?: GuestAccess;
+  /** 远程房主手动填入的共享接入令牌；本机房主不需要 */
+  ownerToken?: string;
+  onAccessLost?: (reason: "expired" | "revoked") => void;
+} = {}) {
   const [meta, setMeta] = useState<MetaResponse>();
-  const [username, setUsername] = useState(() => localStorage.getItem(storedUsernameKey) ?? "");
-  const [currentRoomId, setCurrentRoomId] = useState(initialRoomId);
+  const [username, setUsername] = useState(
+    () => guest?.username ?? localStorage.getItem(storedUsernameKey) ?? "",
+  );
+  const [currentRoomId, setCurrentRoomId] = useState(() => guest?.roomId ?? initialRoomId());
+  // 访客用兑换得到的会话令牌；房主用共享 join token（只在 Server 所在电脑或填入令牌时拿得到）
+  const authToken = meta?.joinToken ?? guest?.token;
+  const isOwner = Boolean(meta?.joinToken);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [guestAgentDialogOpen, setGuestAgentDialogOpen] = useState(false);
+  const [accessNow, setAccessNow] = useState(() => Date.now());
+  useEffect(() => {
+    // 成员列表的剩余时间每分钟刷新一次
+    const timer = window.setInterval(() => setAccessNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [readSeqs, setReadSeqs] = useState<Record<string, number>>({});
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
@@ -762,7 +792,6 @@ export function App() {
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [inviteCopied, setInviteCopied] = useState(false);
   const userMenuHoverTimer = useRef<number | undefined>(undefined);
   const [pendingNewMessages, setPendingNewMessages] = useState(0);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -1001,7 +1030,10 @@ export function App() {
   }, [interfaceDensity, messageSize, reduceMotion]);
 
   useEffect(() => {
-    fetch(`${base}/api/meta`)
+    fetch(
+      `${base}/api/meta`,
+      ownerToken ? { headers: { Authorization: `Bearer ${ownerToken}` } } : undefined,
+    )
       .then(async (response) => {
         if (!response.ok) throw new Error(`Server returned ${response.status}`);
         return (await response.json()) as MetaResponse;
@@ -1013,7 +1045,7 @@ export function App() {
           `无法连接 Hive Server。请确认服务已启动并检查网络：${reason instanceof Error ? reason.message : String(reason)}`,
         );
       });
-  }, [base]);
+  }, [base, ownerToken]);
 
   // 自绘滚动动画：每帧重读底部目标位置，消息异步变高（Markdown 渲染、content-visibility
   // 惰性布局）也能追踪并精确落底；原生 scrollIntoView({behavior:"smooth"}) 的目标在调用
@@ -1350,6 +1382,8 @@ export function App() {
   const switchRoom = useCallback(
     (roomId: string) => {
       if (roomId === currentRoomId) return;
+      // 访客只能待在被邀请的房间
+      if (guest && roomId !== guest.roomId) return;
       markRoomRead(currentRoomId);
       setMessages([]);
       setMessagesLoaded(false);
@@ -1391,9 +1425,9 @@ export function App() {
   }, [currentRoomId, switchRoom]);
 
   const refreshRooms = useCallback(async () => {
-    if (!meta) return;
+    if (!meta || !authToken) return;
     const response = await fetch(`${base}/api/rooms?includeArchived=true`, {
-      headers: { Authorization: `Bearer ${meta.joinToken}` },
+      headers: { Authorization: `Bearer ${authToken}` },
     });
     if (!response.ok) throw new Error(`房间列表拉取失败 (${response.status})`);
     const payload = (await response.json()) as RoomsResponse;
@@ -1407,7 +1441,7 @@ export function App() {
       }
       return next;
     });
-  }, [base, meta]);
+  }, [authToken, base, meta]);
 
   useEffect(() => {
     if (!meta || !username) return;
@@ -1422,21 +1456,21 @@ export function App() {
 
   const catchUp = useCallback(
     async (afterSeq: number) => {
-      if (!meta || afterSeq <= 0) return;
+      if (!meta || !authToken || afterSeq <= 0) return;
       const response = await fetch(
         `${base}/api/rooms/${encodeURIComponent(currentRoomId)}/messages?afterSeq=${afterSeq}`,
-        { headers: { Authorization: `Bearer ${meta.joinToken}` } },
+        { headers: { Authorization: `Bearer ${authToken}` } },
       );
       if (!response.ok) throw new Error(`增量消息拉取失败 (${response.status})`);
       const payload = (await response.json()) as MessagesResponse;
       setMessages((current) => mergeMessages(current, payload.messages));
       latestSeqRef.current = Math.max(latestSeqRef.current, payload.latestSeq);
     },
-    [base, currentRoomId, meta],
+    [authToken, base, currentRoomId, meta],
   );
 
   useEffect(() => {
-    if (!meta || !username) return;
+    if (!meta || !username || !authToken) return;
     let cancelled = false;
     let reconnectAllowed = true;
 
@@ -1458,7 +1492,7 @@ export function App() {
             username,
             participantType: "human",
             roomId: currentRoomId,
-            token: meta.joinToken,
+            token: authToken,
           }),
         );
       });
@@ -1572,7 +1606,12 @@ export function App() {
             ),
           );
         } else if (event.type === "error") {
-          if (event.code === "USERNAME_TAKEN") {
+          if (event.code === "SESSION_EXPIRED" || event.code === "SESSION_REVOKED") {
+            // 访问到期或被房主移除：不再重连，回到入口页给出原因
+            reconnectAllowed = false;
+            socket.close();
+            onAccessLost?.(event.code === "SESSION_EXPIRED" ? "expired" : "revoked");
+          } else if (event.code === "USERNAME_TAKEN") {
             reconnectAllowed = false;
             setConnectionState("offline");
             setError(
@@ -1656,9 +1695,9 @@ export function App() {
 
   const authorizedJson = useCallback(
     async <T,>(path: string): Promise<T> => {
-      if (!meta) throw new Error("尚未连接 Hive Server。");
+      if (!meta || !authToken) throw new Error("尚未连接 Hive Server。");
       const response = await fetch(`${base}${path}`, {
-        headers: { Authorization: `Bearer ${meta.joinToken}` },
+        headers: { Authorization: `Bearer ${authToken}` },
       });
       if (!response.ok) throw new Error(`请求失败 (${response.status})`);
       return (await response.json()) as T;
@@ -2079,17 +2118,6 @@ export function App() {
     return `${origin.replace(/\/$/, "")}/#${currentRoomId}`;
   }
 
-  async function copyInviteLink() {
-    const link = inviteLink();
-    try {
-      await copyTextToClipboard(link);
-      setInviteCopied(true);
-      window.setTimeout(() => setInviteCopied(false), 2000);
-    } catch {
-      setError(`浏览器未允许自动复制，请手动发送邀请链接：${link}`);
-    }
-  }
-
   async function copyCommand() {
     if (!meta) return;
     setCopyError(undefined);
@@ -2109,7 +2137,7 @@ export function App() {
       method,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${meta.joinToken}`,
+        Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify(body),
     });
@@ -2255,16 +2283,18 @@ export function App() {
             </button>
           </div>
           <nav className="sidebar-actions" aria-label="快捷操作">
-            <button
-              className="sidebar-action room-create"
-              type="button"
-              aria-label="新建房间"
-              aria-haspopup="dialog"
-              onClick={(event) => openRoomDialog({ mode: "create" }, event.currentTarget)}
-            >
-              <Icon name="plus" size={16} />
-              <span>新建房间</span>
-            </button>
+            {isOwner && (
+              <button
+                className="sidebar-action room-create"
+                type="button"
+                aria-label="新建房间"
+                aria-haspopup="dialog"
+                onClick={(event) => openRoomDialog({ mode: "create" }, event.currentTarget)}
+              >
+                <Icon name="plus" size={16} />
+                <span>新建房间</span>
+              </button>
+            )}
             <button
               type="button"
               className={`sidebar-action ${activityView === "search" ? "active" : ""}`}
@@ -2342,15 +2372,19 @@ export function App() {
                       <span className="room-unread" aria-label={`# ${room.name} 有未读消息`} />
                     )}
                 </button>
-                <button
-                  type="button"
-                  className="room-item-manage"
-                  aria-label={`管理房间 ${room.name}`}
-                  aria-haspopup="dialog"
-                  onClick={(event) => openRoomDialog({ mode: "manage", room }, event.currentTarget)}
-                >
-                  <Icon name="settings" size={14} />
-                </button>
+                {isOwner && (
+                  <button
+                    type="button"
+                    className="room-item-manage"
+                    aria-label={`管理房间 ${room.name}`}
+                    aria-haspopup="dialog"
+                    onClick={(event) =>
+                      openRoomDialog({ mode: "manage", room }, event.currentTarget)
+                    }
+                  >
+                    <Icon name="settings" size={14} />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -2758,6 +2792,7 @@ export function App() {
                                 onRetry={retryInvocation}
                                 onCancel={cancelInvocation}
                                 onExtend={extendAgentBudget}
+                                isOwner={isOwner}
                               />
                             )}
                           </div>
@@ -3296,109 +3331,150 @@ export function App() {
                 aria-labelledby="side-tab-members"
               >
                 {online.map((participant) => (
-                  <button
-                    type="button"
-                    key={participant.id}
-                    className="member"
-                    onClick={() => {
-                      closeMobilePanel(false);
-                      appendMention(participant.username);
-                    }}
-                  >
-                    <span
-                      className={`avatar ${participant.type}`}
-                      style={
-                        participant.type === "human"
-                          ? avatarHueStyle(participant.username)
-                          : undefined
-                      }
-                      aria-hidden="true"
+                  <Fragment key={participant.id}>
+                    <button
+                      type="button"
+                      className="member"
+                      onClick={() => {
+                        closeMobilePanel(false);
+                        appendMention(participant.username);
+                      }}
                     >
-                      <AvatarGlyph
-                        type={participant.type}
-                        name={participant.username}
-                        provider={participant.provider}
+                      <span
+                        className={`avatar ${participant.type}`}
+                        style={
+                          participant.type === "human"
+                            ? avatarHueStyle(participant.username)
+                            : undefined
+                        }
+                        aria-hidden="true"
+                      >
+                        <AvatarGlyph
+                          type={participant.type}
+                          name={participant.username}
+                          provider={participant.provider}
+                        />
+                      </span>
+                      <span className="member-copy">
+                        <strong>
+                          {participant.username}
+                          {participant.type === "agent" &&
+                            localAgentNames.has(participant.username.toLocaleLowerCase()) && (
+                              <span className="member-local-badge" title="由本机 Hive Server 启动">
+                                本机
+                              </span>
+                            )}
+                        </strong>
+                        <small>
+                          {participant.type === "agent"
+                            ? `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
+                            : "Human"}
+                        </small>
+                        <GuestAccessBadge participant={participant} now={accessNow} />
+                      </span>
+                      <span
+                        className={`status-dot ${participant.status}`}
+                        title={participantStatusLabel(participant.status)}
+                        aria-label={participantStatusLabel(participant.status)}
                       />
-                    </span>
-                    <span className="member-copy">
-                      <strong>
-                        {participant.username}
-                        {participant.type === "agent" &&
-                          localAgentNames.has(participant.username.toLocaleLowerCase()) && (
-                            <span className="member-local-badge" title="由本机 Hive Server 启动">
-                              本机
-                            </span>
-                          )}
-                      </strong>
-                      <small>
-                        {participant.type === "agent"
-                          ? `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
-                          : "Human"}
-                      </small>
-                    </span>
-                    <span
-                      className={`status-dot ${participant.status}`}
-                      title={participantStatusLabel(participant.status)}
-                      aria-label={participantStatusLabel(participant.status)}
-                    />
-                  </button>
+                    </button>
+                    {isOwner && authToken && participant.access && (
+                      <GuestMemberActions
+                        participant={participant}
+                        base={base}
+                        adminToken={authToken}
+                        onError={setError}
+                      />
+                    )}
+                  </Fragment>
                 ))}
                 {offline.length > 0 && <p className="offline-label">离线 · {offline.length}</p>}
                 {offline.map((participant) => (
-                  <div key={participant.id} className="member muted">
-                    <span
-                      className={`avatar ${participant.type}`}
-                      style={
-                        participant.type === "human"
-                          ? avatarHueStyle(participant.username)
-                          : undefined
-                      }
-                      aria-hidden="true"
-                    >
-                      <AvatarGlyph
-                        type={participant.type}
-                        name={participant.username}
-                        provider={participant.provider}
+                  <Fragment key={participant.id}>
+                    <div className="member muted">
+                      <span
+                        className={`avatar ${participant.type}`}
+                        style={
+                          participant.type === "human"
+                            ? avatarHueStyle(participant.username)
+                            : undefined
+                        }
+                        aria-hidden="true"
+                      >
+                        <AvatarGlyph
+                          type={participant.type}
+                          name={participant.username}
+                          provider={participant.provider}
+                        />
+                      </span>
+                      <span className="member-copy">
+                        <strong>{participant.username}</strong>
+                        <small>
+                          {participant.type === "agent"
+                            ? `${agentProviderLabel(participant.provider)} · 离线`
+                            : "Human · 离线"}
+                        </small>
+                        <GuestAccessBadge participant={participant} now={accessNow} />
+                      </span>
+                      <span className="status-dot offline" aria-label="离线" />
+                    </div>
+                    {isOwner && authToken && participant.access && (
+                      <GuestMemberActions
+                        participant={participant}
+                        base={base}
+                        adminToken={authToken}
+                        onError={setError}
                       />
-                    </span>
-                    <span className="member-copy">
-                      <strong>{participant.username}</strong>
-                      <small>
-                        {participant.type === "agent"
-                          ? `${agentProviderLabel(participant.provider)} · 离线`
-                          : "Human · 离线"}
-                      </small>
-                    </span>
-                    <span className="status-dot offline" aria-label="离线" />
-                  </div>
+                    )}
+                  </Fragment>
                 ))}
               </div>
               <div className="member-invite" role="group" aria-label="添加成员">
-                <button
-                  type="button"
-                  className="member-invite-action"
-                  onClick={() => void copyInviteLink()}
-                >
-                  <Icon name={inviteCopied ? "check" : "user-plus"} size={16} />
-                  <span>
-                    <strong>{inviteCopied ? "已复制邀请链接" : "邀请成员"}</strong>
-                    <small>复制本房间链接，发给同事即可加入</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="member-invite-action sidebar-agent-entry"
-                  aria-label="接入 Agent"
-                  aria-haspopup="dialog"
-                  aria-expanded={agentDialogOpen}
-                  onClick={(event) => openAgentDialog(event.currentTarget)}
-                >
-                  <Icon name="plug" size={16} />
-                  <span>
-                    <strong>接入 Agent</strong>
-                    <small>选择运行时并复制接入命令</small>
-                  </span>
-                </button>
+                {isOwner ? (
+                  <button
+                    type="button"
+                    className="member-invite-action"
+                    aria-haspopup="dialog"
+                    onClick={() => setInviteDialogOpen(true)}
+                  >
+                    <Icon name="user-plus" size={16} />
+                    <span>
+                      <strong>邀请成员</strong>
+                      <small>生成限时链接，到期后自动失效</small>
+                    </span>
+                  </button>
+                ) : (
+                  guest && (
+                    <button
+                      type="button"
+                      className="member-invite-action"
+                      aria-haspopup="dialog"
+                      onClick={() => setGuestAgentDialogOpen(true)}
+                    >
+                      <Icon name="plug" size={16} />
+                      <span>
+                        <strong>带入我的 Agent</strong>
+                        <small>只能进本房间，和你同时到期</small>
+                      </span>
+                    </button>
+                  )
+                )}
+                {isOwner && (
+                  <button
+                    type="button"
+                    className="member-invite-action sidebar-agent-entry"
+                    aria-label="接入 Agent"
+                    aria-haspopup="dialog"
+                    aria-expanded={agentDialogOpen}
+                    onClick={(event) => openAgentDialog(event.currentTarget)}
+                  >
+                    <Icon name="plug" size={16} />
+                    <span>
+                      <strong>接入 Agent</strong>
+                      <small>选择运行时并复制接入命令</small>
+                    </span>
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -3427,6 +3503,29 @@ export function App() {
           onOpenMessage={openMessage}
           onMarkMentionsRead={markMentionsRead}
           onClose={closeActivity}
+        />
+      )}
+
+      {inviteDialogOpen && isOwner && authToken && (
+        <InviteDialog
+          base={base}
+          adminToken={authToken}
+          roomId={currentRoomId}
+          linkFor={(token) => `${inviteLink()}?invite=${token}`}
+          onClose={() => setInviteDialogOpen(false)}
+        />
+      )}
+      {guestAgentDialogOpen && guest && (
+        <GuestAgentDialog
+          base={base}
+          guestToken={guest.token}
+          expiresAt={
+            participants.find(
+              (participant) =>
+                participant.username.toLocaleLowerCase() === guest.username.toLocaleLowerCase(),
+            )?.access?.expiresAt ?? guest.expiresAt
+          }
+          onClose={() => setGuestAgentDialogOpen(false)}
         />
       )}
 
@@ -3679,7 +3778,7 @@ export function App() {
                           {copyError}
                         </p>
                       )}
-                      {meta && !meta.agentCommand.startsWith("npx") && (
+                      {meta?.agentCommand && !meta.agentCommand.startsWith("npx") && (
                         <p className="command-dev-note">
                           开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码，
                           而非已发布的 npm 包。
