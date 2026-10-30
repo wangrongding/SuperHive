@@ -86,6 +86,12 @@ import {
   InviteDialog,
 } from "./invite-dialog";
 import { ImDialog } from "./im-dialog";
+import {
+  ComposerAttachments,
+  MessageAttachments,
+  PaperclipIcon,
+  useAttachmentQueue,
+} from "./attachments";
 import { IM_CHANNEL_LABELS } from "./im-api";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
@@ -887,6 +893,15 @@ export function App({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const lastPanelTriggerRef = useRef<HTMLButtonElement>(null);
   const base = useMemo(serverBase, []);
+  const attachmentQueue = useAttachmentQueue({ base, token: authToken, roomId: currentRoomId });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [attachmentNotice, setAttachmentNotice] = useState<string>();
+  const [dragActive, setDragActive] = useState(false);
+  function addAttachments(files: File[]) {
+    if (files.length === 0) return;
+    setAttachmentNotice(attachmentQueue.add(files));
+    window.requestAnimationFrame(() => textareaRef.current?.focus());
+  }
   // Hive Server 就在这台电脑上时，可以直接在网页上拉起 Agent
   const local = useLocalAgents(base, agentDialogOpen);
   const localAgentNames = useMemo(
@@ -1555,7 +1570,10 @@ export function App({
                 mentioned
                   ? `${event.message.senderName} 在 AI Hive 提到了你`
                   : `${event.message.senderName} · # ${event.message.roomId}`,
-                event.message.content.slice(0, 180),
+                event.message.content.slice(0, 180) ||
+                  (event.message.attachments?.length
+                    ? `[${event.message.attachments.length} 个附件]`
+                    : ""),
               );
             }
           }
@@ -1897,10 +1915,19 @@ export function App({
 
   const draftTooLong = draft.trim().length > MAX_MESSAGE_LENGTH;
 
+  // 有附件在上传或上传失败时不能发：失败的要先重试或移除，避免悄悄丢掉
+  const attachmentsBlocking = attachmentQueue.uploading || attachmentQueue.failed;
+  const canSend =
+    (Boolean(draft.trim()) || attachmentQueue.readyIds.length > 0) &&
+    !draftTooLong &&
+    !attachmentsBlocking;
+
   function sendMessage() {
     const content = draft.trim();
     const socket = socketRef.current;
-    if (!content || content.length > MAX_MESSAGE_LENGTH) return;
+    const attachmentIds = attachmentQueue.readyIds;
+    if (!content && attachmentIds.length === 0) return;
+    if (content.length > MAX_MESSAGE_LENGTH || attachmentsBlocking) return;
     if (socket?.readyState !== WebSocket.OPEN) return;
     // 回答提问时带上回复关系：服务端据此把答案交回提问的 Agent，不必再 @ 它
     const replyTo = answering && answering.roomId === currentRoomId ? answering.id : undefined;
@@ -1909,9 +1936,12 @@ export function App({
         type: "message.send",
         clientMessageId: createClientMessageId(),
         content,
+        ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(replyTo ? { replyToMessageId: replyTo } : {}),
       }),
     );
+    attachmentQueue.clear();
+    setAttachmentNotice(undefined);
     setDraft("");
     setMentionContext(undefined);
     setAnswering(undefined);
@@ -2744,21 +2774,30 @@ export function App({
                                   : `${message.senderName} 撤回了一条消息`}
                               </p>
                             ) : (
-                              <div className="message-body">
-                                <CollapsibleMessage
-                                  content={message.content}
-                                  forceExpanded={shareMode}
-                                >
-                                  <Suspense
-                                    fallback={
-                                      <p className="message-body-fallback">{message.content}</p>
-                                    }
+                              message.content && (
+                                <div className="message-body">
+                                  <CollapsibleMessage
+                                    content={message.content}
+                                    forceExpanded={shareMode}
                                   >
-                                    <MessageMarkdown content={message.content} />
-                                  </Suspense>
-                                </CollapsibleMessage>
-                              </div>
+                                    <Suspense
+                                      fallback={
+                                        <p className="message-body-fallback">{message.content}</p>
+                                      }
+                                    >
+                                      <MessageMarkdown content={message.content} />
+                                    </Suspense>
+                                  </CollapsibleMessage>
+                                </div>
+                              )
                             )}
+                            {!message.deletedAt && message.attachments?.length ? (
+                              <MessageAttachments
+                                attachments={message.attachments}
+                                base={base}
+                                token={authToken}
+                              />
+                            ) : null}
                             {message.question && !message.deletedAt && (
                               <QuestionOptions
                                 spec={message.question}
@@ -3099,7 +3138,33 @@ export function App({
                 </button>
               </div>
             )}
-            <div className="composer-box">
+            <div
+              className={`composer-box${dragActive ? " drag-active" : ""}`}
+              onDragEnter={(event) => {
+                if (event.dataTransfer.types.includes("Files")) setDragActive(true);
+              }}
+              onDragOver={(event) => {
+                if (!event.dataTransfer.types.includes("Files")) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setDragActive(false);
+                }
+              }}
+              onDrop={(event) => {
+                if (!event.dataTransfer.files.length) return;
+                event.preventDefault();
+                setDragActive(false);
+                addAttachments([...event.dataTransfer.files]);
+              }}
+            >
+              <ComposerAttachments
+                items={attachmentQueue.items}
+                onRemove={attachmentQueue.remove}
+                onRetry={attachmentQueue.retry}
+              />
               <div className="composer-input">
                 <div className="composer-highlight" ref={highlightRef} aria-hidden="true">
                   {splitDraftMentions(draft).map((segment, index) =>
@@ -3140,6 +3205,13 @@ export function App({
                         event.currentTarget.selectionStart,
                       );
                     }
+                  }}
+                  onPaste={(event) => {
+                    // 只接收浏览器交来的文件（截图、复制的图片）；粘贴的路径文本仍按文字处理，不去读本地文件
+                    const files = [...event.clipboardData.files];
+                    if (files.length === 0) return;
+                    event.preventDefault();
+                    addAttachments(files);
                   }}
                   onKeyDown={(event) => {
                     if (
@@ -3206,7 +3278,31 @@ export function App({
                 />
               </div>
               <div className="composer-footer">
-                <span>
+                <button
+                  type="button"
+                  className="composer-attach"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="添加附件"
+                  title="添加图片或文件（也可以粘贴截图、拖入文件）"
+                >
+                  <PaperclipIcon />
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(event) => {
+                    addAttachments([...(event.target.files ?? [])]);
+                    event.target.value = "";
+                  }}
+                />
+                {(attachmentNotice || attachmentQueue.failed) && (
+                  <span className="composer-notice" role="status">
+                    {attachmentNotice ?? "有附件上传失败，请重试或移除后再发送"}
+                  </span>
+                )}
+                <span className="composer-hint">
                   {sendShortcut === "modifier-enter" ? (
                     <>
                       <kbd>{modifierKeyLabel} + Enter</kbd> 发送 · <kbd>Enter</kbd> 换行
@@ -3234,7 +3330,7 @@ export function App({
                     type="button"
                     className="composer-send"
                     onClick={sendMessage}
-                    disabled={!draft.trim() || draftTooLong || connectionState !== "online"}
+                    disabled={!canSend || connectionState !== "online"}
                     title="发送"
                   >
                     <span className="sr-only">发送</span>

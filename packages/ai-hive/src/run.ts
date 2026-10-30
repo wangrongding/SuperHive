@@ -308,6 +308,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
         provider,
         token: token!,
         access,
+        attachmentCacheDir: path.join(stateDir, "attachments"),
+        cwd,
         ...(hooks?.onRoomsChanged ? { onRoomsChanged: hooks.onRoomsChanged } : {}),
         ...(hooks?.onArchived ? { onArchived: hooks.onArchived } : {}),
       },

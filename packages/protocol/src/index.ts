@@ -27,6 +27,17 @@ export const LIMITS = {
   maxQuestionOtherLength: 2000,
   /** 邀请与续期的最长时长（分钟），超过请选「永久」 */
   maxInviteMinutes: 365 * 24 * 60,
+  /** 附件：单个文件、单条消息的件数与总量；房间总量与个人未发送暂存量可在 Server 配置里调整 */
+  maxAttachmentBytes: 20 * 1024 * 1024,
+  maxAttachmentsPerMessage: 10,
+  maxMessageAttachmentBytes: 50 * 1024 * 1024,
+  defaultRoomAttachmentQuotaBytes: 1024 * 1024 * 1024,
+  defaultPendingAttachmentQuotaBytes: 200 * 1024 * 1024,
+  /** 每个上传者每分钟最多上传次数 */
+  maxAttachmentUploadsPerMinute: 30,
+  /** 上传后一直没随消息发出的附件，过期即清理 */
+  pendingAttachmentTtlMs: 24 * 60 * 60_000,
+  maxAttachmentNameLength: 200,
 } as const;
 
 export const participantTypeSchema = z.enum(["human", "agent"]);
@@ -91,6 +102,30 @@ export const questionAnswerSchema = z.object({
   other: z.string().max(LIMITS.maxQuestionOtherLength).optional(),
 });
 
+/**
+ * 附件元数据由服务端在上传完成时生成：kind 与 mime 按文件内容嗅探，不信任浏览器给的类型。
+ * image 只包括可安全内联显示的 PNG/JPEG/GIF/WebP；SVG、HTML 等一律当普通文件下载。
+ */
+export const attachmentKindSchema = z.enum(["image", "text", "file"]);
+export const attachmentSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(LIMITS.maxAttachmentNameLength),
+  mime: z.string().min(1).max(100),
+  size: z.number().int().min(0),
+  kind: attachmentKindSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+});
+/** 上传接口的返回：附件尚未随消息发出，只有上传者本人可读，过期后清理 */
+export const uploadedAttachmentSchema = attachmentSchema.extend({
+  roomId: z.string().min(1).max(64),
+  expiresAt: z.string().datetime(),
+});
+
+/** 一条消息正文的通用约束；带附件的消息允许正文为空，见 message.send */
+export const messageContentSchema = z.string().trim().min(1).max(LIMITS.maxMessageLength);
+
 export const chatMessageSchema = z.object({
   id: z.string().uuid(),
   roomId: z.string().min(1).max(64),
@@ -122,6 +157,8 @@ export const chatMessageSchema = z.object({
   answer: questionAnswerSchema.optional(),
   /** 经飞书、微信等外部 IM 发来的消息 */
   via: messageViaSchema.optional(),
+  /** 随消息发出的附件；撤回后清空 */
+  attachments: z.array(attachmentSchema).max(LIMITS.maxAttachmentsPerMessage).optional(),
 });
 
 export const participantJoinEventSchema = z.object({
@@ -137,7 +174,10 @@ export const participantJoinEventSchema = z.object({
 export const messageSendEventSchema = z.object({
   type: z.literal("message.send"),
   clientMessageId: z.string().min(1).max(100),
-  content: z.string().trim().min(1).max(LIMITS.maxMessageLength),
+  // 只发附件时正文可以为空；正文与附件都为空由服务端拒绝
+  content: z.string().trim().max(LIMITS.maxMessageLength).default(""),
+  /** 先经 HTTP 上传得到的附件 ID；WebSocket 只传 ID，不传文件内容 */
+  attachmentIds: z.array(z.string().uuid()).max(LIMITS.maxAttachmentsPerMessage).optional(),
   replyToMessageId: z.string().uuid().optional(),
   parentMessageId: z.string().uuid().optional(),
 });
@@ -683,6 +723,9 @@ export type ImConnection = z.infer<typeof imConnectionSchema>;
 export type ImLoginView = z.infer<typeof imLoginViewSchema>;
 export type ImChannelsInfo = z.infer<typeof imChannelsInfoSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
+export type Attachment = z.infer<typeof attachmentSchema>;
+export type AttachmentKind = z.infer<typeof attachmentKindSchema>;
+export type UploadedAttachment = z.infer<typeof uploadedAttachmentSchema>;
 export type QuestionSpec = z.infer<typeof questionSpecSchema>;
 export type QuestionAnswer = z.infer<typeof questionAnswerSchema>;
 export type RoomSummary = z.infer<typeof roomSummarySchema>;

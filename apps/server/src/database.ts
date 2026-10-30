@@ -8,6 +8,7 @@ import {
   messageViaSchema,
   questionAnswerSchema,
   questionSpecSchema,
+  attachmentSchema,
   type ChatMessage,
   type QuestionAnswer,
   type QuestionSpec,
@@ -206,6 +207,10 @@ export type CreateMessageInput = {
   answer?: QuestionAnswer;
   /** 经外部 IM 发来的消息（由服务端的 IM 连接设置） */
   via?: NonNullable<ChatMessage["via"]>;
+  /** 已校验过的待发附件；有附件时正文可以为空 */
+  attachments?: NonNullable<ChatMessage["attachments"]>;
+  /** 与写消息在同一事务里执行（把附件绑定到这条消息）；抛错则整条消息不写入 */
+  onInsert?: (messageId: string) => void;
 };
 
 export type CreateMessageResult = { message: ChatMessage; created: boolean };
@@ -252,17 +257,26 @@ function mapMessage(row: MessageRow): ChatMessage {
 }
 
 /** 损坏或不认识的元数据只当作没有：消息正文仍是唯一的语义来源 */
-function parseMessageMeta(raw: string | null): Pick<ChatMessage, "question" | "answer" | "via"> {
+function parseMessageMeta(
+  raw: string | null,
+): Pick<ChatMessage, "question" | "answer" | "via" | "attachments"> {
   if (!raw) return {};
   try {
-    const value = JSON.parse(raw) as { question?: unknown; answer?: unknown; via?: unknown };
+    const value = JSON.parse(raw) as {
+      question?: unknown;
+      answer?: unknown;
+      via?: unknown;
+      attachments?: unknown;
+    };
     const question = questionSpecSchema.safeParse(value.question);
     const answer = questionAnswerSchema.safeParse(value.answer);
     const via = messageViaSchema.safeParse(value.via);
+    const attachments = attachmentSchema.array().min(1).safeParse(value.attachments);
     return {
       ...(question.success ? { question: question.data } : {}),
       ...(answer.success ? { answer: answer.data } : {}),
       ...(via.success ? { via: via.data } : {}),
+      ...(attachments.success ? { attachments: attachments.data } : {}),
     };
   } catch {
     return {};
@@ -822,42 +836,51 @@ export class HiveDatabase {
     }
 
     const content = stripUnsafeCharacters(input.content).trim();
-    if (!content) throw new HiveError("EMPTY_MESSAGE", "Message content is empty.");
+    const attachments = input.attachments?.length ? input.attachments : undefined;
+    if (!content && !attachments) {
+      throw new HiveError("EMPTY_MESSAGE", "Message content is empty.");
+    }
     const id = randomUUID();
     // 话题分隔只是界面上的分界线，不唤醒任何人
     const mentions = input.kind === "topic" ? [] : parseMentions(content);
     const createdAt = new Date().toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO messages(
+    const insert = () =>
+      this.db
+        .prepare(
+          `INSERT INTO messages(
           id, room_id, sender_id, sender_name, sender_type, content, mentions,
           reply_to_message_id, trace_id, parent_message_id, hop_count, client_message_id, created_at,
           kind, meta
         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        sender.roomId,
-        sender.id,
-        sender.username,
-        sender.type,
-        content,
-        JSON.stringify(mentions),
-        input.replyToMessageId ?? null,
-        traceId,
-        parent?.id ?? null,
-        hopCount,
-        input.clientMessageId,
-        createdAt,
-        input.kind ?? null,
-        input.question || input.answer || input.via
-          ? JSON.stringify({
-              ...(input.question ? { question: input.question } : {}),
-              ...(input.answer ? { answer: input.answer } : {}),
-              ...(input.via ? { via: input.via } : {}),
-            })
-          : null,
-      );
+        )
+        .run(
+          id,
+          sender.roomId,
+          sender.id,
+          sender.username,
+          sender.type,
+          content,
+          JSON.stringify(mentions),
+          input.replyToMessageId ?? null,
+          traceId,
+          parent?.id ?? null,
+          hopCount,
+          input.clientMessageId,
+          createdAt,
+          input.kind ?? null,
+          input.question || input.answer || input.via || attachments
+            ? JSON.stringify({
+                ...(input.question ? { question: input.question } : {}),
+                ...(input.answer ? { answer: input.answer } : {}),
+                ...(input.via ? { via: input.via } : {}),
+                ...(attachments ? { attachments } : {}),
+              })
+            : null,
+        );
+    this.db.transaction(() => {
+      insert();
+      input.onInsert?.(id);
+    })();
     return { message: this.getMessage(id)!, created: true };
   }
 

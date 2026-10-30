@@ -178,6 +178,7 @@ export class RoomClient {
     content: string;
     clientMessageId: string;
     parentMessageId: string;
+    attachmentIds?: string[];
   }): Promise<ChatMessage> {
     if (this.socket?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("聊天室连接已断开，稍后将自动重试。"));

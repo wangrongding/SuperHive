@@ -87,10 +87,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 8px 8px 20px;
+  padding: 4px 8px 8px 10px;
 }
 
-.composer-footer > span:first-child {
+.composer-footer > .composer-hint {
   min-width: 0;
   overflow: hidden;
   color: var(--text-tertiary);

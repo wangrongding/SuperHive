@@ -220,6 +220,38 @@ describe("AgentBridge", () => {
     expect(saved?.threadId).toBe("thread-1");
   });
 
+  it("strips the attachment directive from the reply and reports files it could not publish", async () => {
+    await startBridge(baseState());
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    responder.finish("做好了\n\n<hive-attachments>\nout/a.png\n</hive-attachments>");
+    await waitUntil(() => room.sent.length === 1);
+    expect(room.sent[0]?.content).toBe(
+      "做好了\n\n（以下附件没有发出：a.png — 这个 Agent 没有配置工作目录，不能发布文件）",
+    );
+    expect(room.sent[0]).not.toHaveProperty("attachmentIds");
+  });
+
+  it("resends the full rules once when they changed for a resumed codex thread", async () => {
+    await startBridge({ ...baseState(), threadId: "thread-old", instructionsDigest: "stale" });
+    const first = chat();
+    room.messages.push(first);
+    room.handlers.onMention(first, first.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    expect(responder.calls[0]?.prompt).toContain("<updated_rules>");
+    expect(responder.calls[0]?.prompt).toContain("server rules");
+    responder.finish("好");
+    await waitUntil(() => room.sent.length === 1);
+
+    const second = chat({ seq: first.seq + 10 });
+    room.messages.push(second);
+    room.handlers.onMention(second, second.seq, false);
+    await waitUntil(() => responder.calls.length === 2);
+    expect(responder.calls[1]?.prompt).not.toContain("<updated_rules>");
+  });
+
   it("still posts the final answer after delegating with hive_invoke", async () => {
     await startBridge(baseState());
     const mention = chat();

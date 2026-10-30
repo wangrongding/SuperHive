@@ -1,8 +1,11 @@
 import { observeRuntime } from "./runtime-observation.js";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync } from "node:fs";
+import { open, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -27,7 +30,7 @@ import {
   type Participant,
   type ServerEvent,
 } from "@ai-hive/protocol";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { WebSocket } from "ws";
 import { z } from "zod";
 import { AGENT_INSTRUCTIONS } from "./agent-instructions.js";
@@ -38,7 +41,7 @@ import {
   TERMINAL_INVOCATION_STATUSES,
   type CreateMessageInput,
 } from "./database.js";
-import { createHiveMcpServer, type InboxDigest } from "./hive-mcp.js";
+import { createHiveMcpServer, type AttachmentReadResult, type InboxDigest } from "./hive-mcp.js";
 import { LocalAgentSupervisor, type LocalAgentSupervisorOptions } from "./local-agents.js";
 import { registerLocalAgentRoutes } from "./local-routes.js";
 import { checkLocalRequest } from "./local-access.js";
@@ -49,6 +52,7 @@ import {
   type AccessSession,
   type ResolvedSession,
 } from "./access-store.js";
+import { AttachmentStore, publicAttachment, type StoredAttachment } from "./attachment-store.js";
 import { ImHub } from "./im/im-hub.js";
 import { ImStore } from "./im/im-store.js";
 import { SecretBox } from "./im/secret-box.js";
@@ -88,6 +92,13 @@ export type BuildAppOptions = {
   imDrivers?: Partial<Record<ImChannel, ImChannelDriver>>;
   /** IM 凭据加密密钥文件；省略时用进程内随机密钥（重启后已保存的连接需要重新扫码） */
   imKeyPath?: string;
+  /** 附件文件目录；省略时放在数据库旁的 attachments/（内存数据库用临时目录） */
+  attachmentsDir?: string;
+  /** 每个房间附件总量、每个上传者未发送暂存量（字节）；省略用 LIMITS 里的默认值 */
+  roomAttachmentQuotaBytes?: number;
+  pendingAttachmentQuotaBytes?: number;
+  /** 清理过期上传与无引用文件的间隔；测试可调小 */
+  attachmentSweepMs?: number;
   /**
    * 本机 Agent：允许本机房主在网页上一键拉起 `ai-hive join` 子进程。
    * 省略即关闭（测试默认关闭），由 index.ts 按运行方式注入 CLI 路径。
@@ -153,6 +164,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const access = new AccessStore(database.connection());
   const imStore = new ImStore(database.connection(), SecretBox.open(options.imKeyPath));
   const clock = () => options.now?.() ?? Date.now();
+  const databasePath = options.databasePath ?? "./data/hive.sqlite";
+  const attachments = new AttachmentStore(database.connection(), {
+    dir:
+      options.attachmentsDir ??
+      (databasePath === ":memory:"
+        ? mkdtempSync(path.join(tmpdir(), "hive-attachments-"))
+        : path.join(path.dirname(databasePath), "attachments")),
+    ...(options.roomAttachmentQuotaBytes !== undefined
+      ? { roomQuotaBytes: options.roomAttachmentQuotaBytes }
+      : {}),
+    ...(options.pendingAttachmentQuotaBytes !== undefined
+      ? { pendingQuotaBytes: options.pendingAttachmentQuotaBytes }
+      : {}),
+    now: clock,
+  });
   const connections = new Set<Connection>();
   const onlineByName = new Map<string, Set<Connection>>();
   const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 45_000;
@@ -160,6 +186,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   await app.register(cors, { origin: true });
   await app.register(websocket, { options: { maxPayload: LIMITS.maxClientPayloadBytes } });
+  // 附件走 multipart 流式上传，写盘时边收边算摘要；不经 JSON，也不进 bodyLimit
+  await app.register(multipart, {
+    limits: { files: 1, fields: 0, parts: 1, fileSize: LIMITS.maxAttachmentBytes },
+  });
 
   const configuredStaticDir =
     options.staticDir ?? path.resolve(import.meta.dirname, "../../web/dist");
@@ -1713,6 +1743,240 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return connection?.participant?.type === "agent" ? connection.participant : undefined;
   }
 
+  /** 交给模型看的图片上限：多数看图接口按 base64 后约 5 MB 计 */
+  const MCP_IMAGE_MAX_BYTES = 3_750_000;
+
+  async function readAttachmentForAgent(
+    agent: Participant,
+    input: { id: string; offset: number; maxBytes: number },
+  ): Promise<AttachmentReadResult> {
+    const item = attachments.get(input.id);
+    const message = item?.messageId ? database.getMessage(item.messageId) : undefined;
+    if (!item || item.roomId !== agent.roomId || item.revokedAt || !message || message.deletedAt) {
+      throw new HiveError("ATTACHMENT_NOT_FOUND", "这个房间里没有这个附件（可能已撤回）。");
+    }
+    const attachment = publicAttachment(item);
+    if (item.kind === "image") {
+      if (item.size > MCP_IMAGE_MAX_BYTES) {
+        return {
+          kind: "file",
+          attachment,
+          note: "图片超过 3.75 MB，无法作为图片内容返回；如果你能读取本机文件，请用提示里给出的本地路径。",
+        };
+      }
+      return {
+        kind: "image",
+        attachment,
+        data: (await readFile(item.filePath)).toString("base64"),
+      };
+    }
+    if (item.kind !== "text") {
+      return {
+        kind: "file",
+        attachment,
+        note: "二进制文件，无法以文本读取；如果你能读取本机文件，请用提示里给出的本地路径。",
+      };
+    }
+    const handle = await open(item.filePath, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(input.maxBytes, Math.max(0, item.size - input.offset)));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, input.offset);
+      let end = bytesRead;
+      // 不在多字节字符中间截断：回退到最后一个完整字符的边界
+      if (end > 0 && input.offset + end < item.size) {
+        let lead = end - 1;
+        while (lead > 0 && end - lead < 4 && (buffer[lead]! & 0xc0) === 0x80) lead -= 1;
+        const first = buffer[lead]!;
+        const length = first >= 0xf0 ? 4 : first >= 0xe0 ? 3 : first >= 0xc0 ? 2 : 1;
+        if (lead + length > end) end = lead;
+      }
+      const next = input.offset + end;
+      return {
+        kind: "text",
+        attachment,
+        text: buffer.subarray(0, end).toString("utf8"),
+        nextOffset: next < item.size ? next : null,
+      };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /* ---------- 附件：HTTP 上传与鉴权下载，WebSocket 只传附件 ID ---------- */
+
+  /** 房主与本机 Agent 共用一个上传者身份；访客按会话区分，看不到彼此待发的附件 */
+  function uploaderOf(principal: Principal): string {
+    return principal.kind === "admin" ? "admin" : `guest:${principal.resolved.session.id}`;
+  }
+
+  function attachmentError(reply: FastifyReply, error: unknown) {
+    const hiveError = error instanceof HiveError ? error : undefined;
+    const status =
+      hiveError?.code === "ATTACHMENT_TOO_LARGE"
+        ? 413
+        : hiveError?.code === "UPLOAD_RATE_LIMIT"
+          ? 429
+          : hiveError?.code?.endsWith("_QUOTA")
+            ? 413
+            : hiveError
+              ? 400
+              : 500;
+    return reply.code(status).send({
+      error: hiveError?.message ?? "附件处理失败。",
+      code: hiveError?.code ?? "ATTACHMENT_FAILED",
+    });
+  }
+
+  /**
+   * 读权限：撤回的不再提供；还没发出的只有上传者本人能读；发出后按所在房间的权限。
+   * 内容相同的文件共享磁盘，但每条记录各自鉴权。
+   */
+  function readableAttachment(
+    principal: Principal,
+    id: string,
+  ): { item: StoredAttachment } | { status: number; code: string; error: string } {
+    const item = attachments.get(id);
+    if (!item) return { status: 404, code: "ATTACHMENT_NOT_FOUND", error: "附件不存在。" };
+    if (!canAccessRoom(principal, item.roomId)) {
+      return { status: 403, code: "ROOM_FORBIDDEN", error: "这个凭证不能访问该房间。" };
+    }
+    if (item.revokedAt) {
+      return { status: 410, code: "ATTACHMENT_REVOKED", error: "附件所在的消息已撤回。" };
+    }
+    if (!item.messageId) {
+      if (item.uploader !== uploaderOf(principal)) {
+        return { status: 404, code: "ATTACHMENT_NOT_FOUND", error: "附件不存在。" };
+      }
+      if (Date.parse(item.expiresAt) <= clock()) {
+        return {
+          status: 410,
+          code: "ATTACHMENT_EXPIRED",
+          error: "附件上传后太久没有发出，已过期。",
+        };
+      }
+    }
+    return { item };
+  }
+
+  app.post<{ Params: { roomId: string } }>(
+    "/api/rooms/:roomId/attachments",
+    async (request, reply) => {
+      const roomId = roomParamsSchema.parse(request.params).roomId;
+      const principal = guard(request, reply, roomId);
+      if (!principal) return;
+      if (!database.getRoom(roomId)) {
+        return reply.code(404).send({ error: "房间不存在。", code: "ROOM_NOT_FOUND" });
+      }
+      if (!request.isMultipart()) {
+        return reply
+          .code(415)
+          .send({ error: "请用 multipart/form-data 上传文件。", code: "MULTIPART_REQUIRED" });
+      }
+      const uploader = uploaderOf(principal);
+      try {
+        attachments.checkRate(uploader);
+        // 先按声明的长度预检配额，明知超限就不必把文件收下来
+        const declared = Number(request.headers["content-length"] ?? 0);
+        attachments.checkQuota(roomId, uploader, Number.isFinite(declared) ? declared : 0);
+        const file = await request.file();
+        if (!file) {
+          return reply.code(400).send({ error: "没有收到文件。", code: "FILE_REQUIRED" });
+        }
+        const stored = await attachments.save({
+          roomId,
+          uploader,
+          name: file.filename,
+          stream: file.file,
+          truncated: () => file.file.truncated,
+        });
+        return reply.code(201).send({
+          ...publicAttachment(stored),
+          roomId: stored.roomId,
+          expiresAt: stored.expiresAt,
+        });
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code === "FST_REQ_FILE_TOO_LARGE") {
+          return attachmentError(
+            reply,
+            new HiveError("ATTACHMENT_TOO_LARGE", "单个附件不能超过 20 MiB。"),
+          );
+        }
+        // 客户端中途取消：连接已断开，不再回复
+        if (request.raw.socket?.destroyed) return reply.hijack();
+        return attachmentError(reply, error);
+      }
+    },
+  );
+
+  /** 移除还没发出的附件（上传队列里点 ×） */
+  app.delete<{ Params: { id: string } }>("/api/attachments/:id", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return;
+    const id = z.string().uuid().safeParse(request.params.id);
+    if (!id.success || !attachments.discardPending(id.data, uploaderOf(principal))) {
+      return reply.code(404).send({ error: "没有这个待发附件。", code: "ATTACHMENT_NOT_FOUND" });
+    }
+    return reply.code(204).send();
+  });
+
+  /**
+   * 下载原件：只接受 Authorization 头（不接受 URL 里的凭证）。
+   * 图片按嗅探出的类型内联；其余一律 attachment 下载，并用 nosniff + sandbox CSP 防止被当网页执行。
+   */
+  app.get<{ Params: { id: string } }>("/api/attachments/:id", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return;
+    const id = z.string().uuid().safeParse(request.params.id);
+    if (!id.success) {
+      return reply.code(404).send({ error: "附件不存在。", code: "ATTACHMENT_NOT_FOUND" });
+    }
+    const result = readableAttachment(principal, id.data);
+    if (!("item" in result)) {
+      return reply.code(result.status).send({ error: result.error, code: result.code });
+    }
+    const { item } = result;
+    if (!existsSync(item.filePath)) {
+      return reply.code(410).send({ error: "附件文件已被清理。", code: "ATTACHMENT_GONE" });
+    }
+    const inline = item.kind === "image";
+    reply
+      .header("Content-Type", item.kind === "text" ? "text/plain; charset=utf-8" : item.mime)
+      .header("Content-Length", String(item.size))
+      .header(
+        "Content-Disposition",
+        `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(item.name)}`,
+      )
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Content-Security-Policy", "default-src 'none'; sandbox")
+      .header("Cache-Control", "private, no-store")
+      .header("X-Hive-Attachment-Sha256", item.sha256);
+    return reply.send(createReadStream(item.filePath));
+  });
+
+  /**
+   * 与 Server 同在一台电脑上的房主 Agent 直接拿 Server 存的那份文件路径，不再下载第二份；
+   * 远程 Bridge 拿不到这个接口，改为下载到自己机器上的缓存。
+   */
+  app.get<{ Params: { id: string } }>("/api/attachments/:id/local-path", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return;
+    if (principal.kind !== "admin" || !checkLocalRequest(request).local) {
+      return reply.code(403).send({ error: "只提供给本机的房主 Agent。", code: "LOCAL_ONLY" });
+    }
+    const id = z.string().uuid().safeParse(request.params.id);
+    const result = id.success
+      ? readableAttachment(principal, id.data)
+      : { status: 404, code: "ATTACHMENT_NOT_FOUND", error: "附件不存在。" };
+    if (!("item" in result)) {
+      return reply.code(result.status).send({ error: result.error, code: result.code });
+    }
+    if (!result.item.messageId || !existsSync(result.item.filePath)) {
+      return reply.code(404).send({ error: "附件不存在。", code: "ATTACHMENT_NOT_FOUND" });
+    }
+    return { path: result.item.filePath, sha256: result.item.sha256 };
+  });
+
   app.post("/mcp", async (request, reply) => {
     const participant = connectedMcpAgent(request);
     if (!participant) {
@@ -1771,6 +2035,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       invoke: (input) => delegate(participant, input),
       askHuman: (input) => askHuman(participant, input),
       wait: (input) => waitForInvocation(participant, input),
+      readAttachment: (input) => readAttachmentForAgent(participant, input),
     });
     const transport = new StreamableHTTPServerTransport();
     try {
@@ -2222,6 +2487,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (event.type === "message.delete") {
         try {
           const message = database.deleteMessage(participant, event.messageId);
+          attachments.revokeForMessage(message.id);
           broadcast(participant.roomId, { type: "message.deleted", message });
         } catch (error) {
           const hiveError = error instanceof HiveError ? error : undefined;
@@ -2253,11 +2519,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
 
       try {
+        // 重发同一条消息（断线重试）直接返回已有结果，附件此时已经绑定在那条消息上
+        const sent = database.findMessageByClientId(participant.id, event.clientMessageId);
+        if (sent) {
+          send(socket, { type: "message.created", message: sent });
+          return;
+        }
+        const attachmentIds = [...new Set(event.attachmentIds ?? [])];
+        const claimed =
+          attachmentIds.length && connection.principal
+            ? attachments.claim(attachmentIds, {
+                roomId: participant.roomId,
+                uploader: uploaderOf(connection.principal),
+              })
+            : undefined;
         const result = createAndDispatchMessage(participant, {
           content: event.content,
           clientMessageId: event.clientMessageId,
           ...(event.replyToMessageId ? { replyToMessageId: event.replyToMessageId } : {}),
           ...(event.parentMessageId ? { parentMessageId: event.parentMessageId } : {}),
+          ...(claimed
+            ? {
+                attachments: claimed,
+                onInsert: (messageId: string) => attachments.bind(attachmentIds, messageId),
+              }
+            : {}),
         });
         if (!result.created) {
           send(socket, { type: "message.created", message: result.message });
@@ -2293,6 +2579,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const invocationTimer = setInterval(sweepStaleInvocations, options.invocationSweepMs ?? 30_000);
   // 到点就断开访客，不等它下一次操作；每次操作和重连时也会复核
   const accessTimer = setInterval(sweepExpiredAccess, options.accessSweepMs ?? 10_000);
+  // 测试里直接触发清理
+  app.decorate("attachmentStore", attachments);
+  const attachmentTimer = setInterval(
+    () => {
+      try {
+        attachments.sweep();
+      } catch (error) {
+        app.log.warn({ err: error }, "attachment sweep failed");
+      }
+    },
+    options.attachmentSweepMs ?? 10 * 60_000,
+  );
+  attachmentTimer.unref();
   invocationTimer.unref();
 
   app.addHook("onReady", async () => {
@@ -2310,6 +2609,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     clearInterval(heartbeatTimer);
     clearInterval(invocationTimer);
     clearInterval(accessTimer);
+    clearInterval(attachmentTimer);
     for (const connection of connections) {
       if (connection.participant)
         database.setParticipantStatus(connection.participant.id, "offline");

@@ -32,7 +32,23 @@ export type ChatMessage = {
   deletedAt?: string;
   /** topic：话题分隔（开启新话题或清空房间），之前的会话上下文应被丢弃；delegation：hive_invoke 发出的委派；receipt：子任务回执；question：hive_ask_human 提的问题 */
   kind?: "topic" | "delegation" | "receipt" | "question";
+  /** 随消息发出的附件元数据；内容需经 hive_attachment_read 或附件接口读取 */
+  attachments?: Attachment[];
 };
+
+export type Attachment = {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  kind: "image" | "text" | "file";
+  sha256: string;
+  width?: number;
+  height?: number;
+};
+
+/** 与服务端单个附件上限一致，下载时据此截断异常大的响应 */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 export type MessagesResponse = {
   messages: ChatMessage[];

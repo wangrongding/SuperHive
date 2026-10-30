@@ -27,6 +27,13 @@ import {
   type Snapshot,
 } from "./room-client.js";
 import { StateStore, type AgentState } from "./state-store.js";
+import { AttachmentCache } from "./attachment-cache.js";
+import {
+  AttachmentPublisher,
+  describeFailures,
+  parseAttachmentDirective,
+} from "./attachment-publisher.js";
+import type { AttachmentPaths } from "./prompt-builder.js";
 
 export function shouldProcessMention(input: {
   message: ChatMessage;
@@ -90,6 +97,8 @@ type ActiveBatch = {
 };
 
 const MAX_ATTEMPTS = 3;
+/** 这些 Provider 续接会话时不会换上新的系统 / 开发者规则（ACP 等由 refreshInstructions 重新注入） */
+const RESUMED_SYSTEM_PROMPT_PROVIDERS = new Set(["claude", "codex"]);
 
 export class AgentBridge {
   private state!: AgentState;
@@ -111,6 +120,8 @@ export class AgentBridge {
   private readonly executionIds = new Map<string, string>();
   private readonly room: RoomClient;
   private readonly tuning: Required<BridgeTuning>;
+  private readonly attachments: AttachmentCache | undefined;
+  private readonly publisher: AttachmentPublisher | undefined;
 
   constructor(
     private readonly options: {
@@ -121,6 +132,10 @@ export class AgentBridge {
       provider: string;
       token: string;
       access?: AgentAccessMode;
+      /** 附件缓存目录；只读档不准备本地路径（它没有读文件工具），只能经 hive_attachment_read 读取 */
+      attachmentCacheDir?: string;
+      /** Agent 工作目录：回复里声明的附件只允许来自这里 */
+      cwd?: string;
       onRoomsChanged?: (room: RoomSummary) => void;
       onArchived?: () => void;
       tuning?: BridgeTuning;
@@ -143,6 +158,23 @@ export class AgentBridge {
       fullPromptEveryMs: 30 * 60_000,
       ...options.tuning,
     };
+    this.attachments =
+      options.attachmentCacheDir && options.access && options.access !== "read-only"
+        ? new AttachmentCache({
+            serverUrl: options.serverUrl,
+            token: options.token,
+            dir: options.attachmentCacheDir,
+          })
+        : undefined;
+    this.publisher = options.cwd
+      ? new AttachmentPublisher({
+          serverUrl: options.serverUrl,
+          roomId: options.roomId,
+          token: options.token,
+          cwd: options.cwd,
+          access: options.access ?? "read-only",
+        })
+      : undefined;
     this.room = createRoom(
       {
         serverUrl: this.options.serverUrl,
@@ -353,7 +385,9 @@ export class AgentBridge {
     this.steering.add(message.id);
     let steered = false;
     try {
-      steered = await this.responder.steer!(buildSteerPrompt(message));
+      steered = await this.responder.steer!(
+        buildSteerPrompt(message, await this.attachmentPaths([message])),
+      );
     } catch (error) {
       if (error instanceof AgentExecutionUncertainError) {
         this.rememberProcessed(message.id);
@@ -623,8 +657,11 @@ export class AgentBridge {
       this.notePromptSent(prompt);
 
       const resolved = resolveReplyText(reply.text);
-      const content = resolved.silent ? "" : resolved.text;
-      if (!resolved.silent && !content) throw new Error("Agent 回复为空。");
+      const directive = parseAttachmentDirective(resolved.silent ? "" : resolved.text);
+      let content = directive.text;
+      if (!resolved.silent && !content && directive.paths.length === 0) {
+        throw new Error("Agent 回复为空。");
+      }
       const live = active.messages.filter(
         (message) => !this.recalled.has(message.id) && !active.cancelled.has(message.id),
       );
@@ -644,8 +681,27 @@ export class AgentBridge {
           `[hive] ${live.map((message) => `#${message.seq}`).join("、")} 无需回复，未发送消息`,
         );
       } else if (!sentWithHiveTool) {
+        // 回复里声明的产物由本机 Bridge 上传成附件，随回复一起发出
+        let attachmentIds: string[] = [];
+        if (directive.paths.length) {
+          const published = this.publisher
+            ? await this.publisher.publish(directive.paths)
+            : {
+                attachmentIds: [],
+                failures: directive.paths.map((item) => ({
+                  path: item,
+                  reason: "这个 Agent 没有配置工作目录，不能发布文件",
+                })),
+              };
+          attachmentIds = published.attachmentIds;
+          content = `${content}${describeFailures(published.failures)}`.trim();
+          for (const failure of published.failures) {
+            this.log(`[hive] 附件 ${failure.path} 未发出：${failure.reason}`);
+          }
+        }
         const sent = await this.room.sendMessage({
           content,
+          ...(attachmentIds.length ? { attachmentIds } : {}),
           // 同一次执行（含本地重试）复用幂等键；人重试时换新键，确保会发出新回复
           clientMessageId: `agent-reply-${executionId}`,
           parentMessageId: pickReplyParent(live).id,
@@ -653,6 +709,11 @@ export class AgentBridge {
         replyMessageId = sent.id;
       } else {
         this.log("[hive] 已通过 hive_message_send 发送，不再重复代发。");
+        if (directive.paths.length) {
+          this.log(
+            "[hive] 回复里声明的附件只随 Bridge 代发的回复发出，这次已用工具发送，附件未发出",
+          );
+        }
       }
       for (const message of active.messages) {
         this.recalled.delete(message.id);
@@ -803,18 +864,46 @@ export class AgentBridge {
     if (full) {
       members = await this.room.fetchParticipants().catch(() => undefined);
     }
+    const attachmentPaths = await this.attachmentPaths([...context, ...triggers]);
+    // Claude --resume 与 Codex 线程都沿用会话创建时的系统规则：规则更新后在这一轮把完整新规则补发一次
+    const rulesUpdated =
+      Boolean(this.state.threadId && this.state.instructionsDigest) &&
+      this.state.instructionsDigest !== this.instructionsDigest() &&
+      RESUMED_SYSTEM_PROMPT_PROVIDERS.has(this.options.provider);
+    const prompt = buildMentionPrompt({
+      messages: context,
+      triggers,
+      mode: full ? "full" : "brief",
+      agentName: this.options.username,
+      ...(members ? { members } : {}),
+      ...(whiteboard ? { whiteboard } : {}),
+      attachmentPaths,
+    });
     return {
-      text: buildMentionPrompt({
-        messages: context,
-        triggers,
-        mode: full ? "full" : "brief",
-        agentName: this.options.username,
-        ...(members ? { members } : {}),
-        ...(whiteboard ? { whiteboard } : {}),
-      }),
+      text: rulesUpdated
+        ? `你的工作规则已更新，以下为完整的新规则，与之前的规则冲突时以这里为准：\n<updated_rules>\n${this.instructions}\n</updated_rules>\n\n${prompt}`
+        : prompt,
       full,
       ...(whiteboardDigest ? { whiteboardDigest } : {}),
     };
+  }
+
+  /** 为消息里的附件准备本机路径；拿不到的只在日志里记一笔，Agent 仍可改用 hive_attachment_read */
+  private async attachmentPaths(messages: ChatMessage[]): Promise<AttachmentPaths> {
+    const cache = this.attachments;
+    if (!cache) return {};
+    const items = messages.flatMap((message) =>
+      message.deletedAt ? [] : (message.attachments ?? []),
+    );
+    const paths: AttachmentPaths = {};
+    await Promise.all(
+      items.map(async (item) => {
+        const located = await cache.locate(item);
+        if ("path" in located) paths[item.id] = located.path;
+        else this.log(`[hive] 附件 ${item.name}：${located.error}`);
+      }),
+    );
+    return paths;
   }
 
   private instructionsDigest(): string {

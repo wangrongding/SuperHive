@@ -1,0 +1,295 @@
+/* 附件：输入框上方的待发队列，以及消息里的图片与文件卡片 */
+.composer-box.drag-active {
+  box-shadow:
+    var(--shadow-composer),
+    0 0 0 2px var(--border-heavy);
+  background: var(--bg-subtle);
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px 0;
+  list-style: none;
+}
+
+.composer-attachment {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  max-width: 240px;
+  padding: 0 30px 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+
+.composer-attachment.image {
+  width: 56px;
+  padding: 0;
+  background: var(--bg-muted);
+}
+
+.composer-attachment.image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.composer-attachment.uploading.image img {
+  opacity: 0.55;
+}
+
+.composer-attachment.error {
+  border-color: var(--danger);
+}
+
+.composer-attachment-icon,
+.message-file-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+}
+
+.composer-attachment-copy,
+.message-file-copy {
+  display: grid;
+  min-width: 0;
+  text-align: left;
+}
+
+.composer-attachment-copy strong,
+.message-file-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-copy small,
+.message-file-copy small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment.error small,
+.message-file-copy small.danger {
+  color: var(--danger);
+}
+
+.composer-attachment-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: var(--bg-active);
+}
+
+.composer-attachment-progress span {
+  display: block;
+  height: 100%;
+  background: var(--button-primary-bg);
+  transition: width var(--duration-fast) linear;
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.composer-attachment-remove:hover {
+  opacity: 1;
+}
+
+.composer-attachment-retry {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--border-heavy);
+  border-radius: var(--radius-pill);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.composer-attachment.image .composer-attachment-retry {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+}
+
+.composer-attach {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: background var(--duration-fast);
+}
+
+.composer-attach:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.composer-footer > .composer-notice {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--danger);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-footer > .composer-hint {
+  flex: 1 1 auto;
+}
+
+/* 消息里的附件 */
+.message-attachments {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  max-width: min(100%, 520px);
+}
+
+.message-images {
+  display: grid;
+  gap: 6px;
+}
+
+.message-images.count-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.message-images.count-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.message-image {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 80px;
+  max-height: 360px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  cursor: zoom-in;
+}
+
+.message-images:not(.count-1) .message-image {
+  aspect-ratio: 1 !important;
+}
+
+.message-image:disabled {
+  cursor: default;
+}
+
+.message-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.message-images.count-1 .message-image {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.message-images.count-1 .message-image img {
+  object-fit: contain;
+}
+
+.message-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(100%, 320px);
+  padding: 8px 12px 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-main);
+  transition: background var(--duration-fast);
+}
+
+.message-file:hover {
+  background: var(--bg-hover);
+}
+
+.message-file .message-file-icon {
+  background: var(--bg-subtle);
+}
+
+.attachment-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgb(0 0 0 / 0.8);
+  cursor: zoom-out;
+}
+
+.attachment-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dialog);
+  cursor: default;
+}
+
+.attachment-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.15);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+}

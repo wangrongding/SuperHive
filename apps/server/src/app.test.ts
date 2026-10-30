@@ -188,6 +188,7 @@ describe("Hive WebSocket protocol", () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
       "hive_ask_human",
+      "hive_attachment_read",
       "hive_board_read",
       "hive_board_update",
       "hive_invoke",

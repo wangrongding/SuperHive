@@ -34,6 +34,7 @@ export class ClaudeCodeResponder implements AgentResponder {
       "hive_ask_human",
       "hive_board_read",
       "hive_board_update",
+      "hive_attachment_read",
     ]
       .map((tool) => `mcp__hive__${tool}`)
       .join(",");

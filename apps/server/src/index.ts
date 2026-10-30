@@ -65,8 +65,18 @@ const imDrivers: Partial<Record<"feishu" | "wechat", ImChannelDriver>> = {
     : { wechat: (await import("./im/wechat.js")).wechatDriver }),
 };
 
+/** 附件配额（MB）：房间总量与每个上传者的待发暂存量；未设置用默认的 1024 / 200 */
+function megabytes(value: string | undefined): number | undefined {
+  const parsed = Number.parseFloat(value ?? "");
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 1024 * 1024) : undefined;
+}
+const roomAttachmentQuotaBytes = megabytes(process.env.HIVE_ROOM_ATTACHMENT_QUOTA_MB);
+const pendingAttachmentQuotaBytes = megabytes(process.env.HIVE_PENDING_ATTACHMENT_QUOTA_MB);
+
 const app = await buildApp({
   databasePath,
+  ...(roomAttachmentQuotaBytes ? { roomAttachmentQuotaBytes } : {}),
+  ...(pendingAttachmentQuotaBytes ? { pendingAttachmentQuotaBytes } : {}),
   imDrivers,
   imKeyPath: path.join(path.dirname(databasePath), "im-secret.key"),
   publicUrl,
