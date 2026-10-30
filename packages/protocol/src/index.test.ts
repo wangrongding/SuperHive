@@ -22,3 +22,14 @@ describe("stripUnsafeCharacters", () => {
     expect(stripUnsafeCharacters("x y")).toBe("x\ny");
   });
 });
+
+describe("parseMentions 跳过代码", () => {
+  it("行内代码与代码块里的提及不算，邮箱也不算", () => {
+    expect(parseMentions("示例：正文开头写了 `@rd`，真正找 @alice")).toEqual(["alice"]);
+    expect(parseMentions("``用 `@rd` 举例``")).toEqual([]);
+    expect(parseMentions("```text\n@rd-codex 看下\n```\n@bob 你来")).toEqual(["bob"]);
+    expect(parseMentions("~~~\n@rd\n")).toEqual([]);
+    expect(parseMentions("未闭合的 ` 反引号 @carol")).toEqual(["carol"]);
+    expect(parseMentions("邮件 me@example.com 与中文后直接@小明")).toEqual(["小明"]);
+  });
+});

@@ -751,11 +751,25 @@ export type LocalSessionResponse = z.infer<typeof localSessionResponseSchema>;
 export type LocalProviderInfo = z.infer<typeof localProviderInfoSchema>;
 export type LocalDirectoryListing = z.infer<typeof localDirectoryListingSchema>;
 
-const mentionPattern = /@([\p{L}\p{N}_.-]{1,32})/gu;
+/**
+ * 把 Markdown 代码（``` / ~~~ 代码块、行内 `code`）替换成等长空白：代码里写的 @名字 是示例，不算提及。
+ * 等长替换保留其余文字的位置。未闭合的反引号按普通文字处理（与 CommonMark 一致）；未闭合的代码块延续到结尾。
+ */
+export function maskMarkdownCode(content: string): string {
+  const blank = (text: string) => text.replace(/[^\n]/g, " ");
+  const fenced = content.replace(
+    /^([ \t]{0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}\2[`~]*[ \t]*$|(?![\s\S]))/gm,
+    blank,
+  );
+  return fenced.replace(/(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g, blank);
+}
+
+/** @ 前紧贴 ASCII 字母数字或点时是邮箱等，不算提及；中文后直接 @ 算 */
+const mentionPattern = /(?<![A-Za-z0-9_.])@([\p{L}\p{N}_.-]{1,32})/gu;
 
 export function parseMentions(content: string): string[] {
   const mentions = new Map<string, string>();
-  for (const match of content.matchAll(mentionPattern)) {
+  for (const match of maskMarkdownCode(content).matchAll(mentionPattern)) {
     const username = match[1];
     if (username && !mentions.has(username.toLocaleLowerCase())) {
       mentions.set(username.toLocaleLowerCase(), username);

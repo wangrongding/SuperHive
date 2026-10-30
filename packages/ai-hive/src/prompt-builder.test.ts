@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessage } from "./hive-protocol.js";
+import { isMentioned, type ChatMessage } from "./hive-protocol.js";
 import {
   buildDeveloperInstructions,
   buildMentionPrompt,
@@ -172,5 +172,14 @@ describe("prompt hardening and throttling", () => {
     expect(brief.length).toBeLessThan(full.length);
     expect(formatWhiteboard([])).toBe("（白板为空）");
     expect(buildSteerPrompt(chat())).toContain("<late_message>");
+  });
+});
+
+describe("isMentioned 跳过代码", () => {
+  it("代码里的提及不唤醒，与服务端解析一致", () => {
+    expect(isMentioned("正文写了 `@agent-a`", "agent-a")).toBe(false);
+    expect(isMentioned("```\n@agent-a\n```", "agent-a")).toBe(false);
+    expect(isMentioned("请 @agent-a 看下 `@other`", "agent-a")).toBe(true);
+    expect(isMentioned("x@agent-a.com", "agent-a")).toBe(false);
   });
 });

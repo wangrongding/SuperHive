@@ -72,3 +72,13 @@ describe("draft mention highlighting", () => {
     expect(draftMentions("你好@Bob 看下", "bob")).toBe(true);
   });
 });
+
+describe("草稿高亮跳过代码", () => {
+  it("代码里的 @ 不高亮也不算已提及", () => {
+    expect(splitDraftMentions("看 `@rd` 和 @bob")).toEqual([
+      { text: "看 `@rd` 和 ", mention: false },
+      { text: "@bob", mention: true },
+    ]);
+    expect(draftMentions("```\n@rd\n```", "rd")).toBe(false);
+  });
+});

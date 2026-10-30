@@ -71,13 +71,28 @@ export function applyMention(
 // 与消息正文的高亮规则一致：@ 前不能紧贴 ASCII 字母数字（邮箱），中文后可以直接 @
 const mentionTokenPattern = /(?<![A-Za-z0-9_.])@[\p{L}\p{N}_.-]+/gu;
 
+/* 与 @ai-hive/protocol 的 maskMarkdownCode 一致（网页只导入协议类型，避免把 zod 打进页面包）：
+   代码里写的 @名字 是示例，服务端不会派发，输入框也不高亮 */
+/**
+ * 把 Markdown 代码（``` / ~~~ 代码块、行内 `code`）替换成等长空白：代码里写的 @名字 是示例，不算提及。
+ * 等长替换保留其余文字的位置。未闭合的反引号按普通文字处理（与 CommonMark 一致）；未闭合的代码块延续到结尾。
+ */
+export function maskMarkdownCode(content: string): string {
+  const blank = (text: string) => text.replace(/[^\n]/g, " ");
+  const fenced = content.replace(
+    /^([ \t]{0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}\2[`~]*[ \t]*$|(?![\s\S]))/gm,
+    blank,
+  );
+  return fenced.replace(/(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g, blank);
+}
+
 export type DraftSegment = { text: string; mention: boolean };
 
 /** 把草稿切成普通文本与 @提及 片段，供输入框背后的高亮层渲染 */
 export function splitDraftMentions(value: string): DraftSegment[] {
   const segments: DraftSegment[] = [];
   let cursor = 0;
-  for (const match of value.matchAll(mentionTokenPattern)) {
+  for (const match of maskMarkdownCode(value).matchAll(mentionTokenPattern)) {
     if (match.index > cursor)
       segments.push({ text: value.slice(cursor, match.index), mention: false });
     segments.push({ text: match[0], mention: true });
@@ -90,7 +105,7 @@ export function splitDraftMentions(value: string): DraftSegment[] {
 /** 草稿里是否已经 @ 了这个人（大小写不敏感，@bob 不算 @bobby） */
 export function draftMentions(value: string, username: string): boolean {
   const normalized = `@${username}`.toLocaleLowerCase();
-  for (const match of value.matchAll(mentionTokenPattern)) {
+  for (const match of maskMarkdownCode(value).matchAll(mentionTokenPattern)) {
     if (match[0].toLocaleLowerCase() === normalized) return true;
   }
   return false;
