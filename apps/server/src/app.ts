@@ -21,6 +21,7 @@ import {
   redeemInviteRequestSchema,
   renewAccessRequestSchema,
   startImLoginRequestSchema,
+  setImDeliveryLevelRequestSchema,
   submitImLoginCodeRequestSchema,
   type ImChannel,
   type ChatMessage,
@@ -488,6 +489,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // 推送给所有在线客户端：侧栏的跨房间"Agent 任务"计数需要实时更新，各房间视图按 roomId 自行过滤
   function emitInvocation(invocation: Invocation): Invocation {
     broadcastAll({ type: "invocation.updated", invocation });
+    // 任务结果和需要人处理的状态推到房主的 IM（失败、被拦下这些往往没有对应的聊天消息）
+    imHub.onInvocationUpdated(invocation);
     // 所有状态变更都经过这里：委派的子任务一结束就安排回执，放到下一拍避免在派发循环中重入
     if (
       invocation.continuation === "pending" &&
@@ -1354,6 +1357,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     listRoomIds: () => database.listRooms(false).map((room) => room.id),
     findParticipant: (roomId, username) => database.findParticipant(roomId, username),
     getMessage: (id) => database.getMessage(id),
+    getInvocation: (id) => database.getInvocation(id),
+    invocationAncestors: (id) => database.invocationAncestors(id),
     post: (owner, input) => createAndDispatchMessage(owner, input).message,
     choose: (owner, questionMessageId, selected, clientMessageId) =>
       submitAnswer(owner, { type: "question.answer", questionMessageId, selected, clientMessageId })
@@ -1466,6 +1471,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       try {
         if (request.params.action === "pause") return await imHub.pause(request.params.id);
         if (request.params.action === "resume") return await imHub.resume(request.params.id);
+        if (request.params.action === "level") {
+          const body = setImDeliveryLevelRequestSchema.safeParse(request.body);
+          if (!body.success) return reply.code(400).send({ error: "Invalid level." });
+          return imHub.setLevel(request.params.id, body.data.level);
+        }
         return reply.code(404).send({ error: "Unknown action." });
       } catch (error) {
         return imError(reply, error);

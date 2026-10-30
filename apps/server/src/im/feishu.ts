@@ -1,12 +1,13 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { ImConfig } from "./im-store.js";
-import type {
-  ImChannelDriver,
-  ImInbound,
-  ImLoginCallbacks,
-  ImLoginResult,
-  ImTransport,
-  ImTransportEvents,
+import {
+  USER_TARGET,
+  type ImChannelDriver,
+  type ImInbound,
+  type ImLoginCallbacks,
+  type ImLoginResult,
+  type ImTransport,
+  type ImTransportEvents,
 } from "./types.js";
 
 /**
@@ -153,9 +154,15 @@ class FeishuTransport implements ImTransport {
       if (result.code === 0) return result.data?.message_id;
       // 原消息被撤回等情况下退回到直接发到会话
     }
+    // user: 前缀表示发到这个人的私聊：按 open_id 直接发，不要求对方先在私聊里说过话
+    const toUser = chatId.startsWith(USER_TARGET);
     const result = await this.client.im.message.create({
-      params: { receive_id_type: "chat_id" },
-      data: { receive_id: chatId, msg_type: "text", content },
+      params: { receive_id_type: toUser ? "open_id" : "chat_id" },
+      data: {
+        receive_id: toUser ? chatId.slice(USER_TARGET.length) : chatId,
+        msg_type: "text",
+        content,
+      },
     });
     if (result.code !== 0) throw new Error(result.msg || `飞书返回错误 ${result.code}`);
     return result.data?.message_id;

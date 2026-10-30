@@ -1,13 +1,14 @@
 import { WeChatBot, type Credentials, type IncomingMessage } from "@wechatbot/wechatbot";
 import type { ImConfig } from "./im-store.js";
-import type {
-  ImChannelDriver,
-  ImInbound,
-  ImKeyValue,
-  ImLoginCallbacks,
-  ImLoginResult,
-  ImTransport,
-  ImTransportEvents,
+import {
+  USER_TARGET,
+  type ImChannelDriver,
+  type ImInbound,
+  type ImKeyValue,
+  type ImLoginCallbacks,
+  type ImLoginResult,
+  type ImTransport,
+  type ImTransportEvents,
 } from "./types.js";
 
 /**
@@ -190,7 +191,11 @@ class WeChatTransport implements ImTransport {
 
   async sendText(chatId: string, text: string): Promise<string | undefined> {
     checkAuthority(this.bot.getCredentials()?.baseUrl);
-    await this.bot.send(chatId, text);
+    // 个人微信的私聊会话 ID 就是对方的用户 ID
+    await this.bot.send(
+      chatId.startsWith(USER_TARGET) ? chatId.slice(USER_TARGET.length) : chatId,
+      text,
+    );
     return undefined;
   }
 

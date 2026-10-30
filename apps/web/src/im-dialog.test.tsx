@@ -80,6 +80,8 @@ describe("连接 IM 弹窗", () => {
               ownerName: "rd",
               label: "AI Hive 助手",
               status: "connected",
+              level: "mine",
+              delivery: { pending: 0, filtered: 3 },
               createdAt: new Date().toISOString(),
             },
           ],
@@ -97,5 +99,46 @@ describe("连接 IM 弹窗", () => {
     );
     await waitFor(() => expect(screen.getByText("飞书 · AI Hive 助手")).toBeTruthy());
     expect(screen.queryByRole("radio", { name: "个人微信" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "与我相关" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(screen.getByText(/按档位未推 3 条/)).toBeTruthy();
+  });
+
+  it("切换推送档位", async () => {
+    const calls = mockServer((route) => {
+      if (route.url === "/api/im/channels")
+        return { feishu: { enabled: true }, wechat: { enabled: false } };
+      if (route.url === "/api/rooms/build/im")
+        return {
+          connections: [
+            {
+              id: "22222222-2222-4222-8222-222222222222",
+              roomId: "build",
+              channel: "feishu",
+              ownerName: "rd",
+              label: "AI Hive 助手",
+              status: "connected",
+              level: "mine",
+              delivery: { pending: 0, filtered: 0 },
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        };
+      return {};
+    });
+    render(
+      <ImDialog
+        base="http://hive"
+        adminToken="t"
+        roomId="build"
+        ownerName="rd"
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("radio", { name: "全部消息" }));
+    await waitFor(() =>
+      expect(calls.find((call) => call.url.endsWith("/level"))?.body).toEqual({ level: "all" }),
+    );
   });
 });

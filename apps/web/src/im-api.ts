@@ -1,4 +1,10 @@
-import type { ImChannel, ImChannelsInfo, ImConnection, ImLoginView } from "@ai-hive/protocol";
+import type {
+  ImChannel,
+  ImChannelsInfo,
+  ImConnection,
+  ImDeliveryLevel,
+  ImLoginView,
+} from "@ai-hive/protocol";
 
 async function call<T>(url: string, token: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
@@ -75,4 +81,32 @@ export function setImConnectionPaused(
 
 export function removeImConnection(base: string, token: string, id: string): Promise<unknown> {
   return call(`${base}/api/im/connections/${id}`, token, { method: "DELETE" });
+}
+
+/** 推送档位：名称与一句说明 */
+export const IM_LEVELS: Array<{ level: ImDeliveryLevel; label: string; hint: string }> = [
+  {
+    level: "mine",
+    label: "与我相关",
+    hint: "你的任务的最终结果、问你的问题、提到你的消息、任务失败或等你批准",
+  },
+  { level: "im", label: "IM 任务与提及", hint: "只推从 IM 发起的任务和提到你的消息" },
+  {
+    level: "agents",
+    label: "全部 Agent",
+    hint: "与我相关的马上推，其余 Agent 发言每 3 分钟合并成一条",
+  },
+  { level: "all", label: "全部消息", hint: "房间里所有人和 Agent 的消息逐条推送，不合并" },
+];
+
+export function setImDeliveryLevel(
+  base: string,
+  token: string,
+  id: string,
+  level: ImDeliveryLevel,
+): Promise<ImConnection> {
+  return call(`${base}/api/im/connections/${id}/level`, token, {
+    method: "POST",
+    body: JSON.stringify({ level }),
+  });
 }

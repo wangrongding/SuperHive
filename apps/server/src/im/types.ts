@@ -1,6 +1,9 @@
 import type { ImChannel } from "@ai-hive/protocol";
 import type { ImConfig } from "./im-store.js";
 
+/** 发送目标以它开头时表示「发到这个人的私聊」，后面跟平台上的用户 ID */
+export const USER_TARGET = "user:";
+
 /** IM 平台推来的一条消息，已归一成纯文本 */
 export type ImInbound = {
   /** 平台给的消息 ID，用于去重和回复引用 */

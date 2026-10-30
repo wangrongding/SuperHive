@@ -5,13 +5,27 @@ import type {
   ImChannel,
   ImChannelsInfo,
   ImConnection,
+  ImDeliveryLevel,
   ImLoginView,
+  Invocation,
   Participant,
   QuestionSpec,
 } from "@ai-hive/protocol";
 import { HiveError, type CreateMessageInput } from "../database.js";
-import { publicConnection, type ImStore, type StoredConnection } from "./im-store.js";
-import type { ImChannelDriver, ImInbound, ImKeyValue, ImTransport } from "./types.js";
+import {
+  publicConnection,
+  type ImStore,
+  type OutboxCheck,
+  type OutboxItem,
+  type StoredConnection,
+} from "./im-store.js";
+import {
+  USER_TARGET,
+  type ImChannelDriver,
+  type ImInbound,
+  type ImKeyValue,
+  type ImTransport,
+} from "./types.js";
 
 export type ImHubDeps = {
   store: ImStore;
@@ -22,6 +36,9 @@ export type ImHubDeps = {
   listRoomIds(): string[];
   findParticipant(roomId: string, username: string): Participant | undefined;
   getMessage(id: string): ChatMessage | undefined;
+  getInvocation(id: string): Invocation | undefined;
+  /** 沿委派链向上的调用（不含自身，最近的在前） */
+  invocationAncestors(id: string): Invocation[];
   /** 以房主身份发消息，走与网页发送相同的入库与派发 */
   post(owner: Participant, input: CreateMessageInput): ChatMessage;
   /** 点选式回答：按提问里保存的题目校验后生成完整答案 */
@@ -48,6 +65,8 @@ type LoginSession = {
 };
 
 const MAX_ATTEMPTS = 8;
+/** 「全部 Agent 消息」档的合并窗口 */
+export const DIGEST_WINDOW_MS = 3 * 60_000;
 const LOGIN_TTL_MS = 10 * 60_000;
 const HELP = [
   "AI Hive 用法：",
@@ -90,6 +109,8 @@ export class ImHub {
   private pumpTimer: NodeJS.Timeout | undefined;
   private pumping = false;
   private closed = false;
+  /** 正在把这个连接收到的 IM 消息发进房间：它产生的房间消息不再推回同一个连接 */
+  private posting: string | undefined;
 
   constructor(private readonly deps: ImHubDeps) {}
 
@@ -105,7 +126,18 @@ export class ImHub {
   }
 
   list(roomId: string): ImConnection[] {
-    return this.deps.store.listConnections(roomId).map(publicConnection);
+    return this.deps.store.listConnections(roomId).map((connection) => this.view(connection));
+  }
+
+  private view(connection: StoredConnection): ImConnection {
+    return publicConnection(connection, this.deps.store.deliveryStats(connection.id));
+  }
+
+  setLevel(id: string, level: ImDeliveryLevel): ImConnection {
+    const connection = this.require(id);
+    this.deps.store.setLevel(id, level);
+    this.deps.onConnectionsChanged(connection.roomId);
+    return this.view(this.require(id));
   }
 
   start(): void {
@@ -381,8 +413,9 @@ export class ImHub {
     const connection = this.require(id);
     await this.disconnectTransport(id);
     this.deps.store.setStatus(id, "paused");
+    this.deps.store.dropPending(id);
     this.deps.onConnectionsChanged(connection.roomId);
-    return publicConnection(this.require(id));
+    return this.view(this.require(id));
   }
 
   async resume(id: string): Promise<ImConnection> {
@@ -390,7 +423,7 @@ export class ImHub {
     const connection = this.deps.store.setStatus(id, "connecting")!;
     this.deps.onConnectionsChanged(connection.roomId);
     void this.connect(connection);
-    return publicConnection(connection);
+    return this.view(connection);
   }
 
   async remove(id: string): Promise<void> {
@@ -463,6 +496,7 @@ export class ImHub {
     }
     const clientMessageId = `im-${digest(`${connection.id}:${message.externalId}`)}`;
     let posted: ChatMessage;
+    this.posting = connection.id;
     try {
       const question = this.questionFor(connection, message, text);
       posted = question
@@ -480,6 +514,8 @@ export class ImHub {
         message.externalId,
       );
       return;
+    } finally {
+      this.posting = undefined;
     }
     this.deps.store.link({
       messageId: posted.id,
@@ -510,7 +546,18 @@ export class ImHub {
       if (quoted?.kind === "question" && this.deps.isWaiting(quoted.id)) return quoted;
     }
     if (/@[\p{L}\p{N}_.-]/u.test(text)) return undefined;
-    for (const id of this.deps.store.recentOutboundMessages(connection.id, message.chatId, 20)) {
+    // 网页任务的提问是按人发到私聊的（user: 目标），在私聊里作答时两种会话标识都要查
+    const recent = [
+      ...this.deps.store.recentOutboundMessages(connection.id, message.chatId, 20),
+      ...(message.chatType === "p2p"
+        ? this.deps.store.recentOutboundMessages(
+            connection.id,
+            `${USER_TARGET}${message.senderId}`,
+            20,
+          )
+        : []),
+    ];
+    for (const id of recent) {
       const candidate = this.deps.getMessage(id);
       if (
         candidate?.kind === "question" &&
@@ -584,7 +631,7 @@ export class ImHub {
 
   /* ---------- 出站：房间 → IM ---------- */
 
-  /** 沿 parent 链往上找这条消息是不是由某个 IM 会话发起的 */
+  /** 沿 parent 链往上找这条消息是不是由这个 IM 连接发起的 */
   private originOf(message: ChatMessage, connectionId: string) {
     let current: ChatMessage | undefined = message;
     for (let depth = 0; current && depth < 64; depth += 1) {
@@ -597,44 +644,179 @@ export class ImHub {
     return undefined;
   }
 
-  /** 房间里有新消息：判断要不要推给这个房间的 IM 连接 */
+  private ownerOf(connection: StoredConnection): Participant | undefined {
+    const owner = this.deps.findParticipant(connection.roomId, connection.ownerName);
+    return owner?.type === "human" ? owner : undefined;
+  }
+
+  /** 这条调用最初是谁派的：沿委派链走到最上游 */
+  private rootRequesterId(invocation: Invocation): string | undefined {
+    const chain = this.deps.invocationAncestors(invocation.id);
+    return (chain.at(-1) ?? invocation).requesterId;
+  }
+
+  /** 推送目标：由这个连接发起的回到原会话；其余一律发到房主私聊，不猜「最近说过话的会话」 */
+  private target(connection: StoredConnection, origin?: { chatId: string; externalId?: string }) {
+    if (origin) {
+      return {
+        chatId: origin.chatId,
+        ...(origin.externalId && connection.channel === "feishu"
+          ? { replyToExternalId: origin.externalId }
+          : {}),
+      };
+    }
+    return { chatId: `${USER_TARGET}${connection.ownerActorId}` };
+  }
+
+  private mentionsOwner(message: ChatMessage, connection: StoredConnection): boolean {
+    const name = connection.ownerName.toLocaleLowerCase();
+    return message.mentions.some((mention) => mention.toLocaleLowerCase() === name);
+  }
+
+  private enqueueMessage(
+    connection: StoredConnection,
+    message: ChatMessage,
+    options: { batch?: boolean; check?: OutboxCheck } = {},
+  ): void {
+    const origin = this.originOf(message, connection.id);
+    const driver = this.deps.drivers[connection.channel];
+    const eventKey = `msg:${message.id}`;
+    const created = this.deps.store.enqueue({
+      connectionId: connection.id,
+      eventKey,
+      messageId: message.id,
+      ...this.target(connection, origin),
+      text: this.format(message, driver?.maxTextLength ?? 1800),
+      ...(options.batch ? { batch: true } : {}),
+      ...(options.check ? { check: options.check } : {}),
+    });
+    // 同一条消息已作为合并项排队：现在要求立即发（例如它就是房主任务的最终结果）
+    if (!created && !options.batch) this.deps.store.promote(connection.id, eventKey);
+  }
+
+  /** 房间里有新消息：按每个连接的档位决定推不推 */
   onMessageCreated(message: ChatMessage): void {
-    // 只转述 Agent 的发言；人发的（包括从 IM 进来的）不回推，避免回环
-    if (message.senderType !== "agent" || message.via) return;
-    if (message.kind === "topic" || message.kind === "delegation" || message.kind === "receipt")
-      return;
     for (const connection of this.deps.store.listConnections(message.roomId)) {
       if (connection.status === "paused") continue;
-      const origin = this.originOf(message, connection.id);
-      const mentionsOwner = message.mentions.some(
-        (name) => name.toLocaleLowerCase() === connection.ownerName.toLocaleLowerCase(),
-      );
-      // 由 IM 发起的任务链里，Agent 之间互相 @ 的讨论不推，只推给人看的结果
-      const mentionsAgent = message.mentions.some((name) => {
-        if (name.toLocaleLowerCase() === connection.ownerName.toLocaleLowerCase()) return false;
-        return this.deps.findParticipant(message.roomId, name)?.type === "agent";
+      // 从这个连接发进来的消息不再推回去
+      if (this.posting === connection.id) continue;
+      const decision = this.decide(connection, message);
+      if (decision === "skip") {
+        if (message.senderType === "agent") this.deps.store.countFiltered(connection.id);
+        continue;
+      }
+      this.enqueueMessage(connection, message, {
+        ...(decision === "batch" ? { batch: true } : {}),
+        ...(message.kind === "question"
+          ? { check: { kind: "question" as const, messageId: message.id } }
+          : {}),
       });
-      const deliver =
-        mentionsOwner || (Boolean(origin) && (message.kind === "question" || !mentionsAgent));
-      if (!deliver) continue;
-      const chatId = origin?.chatId ?? connection.lastChatId;
-      if (!chatId) continue;
+    }
+    this.schedulePump();
+  }
+
+  private decide(connection: StoredConnection, message: ChatMessage): "now" | "batch" | "skip" {
+    if (connection.level === "all") return "now";
+    if (message.senderType !== "agent" || message.via || message.kind === "topic") return "skip";
+    const mentionsOwner = this.mentionsOwner(message, connection);
+    if (connection.level === "im") {
+      // 早期行为：IM 发起的任务链里给人看的回复，以及提到房主的消息
+      if (message.kind === "delegation" || message.kind === "receipt") return "skip";
+      const origin = this.originOf(message, connection.id);
+      const mentionsAgent = message.mentions.some(
+        (name) =>
+          name.toLocaleLowerCase() !== connection.ownerName.toLocaleLowerCase() &&
+          this.deps.findParticipant(message.roomId, name)?.type === "agent",
+      );
+      return mentionsOwner || (origin && (message.kind === "question" || !mentionsAgent))
+        ? "now"
+        : "skip";
+    }
+    // 与我相关：真正提到房主的消息（含问房主的问题）马上推；任务的最终结果由调用状态推
+    if (mentionsOwner) return "now";
+    if (connection.level === "agents" && message.kind !== "receipt") return "batch";
+    return "skip";
+  }
+
+  /**
+   * 调用状态变化：房主任务的最终结果，以及需要房主知道或处理的状态（失败、结果未知、被拦下、等批准）。
+   * 这些往往没有对应的聊天消息，只看新消息会漏掉。
+   */
+  onInvocationUpdated(invocation: Invocation): void {
+    for (const connection of this.deps.store.listConnections(invocation.roomId)) {
+      if (connection.status === "paused" || connection.level === "im") continue;
+      const owner = this.ownerOf(connection);
+      if (!owner) continue;
+      const ownTask = this.rootRequesterId(invocation) === owner.id;
+      // 最终结果：房主直接派的这一轮交付的回复（委派出去的子任务回执给 Agent，不推）
+      if (
+        invocation.status === "completed" &&
+        invocation.replyMessageId &&
+        invocation.requesterId === owner.id
+      ) {
+        const reply = this.deps.getMessage(invocation.replyMessageId);
+        if (reply && !reply.deletedAt) this.enqueueMessage(connection, reply);
+        continue;
+      }
+      const approval =
+        invocation.status === "blocked" && invocation.blockReason === "guest_approval";
+      if (!approval && !ownTask) continue;
+      const notice = this.statusNotice(invocation);
+      if (!notice) continue;
+      const trigger = this.deps.getMessage(invocation.messageId);
+      const origin = trigger ? this.originOf(trigger, connection.id) : undefined;
       const driver = this.deps.drivers[connection.channel];
       this.deps.store.enqueue({
         connectionId: connection.id,
-        messageId: message.id,
-        chatId,
-        ...(origin?.externalId && connection.channel === "feishu"
-          ? { replyToExternalId: origin.externalId }
-          : {}),
-        text: this.format(message, driver?.maxTextLength ?? 1800),
+        eventKey: `inv:${invocation.id}:${invocation.attempts}:${invocation.status}`,
+        ...this.target(connection, origin),
+        text: this.clip(
+          `${this.roomName(invocation.roomId)} - ${invocation.agentName}\n${notice}`,
+          invocation.roomId,
+          driver?.maxTextLength ?? 1800,
+        ),
+        check: {
+          kind: "invocation",
+          id: invocation.id,
+          status: invocation.status,
+          attempts: invocation.attempts,
+        },
       });
     }
-    void this.pump();
+    this.schedulePump();
   }
 
+  private statusNotice(invocation: Invocation): string | undefined {
+    const trigger = this.deps.getMessage(invocation.messageId);
+    const ref = trigger ? `#${trigger.seq}` : "这条任务";
+    const detail = invocation.detail ? plain(invocation.detail.replace(/\s+/g, " ")) : "";
+    switch (invocation.status) {
+      case "failed":
+        return `⚠️ 处理 ${ref} 失败${detail ? `：${detail}` : ""}\n到网页查看或重试 ${ref}`;
+      case "timed_out":
+        return `⚠️ 处理 ${ref} 结果未知（长时间没有进展，不代表失败）\n到网页查看 ${ref}`;
+      case "blocked":
+        return invocation.blockReason === "guest_approval"
+          ? `🔒 ${plain(invocation.requesterName)} 是访客，请 ${invocation.agentName} 处理 ${ref}，等你批准\n到网页点「批准」`
+          : `⏸️ ${ref} 已暂停：${detail || "Agent 对话轮数到了上限"}\n到网页点「继续」`;
+      default:
+        return undefined;
+    }
+  }
+
+  private formatAttachments(message: ChatMessage): string[] {
+    const attachments = message.attachments ?? [];
+    if (!attachments.length) return [];
+    return [
+      `📎 附件 ${attachments.length} 个：`,
+      ...attachments.map((item) => `· ${item.name}（${formatSize(item.size)}）`),
+      `到网页查看 #${message.seq}${this.deps.webUrl(message.roomId) ? `：${this.deps.webUrl(message.roomId)}` : ""}`,
+    ];
+  }
+
+  /** 消息顶部统一标注「房间名 - 发送者」 */
   private format(message: ChatMessage, limit: number): string {
-    const header = `【${this.roomName(message.roomId)}】${message.senderName}：`;
+    const header = `${this.roomName(message.roomId)} - ${message.senderName}`;
     let body = plain(message.content);
     if (message.kind === "question") {
       body = body.replace(
@@ -646,28 +828,88 @@ export class ImHub {
           : "（直接回复这条消息作答）",
       );
     }
-    const full = `${header}\n${body}`;
-    if (full.length <= limit) return full;
-    const url = this.deps.webUrl(message.roomId);
-    const suffix = `\n…（太长已截断，全文见网页 #${message.seq}${url ? `：${url}` : ""}）`;
-    return full.slice(0, Math.max(0, limit - suffix.length)) + suffix;
+    const extra = this.formatAttachments(message);
+    const tail = extra.length ? `\n\n${extra.join("\n")}` : "";
+    const head = body ? `${header}\n${body}` : header;
+    return this.clip(head, message.roomId, limit - tail.length, message.seq) + tail;
+  }
+
+  private clip(text: string, roomId: string, limit: number, seq?: number): string {
+    if (text.length <= limit) return text;
+    const url = this.deps.webUrl(roomId);
+    const suffix = `\n…（太长已截断，全文见网页${seq ? ` #${seq}` : ""}${url ? `：${url}` : ""}）`;
+    return text.slice(0, Math.max(0, limit - suffix.length)) + suffix;
+  }
+
+  /** 发送前复核：问题已被回答、调用已经变了状态，就不再发过时的提醒 */
+  private stillRelevant(item: OutboxItem): boolean {
+    const check = item.check;
+    if (!check) return true;
+    if (check.kind === "question") return this.deps.isWaiting(check.messageId);
+    const current = this.deps.getInvocation(check.id);
+    return Boolean(
+      current && current.status === check.status && current.attempts === check.attempts,
+    );
+  }
+
+  /**
+   * 放到下一拍再发：新消息入队时，产生它的那次操作（例如提问把调用转为等人回答）还没做完，
+   * 立即复核会把刚入队的提醒误判为过时
+   */
+  private schedulePump(): void {
+    setImmediate(() => void this.pump());
   }
 
   async pump(): Promise<void> {
     if (this.pumping || this.closed) return;
     this.pumping = true;
     try {
-      for (const item of this.deps.store.duePending(this.now())) {
-        const transport = this.transports.get(item.connectionId);
-        const connection = this.deps.store.getConnection(item.connectionId);
-        if (!transport || !connection || connection.status !== "connected") continue;
-        try {
-          const externalId = await transport.sendText(
-            item.chatId,
-            item.text,
-            item.replyToExternalId,
-          );
-          this.deps.store.markSent(item.id);
+      const due = this.deps.store.duePending(this.now());
+      // 合并项：同一会话攒满一个窗口后合成一条（或按长度切成几条）发
+      const batches = new Map<string, OutboxItem[]>();
+      for (const item of due) {
+        if (!item.batch) continue;
+        const key = `${item.connectionId}\u0000${item.chatId}`;
+        batches.set(key, [...(batches.get(key) ?? []), item]);
+      }
+      for (const item of due) {
+        if (item.batch) continue;
+        await this.sendItems([item], item.text);
+      }
+      for (const items of batches.values()) {
+        const oldest = Date.parse(items[0]!.createdAt ?? new Date(this.now()).toISOString());
+        if (this.now() - oldest < DIGEST_WINDOW_MS) continue;
+        const connection = this.deps.store.getConnection(items[0]!.connectionId);
+        const limit = (connection && this.deps.drivers[connection.channel]?.maxTextLength) ?? 1800;
+        for (const group of chunk(items, limit)) {
+          await this.sendItems(group, group.map((item) => item.text).join("\n\n———\n\n"));
+        }
+      }
+    } finally {
+      this.pumping = false;
+    }
+  }
+
+  private async sendItems(items: OutboxItem[], text: string): Promise<void> {
+    const first = items[0]!;
+    const transport = this.transports.get(first.connectionId);
+    const connection = this.deps.store.getConnection(first.connectionId);
+    if (!transport || !connection || connection.status !== "connected") return;
+    const live = items.filter((item) => {
+      if (this.stillRelevant(item)) return true;
+      this.deps.store.markSkipped(item.id);
+      return false;
+    });
+    if (!live.length) return;
+    try {
+      const externalId = await transport.sendText(
+        first.chatId,
+        live.length === items.length ? text : live.map((item) => item.text).join("\n\n———\n\n"),
+        first.replyToExternalId,
+      );
+      for (const item of live) {
+        this.deps.store.markSent(item.id);
+        if (item.messageId) {
           this.deps.store.link({
             messageId: item.messageId,
             connectionId: item.connectionId,
@@ -675,21 +917,48 @@ export class ImHub {
             ...(externalId ? { externalId } : {}),
             direction: "out",
           });
-        } catch (error) {
-          const attempts = item.attempts + 1;
-          this.deps.store.markRetry(
-            item.id,
-            attempts,
-            this.now() + Math.min(5 * 60_000, 5_000 * 2 ** attempts),
-            describe(error),
-            attempts >= MAX_ATTEMPTS,
-          );
         }
       }
+    } catch (error) {
+      for (const item of live) {
+        const attempts = item.attempts + 1;
+        this.deps.store.markRetry(
+          item.id,
+          attempts,
+          this.now() + Math.min(5 * 60_000, 5_000 * 2 ** attempts),
+          describe(error),
+          attempts >= MAX_ATTEMPTS,
+        );
+      }
     } finally {
-      this.pumping = false;
+      this.deps.onConnectionsChanged(connection.roomId);
     }
   }
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 合并项按单条长度上限切组 */
+function chunk(items: OutboxItem[], limit: number): OutboxItem[][] {
+  const groups: OutboxItem[][] = [];
+  let current: OutboxItem[] = [];
+  let length = 0;
+  for (const item of items) {
+    const next = length + item.text.length + 9;
+    if (current.length && next > limit) {
+      groups.push(current);
+      current = [];
+      length = 0;
+    }
+    current.push(item);
+    length += item.text.length + 9;
+  }
+  if (current.length) groups.push(current);
+  return groups;
 }
 
 /** 「A」「a,c」「A、C」这类回复解析成选项；不像选项或与题目不符时返回 undefined，按文字回答 */

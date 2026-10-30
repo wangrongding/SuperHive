@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ImChannel, ImChannelsInfo, ImConnection, ImLoginView } from "@ai-hive/protocol";
 import {
   IM_CHANNEL_LABELS,
+  IM_LEVELS,
   cancelImLogin,
   fetchImChannels,
   getImLogin,
   listImConnections,
   removeImConnection,
   setImConnectionPaused,
+  setImDeliveryLevel,
   startImLogin,
   submitImLoginCode,
 } from "./im-api";
@@ -40,6 +42,32 @@ const scanGuides: Record<ImChannel, string> = {
     "用飞书扫码，按页面提示新建或选择一个应用并确认权限。扫码的人就是房主身份：之后私聊这个机器人，消息会以你的名义发进房间。",
   wechat: "用微信扫码并在手机上确认登录。之后在微信里给这个账号发消息，会以你的名义发进房间。",
 };
+
+function shortTime(value: string): string {
+  return new Date(value).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** 推送情况：分清「没推」是被档位过滤了还是发送失败 */
+function deliverySummary(delivery: ImConnection["delivery"]): string {
+  const parts: string[] = [];
+  if (delivery.lastAt && delivery.lastStatus) {
+    parts.push(
+      delivery.lastStatus === "sent"
+        ? `最近推送 ${shortTime(delivery.lastAt)} 成功`
+        : `最近推送${delivery.lastStatus === "failed" ? "失败" : "失败，稍后重试"}：${delivery.lastError ?? "原因未知"}`,
+    );
+  } else {
+    parts.push("还没有推送过");
+  }
+  if (delivery.pending) parts.push(`待发 ${delivery.pending} 条`);
+  parts.push(`按档位未推 ${delivery.filtered} 条`);
+  return parts.join(" · ");
+}
 
 const LOGIN_DONE: ImLoginView["status"][] = ["succeeded", "failed", "cancelled"];
 
@@ -342,6 +370,16 @@ export function ImDialog({
                               ? ` · ${connection.detail}`
                               : ""}
                           </small>
+                          <small
+                            className={
+                              connection.delivery.lastStatus &&
+                              connection.delivery.lastStatus !== "sent"
+                                ? "im-failed"
+                                : undefined
+                            }
+                          >
+                            {deliverySummary(connection.delivery)}
+                          </small>
                         </div>
                         <div className="invite-item-actions">
                           <button
@@ -378,13 +416,45 @@ export function ImDialog({
                           </button>
                         </div>
                       </div>
+                      <div className="im-level">
+                        <div
+                          className="duration-segments"
+                          role="radiogroup"
+                          aria-label="推送到 IM 的消息"
+                        >
+                          {IM_LEVELS.map((item) => (
+                            <button
+                              key={item.level}
+                              type="button"
+                              role="radio"
+                              aria-checked={connection.level === item.level}
+                              className={connection.level === item.level ? "on" : ""}
+                              title={item.hint}
+                              onClick={() =>
+                                void setImDeliveryLevel(
+                                  base,
+                                  adminToken,
+                                  connection.id,
+                                  item.level,
+                                ).then(refresh, fail)
+                              }
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                        <small>
+                          {IM_LEVELS.find((item) => item.level === connection.level)?.hint}
+                        </small>
+                      </div>
                     </li>
                   );
                 })}
               </ul>
             )}
             <p className="invite-empty im-usage">
-              在 IM 里 @ Agent 的名字就能让它干活；回复 /help 查看用法，/room 房间ID 切换房间。
+              推送的消息顶部会标注「房间名 - 发送者」。在 IM 里 @ Agent 的名字就能让它干活；回复
+              /help 查看用法，/room 房间ID 切换房间。
             </p>
           </section>
         </div>

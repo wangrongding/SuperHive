@@ -544,6 +544,24 @@ export const inviteSchema = z.object({
  * 由此发起的任务结果和需要房主回答的提问再回到原来的 IM 会话。
  */
 export const imConnectionStatusSchema = z.enum(["connecting", "connected", "paused", "error"]);
+/**
+ * 往 IM 推哪些消息：
+ * mine=与我相关（默认）：我的任务的最终结果、问我的问题、真正提到我的消息、我的任务出了问题或等我批准；
+ * im=只推从 IM 发起的任务和提到我的消息（早期行为）；
+ * agents=在「与我相关」之外，房间里其余 Agent 发言每 3 分钟合并成一条；
+ * all=房间里所有消息（含人类）逐条推送，不合并。
+ */
+export const imDeliveryLevelSchema = z.enum(["mine", "im", "agents", "all"]);
+export const imDeliveryStatsSchema = z.object({
+  /** 最近一次推送尝试：已发出、发送失败（还会重试）或放弃 */
+  lastAt: z.string().datetime().optional(),
+  lastStatus: z.enum(["sent", "retrying", "failed"]).optional(),
+  lastError: z.string().optional(),
+  /** 排队待发的条数 */
+  pending: z.number().int().nonnegative(),
+  /** 按当前档位没有推送的消息条数（自连接起累计） */
+  filtered: z.number().int().nonnegative(),
+});
 export const imConnectionSchema = z.object({
   id: z.string().uuid(),
   roomId: z.string(),
@@ -554,6 +572,8 @@ export const imConnectionSchema = z.object({
   label: z.string(),
   status: imConnectionStatusSchema,
   detail: z.string().optional(),
+  level: imDeliveryLevelSchema,
+  delivery: imDeliveryStatsSchema,
   createdAt: z.string().datetime(),
   /** 最近一次从 IM 收到房主消息的时间 */
   lastInboundAt: z.string().datetime().optional(),
@@ -592,6 +612,7 @@ export const startImLoginRequestSchema = z.object({
   /** 个人微信必须显式确认风险 */
   acceptRisk: z.boolean().optional(),
 });
+export const setImDeliveryLevelRequestSchema = z.object({ level: imDeliveryLevelSchema });
 export const submitImLoginCodeRequestSchema = z.object({
   code: z
     .string()
@@ -720,6 +741,7 @@ export type AgentProvider = z.infer<typeof agentProviderSchema>;
 export type Participant = z.infer<typeof participantSchema>;
 export type ImChannel = z.infer<typeof imChannelSchema>;
 export type ImConnection = z.infer<typeof imConnectionSchema>;
+export type ImDeliveryLevel = z.infer<typeof imDeliveryLevelSchema>;
 export type ImLoginView = z.infer<typeof imLoginViewSchema>;
 export type ImChannelsInfo = z.infer<typeof imChannelsInfoSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;

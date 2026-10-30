@@ -146,8 +146,10 @@ describe("IM 连接", () => {
 
   async function start() {
     const fake = new FakeChannel();
+    const clock = { offset: 0 };
     const app = await buildApp({
       databasePath: ":memory:",
+      now: () => Date.now() + clock.offset,
       token: "test-token",
       staticDir: "/definitely-not-present",
       imDrivers: { feishu: fake.driver("feishu"), wechat: fake.driver("wechat") },
@@ -203,7 +205,15 @@ describe("IM 连接", () => {
       }
       return { rd, connections, loginId: started.body.id as string };
     };
-    return { app, port, api, join, connect, fake };
+    const setLevel = async (level: string) => {
+      const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections as Array<{
+        id: string;
+      }>;
+      const result = await api("POST", `/api/im/connections/${connection!.id}/level`, { level });
+      expect(result.body.level).toBe(level);
+      return connection!.id;
+    };
+    return { app, port, api, join, connect, fake, clock, setLevel };
   }
 
   it("扫码连接后，房主在 IM 里发的消息以房主身份进入房间并唤醒 Agent，结果回到原会话", async () => {
@@ -244,7 +254,8 @@ describe("IM 连接", () => {
     });
     const delivered = await until(() => fake.sent.find((item) => item.text.includes("配置缺了")));
     expect(delivered).toMatchObject({ chatId: "chat-1", replyTo: "in-1" });
-    expect(delivered.text).toContain("helper：");
+    // 顶部标注「房间名 - 发送者」
+    expect(delivered.text.split("\n")[0]).toBe("general - helper");
     // 转述的正文里 @ 换成全角，不会在 IM 那边变成提及
     expect(delivered.text).toContain("＠rd");
 
@@ -269,12 +280,12 @@ describe("IM 连接", () => {
     const trigger = (created as { message: ChatMessage }).message;
     await helper.next((event) => event.type === "agent.mentioned");
     const sentBefore = fake.sent.length;
-    // helper 转给 worker 的中间讨论不推；网页上 rd 自己发的消息也不推
+    // helper 执行中转给 worker 的讨论不推；网页上 rd 自己发的消息也不推
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
     helper.send({
       type: "message.send",
       clientMessageId: "chatter",
       content: "@worker 帮我查一下",
-      parentMessageId: trigger.id,
     });
     rd.send({ type: "message.send", clientMessageId: "web", content: "网页上说一句" });
     await rd.next(
@@ -375,6 +386,192 @@ describe("IM 连接", () => {
     expect(nobody.body.code).toBe("NOT_A_MEMBER");
     const anonymous = await fetch(`http://127.0.0.1:${(await start()).port}/api/im/channels`);
     expect(anonymous.status).toBe(401);
+  });
+});
+
+describe("IM 推送档位", () => {
+  let close: (() => Promise<void>) | undefined;
+  const peers: Peer[] = [];
+  afterEach(async () => {
+    for (const peer of peers.splice(0)) peer.socket.close();
+    await close?.();
+    close = undefined;
+  });
+
+  async function setup() {
+    const fake = new FakeChannel();
+    const clock = { offset: 0 };
+    const app = await buildApp({
+      databasePath: ":memory:",
+      token: "test-token",
+      staticDir: "/definitely-not-present",
+      now: () => Date.now() + clock.offset,
+      imDrivers: { feishu: fake.driver("feishu") },
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    close = () => app.close();
+    const port = (app.server.address() as AddressInfo).port;
+    const api = async (method: string, url: string, body?: unknown) => {
+      const headers = { ...OWNER } as Record<string, string>;
+      if (body === undefined) delete headers["Content-Type"];
+      const response = await fetch(`http://127.0.0.1:${port}${url}`, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      return { status: response.status, body: (await response.json()) as Record<string, any> };
+    };
+    const join = async (username: string, participantType: "human" | "agent") => {
+      const peer = await Peer.connect(`ws://127.0.0.1:${port}/ws`);
+      peers.push(peer);
+      peer.send({
+        type: "participant.join",
+        username,
+        participantType,
+        roomId: "general",
+        token: "test-token",
+      });
+      await peer.next((event) => event.type === "room.snapshot");
+      return peer;
+    };
+    const rd = await join("rd", "human");
+    const helper = await join("helper", "agent");
+    const started = await api("POST", "/api/rooms/general/im/login", {
+      channel: "feishu",
+      ownerName: "rd",
+    });
+    await until(() => fake.login);
+    fake.login!.resolve("owner-open-id");
+    await until(() => fake.events);
+    let id = "";
+    for (let i = 0; i < 50; i += 1) {
+      const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections;
+      if (connection?.status === "connected") {
+        id = connection.id;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    void started;
+    /** rd 在网页上派活给 helper，返回触发消息 */
+    const assign = async (content: string, clientMessageId: string) => {
+      rd.send({ type: "message.send", clientMessageId, content });
+      const created = await rd.next(
+        (event) => event.type === "message.created" && event.message.content === content,
+      );
+      await helper.next((event) => event.type === "agent.mentioned");
+      return (created as { message: ChatMessage }).message;
+    };
+    const setLevel = async (level: string) =>
+      (await api("POST", `/api/im/connections/${id}/level`, { level })).body;
+    return { api, fake, clock, rd, helper, assign, setLevel, id, join };
+  }
+
+  it("默认「与我相关」：网页派的活，Agent 没提到房主，最终结果也推到房主私聊", async () => {
+    const { fake, helper, assign, api } = await setup();
+    const trigger = await assign("@helper 看下日志", "web-1");
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+    helper.send({
+      type: "message.send",
+      clientMessageId: "final",
+      content: "日志里是磁盘满了",
+      parentMessageId: trigger.id,
+    });
+    const delivered = await until(() => fake.sent.find((item) => item.text.includes("磁盘满了")));
+    // 网页任务发到房主私聊，不发到「最近说过话的会话」
+    expect(delivered.chatId).toBe("user:owner-open-id");
+    expect(delivered.replyTo).toBeUndefined();
+    expect(delivered.text.split("\n")[0]).toBe("general - helper");
+    const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections;
+    expect(connection.level).toBe("mine");
+    expect(connection.delivery).toMatchObject({ lastStatus: "sent", pending: 0 });
+  });
+
+  it("委派链只推交给房主的最终结果，Agent 之间的转交和中间回复不推", async () => {
+    const { fake, helper, assign, join, rd } = await setup();
+    const worker = await join("worker", "agent");
+    const trigger = await assign("@helper 整理发布说明", "web-3");
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+    // helper 执行中把子任务转给 worker（不带 parent，服务端按执行中的调用补上）
+    helper.send({ type: "message.send", clientMessageId: "hand", content: "@worker 列一下改动" });
+    const handed = await worker.next((event) => event.type === "agent.mentioned");
+    const handoff = (handed as { message: ChatMessage }).message;
+    worker.send({
+      type: "message.send",
+      clientMessageId: "w-reply",
+      content: "改动有三项",
+      parentMessageId: handoff.id,
+    });
+    await rd.next(
+      (event) => event.type === "message.created" && event.message.content === "改动有三项",
+    );
+    helper.send({
+      type: "message.send",
+      clientMessageId: "h-final",
+      content: "发布说明整理好了",
+      parentMessageId: trigger.id,
+    });
+    await until(() => fake.sent.find((item) => item.text.includes("发布说明整理好了")));
+    expect(fake.sent.some((item) => item.text.includes("列一下改动"))).toBe(false);
+    expect(fake.sent.some((item) => item.text.includes("改动有三项"))).toBe(false);
+  });
+
+  it("任务失败、结果未知推一条状态通知；同一状态只推一次", async () => {
+    const { fake, helper, assign } = await setup();
+    const trigger = await assign("@helper 跑一下部署", "web-2");
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+    helper.send({
+      type: "invocation.report",
+      messageId: trigger.id,
+      status: "failed",
+      detail: "部署脚本退出码 1",
+    });
+    const notice = await until(() => fake.sent.find((item) => item.text.includes("失败")));
+    expect(notice.text).toContain(`处理 #${trigger.seq} 失败：部署脚本退出码 1`);
+    expect(notice.chatId).toBe("user:owner-open-id");
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "failed" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.sent.filter((item) => item.text.includes("失败"))).toHaveLength(1);
+  });
+
+  it("「全部消息」：人和 Agent 的消息都逐条推送，IM 自己发进来的不回推", async () => {
+    const { fake, rd, helper, setLevel } = await setup();
+    expect((await setLevel("all")).level).toBe("all");
+    rd.send({ type: "message.send", clientMessageId: "hi", content: "大家好" });
+    const human = await until(() => fake.sent.find((item) => item.text.includes("大家好")));
+    expect(human.text).toBe("general - rd\n大家好");
+    helper.send({ type: "message.send", clientMessageId: "chat", content: "收到" });
+    await until(() => fake.sent.find((item) => item.text === "general - helper\n收到"));
+    const before = fake.sent.length;
+    fake.emit({ text: "从飞书说一句" });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(fake.sent.slice(before).some((item) => item.text.includes("general - rd\n从飞书"))).toBe(
+      false,
+    );
+  });
+
+  it("「全部 Agent 消息」：其它 Agent 发言攒满 3 分钟合并成一条", async () => {
+    const { fake, helper, clock, setLevel } = await setup();
+    await setLevel("agents");
+    helper.send({ type: "message.send", clientMessageId: "a", content: "第一句" });
+    helper.send({ type: "message.send", clientMessageId: "b", content: "第二句" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(fake.sent.some((item) => item.text.includes("第一句"))).toBe(false);
+    clock.offset = 4 * 60_000;
+    const digest = await until(() => fake.sent.find((item) => item.text.includes("第一句")), 5_000);
+    expect(digest.text).toContain("第二句");
+  });
+
+  it("暂停后不推，恢复后不补发暂停期间的消息", async () => {
+    const { fake, helper, setLevel, id, api } = await setup();
+    await setLevel("all");
+    await api("POST", `/api/im/connections/${id}/pause`);
+    helper.send({ type: "message.send", clientMessageId: "p", content: "暂停时说的" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await api("POST", `/api/im/connections/${id}/resume`);
+    await until(async () => true);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(fake.sent.some((item) => item.text.includes("暂停时说的"))).toBe(false);
   });
 });
 
