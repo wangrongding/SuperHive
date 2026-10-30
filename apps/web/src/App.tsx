@@ -92,6 +92,7 @@ import {
   PaperclipIcon,
   useAttachmentQueue,
 } from "./attachments";
+import { InvocationDock, dockInvocations } from "./invocation-dock";
 import { IM_CHANNEL_LABELS } from "./im-api";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
@@ -3124,6 +3125,19 @@ export function App({
                 </div>
               </div>
             )}
+            <InvocationDock
+              invocations={dockInvocations(invocations.values(), currentRoomId, accessNow)}
+              connectionState={connectionState}
+              allInvocations={invocations}
+              participants={participants}
+              canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
+              onJump={jumpToMessage}
+              onLocate={jumpToMessage}
+              onRetry={retryInvocation}
+              onCancel={cancelInvocation}
+              onExtend={extendAgentBudget}
+              isOwner={isOwner}
+            />
             {answering && answering.roomId === currentRoomId && (
               <div className="composer-answering" role="status">
                 <strong>回答 @{answering.senderName} 的提问</strong>

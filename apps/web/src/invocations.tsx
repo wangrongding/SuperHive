@@ -285,7 +285,10 @@ export function InvocationChips({
   connectionState,
   allInvocations,
   isOwner = true,
+  onLocate,
 }: {
+  /** 底部状态栏里用：跳到触发这条调用的消息 */
+  onLocate?: (messageId: string) => void;
   /** 访客看不到「批准」：访客的请求只能由房主放行 */
   isOwner?: boolean;
   invocations: Invocation[];
@@ -381,6 +384,16 @@ export function InvocationChips({
                   详情 ›
                 </span>
               </button>
+              {onLocate && canJumpTo(invocation.messageId) && (
+                <button
+                  type="button"
+                  className="invocation-action subtle"
+                  aria-label={`${ariaSummary}，定位到原消息`}
+                  onClick={() => onLocate(invocation.messageId)}
+                >
+                  原消息
+                </button>
+              )}
               {jumpTarget && (
                 <button
                   type="button"
