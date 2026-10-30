@@ -17,3 +17,7 @@ ChatGPT.md
 
 # 开发模式 supervisor 的运行状态
 .ai-hive-dev/
+
+# 本机运行数据（包含加密密钥、附件）与任务生成产物，不随源码提交
+/apps/server/data/
+/output/
