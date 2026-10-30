@@ -26,10 +26,13 @@ export function isLongMessage(content: string): boolean {
 export function CollapsibleMessage({
   content,
   forceExpanded = false,
+  onToggle,
   children,
 }: {
   content: string;
   forceExpanded?: boolean;
+  /** 在展开/收起改变高度之前调用：消息列表据此暂停贴底，读者看到的位置不动 */
+  onToggle?: () => void;
   children: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -39,6 +42,7 @@ export function CollapsibleMessage({
 
   function toggle() {
     const next = !expanded;
+    onToggle?.();
     setExpanded(next);
     if (!next) {
       // 收起后消息顶部可能已在视口上方，滚回来以免读者丢失位置

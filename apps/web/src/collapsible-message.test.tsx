@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LIMITS } from "@ai-hive/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsibleMessage, MAX_MESSAGE_LENGTH, isLongMessage } from "./collapsible-message";
 
 afterEach(cleanup);
@@ -40,6 +40,20 @@ describe("CollapsibleMessage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "收起" }));
     expect(container.querySelector(".message-collapsible.collapsed")).not.toBeNull();
+  });
+
+  it("展开、收起前先通知外层，让消息列表暂停贴底", () => {
+    const onToggle = vi.fn();
+    const content = "长".repeat(2000);
+    render(
+      <CollapsibleMessage content={content} onToggle={onToggle}>
+        <p>{content}</p>
+      </CollapsibleMessage>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /展开全文/ }));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "收起" }));
+    expect(onToggle).toHaveBeenCalledTimes(2);
   });
 
   it("强制展开时不折叠也不显示按钮", () => {

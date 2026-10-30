@@ -1155,6 +1155,15 @@ export function App({
     setShowJumpToBottom(distance > 320);
   }, []);
 
+  // 读者在底部附近点「展开全文」：内容变高时不能被贴底逻辑拉到底，停在原处继续读。
+  // 之后滚回底部时 handleMessageListScroll 会恢复贴底
+  const releaseBottomPin = useCallback(() => {
+    cancelAnimationFrame(bottomAnimationRef.current);
+    bottomAnimationRef.current = 0;
+    detachAnimationCancelRef.current?.();
+    nearBottomRef.current = false;
+  }, []);
+
   const jumpToLatest = useCallback(() => {
     setPendingNewMessages(0);
     scrollToBottom(true);
@@ -2780,6 +2789,7 @@ export function App({
                                   <CollapsibleMessage
                                     content={message.content}
                                     forceExpanded={shareMode}
+                                    onToggle={releaseBottomPin}
                                   >
                                     <Suspense
                                       fallback={
