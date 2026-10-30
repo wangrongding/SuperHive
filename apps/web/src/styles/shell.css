@@ -637,8 +637,13 @@
   text-align: left;
 }
 
-button.member:hover {
+button.member:hover,
+div.member[role="button"]:hover {
   background: var(--bg-hover);
+}
+
+div.member[role="button"] {
+  cursor: pointer;
 }
 
 .member .avatar {

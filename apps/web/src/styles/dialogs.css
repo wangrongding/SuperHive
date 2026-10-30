@@ -859,14 +859,14 @@
 
 .room-dialog-footer {
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 4px;
 }
 
-.room-dialog-footer .room-archive,
-.room-dialog-footer .room-restore {
-  margin-right: auto;
+.room-dialog-footer button[type="submit"] {
+  margin-left: auto;
 }
 
 .room-dialog-footer .room-archive {

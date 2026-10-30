@@ -3341,11 +3341,20 @@ export function App({
                 aria-labelledby="side-tab-members"
               >
                 {online.map((participant) => (
-                  <Fragment key={participant.id}>
-                    <button
-                      type="button"
+                  <div key={participant.id} className="member-row">
+                    {/* 用 div 承载点击：访客行里还要嵌入「⋯」按钮，button 不能嵌套 button */}
+                    <div
+                      role="button"
+                      tabIndex={0}
                       className="member"
                       onClick={() => {
+                        closeMobilePanel(false);
+                        appendMention(participant.username);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
                         closeMobilePanel(false);
                         appendMention(participant.username);
                       }}
@@ -3374,33 +3383,42 @@ export function App({
                                 本机
                               </span>
                             )}
+                          {isOwner && authToken && participant.access && (
+                            <GuestMemberActions
+                              participant={participant}
+                              base={base}
+                              adminToken={authToken}
+                              now={accessNow}
+                              onError={setError}
+                            />
+                          )}
                         </strong>
                         <small>
-                          {participant.type === "agent"
-                            ? `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
-                            : "Human"}
+                          {participant.access ? (
+                            <>
+                              {participant.type === "agent"
+                                ? `${agentProviderLabel(participant.provider)} · `
+                                : ""}
+                              <GuestAccessBadge participant={participant} now={accessNow} />
+                            </>
+                          ) : participant.type === "agent" ? (
+                            `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
+                          ) : (
+                            "Human"
+                          )}
                         </small>
-                        <GuestAccessBadge participant={participant} now={accessNow} />
                       </span>
                       <span
                         className={`status-dot ${participant.status}`}
                         title={participantStatusLabel(participant.status)}
                         aria-label={participantStatusLabel(participant.status)}
                       />
-                    </button>
-                    {isOwner && authToken && participant.access && (
-                      <GuestMemberActions
-                        participant={participant}
-                        base={base}
-                        adminToken={authToken}
-                        onError={setError}
-                      />
-                    )}
-                  </Fragment>
+                    </div>
+                  </div>
                 ))}
                 {offline.length > 0 && <p className="offline-label">离线 · {offline.length}</p>}
                 {offline.map((participant) => (
-                  <Fragment key={participant.id}>
+                  <div key={participant.id} className="member-row">
                     <div className="member muted">
                       <span
                         className={`avatar ${participant.type}`}
@@ -3418,25 +3436,36 @@ export function App({
                         />
                       </span>
                       <span className="member-copy">
-                        <strong>{participant.username}</strong>
+                        <strong>
+                          {participant.username}
+                          {isOwner && authToken && participant.access && (
+                            <GuestMemberActions
+                              participant={participant}
+                              base={base}
+                              adminToken={authToken}
+                              now={accessNow}
+                              onError={setError}
+                            />
+                          )}
+                        </strong>
                         <small>
-                          {participant.type === "agent"
-                            ? `${agentProviderLabel(participant.provider)} · 离线`
-                            : "Human · 离线"}
+                          {participant.access ? (
+                            <>
+                              {participant.type === "agent"
+                                ? `${agentProviderLabel(participant.provider)} · `
+                                : ""}
+                              <GuestAccessBadge participant={participant} now={accessNow} />
+                            </>
+                          ) : participant.type === "agent" ? (
+                            `${agentProviderLabel(participant.provider)} · 离线`
+                          ) : (
+                            "Human · 离线"
+                          )}
                         </small>
-                        <GuestAccessBadge participant={participant} now={accessNow} />
                       </span>
                       <span className="status-dot offline" aria-label="离线" />
                     </div>
-                    {isOwner && authToken && participant.access && (
-                      <GuestMemberActions
-                        participant={participant}
-                        base={base}
-                        adminToken={authToken}
-                        onError={setError}
-                      />
-                    )}
-                  </Fragment>
+                  </div>
                 ))}
               </div>
               <div className="member-invite" role="group" aria-label="添加成员">

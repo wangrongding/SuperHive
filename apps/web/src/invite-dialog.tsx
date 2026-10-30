@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Invite, Participant } from "@ai-hive/protocol";
 import {
   DURATION_PRESETS,
@@ -439,14 +440,14 @@ export function InviteDialog({
   );
 }
 
-/** 成员列表里访客的期限：不到 1 小时高亮，到期显示已到期 */
+/** 成员列表里访客的期限（嵌在成员第二行）：不到 1 小时高亮，结束后显示已到期或已移除 */
 export function GuestAccessBadge({ participant, now }: { participant: Participant; now: number }) {
   const access = participant.access;
   if (!access) return null;
   const ended = access.ended || (access.expiresAt !== null && Date.parse(access.expiresAt) <= now);
-  const label = ended
-    ? `${access.sponsorName ? `${access.sponsorName} 带入 · ` : "访客 · "}${access.revoked ? "已移除" : "已到期"}`
-    : `${access.sponsorName ? `${access.sponsorName} 带入 · ` : "访客 · "}${formatRemaining(access.expiresAt, now)}`;
+  const label = `${access.sponsorName ? `${access.sponsorName} 带入` : "访客"} · ${
+    ended ? (access.revoked ? "已移除" : "已到期") : formatRemaining(access.expiresAt, now)
+  }`;
   return (
     <span
       className={`guest-badge ${ended ? "ended" : expiresSoon(access.expiresAt, now) ? "soon" : ""}`}
@@ -457,83 +458,178 @@ export function GuestAccessBadge({ participant, now }: { participant: Participan
   );
 }
 
-/** 房主对访客的操作：续期（访客带入的 Agent 跟着延长）或移除 */
+/**
+ * 房主对访客的操作：名字右侧的「⋯」（悬停成员行时出现），点开浮层续期（访客带入的 Agent 跟着延长）或移出。
+ * 浮层渲染到 body 并用 fixed 定位，避免被侧栏的滚动容器裁掉；空间不够时向上展开。
+ */
 export function GuestMemberActions({
   participant,
   base,
   adminToken,
+  now,
   onError,
 }: {
   participant: Participant;
   base: string;
   adminToken: string;
+  now: number;
   onError: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [minutes, setMinutes] = useState<number | null | undefined>(24 * 60);
   const [busy, setBusy] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [position, setPosition] = useState<{ top?: number; bottom?: number; right: number }>();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const access = participant.access;
-  // 访客带入的 Agent 跟随访客，只能给访客本人续期或移除访客
+
+  const place = useCallback(() => {
+    // 以整行为锚点，浮层贴着成员行下方（或上方）出现，不压住这一行的期限文字
+    const trigger = triggerRef.current;
+    const rect = (trigger?.closest(".member") ?? trigger)?.getBoundingClientRect();
+    if (!rect) return;
+    const right = Math.max(8, window.innerWidth - rect.right);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    setPosition(
+      spaceBelow >= 360
+        ? { top: rect.bottom + 6, right }
+        : { bottom: window.innerHeight - rect.top + 6, right },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!popoverRef.current?.contains(target) && !triggerRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    // 侧栏滚动时跟着重新定位
+    window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+
   if (!access || access.sponsorName) return null;
+  const ended = access.ended || (access.expiresAt !== null && Date.parse(access.expiresAt) <= now);
+
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
     try {
       await action();
       setOpen(false);
+      setConfirmRemove(false);
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
     }
   };
+
   return (
-    <div className="guest-actions">
-      {open ? (
-        <div className="guest-renew" role="group" aria-label={`为 ${participant.username} 续期`}>
-          <DurationPicker onChange={setMinutes} />
-          <div className="guest-renew-buttons">
-            <button
-              type="button"
-              className="primary"
-              disabled={busy || minutes === undefined}
-              onClick={() =>
-                void run(() => renewGuest(base, adminToken, access.sessionId, minutes ?? null))
-              }
-            >
-              从现在起续期
-            </button>
-            <button type="button" onClick={() => setOpen(false)}>
-              取消
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          {/* 被移除（或链接被撤销）的不能续期，只能重新邀请；自然到期的可以直接续期拉回来 */}
-          {!access.revoked && (
-            <button type="button" disabled={busy} onClick={() => setOpen(true)}>
-              续期
-            </button>
-          )}
-          {!access.ended && (
-            <button
-              type="button"
-              className="danger"
-              disabled={busy}
-              onClick={() => {
-                if (
-                  window.confirm(`移除 ${participant.username}？他和他带入的 Agent 会立即被断开。`)
-                ) {
-                  void run(() => removeGuest(base, adminToken, access.sessionId));
-                }
-              }}
-            >
-              移除
-            </button>
-          )}
-        </>
-      )}
-    </div>
+    <span className="guest-actions">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`guest-actions-trigger ${open ? "open" : ""}`}
+        aria-label={`管理访客 ${participant.username}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={(event) => {
+          // 不触发成员行的「@ 他」
+          event.stopPropagation();
+          setOpen((value) => !value);
+          setConfirmRemove(false);
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <circle cx="5" cy="12" r="1.8" fill="currentColor" />
+          <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+          <circle cx="19" cy="12" r="1.8" fill="currentColor" />
+        </svg>
+      </button>
+      {open &&
+        position &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="guest-popover"
+            role="dialog"
+            aria-label={`管理访客 ${participant.username}`}
+            style={position}
+          >
+            <header>
+              <strong>{participant.username}</strong>
+              <small>
+                {ended
+                  ? access.revoked
+                    ? "已被移除，需要重新邀请"
+                    : `已于 ${formatDeadline(access.expiresAt).replace(" 到期", "")} 到期`
+                  : `${formatDeadline(access.expiresAt)} · ${formatRemaining(access.expiresAt, now)}`}
+              </small>
+            </header>
+            {!access.revoked && (
+              <section>
+                <span className="guest-popover-label">
+                  {ended ? "续期后可重新进入" : "从现在起续期"}
+                </span>
+                <DurationPicker onChange={setMinutes} />
+                <button
+                  type="button"
+                  className="guest-popover-primary"
+                  disabled={busy || minutes === undefined}
+                  onClick={() =>
+                    void run(() => renewGuest(base, adminToken, access.sessionId, minutes ?? null))
+                  }
+                >
+                  {busy ? "正在续期…" : "确认续期"}
+                </button>
+              </section>
+            )}
+            {!ended && (
+              <footer>
+                {confirmRemove ? (
+                  <>
+                    <span>他和他带入的 Agent 会被立即断开。</span>
+                    <button type="button" onClick={() => setConfirmRemove(false)}>
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(() => removeGuest(base, adminToken, access.sessionId))
+                      }
+                    >
+                      确认移除
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="danger" onClick={() => setConfirmRemove(true)}>
+                    移出房间
+                  </button>
+                )}
+              </footer>
+            )}
+          </div>,
+          document.body,
+        )}
+    </span>
   );
 }
 

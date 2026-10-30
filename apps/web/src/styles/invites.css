@@ -306,9 +306,7 @@
 }
 
 /* 小号描边按钮：复制、续期、撤销 */
-.invite-dialog button.ghost,
-.guest-actions button,
-.guest-renew-buttons button {
+.invite-dialog button.ghost {
   min-height: 30px;
   flex: 0 0 auto;
   padding: 0 12px;
@@ -324,25 +322,21 @@
     background var(--duration-fast);
 }
 
-.invite-dialog button.ghost:hover,
-.guest-actions button:hover {
+.invite-dialog button.ghost:hover {
   border-color: var(--text-tertiary);
   color: var(--text);
 }
 
-.invite-dialog button.ghost.danger,
-.guest-actions button.danger {
+.invite-dialog button.ghost.danger {
   color: var(--danger);
 }
 
-.invite-dialog button.ghost.danger:hover,
-.guest-actions button.danger:hover {
+.invite-dialog button.ghost.danger:hover {
   border-color: color-mix(in srgb, var(--danger) 50%, transparent);
   background: var(--danger-soft);
 }
 
-.invite-dialog button.primary,
-.guest-renew-buttons button.primary {
+.invite-dialog button.primary {
   min-height: 30px;
   padding: 0 14px;
   border: 0;
@@ -353,8 +347,7 @@
   font-weight: var(--weight-semibold);
 }
 
-.invite-dialog button.primary:disabled,
-.guest-renew-buttons button.primary:disabled {
+.invite-dialog button.primary:disabled {
   opacity: 0.5;
 }
 
@@ -520,11 +513,13 @@
   }
 }
 
+/* ---------- 成员列表里的访客 ---------- */
+.member-row {
+  position: relative;
+}
+
 .guest-badge {
-  display: inline-block;
-  margin-top: 2px;
   color: var(--text-tertiary);
-  font-size: var(--text-xs);
 }
 
 .guest-badge.soon {
@@ -536,22 +531,159 @@
   color: var(--danger);
 }
 
+/* 「⋯」紧跟在名字右侧，悬停成员行、键盘聚焦或浮层打开时才出现 */
 .guest-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 12px 8px 52px;
+  display: inline-flex;
+  margin-left: 4px;
+  vertical-align: middle;
 }
 
-.guest-renew {
+.guest-actions-trigger {
+  width: 22px;
+  height: 22px;
   display: grid;
-  gap: 8px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast),
+    background var(--duration-fast),
+    color var(--duration-fast);
+}
+
+.member:hover .guest-actions-trigger,
+.member:focus-within .guest-actions-trigger,
+.guest-actions-trigger.open {
+  opacity: 1;
+}
+
+.guest-actions-trigger:hover,
+.guest-actions-trigger.open {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+@media (hover: none) {
+  .guest-actions-trigger {
+    opacity: 1;
+  }
+}
+
+/* 离线行整体半透明，浮层入口保持清晰 */
+.member.muted .guest-actions-trigger {
+  opacity: 0;
+}
+
+.member.muted:hover .guest-actions-trigger,
+.member.muted .guest-actions-trigger.open {
+  opacity: 1;
+}
+
+.guest-popover {
+  position: fixed;
+  z-index: 85;
+  width: 300px;
+  display: grid;
+  gap: 14px;
+  border-radius: var(--radius-xl);
+  padding: 16px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  animation: pop-in var(--duration-fast) var(--ease-out);
+}
+
+.guest-popover header {
+  display: grid;
+  gap: 2px;
+}
+
+.guest-popover header strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.guest-popover header small,
+.guest-popover-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.guest-popover section {
+  display: grid;
+  gap: 10px;
+}
+
+/* 面板窄：有效期分段改成三列两行 */
+.guest-popover .duration-segments {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-radius: var(--radius-lg);
+}
+
+.guest-popover .duration-segments > button {
+  border-radius: var(--radius-md);
+}
+
+.guest-popover .duration-preview {
   width: 100%;
 }
 
-.guest-renew-buttons {
+.guest-popover-primary {
+  min-height: 34px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.guest-popover-primary:hover:not(:disabled) {
+  background: var(--button-primary-hover);
+}
+
+.guest-popover-primary:disabled {
+  opacity: 0.45;
+}
+
+.guest-popover footer {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.guest-popover footer span {
+  flex: 1 1 100%;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.guest-popover footer button {
+  min-height: 28px;
+  border: 1px solid var(--border-heavy);
+  border-radius: var(--radius-pill);
+  padding: 0 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.guest-popover footer button.danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  color: var(--danger);
+}
+
+.guest-popover footer button.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
 }
 
 .access-card {
