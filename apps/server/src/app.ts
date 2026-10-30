@@ -506,12 +506,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   /** 这条消息回复的是 Agent 的提问且该调用仍在等人回答时，返回那个等待中的调用 */
   function answeredQuestion(message: ChatMessage): Invocation | undefined {
     if (!message.replyToMessageId) return undefined;
-    const question = database.getMessage(message.replyToMessageId);
+    const invocation = waitingForQuestion(message.replyToMessageId);
+    return invocation && invocation.roomId === message.roomId ? invocation : undefined;
+  }
+
+  function waitingForQuestion(questionId: string): Invocation | undefined {
+    const question = database.getMessage(questionId);
     if (
       !question ||
       question.kind !== "question" ||
       question.deletedAt ||
-      question.roomId !== message.roomId ||
       !question.parentMessageId
     ) {
       return undefined;
@@ -521,10 +525,97 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   /**
+   * 网页点选回答：按提问里保存的题目校验所选，生成完整正文（带选项原文，历史被裁剪也看得懂），
+   * 再作为对提问的回复走普通的回答续接。同一 clientMessageId 的重试直接返回已发出的答案；
+   * 提问已被回答（另一个标签页、手打回复）后再点选会被拒绝，保证只续接一次。
+   */
+  function submitAnswer(
+    human: Participant,
+    input: Extract<ClientEvent, { type: "question.answer" }>,
+  ): { message: ChatMessage; created: boolean } {
+    const existing = database.findMessageByClientId(human.id, input.clientMessageId);
+    if (existing) return { message: existing, created: false };
+    const question = database.getMessage(input.questionMessageId);
+    if (
+      !question ||
+      question.roomId !== human.roomId ||
+      question.kind !== "question" ||
+      question.deletedAt ||
+      !question.question
+    ) {
+      throw new HiveError("QUESTION_NOT_FOUND", "这条提问不存在或没有可选项。");
+    }
+    if (!waitingForQuestion(question.id)) {
+      throw new HiveError("QUESTION_CLOSED", "这个提问已经回答过或已停止等待。");
+    }
+    const spec = question.question;
+    const selected = [...new Set(input.selected)];
+    if (selected.length !== input.selected.length) {
+      throw new HiveError("INVALID_ANSWER", "选项重复。");
+    }
+    const labels = new Map(spec.options.map((option) => [option.key, option.label]));
+    const unknown = selected.find((key) => !labels.has(key));
+    if (unknown) throw new HiveError("INVALID_ANSWER", `没有选项 ${unknown}。`);
+    const other = input.other?.trim() || undefined;
+    const picks = selected.length + (other ? 1 : 0);
+    if (picks === 0) throw new HiveError("INVALID_ANSWER", "请至少选择一项，或填写「其它」。");
+    if (!spec.multiple && picks > 1) {
+      throw new HiveError("INVALID_ANSWER", "单选题只能选一项（或只填写「其它」）。");
+    }
+    const ordered = spec.options.filter((option) => selected.includes(option.key));
+    const parts = [
+      ...(ordered.length
+        ? [`选择 ${ordered.map((option) => `${option.key}：${option.label}`).join("；")}`]
+        : []),
+      ...(other ? [`其它：${other}`] : []),
+    ];
+    return createAndDispatchMessage(human, {
+      content: parts.join("；"),
+      clientMessageId: input.clientMessageId,
+      replyToMessageId: question.id,
+      answer: {
+        questionMessageId: question.id,
+        selected: ordered.map((option) => option.key),
+        ...(other ? { other } : {}),
+      },
+    });
+  }
+
+  /**
    * hive_ask_human：Agent 在执行中需要人拍板时，发一条提问并把当前调用转为等人回答。
    * 这一轮照常结束、不占进程；人回复提问后由服务端以回答重新唤醒它，等待期间不算卡住。
    */
-  function askHuman(agent: Participant, input: { question: string; clientMessageId: string }) {
+  function askHuman(
+    agent: Participant,
+    input: { question: string; clientMessageId: string; options?: string[]; multiple?: boolean },
+  ) {
+    const labels = (input.options ?? []).map((label) => label.replace(/\s+/g, " ").trim());
+    if (labels.length > 0) {
+      if (labels.length < 2 || labels.length > LIMITS.maxQuestionOptions) {
+        throw new HiveError(
+          "INVALID_OPTIONS",
+          `选项需要 2 到 ${LIMITS.maxQuestionOptions} 个；只有一个可选项时直接写在问题里。`,
+        );
+      }
+      if (labels.some((label) => !label || label.length > LIMITS.maxQuestionOptionLength)) {
+        throw new HiveError(
+          "INVALID_OPTIONS",
+          `每个选项需为 1 到 ${LIMITS.maxQuestionOptionLength} 个字符。`,
+        );
+      }
+      if (new Set(labels.map((label) => label.toLocaleLowerCase())).size !== labels.length) {
+        throw new HiveError("INVALID_OPTIONS", "选项不能重复。");
+      }
+    }
+    const spec = labels.length
+      ? {
+          options: labels.map((label, index) => ({
+            key: String.fromCharCode(65 + index),
+            label,
+          })),
+          multiple: input.multiple === true,
+        }
+      : undefined;
     const parent = inferExecutingParent(agent);
     const invocation = parent ? database.getInvocationFor(parent.id, agent.id) : undefined;
     if (!parent || !invocation || invocation.status === "cancelling") {
@@ -544,10 +635,23 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       agent,
       {
         // 问题里的 @ 换成全角：提问只发给人，不能借机唤醒其他 Agent
-        content: `${asker}❓ ${quoteWithoutMentions(input.question, LIMITS.maxMessageLength - 200)}\n（回复这条消息即可把答案交给 ${agent.username}）`,
+        // 选项也逐行写进正文：不渲染选项的客户端和 Agent 读正文就能看懂、照样能手打回答
+        content: [
+          `${asker}❓ ${quoteWithoutMentions(input.question, LIMITS.maxMessageLength - 2_000)}`,
+          ...(spec
+            ? [
+                spec.multiple ? "（可多选）" : "（单选）",
+                ...spec.options.map(
+                  (option) => `${option.key}. ${quoteWithoutMentions(option.label, 100)}`,
+                ),
+                `（点选选项、填写「其它」，或直接回复这条消息即可把答案交给 ${agent.username}）`,
+              ]
+            : [`（回复这条消息即可把答案交给 ${agent.username}）`]),
+        ].join("\n"),
         clientMessageId: input.clientMessageId,
         parentMessageId: parent.id,
         kind: "question",
+        ...(spec ? { question: spec } : {}),
       },
       { inferredParent: true },
     );
@@ -1430,6 +1534,24 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             type: "error",
             code: hiveError?.code ?? "DELETE_FAILED",
             message: hiveError?.message ?? "Could not recall the message.",
+          });
+        }
+        return;
+      }
+
+      if (event.type === "question.answer") {
+        try {
+          if (participant.type !== "human") {
+            throw new HiveError("FORBIDDEN", "Only humans answer agent questions.");
+          }
+          const result = submitAnswer(participant, event);
+          if (!result.created) send(socket, { type: "message.created", message: result.message });
+        } catch (error) {
+          const hiveError = error instanceof HiveError ? error : undefined;
+          send(socket, {
+            type: "error",
+            code: hiveError?.code ?? "ANSWER_FAILED",
+            message: hiveError?.message ?? "Could not submit the answer.",
           });
         }
         return;

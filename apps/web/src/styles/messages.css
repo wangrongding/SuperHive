@@ -842,3 +842,103 @@
 .question-answer:hover {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
+
+/* 提问的选项：单选是一排可点的按钮，多选是复选框；最后一行固定是「其它」 */
+.question-options {
+  display: grid;
+  gap: 4px;
+  max-width: 520px;
+  margin-top: 8px;
+}
+
+.question-options-mode,
+.question-options-note,
+.question-other-hint {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.question-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+
+button.question-option:not(:disabled):hover,
+label.question-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: var(--accent-soft);
+}
+
+.question-option b {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+
+.question-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.question-option.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.question-options.locked .question-option:not(.picked) {
+  opacity: 0.55;
+}
+
+.question-option.other label,
+.question-other-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.question-other-input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.question-other-input:focus {
+  border-bottom-color: var(--accent);
+}
+
+.question-submit {
+  justify-self: start;
+  padding: 4px 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.question-option .question-submit {
+  flex: 0 0 auto;
+}
+
+.question-submit:disabled {
+  opacity: 0.45;
+}

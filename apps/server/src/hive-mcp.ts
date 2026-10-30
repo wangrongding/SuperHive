@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  LIMITS,
   messageSendEventSchema,
   type ChatMessage,
   type Invocation,
@@ -64,7 +65,12 @@ export type HiveMcpContext = {
     targetBusy: boolean;
   };
   /** 向人提问：发出提问消息，当前调用转为等人回答 */
-  askHuman: (input: { question: string; clientMessageId: string }) => {
+  askHuman: (input: {
+    question: string;
+    clientMessageId: string;
+    options?: string[];
+    multiple?: boolean;
+  }) => {
     invocation: Invocation;
     message: ChatMessage;
   };
@@ -276,10 +282,18 @@ export function createHiveMcpServer(context: HiveMcpContext): McpServer {
     {
       title: "Ask a human to decide",
       description:
-        "需要人拍板、补充信息或授权才能继续时，向人提一个问题。服务端会发出一条提问消息，你当前的任务转为「等人回答」，不会因为超时被判为卡住。提问后用一两句话说明你在等什么、已经做到哪里，然后结束本轮即可，不要原地等待或轮询；人回复这条提问后，服务端会带着回答重新唤醒你继续。只用于确实需要人决定的事，能自己判断的不要问；问题要具体，最好给出选项和你的建议。",
+        "需要人拍板、补充信息或授权才能继续时，向人提一个问题；是做选择的就传 options（2-10 个，服务端按顺序编为 A、B、C…），网页会渲染成可点选的选项，最后自动附一个「其它」输入框，multiple=true 为多选。服务端会发出一条提问消息，你当前的任务转为「等人回答」，不会因为超时被判为卡住。提问后用一两句话说明你在等什么、已经做到哪里，然后结束本轮即可，不要原地等待或轮询；人回复这条提问后，服务端会带着回答重新唤醒你继续。只用于确实需要人决定的事，能自己判断的不要问；问题要具体，最好给出选项和你的建议。",
       inputSchema: {
-        question:
-          messageSendEventSchema.shape.content.describe("要人回答的具体问题，可附上选项与你的建议"),
+        question: messageSendEventSchema.shape.content.describe(
+          "要人回答的具体问题，可附上你的建议；选项放在 options 里，不要在这里重复列出",
+        ),
+        options: z
+          .array(z.string().trim().min(1).max(LIMITS.maxQuestionOptionLength))
+          .min(2)
+          .max(LIMITS.maxQuestionOptions)
+          .optional()
+          .describe("可选的候选答案，每项一句话；不传就是自由回答"),
+        multiple: z.boolean().optional().describe("true=允许多选；默认单选"),
         clientMessageId: z
           .string()
           .min(1)
@@ -288,11 +302,13 @@ export function createHiveMcpServer(context: HiveMcpContext): McpServer {
           .describe("可选幂等键；重试同一次提问时复用"),
       },
     },
-    async ({ question, clientMessageId }) => {
+    async ({ question, clientMessageId, options, multiple }) => {
       try {
         const result = context.askHuman({
           question,
           clientMessageId: clientMessageId ?? randomUUID(),
+          ...(options ? { options } : {}),
+          ...(multiple !== undefined ? { multiple } : {}),
         });
         return toolResult(
           {
@@ -300,6 +316,7 @@ export function createHiveMcpServer(context: HiveMcpContext): McpServer {
             questionMessageId: result.message.id,
             invocationId: result.invocation.id,
             status: result.invocation.status,
+            ...(result.message.question ? { options: result.message.question.options } : {}),
             note: "已提问。简短说明你在等什么后结束本轮；人回复后会带着回答重新唤醒你。",
           },
           context.takeInbox(),

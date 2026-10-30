@@ -1502,10 +1502,10 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       );
       const helperMcp = mcpClient(room.port, "helper");
       await helperMcp.connect();
-      const ask = async (question: string) => {
+      const ask = async (question: string, extra: Record<string, unknown> = {}) => {
         const result = await helperMcp.client.callTool({
           name: "hive_ask_human",
-          arguments: { question },
+          arguments: { question, ...extra },
         });
         return {
           result,
@@ -1580,6 +1580,98 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       ).toMatchObject({ agentName: "helper", status: "queued" });
 
       await helperMcp.client.close();
+    });
+
+    it("renders options and turns a validated pick into a full-text answer exactly once", async () => {
+      const { alice, helper, ask } = await askRoom();
+      const { data } = await ask("先做哪个？", {
+        options: ["提交改动", "先跑测试", "写文档"],
+        multiple: true,
+      });
+      expect(data.options).toEqual([
+        { key: "A", label: "提交改动" },
+        { key: "B", label: "先跑测试" },
+        { key: "C", label: "写文档" },
+      ]);
+      const created = await alice.next(
+        (event) => event.type === "message.created" && event.message.id === data.questionMessageId,
+      );
+      const question = created.type === "message.created" ? created.message : undefined;
+      // 正文同样列出选项，纯文本端也能看懂
+      expect(question?.question).toEqual({ options: data.options, multiple: true });
+      expect(question?.content).toContain("A. 提交改动");
+      expect(question?.content).toContain("（可多选）");
+
+      const errorOf = async (event: Record<string, unknown>) => {
+        alice.send({ type: "question.answer", questionMessageId: question!.id, ...event });
+        const error = await alice.next((item) => item.type === "error");
+        return error.type === "error" ? error.code : undefined;
+      };
+      expect(await errorOf({ clientMessageId: "x1", selected: ["D"] })).toBe("INVALID_ANSWER");
+      expect(await errorOf({ clientMessageId: "x2", selected: [] })).toBe("INVALID_ANSWER");
+      expect(await errorOf({ clientMessageId: "x3", selected: ["A", "A"] })).toBe("INVALID_ANSWER");
+
+      alice.send({
+        type: "question.answer",
+        clientMessageId: "pick",
+        questionMessageId: question!.id,
+        selected: ["C", "A"],
+        other: "顺便推送",
+      });
+      const woken = await helper.next(
+        (event) => event.type === "agent.mentioned" && event.message.answer !== undefined,
+      );
+      const answer = woken.type === "agent.mentioned" ? woken.message : undefined;
+      // 正文由服务端按题目顺序生成并带上选项原文；结构化字段只记下所选
+      expect(answer).toMatchObject({
+        content: "选择 A：提交改动；C：写文档；其它：顺便推送",
+        replyToMessageId: question!.id,
+        answer: { questionMessageId: question!.id, selected: ["A", "C"], other: "顺便推送" },
+      });
+
+      // 同一 clientMessageId 的重试拿回已发出的答案；换个标签页再答被拒绝
+      alice.send({
+        type: "question.answer",
+        clientMessageId: "pick",
+        questionMessageId: question!.id,
+        selected: ["B"],
+      });
+      const replayed = await alice.next(
+        (event) => event.type === "message.created" && event.message.id === answer!.id,
+      );
+      expect(replayed.type).toBe("message.created");
+      expect(await errorOf({ clientMessageId: "pick-2", selected: ["B"] })).toBe("QUESTION_CLOSED");
+    });
+
+    it("keeps single choice to one pick and accepts other alone", async () => {
+      const { alice, helper, ask } = await askRoom();
+      const { data } = await ask("发到哪？", { options: ["测试环境", "正式环境"] });
+      alice.send({
+        type: "question.answer",
+        clientMessageId: "two",
+        questionMessageId: data.questionMessageId,
+        selected: ["A"],
+        other: "都不要",
+      });
+      const error = await alice.next((event) => event.type === "error");
+      expect(error.type === "error" && error.code).toBe("INVALID_ANSWER");
+      alice.send({
+        type: "question.answer",
+        clientMessageId: "other",
+        questionMessageId: data.questionMessageId,
+        selected: [],
+        other: "先别发",
+      });
+      const woken = await helper.next(
+        (event) => event.type === "agent.mentioned" && event.message.content === "其它：先别发",
+      );
+      expect(woken.type).toBe("agent.mentioned");
+    });
+
+    it("rejects invalid option lists from the agent", async () => {
+      const { ask } = await askRoom();
+      const { result } = await ask("选一个", { options: ["同一个", "同一个"] });
+      expect(result.isError).toBe(true);
     });
 
     it("refuses questions outside an executing invocation and lets a human stop waiting", async () => {

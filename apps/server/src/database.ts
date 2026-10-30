@@ -5,7 +5,11 @@ import {
   LIMITS,
   parseMentions,
   stripUnsafeCharacters,
+  questionAnswerSchema,
+  questionSpecSchema,
   type ChatMessage,
+  type QuestionAnswer,
+  type QuestionSpec,
   type Invocation,
   type InvocationBlockReason,
   type InvocationStatus,
@@ -49,6 +53,7 @@ type MessageRow = {
   created_at: string;
   deleted_at: string | null;
   kind: string | null;
+  meta: string | null;
 };
 
 type LocalAgentRow = {
@@ -194,6 +199,10 @@ export type CreateMessageInput = {
   parentMessageId?: string;
   /** 只由服务端设置（开启新话题、清空房间、委派与回执），客户端的普通消息没有 kind */
   kind?: NonNullable<ChatMessage["kind"]>;
+  /** 带选项的提问的题目定义 */
+  question?: QuestionSpec;
+  /** 点选提交的答案（由服务端校验后生成） */
+  answer?: QuestionAnswer;
 };
 
 export type CreateMessageResult = { message: ChatMessage; created: boolean };
@@ -235,7 +244,24 @@ function mapMessage(row: MessageRow): ChatMessage {
     row.kind === "question"
       ? { kind: row.kind as NonNullable<ChatMessage["kind"]> }
       : {}),
+    ...(row.deleted_at ? {} : parseMessageMeta(row.meta)),
   };
+}
+
+/** 损坏或不认识的元数据只当作没有：消息正文仍是唯一的语义来源 */
+function parseMessageMeta(raw: string | null): Pick<ChatMessage, "question" | "answer"> {
+  if (!raw) return {};
+  try {
+    const value = JSON.parse(raw) as { question?: unknown; answer?: unknown };
+    const question = questionSpecSchema.safeParse(value.question);
+    const answer = questionAnswerSchema.safeParse(value.answer);
+    return {
+      ...(question.success ? { question: question.data } : {}),
+      ...(answer.success ? { answer: answer.data } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 function mapInvocation(row: InvocationRow): Invocation {
@@ -454,6 +480,10 @@ export class HiveDatabase {
     }
     if (!messageColumns.some((column) => column.name === "kind")) {
       this.db.exec("ALTER TABLE messages ADD COLUMN kind TEXT");
+    }
+    if (!messageColumns.some((column) => column.name === "meta")) {
+      // 提问的题目定义 / 点选答案（JSON，见 ChatMessage.question / answer）
+      this.db.exec("ALTER TABLE messages ADD COLUMN meta TEXT");
     }
     const roomColumns = this.db.pragma("table_info(rooms)") as Array<{ name: string }>;
     if (!roomColumns.some((column) => column.name === "agent_turn_allowance")) {
@@ -792,8 +822,8 @@ export class HiveDatabase {
         `INSERT INTO messages(
           id, room_id, sender_id, sender_name, sender_type, content, mentions,
           reply_to_message_id, trace_id, parent_message_id, hop_count, client_message_id, created_at,
-          kind
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          kind, meta
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -810,8 +840,21 @@ export class HiveDatabase {
         input.clientMessageId,
         createdAt,
         input.kind ?? null,
+        input.question || input.answer
+          ? JSON.stringify({
+              ...(input.question ? { question: input.question } : {}),
+              ...(input.answer ? { answer: input.answer } : {}),
+            })
+          : null,
       );
     return { message: this.getMessage(id)!, created: true };
+  }
+
+  findMessageByClientId(senderId: string, clientMessageId: string): ChatMessage | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM messages WHERE sender_id = ? AND client_message_id = ?")
+      .get(senderId, clientMessageId) as MessageRow | undefined;
+    return row ? mapMessage(row) : undefined;
   }
 
   findParticipant(roomId: string, username: string): Participant | undefined {

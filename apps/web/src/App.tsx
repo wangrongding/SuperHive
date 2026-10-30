@@ -18,6 +18,7 @@ import type {
   MessagesResponse,
   MetaResponse,
   Participant,
+  QuestionAnswer,
   RoomSummary,
   RoomsResponse,
   ServerEvent,
@@ -76,6 +77,7 @@ function MessageMarkdown({ content }: { content: string }) {
 /** 自绘滚动动画单帧最多推进的时间：约两帧，主线程卡顿时动画放慢而不是跳跃 */
 const MAX_FRAME_STEP_MS = 32;
 import { copyTextToClipboard } from "./clipboard";
+import { QuestionOptions } from "./question-options";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
 
@@ -709,6 +711,8 @@ export function App() {
   const [mentionMessages, setMentionMessages] = useState<ChatMessage[]>([]);
   // 正在回答的 Agent 提问；发送时作为 replyToMessageId
   const [answering, setAnswering] = useState<ChatMessage>();
+  // 已点选提交、等服务端确认的提问 ID → 幂等键（重发沿用同一个键，只续接一次）
+  const [pendingAnswers, setPendingAnswers] = useState<ReadonlyMap<string, string>>(new Map());
   const [activeInvocations, setActiveInvocations] = useState<ReadonlyMap<string, Invocation>>(
     new Map(),
   );
@@ -903,6 +907,16 @@ export function App() {
     [topicMessages, visibleLimit, hiddenCount],
   );
   const invocationsByMessage = useMemo(() => groupInvocationsByMessage(invocations), [invocations]);
+  // 点选提交的答案按提问归档，用来在提问上高亮所选；先到的一条生效
+  const choiceAnswers = useMemo(() => {
+    const answers = new Map<string, QuestionAnswer>();
+    for (const message of messages) {
+      if (message.answer && !message.deletedAt && !answers.has(message.answer.questionMessageId)) {
+        answers.set(message.answer.questionMessageId, message.answer);
+      }
+    }
+    return answers;
+  }, [messages]);
   const pausedInvocations = useMemo(
     () => currentPausedInvocations(invocations.values(), messages),
     [invocations, messages],
@@ -1578,6 +1592,15 @@ export function App() {
             setError("这次调用当前无法重试：它可能已在进行中，或触发消息已被撤回。");
           } else if (event.code === "INVOCATION_NOT_FOUND") {
             setError("找不到这次调用，它可能属于其他房间或已被清理。");
+          } else if (
+            event.code === "INVALID_ANSWER" ||
+            event.code === "QUESTION_CLOSED" ||
+            event.code === "QUESTION_NOT_FOUND" ||
+            event.code === "ANSWER_FAILED"
+          ) {
+            // 点选没被接受：放开选项让人重选，选择与输入保留在表单里
+            setPendingAnswers(new Map());
+            setError(event.message);
           } else {
             setError(event.message);
           }
@@ -1848,6 +1871,22 @@ export function App() {
     setDraft("");
     setMentionContext(undefined);
     setAnswering(undefined);
+  }
+
+  function submitChoice(question: ChatMessage, selected: string[], other?: string) {
+    const socket = socketRef.current;
+    if (socket?.readyState !== WebSocket.OPEN || pendingAnswers.has(question.id)) return;
+    const clientMessageId = createClientMessageId();
+    setPendingAnswers((current) => new Map(current).set(question.id, clientMessageId));
+    socket.send(
+      JSON.stringify({
+        type: "question.answer",
+        clientMessageId,
+        questionMessageId: question.id,
+        selected,
+        ...(other ? { other } : {}),
+      }),
+    );
   }
 
   function answerQuestion(question: ChatMessage) {
@@ -2676,7 +2715,25 @@ export function App() {
                                 </CollapsibleMessage>
                               </div>
                             )}
+                            {message.question && !message.deletedAt && (
+                              <QuestionOptions
+                                spec={message.question}
+                                waiting={Boolean(
+                                  waitingInvocationForQuestion(message, invocations.values()),
+                                )}
+                                pending={
+                                  pendingAnswers.has(message.id) && !choiceAnswers.has(message.id)
+                                }
+                                {...(choiceAnswers.get(message.id)
+                                  ? { answer: choiceAnswers.get(message.id)! }
+                                  : {})}
+                                onSubmit={(selected, other) =>
+                                  submitChoice(message, selected, other)
+                                }
+                              />
+                            )}
                             {!shareMode &&
+                              !message.question &&
                               waitingInvocationForQuestion(message, invocations.values()) && (
                                 <button
                                   type="button"

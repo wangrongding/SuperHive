@@ -20,6 +20,11 @@ export const LIMITS = {
   /** Agent 在线却一直没确认收到 @，视为投递未被接收 */
   invocationUnacknowledgedMs: 2 * 60_000,
   maxWhiteboardEntriesPerSlot: 50,
+  /** hive_ask_human 的选项数上限（字母 A 起依次分配）与每项长度 */
+  maxQuestionOptions: 10,
+  maxQuestionOptionLength: 64,
+  /** 点选回答里「其它」输入的长度上限 */
+  maxQuestionOtherLength: 2000,
 } as const;
 
 export const participantTypeSchema = z.enum(["human", "agent"]);
@@ -41,6 +46,23 @@ export const participantSchema = z.object({
   provider: agentProviderSchema.optional(),
   joinedAt: z.string().datetime(),
   lastSeenAt: z.string().datetime(),
+});
+
+/** 提问的选项：key 由服务端按顺序分配（A、B、C…），刷新或重连后保持不变 */
+export const questionOptionSchema = z.object({
+  key: z.string().regex(/^[A-Z]$/),
+  label: z.string().min(1).max(LIMITS.maxQuestionOptionLength),
+});
+export const questionSpecSchema = z.object({
+  options: z.array(questionOptionSchema).min(2).max(LIMITS.maxQuestionOptions),
+  /** true=多选（复选框 + 提交）；false=单选（点一下即提交） */
+  multiple: z.boolean(),
+});
+/** 点选产生的答案：正文由服务端按已存的题目生成，这里只记下所选，供界面高亮 */
+export const questionAnswerSchema = z.object({
+  questionMessageId: z.string().uuid(),
+  selected: z.array(z.string().regex(/^[A-Z]$/)).max(LIMITS.maxQuestionOptions),
+  other: z.string().max(LIMITS.maxQuestionOtherLength).optional(),
 });
 
 export const chatMessageSchema = z.object({
@@ -68,6 +90,10 @@ export const chatMessageSchema = z.object({
    * question：Agent 经 hive_ask_human 向人提的问题；人回复它即可把答案交回并唤醒提问的 Agent。
    */
   kind: z.enum(["topic", "delegation", "receipt", "question"]).optional(),
+  /** kind=question 且带选项时的题目定义；没有它就是自由回答的问题 */
+  question: questionSpecSchema.optional(),
+  /** 经网页点选提交的答案；手打的回答没有这个字段，正文照样是答案 */
+  answer: questionAnswerSchema.optional(),
 });
 
 export const participantJoinEventSchema = z.object({
@@ -101,6 +127,18 @@ export const messageDeleteEventSchema = z.object({
   type: z.literal("message.delete"),
   messageId: z.string().uuid(),
 });
+/**
+ * 人点选回答 Agent 的提问：服务端按已存的题目校验所选，生成完整正文后作为对提问的回复发出，
+ * 与手打回答走同一条续接路径。clientMessageId 让双击、重试只生效一次。
+ */
+export const questionAnswerEventSchema = z.object({
+  type: z.literal("question.answer"),
+  clientMessageId: z.string().min(1).max(100),
+  questionMessageId: z.string().uuid(),
+  selected: z.array(z.string().regex(/^[A-Z]$/)).max(LIMITS.maxQuestionOptions),
+  other: z.string().trim().max(LIMITS.maxQuestionOtherLength).optional(),
+});
+
 /** 人开启新话题：服务端插入一条 kind=topic 的分隔消息 */
 export const topicStartEventSchema = z.object({ type: z.literal("topic.start") });
 
@@ -251,6 +289,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   messageAckEventSchema,
   messageDeleteEventSchema,
   topicStartEventSchema,
+  questionAnswerEventSchema,
   invocationReportEventSchema,
   invocationRetryEventSchema,
   invocationCancelEventSchema,
@@ -491,6 +530,8 @@ export type ParticipantStatus = z.infer<typeof participantStatusSchema>;
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
 export type Participant = z.infer<typeof participantSchema>;
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
+export type QuestionSpec = z.infer<typeof questionSpecSchema>;
+export type QuestionAnswer = z.infer<typeof questionAnswerSchema>;
 export type RoomSummary = z.infer<typeof roomSummarySchema>;
 export type ClientEvent = z.infer<typeof clientEventSchema>;
 export type ServerEvent = z.infer<typeof serverEventSchema>;
