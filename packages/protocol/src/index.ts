@@ -308,6 +308,19 @@ export const invocationSchema = z.object({
   receivedAt: z.string().datetime().optional(),
   startedAt: z.string().datetime().optional(),
   finishedAt: z.string().datetime().optional(),
+  /**
+   * 失败、被拦、结果未知的调用已不再需要人处理：dismissed=人点了「忽略」；
+   * superseded=之后同一 Agent 在这个房间正常完成了任务，或开启了新话题，服务端自动收起。
+   * 状态本身不变（历史可查），只是不再算作「需要处理」；调用状态再变化时自动清除。
+   */
+  resolution: z
+    .object({
+      kind: z.enum(["dismissed", "superseded"]),
+      at: z.string().datetime(),
+      by: z.string().max(64).optional(),
+      note: z.string().max(200).optional(),
+    })
+    .optional(),
 });
 
 export const whiteboardSlotSchema = z.enum(["ready", "in_progress", "blocked", "milestone"]);
@@ -344,6 +357,11 @@ export const invocationRetryEventSchema = z.object({
   type: z.literal("invocation.retry"),
   invocationId: z.string().uuid(),
 });
+/** 人把不再需要处理的失败、被拦、结果未知的调用标为已处理（可一次多条） */
+export const invocationDismissEventSchema = z.object({
+  type: z.literal("invocation.dismiss"),
+  invocationIds: z.array(z.string().uuid()).min(1).max(500),
+});
 export const invocationCancelEventSchema = z.object({
   type: z.literal("invocation.cancel"),
   invocationId: z.string().uuid(),
@@ -369,6 +387,7 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   questionAnswerEventSchema,
   invocationReportEventSchema,
   invocationRetryEventSchema,
+  invocationDismissEventSchema,
   invocationCancelEventSchema,
   budgetExtendEventSchema,
   whiteboardRemoveEventSchema,

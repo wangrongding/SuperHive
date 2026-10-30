@@ -249,10 +249,28 @@
 }
 
 .activity-section-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 10px 12px 4px;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
+}
+
+.activity-section-action {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.activity-section-action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .activity-results {

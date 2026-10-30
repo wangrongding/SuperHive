@@ -2063,6 +2063,22 @@ export function App({
     sendClientEvent({ type: "invocation.retry", invocationId: invocation.id }, "无法重试。");
   }
 
+  // 走 HTTP：「Agent 任务」面板里的调用可能属于其它房间，WebSocket 只作用于当前房间
+  function dismissInvocations(list: Invocation[]) {
+    if (!authToken || list.length === 0) return;
+    void fetch(`${base}/api/invocations/dismiss`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ invocationIds: list.map((item) => item.id), by: username }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`(${response.status})`);
+      })
+      .catch((reason: unknown) =>
+        setError(`无法忽略：${reason instanceof Error ? reason.message : String(reason)}`),
+      );
+  }
+
   function cancelInvocation(invocation: Invocation) {
     sendClientEvent({ type: "invocation.cancel", invocationId: invocation.id }, "无法停止。");
   }
@@ -2851,6 +2867,7 @@ export function App({
                                 onJump={jumpToMessage}
                                 onRetry={retryInvocation}
                                 onCancel={cancelInvocation}
+                                onDismiss={(invocation) => dismissInvocations([invocation])}
                                 onExtend={extendAgentBudget}
                                 isOwner={isOwner}
                               />
@@ -3145,6 +3162,7 @@ export function App({
               onLocate={jumpToMessage}
               onRetry={retryInvocation}
               onCancel={cancelInvocation}
+              onDismiss={(invocation) => dismissInvocations([invocation])}
               onExtend={extendAgentBudget}
               isOwner={isOwner}
             />
@@ -3675,6 +3693,7 @@ export function App({
           search={searchMessages}
           onOpenMessage={openMessage}
           onMarkMentionsRead={markMentionsRead}
+          onDismiss={dismissInvocations}
           onClose={closeActivity}
         />
       )}

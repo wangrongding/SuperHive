@@ -302,6 +302,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }).message;
     broadcast(roomId, { type: "room.cleared", message });
     broadcastRoomActivity(roomId);
+    supersedeStale(roomId);
     return removed;
   }
   registerLocalAgentRoutes(app, localAgents, { clearRoom });
@@ -487,8 +488,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   // 推送给所有在线客户端：侧栏的跨房间"Agent 任务"计数需要实时更新，各房间视图按 roomId 自行过滤
+  /** 收起已经过时的失败、被拦、结果未知，推送给所有能看到它们的页面 */
+  function supersedeStale(roomId?: string): void {
+    for (const invocation of database.supersedeStaleInvocations(roomId)) {
+      broadcastAll({ type: "invocation.updated", invocation });
+    }
+  }
+
   function emitInvocation(invocation: Invocation): Invocation {
     broadcastAll({ type: "invocation.updated", invocation });
+    // 这个 Agent 在房间里正常完成了一次任务：它更早留下的异常多半已经过时，自动收起
+    if (invocation.status === "completed") setImmediate(() => supersedeStale(invocation.roomId));
     // 任务结果和需要人处理的状态推到房主的 IM（失败、被拦下这些往往没有对应的聊天消息）
     imHub.onInvocationUpdated(invocation);
     // 所有状态变更都经过这里：委派的子任务一结束就安排回执，放到下一拍避免在派发循环中重入
@@ -711,6 +721,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     broadcast(participant.roomId, { type: "message.created", message });
     broadcastRoomActivity(participant.roomId);
     imHub.onMessageCreated(message);
+    if (message.kind === "topic") supersedeStale(message.roomId);
     // 回执由服务端代发，不是被委派方的回复：既不推进子任务，也不因子任务已停止而吞掉对委派方的 @
     if (
       participant.type === "agent" &&
@@ -1141,6 +1152,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     // 服务重启前没来得及发出、或因限流暂时失败的回执，在这里补发
     for (const invocation of database.listPendingContinuations())
       deliverContinuation(invocation.id);
+    // 停止请求长时间没有确认（Agent 已离开、进程丢失）：不再显示「停止中」占着 Agent，改为结果未知。
+    // Agent 之后若补报结果，照常按迟到的结果处理
+    for (const invocation of database.listStaleCancelling(options.now?.() ?? Date.now())) {
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          status: "timed_out",
+          detail: `停止请求超过 ${Math.round(LIMITS.invocationStaleMs / 60_000)} 分钟没有得到确认，结果未知`,
+          progress: null,
+        }),
+      );
+    }
+    supersedeStale();
     for (const invocation of database.listStaleInvocations(options.now?.() ?? Date.now())) {
       if (invocation.status === "running") {
         emitInvocation(
@@ -2151,6 +2174,36 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return { invocations, messages, onlineInvocationIds };
   });
 
+  /**
+   * 忽略不再需要处理的失败、被拦、结果未知（「Agent 任务」面板跨房间，走 HTTP）。
+   * 房主可以忽略任何房间的；访客只能忽略自己在本房间发起的。
+   */
+  app.post("/api/invocations/dismiss", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    const body = z
+      .object({
+        invocationIds: z.array(z.string().uuid()).min(1).max(500),
+        by: z.string().trim().min(1).max(32).optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "Invalid dismiss payload." });
+    let ids = body.data.invocationIds;
+    let by = body.data.by ?? "房主";
+    if (principal.kind === "guest") {
+      const session = principal.resolved.session;
+      const self = database.findParticipant(session.roomId, session.username);
+      ids = ids.filter((id) => {
+        const invocation = database.getInvocation(id);
+        return invocation?.roomId === session.roomId && invocation.requesterId === self?.id;
+      });
+      by = session.username;
+    }
+    const changed = database.dismissInvocations(null, ids, by);
+    for (const invocation of changed) broadcastAll({ type: "invocation.updated", invocation });
+    return { dismissed: changed.map((invocation) => invocation.id) };
+  });
+
   app.get<{ Params: { roomId: string } }>(
     "/api/rooms/:roomId/whiteboard",
     async (request, reply) => {
@@ -2411,6 +2464,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         });
         return;
       }
+      if (guest && event.type === "invocation.dismiss") {
+        const foreign = event.invocationIds.some(
+          (id) => database.getInvocation(id)?.requesterId !== participant.id,
+        );
+        if (foreign) {
+          send(socket, {
+            type: "error",
+            code: "OWNER_ONLY",
+            message: "访客只能忽略自己发起的调用。",
+          });
+          return;
+        }
+      }
       if (guest && (event.type === "invocation.retry" || event.type === "invocation.cancel")) {
         const invocation = database.getInvocation(event.invocationId);
         // 访客只能管自己发起的调用；房主批准访客的请求不能由访客自己点
@@ -2442,6 +2508,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         event.type === "invocation.report" ||
         event.type === "invocation.retry" ||
         event.type === "invocation.cancel" ||
+        event.type === "invocation.dismiss" ||
         event.type === "budget.extend" ||
         event.type === "whiteboard.remove"
       ) {
@@ -2456,7 +2523,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           if (participant.type !== "human") {
             throw new HiveError("FORBIDDEN", "Only humans can manage invocations.");
           }
-          if (event.type === "invocation.retry") retryInvocation(participant, event.invocationId);
+          if (event.type === "invocation.dismiss") {
+            for (const invocation of database.dismissInvocations(
+              participant.roomId,
+              event.invocationIds,
+              participant.username,
+            )) {
+              broadcastAll({ type: "invocation.updated", invocation });
+            }
+          } else if (event.type === "invocation.retry")
+            retryInvocation(participant, event.invocationId);
           else if (event.type === "invocation.cancel") {
             cancelInvocation(participant, event.invocationId);
           } else if (event.type === "budget.extend") extendBudget(participant, event.turns);
@@ -2607,6 +2683,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.addHook("onReady", async () => {
     localAgents?.start();
     imHub.start();
+    supersedeStale();
     for (const invocation of database.listPendingContinuations())
       deliverContinuation(invocation.id);
   });

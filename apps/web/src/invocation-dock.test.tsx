@@ -75,4 +75,31 @@ describe("输入框上方的 Agent 状态栏", () => {
     expect(screen.queryByRole("list", { name: "Agent 调用状态" })).toBeNull();
     expect(localStorage.getItem("ai-hive.invocation-dock.collapsed")).toBe("1");
   });
+
+  it("已忽略或已被取代的异常不再挂在状态栏；未收起的可以点「忽略」", () => {
+    const resolved = invocation("timed_out", {
+      resolution: {
+        kind: "superseded",
+        at: new Date(now).toISOString(),
+        note: "之后的任务已正常完成",
+      },
+    });
+    const failed = invocation("failed");
+    expect(dockInvocations([resolved, failed], "build", now)).toEqual([failed]);
+    const dismissed: string[] = [];
+    render(
+      <InvocationDock
+        invocations={[failed]}
+        participants={[]}
+        canJumpTo={() => false}
+        onJump={() => undefined}
+        onRetry={() => undefined}
+        onCancel={() => undefined}
+        onExtend={() => undefined}
+        onDismiss={(item) => dismissed.push(item.id)}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /忽略 @/ }));
+    expect(dismissed).toEqual([failed.id]);
+  });
 });

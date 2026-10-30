@@ -5,13 +5,17 @@ import { formatRelativeTime } from "./whiteboard";
 
 export type ActivityView = "search" | "mentions" | "tasks";
 
-/** 需要人处理的调用：失败、被拦截、结果未知、等人回答 */
+/**
+ * 需要人处理的调用：失败、被拦截、结果未知、等人回答。
+ * 人点了「忽略」或服务端判定已被后续处理取代（resolution）的不再算。
+ */
 export function needsAttention(invocation: Invocation): boolean {
+  if (invocation.status === "waiting_human") return true;
   return (
-    invocation.status === "failed" ||
-    invocation.status === "blocked" ||
-    invocation.status === "timed_out" ||
-    invocation.status === "waiting_human"
+    !invocation.resolution &&
+    (invocation.status === "failed" ||
+      invocation.status === "blocked" ||
+      invocation.status === "timed_out")
   );
 }
 
@@ -318,6 +322,7 @@ export function ActivityPanel({
   search,
   onOpenMessage,
   onMarkMentionsRead,
+  onDismiss,
   onClose,
 }: {
   view: ActivityView;
@@ -332,6 +337,8 @@ export function ActivityPanel({
   search: (query: string) => Promise<ChatMessage[]>;
   onOpenMessage: (message: ChatMessage) => void;
   onMarkMentionsRead: () => void;
+  /** 把不再需要处理的失败、被拦、结果未知一次性标为已处理 */
+  onDismiss?: (invocations: Invocation[]) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -585,6 +592,24 @@ export function ActivityPanel({
                   <section aria-label="需要处理">
                     <h3 className="activity-section-label">
                       需要处理 · {taskItems.attention.length}
+                      {onDismiss && (
+                        <button
+                          type="button"
+                          className="activity-section-action"
+                          title="把这些失败、被拦、结果未知的调用都标为已处理，记录仍可在消息下查看"
+                          onClick={() =>
+                            onDismiss(
+                              invocations.filter(
+                                (invocation) =>
+                                  needsAttention(invocation) &&
+                                  invocation.status !== "waiting_human",
+                              ),
+                            )
+                          }
+                        >
+                          全部忽略
+                        </button>
+                      )}
                     </h3>
                     <ResultList
                       items={taskItems.attention}

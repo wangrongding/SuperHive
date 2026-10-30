@@ -23,6 +23,7 @@ export function dockInvocations(
         invocation.roomId === roomId &&
         (ACTIVE.includes(invocation.status) ||
           (NEEDS_ACTION.includes(invocation.status) &&
+            !invocation.resolution &&
             now - Date.parse(invocation.updatedAt) < NEEDS_ACTION_WINDOW_MS)),
     )
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));

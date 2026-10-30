@@ -448,4 +448,78 @@ describe("HiveDatabase", () => {
     db.updateInvocation(running.id, { status: "failed" });
     expect(db.listActiveInvocations()[0]).toMatchObject({ id: running.id, status: "failed" });
   });
+
+  describe("异常调用的收起", () => {
+    let clock = Date.parse("2026-10-30T10:00:00.000Z");
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+    });
+    afterEach(() => vi.useRealTimers());
+    const tick = () => {
+      clock += 1_000;
+      vi.setSystemTime(clock);
+    };
+    const invoke = (agent: Participant, text: string) => {
+      tick();
+      const { message } = db.createMessage(human, {
+        content: `@${agent.username} ${text}`,
+        clientMessageId: `m-${clock}`,
+      });
+      return db.createInvocation({ message, agent, status: "queued" }).invocation;
+    };
+
+    it("同一 Agent 之后正常完成任务，更早的失败与结果未知自动收起；访客待批准不收起", () => {
+      const unknown = invoke(agentA, "a");
+      db.updateInvocation(unknown.id, { status: "timed_out" });
+      const failed = invoke(agentA, "b");
+      db.updateInvocation(failed.id, { status: "failed" });
+      const other = invoke(agentB, "c");
+      db.updateInvocation(other.id, { status: "timed_out" });
+      tick();
+      const { message } = db.createMessage(human, { content: "@agent-a d", clientMessageId: "g" });
+      const approval = db.createInvocation({
+        message,
+        agent: agentA,
+        status: "blocked",
+        blockReason: "guest_approval",
+      }).invocation;
+      expect(db.supersedeStaleInvocations()).toEqual([]);
+
+      const done = invoke(agentA, "e");
+      db.updateInvocation(done.id, { status: "completed" });
+      const superseded = db.supersedeStaleInvocations("general");
+      expect(superseded.map((item) => item.id).sort()).toEqual([unknown.id, failed.id].sort());
+      expect(superseded[0]?.resolution).toMatchObject({
+        kind: "superseded",
+        note: "agent-a 之后的任务已正常完成",
+      });
+      expect(db.getInvocation(other.id)?.resolution).toBeUndefined();
+      expect(db.getInvocation(approval.id)?.resolution).toBeUndefined();
+      // 再跑一次不会重复收起
+      expect(db.supersedeStaleInvocations()).toEqual([]);
+    });
+
+    it("开启新话题后收起之前的异常；人可以手动忽略，状态再变化时自动恢复", () => {
+      const stale = invoke(agentB, "x");
+      db.updateInvocation(stale.id, { status: "timed_out" });
+      const kept = invoke(agentA, "y");
+      db.updateInvocation(kept.id, { status: "failed" });
+      const running = invoke(agentA, "z");
+      expect(db.dismissInvocations("general", [kept.id, running.id], "Alice")).toHaveLength(1);
+      expect(db.getInvocation(kept.id)?.resolution).toMatchObject({
+        kind: "dismissed",
+        by: "Alice",
+      });
+      expect(db.dismissInvocations("other-room", [stale.id], "Alice")).toEqual([]);
+
+      // 重试会把状态改回 queued：之前的「已忽略」作废
+      db.updateInvocation(kept.id, { status: "queued" });
+      expect(db.getInvocation(kept.id)?.resolution).toBeUndefined();
+
+      tick();
+      db.createMessage(human, { content: "开启新话题", clientMessageId: "t", kind: "topic" });
+      expect(db.supersedeStaleInvocations("general").map((item) => item.id)).toEqual([stale.id]);
+      expect(db.getInvocation(stale.id)?.resolution?.note).toBe("之后开启了新话题");
+    });
+  });
 });

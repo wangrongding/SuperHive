@@ -43,7 +43,18 @@ export function canRetryInvocation(invocation: Invocation): boolean {
   );
 }
 
+/** 可以「忽略」的调用：失败、被拦、结果未知，且还没被收起 */
+export function canDismissInvocation(invocation: Invocation): boolean {
+  return (
+    !invocation.resolution &&
+    (invocation.status === "failed" ||
+      invocation.status === "blocked" ||
+      invocation.status === "timed_out")
+  );
+}
+
 export function canCancelInvocation(invocation: Invocation): boolean {
+  if (invocation.resolution) return false;
   return (
     invocation.status === "queued" ||
     invocation.status === "running" ||
@@ -286,7 +297,10 @@ export function InvocationChips({
   allInvocations,
   isOwner = true,
   onLocate,
+  onDismiss,
 }: {
+  /** 「忽略」：标为已处理，不再算作需要处理 */
+  onDismiss?: (invocation: Invocation) => void;
   /** 底部状态栏里用：跳到触发这条调用的消息 */
   onLocate?: (messageId: string) => void;
   /** 访客看不到「批准」：访客的请求只能由房主放行 */
@@ -353,6 +367,13 @@ export function InvocationChips({
                 <span className="invocation-attempts">第{invocation.attempts}次</span>
               )}
               {delegation && <span className="invocation-delegation">{delegation}</span>}
+              {invocation.resolution && (
+                <span className="invocation-resolution">
+                  {invocation.resolution.kind === "dismissed"
+                    ? `${invocation.resolution.by ?? ""}已忽略`
+                    : (invocation.resolution.note ?? "已被后续处理取代")}
+                </span>
+              )}
             </>
           );
           const ariaSummary = [
@@ -368,7 +389,7 @@ export function InvocationChips({
               key={invocation.id}
               role="listitem"
               data-invocation-id={invocation.id}
-              className={`invocation-chip ${invocation.status}`}
+              className={`invocation-chip ${invocation.status}${invocation.resolution ? " resolved" : ""}`}
               title={hint}
               onClick={(event) => event.stopPropagation()}
             >
@@ -426,6 +447,19 @@ export function InvocationChips({
                   </button>
                 )
               )}
+              {onDismiss &&
+                canDismissInvocation(invocation) &&
+                (invocation.blockReason !== "guest_approval" || isOwner) && (
+                  <button
+                    type="button"
+                    className="invocation-action subtle"
+                    aria-label={`忽略 @${invocation.agentName} 的这次调用`}
+                    title="标为已处理，不再算作需要处理；记录仍保留"
+                    onClick={() => onDismiss(invocation)}
+                  >
+                    忽略
+                  </button>
+                )}
               {canCancelInvocation(invocation) && (
                 <button
                   type="button"

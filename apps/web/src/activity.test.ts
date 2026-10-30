@@ -1,6 +1,6 @@
 import type { Invocation, Participant } from "@ai-hive/protocol";
 import { describe, expect, it } from "vitest";
-import { agentRuntimeRows, orderByDelegation, plainPreview } from "./activity";
+import { agentRuntimeRows, needsAttention, orderByDelegation, plainPreview } from "./activity";
 
 describe("plainPreview", () => {
   it("strips markdown markers for list previews", () => {
@@ -92,5 +92,15 @@ describe("orderByDelegation", () => {
   it("委派关系成环时不死循环且每条只出现一次", () => {
     const ordered = orderByDelegation([call("a", "b"), call("b", "a")]);
     expect(ordered.map(({ invocation }) => invocation.id).sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("needsAttention", () => {
+  it("收起的异常不算需要处理；等你回答始终算", () => {
+    const base = { status: "timed_out" } as Invocation;
+    expect(needsAttention(base)).toBe(true);
+    const resolution = { kind: "dismissed" as const, at: "2026-10-30T10:00:00.000Z" };
+    expect(needsAttention({ ...base, resolution })).toBe(false);
+    expect(needsAttention({ ...base, status: "waiting_human", resolution })).toBe(true);
   });
 });

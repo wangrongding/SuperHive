@@ -847,8 +847,12 @@ export class ImHub {
     if (!check) return true;
     if (check.kind === "question") return this.deps.isWaiting(check.messageId);
     const current = this.deps.getInvocation(check.id);
+    // 已被人忽略或被之后的正常任务收起的异常，也不再提醒
     return Boolean(
-      current && current.status === check.status && current.attempts === check.attempts,
+      current &&
+      !current.resolution &&
+      current.status === check.status &&
+      current.attempts === check.attempts,
     );
   }
 

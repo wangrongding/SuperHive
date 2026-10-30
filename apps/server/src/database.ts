@@ -126,6 +126,10 @@ type InvocationRow = {
   received_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  resolution_kind: "dismissed" | "superseded" | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
 };
 
 type WhiteboardRow = {
@@ -314,6 +318,16 @@ function mapInvocation(row: InvocationRow): Invocation {
     ...(row.received_at ? { receivedAt: row.received_at } : {}),
     ...(row.started_at ? { startedAt: row.started_at } : {}),
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+    ...(row.resolution_kind && row.resolved_at
+      ? {
+          resolution: {
+            kind: row.resolution_kind,
+            at: row.resolved_at,
+            ...(row.resolved_by ? { by: row.resolved_by } : {}),
+            ...(row.resolution_note ? { note: row.resolution_note } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -487,6 +501,14 @@ export class HiveDatabase {
     const invocationColumns = this.db.pragma("table_info(invocations)") as Array<{ name: string }>;
     if (!invocationColumns.some((column) => column.name === "runtime")) {
       this.db.exec("ALTER TABLE invocations ADD COLUMN runtime TEXT");
+    }
+    if (!invocationColumns.some((column) => column.name === "resolution_kind")) {
+      this.db.exec(`
+        ALTER TABLE invocations ADD COLUMN resolution_kind TEXT;
+        ALTER TABLE invocations ADD COLUMN resolved_at TEXT;
+        ALTER TABLE invocations ADD COLUMN resolved_by TEXT;
+        ALTER TABLE invocations ADD COLUMN resolution_note TEXT;
+      `);
     }
     if (!invocationColumns.some((column) => column.name === "parent_invocation_id")) {
       // 委派关系与子任务回执状态（见 Invocation.parentInvocationId / continuation）
@@ -1134,6 +1156,15 @@ export class HiveDatabase {
     };
     const assignments: string[] = ["updated_at = ?"];
     const values: unknown[] = [new Date().toISOString()];
+    // 状态一变（重试、迟到的结果等），之前的「已忽略 / 已被取代」就不再成立
+    if (patch.status !== undefined) {
+      assignments.push(
+        "resolution_kind = NULL",
+        "resolved_at = NULL",
+        "resolved_by = NULL",
+        "resolution_note = NULL",
+      );
+    }
     for (const [key, column] of Object.entries(columns) as Array<[keyof InvocationPatch, string]>) {
       if (patch[key] === undefined) continue;
       assignments.push(`${column} = ?`);
@@ -1174,6 +1205,76 @@ export class HiveDatabase {
 
   lastHumanMessageSeq(roomId: string): number {
     return this.lastHumanSeq(roomId);
+  }
+
+  /** 人点「忽略」：只收起失败、被拦、结果未知且尚未收起的调用，返回实际改动的 */
+  dismissInvocations(roomId: string | null, ids: string[], by: string): Invocation[] {
+    const now = new Date().toISOString();
+    const statement = this.db.prepare(
+      `UPDATE invocations SET resolution_kind = 'dismissed', resolved_at = ?, resolved_by = ?,
+         resolution_note = NULL
+       WHERE id = ? AND (? IS NULL OR room_id = ?) AND resolved_at IS NULL
+         AND status IN ('failed', 'blocked', 'timed_out')`,
+    );
+    const changed: Invocation[] = [];
+    this.db.transaction(() => {
+      for (const id of new Set(ids)) {
+        if (statement.run(now, by, id, roomId, roomId).changes === 1) {
+          changed.push(this.getInvocation(id)!);
+        }
+      }
+    })();
+    return changed;
+  }
+
+  /**
+   * 自动收起已经过时的异常：之后同一 Agent 在同一房间又正常完成了任务，或房间开启了新话题。
+   * 等房主批准的访客请求（guest_approval）是待决事项，不自动收起。
+   */
+  supersedeStaleInvocations(roomId?: string): Invocation[] {
+    const rows = this.db
+      .prepare(
+        `SELECT c.*,
+           EXISTS (SELECT 1 FROM invocations d WHERE d.room_id = c.room_id AND d.agent_id = c.agent_id
+             AND d.status = 'completed' AND d.created_at > c.created_at) AS later_completed
+         FROM invocations c
+         WHERE c.resolved_at IS NULL
+           AND (? IS NULL OR c.room_id = ?)
+           AND (c.status IN ('failed', 'timed_out')
+             OR (c.status = 'blocked' AND COALESCE(c.block_reason, '') <> 'guest_approval'))
+           AND (
+             EXISTS (SELECT 1 FROM invocations d WHERE d.room_id = c.room_id AND d.agent_id = c.agent_id
+               AND d.status = 'completed' AND d.created_at > c.created_at)
+             OR EXISTS (SELECT 1 FROM messages m WHERE m.room_id = c.room_id AND m.kind = 'topic'
+               AND m.created_at > c.created_at)
+           )`,
+      )
+      .all(roomId ?? null, roomId ?? null) as Array<InvocationRow & { later_completed: number }>;
+    if (rows.length === 0) return [];
+    const now = new Date().toISOString();
+    const statement = this.db.prepare(
+      `UPDATE invocations SET resolution_kind = 'superseded', resolved_at = ?, resolution_note = ?
+       WHERE id = ? AND resolved_at IS NULL`,
+    );
+    this.db.transaction(() => {
+      for (const row of rows) {
+        statement.run(
+          now,
+          row.later_completed ? `${row.agent_name} 之后的任务已正常完成` : "之后开启了新话题",
+          row.id,
+        );
+      }
+    })();
+    return rows.map((row) => this.getInvocation(row.id)!);
+  }
+
+  /** 停止请求发出后迟迟没有确认的调用（Agent 已离开、进程丢失等） */
+  listStaleCancelling(now = Date.now()): Invocation[] {
+    const stale = new Date(now - LIMITS.invocationStaleMs).toISOString();
+    const rows = this.db
+      .prepare("SELECT * FROM invocations WHERE status = 'cancelling' AND updated_at < ?")
+      .all(stale) as InvocationRow[];
+    return rows.map(mapInvocation);
   }
 
   /** queued 且未确认送达、或 running 但长时间没有回报的调用 */
@@ -1389,7 +1490,8 @@ export class HiveDatabase {
       .prepare(
         `SELECT * FROM invocations
          WHERE status IN ('queued', 'running', 'cancelling', 'waiting_human')
-            OR (status IN ('failed', 'blocked', 'timed_out') AND updated_at >= ?)
+            OR (status IN ('failed', 'blocked', 'timed_out') AND updated_at >= ?
+                AND resolved_at IS NULL)
          ORDER BY updated_at DESC LIMIT ?`,
       )
       .all(since, limit) as InvocationRow[];

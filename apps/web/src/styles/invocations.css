@@ -387,3 +387,22 @@ button.invocation-summary:focus-visible {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+/* 已忽略或已被后续处理取代：不再是待办，退回中性底色，只留记录 */
+.invocation-chip.resolved {
+  background: var(--bg-subtle);
+}
+
+.invocation-chip.resolved .invocation-indicator,
+.invocation-chip.resolved .invocation-status {
+  color: var(--text-tertiary);
+}
+
+.invocation-resolution {
+  color: var(--text-tertiary);
+}
+
+.invocation-resolution::before {
+  margin-right: 5px;
+  content: "·";
+}
