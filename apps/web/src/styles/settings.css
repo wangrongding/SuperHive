@@ -671,22 +671,26 @@
   color: var(--danger);
 }
 
-/* 侧栏底部：正在阻止睡眠时的小月亮 */
-.keep-awake-indicator {
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  padding: 0;
+/* 房间标题下的状态行：正在阻止睡眠时的小标签 */
+.keep-awake-badge {
+  margin-left: 6px;
+  padding: 0 7px;
   border: 0;
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 14px;
-  line-height: 26px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  vertical-align: 1px;
+  cursor: pointer;
 }
 
-.keep-awake-indicator.failed {
+.keep-awake-badge:hover {
+  filter: brightness(0.95);
+}
+
+.keep-awake-badge.failed {
   background: var(--danger-soft);
   color: var(--danger);
-  font-weight: var(--weight-semibold);
 }

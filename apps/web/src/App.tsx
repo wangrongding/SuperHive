@@ -2760,21 +2760,6 @@ export function App({
                 </button>
               </div>
             )}
-            {local.keepAwake &&
-              (local.keepAwake.status === "active" || local.keepAwake.status === "failed") && (
-                <button
-                  type="button"
-                  className={`keep-awake-indicator ${local.keepAwake.status}`}
-                  title={keepAwakeSummary(local.keepAwake)}
-                  aria-label={keepAwakeSummary(local.keepAwake)}
-                  onClick={() => {
-                    setSettingsTab("computer");
-                    setSettingsOpen(true);
-                  }}
-                >
-                  {local.keepAwake.status === "active" ? "☾" : "!"}
-                </button>
-              )}
             <button
               ref={settingsTriggerRef}
               type="button"
@@ -2820,6 +2805,23 @@ export function App({
                     · {currentRoomWorkspace.split("/").filter(Boolean).at(-1)}
                   </span>
                 )}
+                {local.keepAwake &&
+                  (local.keepAwake.status === "active" || local.keepAwake.status === "failed") && (
+                    <button
+                      type="button"
+                      className={`keep-awake-badge ${local.keepAwake.status}`}
+                      title={keepAwakeSummary(local.keepAwake)}
+                      aria-label={keepAwakeSummary(local.keepAwake)}
+                      onClick={() => {
+                        setSettingsTab("computer");
+                        setSettingsOpen(true);
+                      }}
+                    >
+                      {local.keepAwake.status === "active"
+                        ? t("☾ 保持在线")
+                        : t("! 保持在线未生效")}
+                    </button>
+                  )}
               </span>
             </div>
             <div className="chat-header-actions">

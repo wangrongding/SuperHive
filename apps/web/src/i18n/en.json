@@ -852,5 +852,7 @@
   "默认只在接电源时生效；打开后用电池也不睡眠，比较耗电": "By default only when plugged in; turning this on keeps it awake on battery too, which uses more power",
   "（{0}）": " ({0})",
   "：{0}": ": {0}",
-  "合上笔记本盖子、手动睡眠仍会睡眠（接着电源和外接显示器时合盖除外）；Hive 重启升级的几秒里不保证。": "Closing the lid or sleeping manually still puts the computer to sleep (except lid-closed with power and an external display); not guaranteed during the few seconds Hive restarts to upgrade."
+  "合上笔记本盖子、手动睡眠仍会睡眠（接着电源和外接显示器时合盖除外）；Hive 重启升级的几秒里不保证。": "Closing the lid or sleeping manually still puts the computer to sleep (except lid-closed with power and an external display); not guaranteed during the few seconds Hive restarts to upgrade.",
+  "☾ 保持在线": "☾ Staying online",
+  "! 保持在线未生效": "! Stay online failed"
 }
