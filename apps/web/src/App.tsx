@@ -104,7 +104,7 @@ import {
   PaperclipIcon,
   useAttachmentQueue,
 } from "./attachments";
-import { InvocationDock, dockInvocations } from "./invocation-dock";
+import { agentActivity } from "./agent-activity";
 import { IM_CHANNEL_LABELS } from "./im-api";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveShareBase, resolveWebSocketUrl } from "./server-url";
@@ -3242,18 +3242,52 @@ export function App({
                       )}
                     </Fragment>
                   ))}
-                  {participants.some((participant) => participant.status === "busy") && (
-                    <div className="typing" role="status" aria-live="polite">
-                      <span aria-hidden="true" />
-                      <span aria-hidden="true" />
-                      <span aria-hidden="true" />{" "}
-                      {participants
-                        .filter((participant) => participant.status === "busy")
-                        .map((participant) => participant.username)
-                        .join(", ")}{" "}
-                      {t("正在思考")}
-                    </div>
-                  )}
+                  {(() => {
+                    // 谁在干活：每个 Agent 一个头像，点了跳到它正在处理的那条消息
+                    const rows = agentActivity(participants, invocations.values(), currentRoomId);
+                    if (!rows.length) return null;
+                    return (
+                      <div className="typing" role="status" aria-live="polite">
+                        <span aria-hidden="true" />
+                        <span aria-hidden="true" />
+                        <span aria-hidden="true" />
+                        <ul className="typing-agents">
+                          {rows.map((row) => {
+                            const target = row.invocation?.messageId;
+                            const canJump = Boolean(target && loadedMessageIds.has(target));
+                            return (
+                              <li key={row.participant.id}>
+                                <button
+                                  type="button"
+                                  className={`typing-agent ${row.state}`}
+                                  disabled={!canJump}
+                                  title={
+                                    canJump
+                                      ? t("{0}：{1}，点击跳到原消息", {
+                                          0: row.participant.username,
+                                          1: row.label,
+                                        })
+                                      : `${row.participant.username}：${row.label}`
+                                  }
+                                  onClick={() => target && jumpToMessage(target)}
+                                >
+                                  <span className="mention-avatar agent" aria-hidden="true">
+                                    <AvatarGlyph
+                                      type="agent"
+                                      name={row.participant.username}
+                                      provider={row.participant.provider}
+                                    />
+                                  </span>
+                                  <strong>{row.participant.username}</strong>
+                                  <span className="typing-agent-state">{row.label}</span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    );
+                  })()}
                   <div ref={messagesEndRef} />
                 </div>
               </div>
@@ -3437,20 +3471,6 @@ export function App({
                 </div>
               </div>
             )}
-            <InvocationDock
-              invocations={dockInvocations(invocations.values(), currentRoomId, accessNow)}
-              connectionState={connectionState}
-              allInvocations={invocations}
-              participants={participants}
-              canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
-              onJump={jumpToMessage}
-              onLocate={jumpToMessage}
-              onRetry={retryInvocation}
-              onCancel={cancelInvocation}
-              onDismiss={(invocation) => dismissInvocations([invocation])}
-              onExtend={extendAgentBudget}
-              isOwner={isOwner}
-            />
             {answering && answering.roomId === currentRoomId && (
               <div className="composer-answering" role="status">
                 <strong>{t("回答 @{0} 的提问", { 0: answering.senderName })}</strong>

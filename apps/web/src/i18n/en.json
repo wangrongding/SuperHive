@@ -854,5 +854,8 @@
   "：{0}": ": {0}",
   "合上笔记本盖子、手动睡眠仍会睡眠（接着电源和外接显示器时合盖除外）；Hive 重启升级的几秒里不保证。": "Closing the lid or sleeping manually still puts the computer to sleep (except lid-closed with power and an external display); not guaranteed during the few seconds Hive restarts to upgrade.",
   "☾ 保持在线": "☾ Staying online",
-  "! 保持在线未生效": "! Stay online failed"
+  "! 保持在线未生效": "! Stay online failed",
+  "{0}：{1}，点击跳到原消息": "{0}: {1} — click to jump to the original message",
+  "执行中": "Running",
+  "停止中": "Stopping"
 }

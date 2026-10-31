@@ -942,3 +942,64 @@ label.question-option:hover {
 .question-submit:disabled {
   opacity: 0.45;
 }
+
+/* 谁在干活：头像 + 名字 + 状态，点了跳到它正在处理的消息 */
+.typing-agents {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 0 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.typing-agent {
+  display: inline-flex;
+  max-width: 360px;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 2px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-pill);
+  background: var(--bg-main);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.typing-agent:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.typing-agent:disabled {
+  cursor: default;
+}
+
+.typing-agent .mention-avatar {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
+.typing-agent strong {
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+.typing-agent-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.typing-agent.waiting {
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+
+.typing-agent.waiting .typing-agent-state {
+  color: var(--accent);
+}

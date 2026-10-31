@@ -333,61 +333,6 @@ button.invocation-summary:focus-visible {
   }
 }
 
-/* ---------- 输入框上方常驻的 Agent 状态栏 ---------- */
-.invocation-dock {
-  margin-bottom: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 6px 10px 8px;
-  background: var(--bg-elevated);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
-}
-
-.invocation-dock.collapsed {
-  padding-bottom: 6px;
-}
-
-.invocation-dock-head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-  text-align: left;
-}
-
-.invocation-dock-title {
-  color: var(--text);
-  font-weight: var(--weight-semibold);
-}
-
-.invocation-dock-summary {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.invocation-dock-toggle {
-  color: var(--text-tertiary);
-}
-
-.invocation-dock-head:hover .invocation-dock-toggle {
-  color: var(--text);
-}
-
-.invocation-dock .invocation-row {
-  max-height: 132px;
-  margin-top: 6px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
 /* 已忽略或已被后续处理取代：不再是待办，退回中性底色，只留记录 */
 .invocation-chip.resolved {
   background: var(--bg-subtle);
