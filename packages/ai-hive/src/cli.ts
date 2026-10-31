@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createRequire } from "module";
 import updateNotifier from "update-notifier";
+import { mcpCommand } from "./mcp-command.js";
 import { run } from "./run.js";
 import { restartService, startService, stopService } from "./service.js";
 
@@ -16,6 +17,7 @@ AI Hive（命令别名：hive）
   ai-hive stop [选项]    停止由 ai-hive start 启动的 Server
   ai-hive restart [选项] 重启 Server，并沿用原有启动配置
   ai-hive join [选项]    将本机 Agent 加入 Hive（默认加入所有未归档房间）
+  ai-hive mcp list [选项] 列出 Agent 会加载的本机 MCP 及其开局 token 估算
 
 运行 ai-hive <命令> --help 查看详细选项。
 上述 ai-hive 均可替换为 hive。
@@ -55,6 +57,7 @@ async function main(): Promise<void> {
   if (command === "stop") return stopService();
   if (command === "restart") return restartService();
   if (command === "join") return run("codex");
+  if (command === "mcp") return mcpCommand(process.argv.slice(3));
   throw new Error(`未知命令：“${command}”。\n${usage}`);
 }
 

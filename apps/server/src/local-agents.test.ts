@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -238,6 +238,93 @@ describe("local agent routes", () => {
       "[hive] 已加入 #general",
       "[hive] 正在处理",
     ]);
+  });
+
+  it("passes an agent settings file and applies MCP selections without a restart", async () => {
+    const settingsDir = mkdtempSync(path.join(tmpdir(), "hive-agent-settings-"));
+    const listMcp = vi.fn(async (args: string[]) => {
+      const file = args[args.indexOf("--agent-settings") + 1]!;
+      const disabled = (JSON.parse(readFileSync(file, "utf8")) as { mcpDisabled: string[] })
+        .mcpDisabled;
+      return `${JSON.stringify({
+        servers: [
+          {
+            name: "rea",
+            scope: "user",
+            transport: "stdio",
+            enabled: !disabled.includes("rea"),
+            configurable: true,
+            ...(args.includes("--measure")
+              ? { measurement: { ok: true, tools: 207, tokens: 350_000 } }
+              : {}),
+          },
+        ],
+      })}\n`;
+    });
+    const { app, owner, spawner } = await setup({ settingsDir, listMcp });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/local/agents",
+      headers: owner,
+      payload: { provider: "claude", name: "rd-claude", access: "read-only" },
+    });
+    const id = created.json().agent.id as string;
+    const args = spawner.children[0]!.args;
+    const file = args[args.indexOf("--agent-settings") + 1]!;
+    expect(file).toBe(path.join(settingsDir, `${id}.json`));
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpDisabled: [] });
+
+    const measured = await app.inject({
+      method: "GET",
+      url: `/api/local/agents/${id}/mcp?measure=1`,
+      headers: owner,
+    });
+    expect(measured.json()).toMatchObject({
+      supported: true,
+      baselineTokens: 40_000,
+      servers: [{ name: "rea", enabled: true, measurement: { tokens: 350_000 } }],
+    });
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: `/api/local/agents/${id}/settings`,
+      headers: owner,
+      payload: { mcpDisabled: ["rea", "rea"] },
+    });
+    expect(updated.json().agent.mcpDisabled).toEqual(["rea"]);
+    expect(updated.json().agent.settingsPendingRestart).toBeUndefined();
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpDisabled: ["rea"] });
+    // 改设置不重启进程
+    expect(spawner.children).toHaveLength(1);
+    // 不重新估算时沿用上次的估算值，启用状态取最新
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/local/agents/${id}/mcp`,
+      headers: owner,
+    });
+    expect(listed.json().servers[0]).toMatchObject({
+      enabled: false,
+      measurement: { tokens: 350_000 },
+    });
+    expect(listMcp).toHaveBeenCalledTimes(2);
+
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/local/agents",
+      headers: owner,
+      payload: { provider: "opencode", name: "rd-opencode", access: "read-only" },
+    });
+    expect(spawner.children[1]!.args).not.toContain("--agent-settings");
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/local/agents/${other.json().agent.id}/mcp`,
+          headers: owner,
+        })
+      ).json(),
+    ).toEqual({ supported: false, servers: [], baselineTokens: null });
+    rmSync(settingsDir, { recursive: true, force: true });
   });
 
   it("validates access, working directory and name before starting anything", async () => {

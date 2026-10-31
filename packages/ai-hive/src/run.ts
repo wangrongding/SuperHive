@@ -59,6 +59,9 @@ AI Hive Agent
   --opencode PATH   OpenCode CLI 命令（默认 opencode）
   --omp PATH        omp（oh-my-pi）CLI 命令（默认 omp）
   --model NAME      provider 使用的可选模型（opencode 为 provider/model 格式）
+  --agent-settings FILE
+                    Agent 设置文件（JSON：{"mcpDisabled": ["名称"]}）；给定时 Claude Code / Codex
+                    只加载未关闭的本机 MCP，每一轮重新读取。本机 Hive Server 拉起时自动传入
 `;
 
 /**
@@ -161,6 +164,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       opencode: { type: "string", default: "opencode" },
       omp: { type: "string", default: "omp" },
       model: { type: "string" },
+      "agent-settings": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -264,6 +268,11 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       throw new Error(`Agent CLI 无法启动：${check.stderr || check.error?.message}`);
   }
 
+  // 本机 Hive Server 拉起时传入：网页上勾选的 MCP 写在这个文件里，Agent 每一轮读取
+  const settingsFile = parsed.values["agent-settings"]
+    ? path.resolve(parsed.values["agent-settings"])
+    : undefined;
+
   function buildResponder(hive: HiveMcpConnection, cwd: string): AgentResponder {
     switch (provider) {
       case "echo":
@@ -274,6 +283,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
           cwd,
           hive,
           access,
+          ...(settingsFile ? { settingsFile } : {}),
           ...(parsed.values.model ? { model: parsed.values.model } : {}),
         });
       case "copilot":
@@ -315,6 +325,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
           hive,
           access,
           transport: codexTransport,
+          ...(settingsFile ? { settingsFile } : {}),
           ...(parsed.values.model ? { model: parsed.values.model } : {}),
         });
     }

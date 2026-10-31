@@ -7,6 +7,7 @@ import {
   codexHiveMcpOverrides,
   type HiveMcpConnection,
 } from "./hive-mcp-config.js";
+import { codexMcpDisableOverrides, readAgentSettings } from "./mcp-servers.js";
 import {
   AgentCancelledError,
   AgentExecutionUncertainError,
@@ -42,6 +43,8 @@ export type CodexAppServerResponderOptions = {
   access?: AgentAccessMode;
   model?: string;
   log?: (message: string) => void;
+  /** 本机 Hive Server 写入的 Agent 设置文件：关闭勾选掉的 MCP，改动在下一轮换新的 app-server 进程生效 */
+  settingsFile?: string;
 };
 
 export type CodexAppServerResponderDependencies = {
@@ -135,6 +138,8 @@ type Session = {
   ready: Promise<void>;
   initialized: boolean;
   dead: boolean;
+  /** 启动这个进程时关闭的 MCP；设置变了就换新进程 */
+  mcpDisabled: string;
 };
 
 type AgentMessage = { text: string; phase: string | null; turnId?: string };
@@ -240,6 +245,7 @@ export class CodexAppServerResponder implements AgentResponder {
     let threadId: string;
     let session: Session;
     try {
+      this.retireSessionIfMcpChanged();
       session = await this.ensureSession();
       this.throwIfAborted(input.signal);
       threadId = await this.openThread(session, input);
@@ -416,11 +422,25 @@ export class CodexAppServerResponder implements AgentResponder {
     return threadId;
   }
 
+  private mcpDisabled(): string[] {
+    return readAgentSettings(this.options.settingsFile).mcpDisabled;
+  }
+
+  /** MCP 勾选变了：app-server 只在启动时读配置，空闲时换一个新进程（线程照常续接） */
+  private retireSessionIfMcpChanged(): void {
+    const session = this.session;
+    if (!session || session.dead || session.mcpDisabled === this.mcpDisabled().join(",")) return;
+    this.log("[hive] MCP 设置已变更，重启 Codex app-server 以加载新的工具");
+    this.teardown(session, new Error("MCP 设置已变更"));
+    session.transport.kill();
+  }
+
   private ensureSession(): Promise<Session> {
     const existing = this.session;
     if (existing && !existing.dead) return existing.ready.then(() => existing);
 
     const access = codexAccess(this.options.access);
+    const mcpDisabled = this.mcpDisabled();
     const args = [
       "app-server",
       "-c",
@@ -430,6 +450,7 @@ export class CodexAppServerResponder implements AgentResponder {
       ...codexHiveMcpOverrides(this.options.hive).flatMap((override) => ["-c", override]),
       "-c",
       CODEX_HIVE_TOOLS_APPROVAL_OVERRIDE,
+      ...codexMcpDisableOverrides(mcpDisabled).flatMap((override) => ["-c", override]),
     ];
     const transport = this.createTransport(this.options.command, args, { cwd: this.options.cwd });
     const session: Session = {
@@ -440,6 +461,7 @@ export class CodexAppServerResponder implements AgentResponder {
       ready: Promise.resolve(),
       initialized: false,
       dead: false,
+      mcpDisabled: mcpDisabled.join(","),
     };
     this.session = session;
     transport.onLine((line) => this.handleLine(session, line));

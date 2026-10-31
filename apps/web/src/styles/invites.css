@@ -702,3 +702,84 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* ---------- 本机 Agent 设置（MCP 开关） ---------- */
+.agent-settings-trigger svg {
+  display: block;
+}
+
+.agent-mcp-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-mcp-list li {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  transition: opacity var(--duration-fast);
+}
+
+.agent-mcp-list li.off {
+  opacity: 0.6;
+}
+
+.agent-mcp-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.agent-mcp-list input {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+
+.agent-mcp-list input:disabled + .agent-mcp-copy {
+  cursor: default;
+}
+
+.agent-mcp-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-mcp-copy strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.agent-mcp-copy small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.agent-mcp-heavy {
+  color: var(--warning);
+  font-weight: var(--weight-medium);
+}
+
+.agent-mcp-estimate {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.agent-mcp-hint,
+.agent-mcp-saved {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.agent-settings-dialog .invite-dialog-body {
+  gap: 14px;
+}

@@ -89,6 +89,7 @@ const app = await buildApp({
           cli: agentCli,
           serverUrl: localServerUrl,
           logDir: path.join(path.dirname(databasePath), "agent-logs"),
+          settingsDir: path.join(path.dirname(databasePath), "agent-settings"),
         },
       }
     : {}),

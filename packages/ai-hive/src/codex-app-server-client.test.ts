@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerResponder,
@@ -112,7 +115,11 @@ function defaultHandlers(overrides: Record<string, Handler> = {}): Record<string
 
 function setup(
   handlers: Record<string, Handler> = defaultHandlers(),
-  extra: { access?: "read-only" | "workspace" | "full"; model?: string } = {},
+  extra: {
+    access?: "read-only" | "workspace" | "full";
+    model?: string;
+    settingsFile?: string;
+  } = {},
   deps: { requestTimeoutMs?: number; interruptGraceMs?: number } = {},
 ) {
   const servers: FakeAppServer[] = [];
@@ -132,6 +139,25 @@ function setup(
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("CodexAppServerResponder", () => {
+  it("disables unchecked MCP servers and restarts app-server when the selection changes", async () => {
+    const settingsFile = path.join(mkdtempSync(path.join(tmpdir(), "hive-codex-")), "s.json");
+    writeFileSync(settingsFile, JSON.stringify({ mcpDisabled: ["chrome-devtools"] }));
+    const { responder, servers } = setup(defaultHandlers(), { settingsFile });
+
+    await responder.reply({ instructions: "r", prompt: "p" });
+    await responder.reply({ instructions: "r", prompt: "p", threadId: "thread-new" });
+    expect(servers).toHaveLength(1);
+    expect(servers[0]!.args).toContain("mcp_servers.chrome-devtools.enabled=false");
+
+    writeFileSync(settingsFile, JSON.stringify({ mcpDisabled: [] }));
+    await responder.reply({ instructions: "r", prompt: "p", threadId: "thread-new" });
+    expect(servers).toHaveLength(2);
+    expect(servers[0]!.killed).toBe(true);
+    expect(servers[1]!.args.join(" ")).not.toContain("enabled=false");
+    // 新进程续接原来的线程
+    expect(servers[1]!.methods()).toContain("thread/resume");
+  });
+
   it("returns per-turn token usage from thread/tokenUsage/updated with the thread model", async () => {
     const usage = (input: number, cached: number, output: number, total: number) => ({
       last: {

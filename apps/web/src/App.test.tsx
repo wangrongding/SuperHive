@@ -135,8 +135,9 @@ function localAgent(overrides: Partial<LocalAgent> = {}): LocalAgent {
     lastError: null,
     restarts: 0,
     createdAt: new Date().toISOString(),
+    mcpDisabled: [],
     ...overrides,
-  };
+  } as LocalAgent;
 }
 
 describe("App mention autocomplete", () => {

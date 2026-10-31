@@ -94,6 +94,7 @@ import {
   InviteDialog,
 } from "./invite-dialog";
 import { ImDialog } from "./im-dialog";
+import { AgentSettingsDialog, SettingsGlyph } from "./agent-settings-dialog";
 import {
   ComposerAttachments,
   MessageAttachments,
@@ -938,6 +939,34 @@ export function App({
     () => new Set(local.agents.map((agent) => agent.name.toLocaleLowerCase())),
     [local.agents],
   );
+  const [settingsAgentId, setSettingsAgentId] = useState<string | undefined>();
+  const settingsAgent = local.agents.find((agent) => agent.id === settingsAgentId);
+  function localAgentFor(name: string) {
+    const key = name.toLocaleLowerCase();
+    return local.agents.find((agent) => agent.name.toLocaleLowerCase() === key);
+  }
+  /** 本机 Agent 名字旁的设置入口（悬停成员行时出现）；写成函数而非组件，避免每次渲染重建按钮 */
+  function agentSettingsButton(name: string) {
+    const agent = localAgentFor(name);
+    if (!agent) return null;
+    return (
+      <span className="guest-actions">
+        <button
+          type="button"
+          className="guest-actions-trigger agent-settings-trigger"
+          aria-label={t("{0} 的设置", { 0: agent.name })}
+          title={t("设置（MCP 等）")}
+          onClick={(event) => {
+            event.stopPropagation();
+            setSettingsAgentId(agent.id);
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <SettingsGlyph />
+        </button>
+      </span>
+    );
+  }
   const modifierKeyLabel = useMemo(platformModifierLabel, []);
   const mentionSuggestions = useMemo(
     () =>
@@ -3649,12 +3678,15 @@ export function App({
                           {participant.username}
                           {participant.type === "agent" &&
                             localAgentNames.has(participant.username.toLocaleLowerCase()) && (
-                              <span
-                                className="member-local-badge"
-                                title={t("由本机 Hive Server 启动")}
-                              >
-                                {t("本机")}
-                              </span>
+                              <>
+                                <span
+                                  className="member-local-badge"
+                                  title={t("由本机 Hive Server 启动")}
+                                >
+                                  {t("本机")}
+                                </span>
+                                {agentSettingsButton(participant.username)}
+                              </>
                             )}
                           {isOwner && authToken && participant.access && (
                             <GuestMemberActions
@@ -3713,6 +3745,8 @@ export function App({
                       <span className="member-copy">
                         <strong>
                           {participant.username}
+                          {participant.type === "agent" &&
+                            agentSettingsButton(participant.username)}
                           {isOwner && authToken && participant.access && (
                             <GuestMemberActions
                               participant={participant}
@@ -3844,6 +3878,14 @@ export function App({
           roomId={currentRoomId}
           linkFor={(token) => `${inviteLink()}?invite=${token}`}
           onClose={() => setInviteDialogOpen(false)}
+        />
+      )}
+      {settingsAgent && (
+        <AgentSettingsDialog
+          key={settingsAgent.id}
+          agent={settingsAgent}
+          local={local}
+          onClose={() => setSettingsAgentId(undefined)}
         />
       )}
       {imDialogOpen && isOwner && authToken && (

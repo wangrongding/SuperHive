@@ -7,12 +7,14 @@ import {
   realpathSync,
   renameSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type {
   CreateLocalAgentRequest,
   LocalAgent,
+  LocalAgentMcpResponse,
   LocalAgentProvider,
   LocalAgentStatus,
   LocalProviderInfo,
@@ -70,6 +72,10 @@ export type LocalAgentSupervisorOptions = {
   adopt?: AdoptAgent;
   /** Agent 输出日志的目录；设置后 Agent 以独立进程组运行，Server 交接重启时不随之退出 */
   logDir?: string;
+  /** Agent 设置文件目录（网页上勾选的 MCP 等）；Agent 每一轮读取，改动不必重启 */
+  settingsDir?: string;
+  /** 列出 Agent 会加载的本机 MCP（测试注入）；默认运行 `ai-hive mcp list` */
+  listMcp?: McpLister;
   probe?: ProviderProbe;
   now?: () => number;
   setTimer?: (callback: () => void, ms: number) => { cancel(): void };
@@ -87,6 +93,14 @@ const PROBE_CACHE_MS = 60_000;
 /** 单个 Agent 日志超过这个大小时，下次启动先轮转为 .1 */
 const LOG_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const TAIL_INTERVAL_MS = 1_000;
+
+export type McpLister = (args: string[]) => Promise<string>;
+
+/** 支持按勾选加载 MCP 的 provider */
+const MCP_SELECTABLE: ReadonlySet<LocalAgentProvider> = new Set(["claude", "codex"]);
+/** 实测：Claude Code 不带任何 MCP 时开局约 4 万 token（系统提示与内置工具） */
+const CLAUDE_BASELINE_TOKENS = 40_000;
+const MCP_MEASURE_CACHE_MS = 10 * 60_000;
 
 export const PROVIDER_COMMANDS: Record<LocalAgentProvider, string> = {
   codex: "codex",
@@ -115,6 +129,8 @@ type Runtime = {
   logs: string[];
   pendingLine: string;
   exited?: Promise<void> | undefined;
+  /** 当前进程启动时带了设置文件：之后的勾选改动下一轮就生效；否则要重启一次 */
+  settingsApplied: boolean;
 };
 
 // eslint-disable-next-line no-control-regex
@@ -304,6 +320,8 @@ export class LocalAgentSupervisor {
   private readonly setTimer: NonNullable<LocalAgentSupervisorOptions["setTimer"]>;
   private readonly log: (message: string) => void;
   private probeCache?: { at: number; result: Promise<LocalProviderInfo[]> };
+  private readonly measureCache = new Map<string, { at: number; result: LocalAgentMcpResponse }>();
+  private readonly listMcp: McpLister;
   private shuttingDown = false;
 
   constructor(private readonly options: LocalAgentSupervisorOptions) {
@@ -319,6 +337,17 @@ export class LocalAgentSupervisor {
         return { cancel: () => clearTimeout(timer) };
       });
     this.log = options.log ?? (() => undefined);
+    this.listMcp =
+      options.listMcp ??
+      ((args) =>
+        new Promise((resolve, reject) =>
+          execFile(
+            options.cli.command,
+            [...options.cli.args, ...args],
+            { timeout: 90_000, maxBuffer: 4 * 1024 * 1024 },
+            (error, stdout) => (error ? reject(error) : resolve(stdout)),
+          ),
+        ));
   }
 
   /**
@@ -341,6 +370,7 @@ export class LocalAgentSupervisor {
           previous,
           config.pidStartedAt ? Date.parse(config.pidStartedAt) : this.now(),
         );
+        runtime.settingsApplied = processHasArgument(previous.pid, "--agent-settings");
         continue;
       }
       // 不该再运行的（已手动停止）结束掉；已经不在的清掉记录
@@ -361,6 +391,87 @@ export class LocalAgentSupervisor {
       runtime.timer = undefined;
       runtime.child?.release?.();
     }
+  }
+
+  private settingsFile(config: LocalAgentConfig): string | undefined {
+    return this.options.settingsDir && MCP_SELECTABLE.has(config.provider)
+      ? path.join(this.options.settingsDir, `${config.id}.json`)
+      : undefined;
+  }
+
+  private writeSettings(config: LocalAgentConfig): string | undefined {
+    const file = this.settingsFile(config);
+    if (!file) return undefined;
+    mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ mcpDisabled: config.mcpDisabled ?? [] }), { mode: 0o600 });
+    // 先写临时文件再改名：Agent 随时可能在读，不能读到写了一半的内容
+    renameSync(tmp, file);
+    return file;
+  }
+
+  /** 保存网页上的勾选；已带设置文件启动的 Agent 下一轮就按新的勾选加载 */
+  updateSettings(id: string, settings: { mcpDisabled: string[] }): LocalAgent {
+    const runtime = this.require(id);
+    if (!MCP_SELECTABLE.has(runtime.config.provider)) {
+      throw new HiveError(
+        "LOCAL_AGENT_MCP_UNSUPPORTED",
+        "这个 Agent 类型暂不支持在 Hive 里开关 MCP。",
+      );
+    }
+    runtime.config.mcpDisabled = this.options.database.setLocalAgentMcpDisabled(
+      id,
+      settings.mcpDisabled,
+    );
+    this.writeSettings(runtime.config);
+    return this.view(runtime);
+  }
+
+  /** 这个 Agent 会加载的本机 MCP 及启用状态；measure 时逐个连上估算开局 token（结果缓存 10 分钟） */
+  async mcpServers(id: string, measure: boolean): Promise<LocalAgentMcpResponse> {
+    const { config } = this.require(id);
+    if (!MCP_SELECTABLE.has(config.provider)) {
+      return { supported: false, servers: [], baselineTokens: null };
+    }
+    const cachedEntry = this.measureCache.get(id);
+    const cached =
+      cachedEntry && this.now() - cachedEntry.at < MCP_MEASURE_CACHE_MS
+        ? cachedEntry.result
+        : undefined;
+    const file = this.writeSettings(config);
+    const stdout = await this.listMcp([
+      "mcp",
+      "list",
+      "--provider",
+      config.provider,
+      "--cwd",
+      config.cwd ?? homedir(),
+      ...(file ? ["--agent-settings", file] : []),
+      "--json",
+      ...(measure && config.provider === "claude" ? ["--measure"] : []),
+    ]);
+    const line = stdout.trim().split("\n").at(-1) ?? "";
+    let servers: LocalAgentMcpResponse["servers"];
+    try {
+      servers = (JSON.parse(line) as { servers: LocalAgentMcpResponse["servers"] }).servers;
+    } catch {
+      throw new HiveError("LOCAL_AGENT_MCP_LIST_FAILED", "没能读取这个 Agent 的 MCP 列表。");
+    }
+    // 没要求重新估算时沿用 10 分钟内的估算结果，启用状态以刚读到的为准
+    if (!measure && cached) {
+      const measured = new Map(cached.servers.map((server) => [server.name, server.measurement]));
+      servers = servers.map((server) => {
+        const measurement = measured.get(server.name);
+        return measurement ? { ...server, measurement } : server;
+      });
+    }
+    const result: LocalAgentMcpResponse = {
+      supported: true,
+      servers,
+      baselineTokens: config.provider === "claude" ? CLAUDE_BASELINE_TOKENS : null,
+    };
+    if (measure) this.measureCache.set(id, { at: this.now(), result });
+    return result;
   }
 
   private logFile(config: LocalAgentConfig): string | undefined {
@@ -476,6 +587,7 @@ export class LocalAgentSupervisor {
       stopping: false,
       logs: [],
       pendingLine: "",
+      settingsApplied: false,
     };
     this.runtimes.set(config.id, runtime);
     return runtime;
@@ -503,12 +615,19 @@ export class LocalAgentSupervisor {
       lastError: runtime.lastError,
       restarts: runtime.restarts,
       createdAt: config.createdAt,
+      mcpDisabled: config.mcpDisabled ?? [],
+      // 正在运行、但启动时没带设置文件（升级前就在跑的进程）：勾选要重启一次才生效
+      ...(runtime.child && !runtime.settingsApplied && MCP_SELECTABLE.has(config.provider)
+        ? { settingsPendingRestart: true }
+        : {}),
     };
   }
 
   private launch(runtime: Runtime): void {
     if (this.shuttingDown || runtime.child) return;
     const { config } = runtime;
+    const settingsFile = this.writeSettings(config);
+    runtime.settingsApplied = settingsFile !== undefined;
     const args = [
       ...this.options.cli.args,
       "join",
@@ -522,6 +641,7 @@ export class LocalAgentSupervisor {
       config.access,
       ...(config.cwd ? ["--cwd", config.cwd] : []),
       ...(config.model ? ["--model", config.model] : []),
+      ...(settingsFile ? ["--agent-settings", settingsFile] : []),
     ];
     runtime.phase = "running";
     runtime.stopping = false;
@@ -638,6 +758,18 @@ export class LocalAgentSupervisor {
 }
 
 /** workspace / full 的目录必须真实存在且是绝对路径；取 realpath 存储，拒绝文件系统根目录 */
+/** 进程的命令行里是否带某个参数（读不到时按没有处理） */
+function processHasArgument(pid: number | undefined, argument: string): boolean {
+  if (!pid) return false;
+  try {
+    return execFileSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" }).includes(
+      argument,
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function resolveWorkspace(input: string | undefined): string {
   if (!input?.trim())
     throw new HiveError("LOCAL_AGENT_CWD_REQUIRED", "工作区和完全访问权限需要指定工作目录。");

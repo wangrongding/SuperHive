@@ -1,6 +1,10 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { createLocalAgentRequestSchema, type LocalSessionResponse } from "@ai-hive/protocol";
+import {
+  createLocalAgentRequestSchema,
+  updateLocalAgentSettingsRequestSchema,
+  type LocalSessionResponse,
+} from "@ai-hive/protocol";
 import { HiveError } from "./database.js";
 import { checkLocalRequest } from "./local-access.js";
 import { listDirectories } from "./local-directories.js";
@@ -24,6 +28,8 @@ const ERROR_STATUS: Record<string, number> = {
   LOCAL_DIRECTORY_NOT_FOUND: 404,
   ROOM_NOT_FOUND: 404,
   NOT_A_MEMBER: 403,
+  LOCAL_AGENT_MCP_UNSUPPORTED: 400,
+  LOCAL_AGENT_MCP_LIST_FAILED: 502,
 };
 
 export type LocalRoomActions = {
@@ -122,6 +128,30 @@ export function registerLocalAgentRoutes(
       },
     );
   }
+
+  /** 这个 Agent 会加载的本机 MCP；?measure=1 时逐个连上估算开局 token（较慢） */
+  app.get<{ Params: { id: string }; Querystring: { measure?: string } }>(
+    "/api/local/agents/:id/mcp",
+    async (request, reply) => {
+      if (deny(request, reply)) return reply;
+      try {
+        return await supervisor!.mcpServers(request.params.id, request.query.measure === "1");
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.put<{ Params: { id: string } }>("/api/local/agents/:id/settings", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    const parsed = updateLocalAgentSettingsRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "参数不正确。" });
+    try {
+      return { agent: supervisor!.updateSettings(request.params.id, parsed.data) };
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
 
   app.delete<{ Params: { id: string } }>("/api/local/agents/:id", async (request, reply) => {
     if (deny(request, reply)) return reply;

@@ -21,6 +21,7 @@ export class CodexResponder implements AgentResponder {
       model?: string;
       transport?: CodexTransport;
       log?: (message: string) => void;
+      settingsFile?: string;
     },
     dependencies: { appServer?: AgentResponder; mcp?: () => AgentResponder } = {},
   ) {
@@ -44,6 +45,7 @@ export class CodexResponder implements AgentResponder {
             ...(options.access ? { access: options.access } : {}),
             ...(options.model ? { model: options.model } : {}),
             ...(options.log ? { log: options.log } : {}),
+            ...(options.settingsFile ? { settingsFile: options.settingsFile } : {}),
           }));
   }
 

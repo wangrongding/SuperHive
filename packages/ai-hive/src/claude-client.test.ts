@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeCodeResponder } from "./claude-client.js";
 import type { CommandRunner } from "./command-runner.js";
@@ -170,5 +173,70 @@ describe("ClaudeCodeResponder", () => {
     await expect(empty.reply({ instructions: "rules", prompt: "context" })).rejects.toThrow(
       /没有返回/,
     );
+  });
+
+  it("loads only the MCP servers left enabled in the agent settings file", async () => {
+    const settingsFile = path.join(mkdtempSync(path.join(tmpdir(), "hive-settings-")), "a.json");
+    writeFileSync(settingsFile, JSON.stringify({ mcpDisabled: ["rea"] }));
+    let seen: { file: string; config: unknown; mode: number } | undefined;
+    const runner = vi.fn<CommandRunner>(async (_command, args) => {
+      const file = args[args.indexOf("--mcp-config") + 1]!;
+      seen = {
+        file,
+        config: JSON.parse(readFileSync(file, "utf8")),
+        mode: statSync(file).mode & 0o777,
+      };
+      return { stdout: JSON.stringify({ result: "ok", session_id: "s1" }), stderr: "" };
+    });
+    const mcpServers = vi.fn((_cwd: string, settings: { mcpDisabled: string[] }) =>
+      settings.mcpDisabled.includes("rea")
+        ? { "chrome-devtools": { command: "chrome-devtools-mcp" } }
+        : { "chrome-devtools": { command: "chrome-devtools-mcp" }, rea: { command: "rea" } },
+    );
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/workspace",
+      hive,
+      runner,
+      settingsFile,
+      mcpServers,
+    });
+
+    await responder.reply({ instructions: "rules", prompt: "context" });
+
+    const args = runner.mock.calls[0]?.[1] ?? [];
+    expect(args).toContain("--strict-mcp-config");
+    expect(mcpServers).toHaveBeenCalledWith("/workspace", { mcpDisabled: ["rea"] });
+    const config = seen?.config as { mcpServers: Record<string, { url?: string }> };
+    expect(Object.keys(config.mcpServers)).toEqual(["chrome-devtools", "hive"]);
+    expect(config.mcpServers.hive?.url).toBe("http://localhost:8787/mcp");
+    // 本机 MCP 配置可能含密钥：只写进本人可读的临时文件，不放进命令行参数，用完删除
+    expect(seen?.mode).toBe(0o600);
+    expect(args.join(" ")).not.toContain("test-token");
+    expect(existsSync(seen!.file)).toBe(false);
+
+    // 改设置后下一轮生效
+    writeFileSync(settingsFile, JSON.stringify({ mcpDisabled: [] }));
+    await responder.reply({ instructions: "rules", prompt: "context" });
+    expect(Object.keys((seen?.config as { mcpServers: object }).mcpServers)).toEqual([
+      "chrome-devtools",
+      "rea",
+      "hive",
+    ]);
+  });
+
+  it("keeps Claude Code's own MCP loading when no settings file is given", async () => {
+    const runner = vi.fn<CommandRunner>(async () => ({
+      stdout: JSON.stringify({ result: "ok", session_id: "s1" }),
+      stderr: "",
+    }));
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/workspace",
+      hive,
+      runner,
+    });
+    await responder.reply({ instructions: "rules", prompt: "context" });
+    expect(runner.mock.calls[0]?.[1]).not.toContain("--strict-mcp-config");
   });
 });

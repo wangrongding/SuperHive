@@ -834,6 +834,40 @@ export const localAgentSchema = z.object({
   lastError: z.string().nullable(),
   restarts: z.number().int(),
   createdAt: z.string().datetime(),
+  /** 在网页上关掉的本机 MCP 名称；空数组表示全部按 Agent CLI 自己的配置加载 */
+  mcpDisabled: z.array(z.string()).default([]),
+  /** 进程启动时还不支持设置文件（升级前就在运行）：MCP 勾选要重启这个 Agent 一次才生效 */
+  settingsPendingRestart: z.boolean().optional(),
+});
+
+export const updateLocalAgentSettingsRequestSchema = z.object({
+  mcpDisabled: z.array(z.string().trim().min(1).max(200)).max(200),
+});
+
+/** Agent CLI 在本机会加载的一个 MCP（hive 自己不在其中，始终加载） */
+export const localMcpServerSchema = z.object({
+  name: z.string(),
+  /** user：全局；local：只对这个项目；project：项目 .mcp.json；plugin：插件自带 */
+  scope: z.enum(["user", "local", "project", "plugin"]),
+  transport: z.enum(["stdio", "http", "sse"]),
+  enabled: z.boolean(),
+  /** false：插件提供或 CLI 自己已关闭，不能在 Hive 里开关 */
+  configurable: z.boolean(),
+  disabledByCli: z.boolean().optional(),
+  measurement: z
+    .discriminatedUnion("ok", [
+      z.object({ ok: z.literal(true), tools: z.number().int(), tokens: z.number().int() }),
+      z.object({ ok: z.literal(false), error: z.string() }),
+    ])
+    .optional(),
+});
+
+export const localAgentMcpResponseSchema = z.object({
+  /** 不支持按勾选加载的 provider 为 false */
+  supported: z.boolean(),
+  servers: z.array(localMcpServerSchema),
+  /** 不带任何 MCP 时 Agent 开局的大约 token 数（系统提示与内置工具），仅供参考 */
+  baselineTokens: z.number().int().nullable(),
 });
 
 export const localSessionResponseSchema = z.discriminatedUnion("enabled", [
@@ -902,6 +936,9 @@ export type LocalAgentProvider = z.infer<typeof localAgentProviderSchema>;
 export type LocalAgentAccess = z.infer<typeof localAgentAccessSchema>;
 export type LocalAgentStatus = z.infer<typeof localAgentStatusSchema>;
 export type CreateLocalAgentRequest = z.infer<typeof createLocalAgentRequestSchema>;
+export type UpdateLocalAgentSettingsRequest = z.infer<typeof updateLocalAgentSettingsRequestSchema>;
+export type LocalMcpServer = z.infer<typeof localMcpServerSchema>;
+export type LocalAgentMcpResponse = z.infer<typeof localAgentMcpResponseSchema>;
 export type LocalAgent = z.infer<typeof localAgentSchema>;
 export type LocalSessionResponse = z.infer<typeof localSessionResponseSchema>;
 export type LocalProviderInfo = z.infer<typeof localProviderInfoSchema>;

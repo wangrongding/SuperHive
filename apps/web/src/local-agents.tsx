@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type {
   CreateLocalAgentRequest,
   LocalAgent,
+  LocalAgentMcpResponse,
   LocalAgentProvider,
   LocalDirectoryListing,
   LocalProviderInfo,
@@ -29,6 +30,9 @@ export type LocalAgentsState = {
   directories(path?: string): Promise<LocalDirectoryListing>;
   /** 清空房间的消息和调用记录（白板保留）；只有本机房主可用 */
   clearRoom(roomId: string, username: string): Promise<void>;
+  /** Agent 会加载的本机 MCP；measure 时逐个连上估算开局 token */
+  mcpServers(id: string, measure?: boolean): Promise<LocalAgentMcpResponse>;
+  updateSettings(id: string, settings: { mcpDisabled: string[] }): Promise<LocalAgent>;
 };
 
 const POLL_MS = 2_000;
@@ -158,6 +162,27 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     [request],
   );
 
+  const mcpServers = useCallback(
+    async (id: string, measure = false) => {
+      const response = await request(`/api/local/agents/${id}/mcp${measure ? "?measure=1" : ""}`);
+      return (await response.json()) as LocalAgentMcpResponse;
+    },
+    [request],
+  );
+
+  const updateSettings = useCallback(
+    async (id: string, settings: { mcpDisabled: string[] }) => {
+      const response = await request(`/api/local/agents/${id}/settings`, {
+        method: "PUT",
+        body: JSON.stringify(settings),
+      });
+      const { agent } = (await response.json()) as { agent: LocalAgent };
+      setAgents((current) => current.map((item) => (item.id === id ? agent : item)));
+      return agent;
+    },
+    [request],
+  );
+
   return {
     enabled,
     reason: session && !session.enabled ? session.reason : undefined,
@@ -169,6 +194,8 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     logs,
     directories,
     clearRoom,
+    mcpServers,
+    updateSettings,
   };
 }
 
