@@ -4,6 +4,7 @@ import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from "nod
 import { open, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
@@ -1416,9 +1417,56 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     getInvocation: (id) => database.getInvocation(id),
     invocationAncestors: (id) => database.invocationAncestors(id),
     post: (owner, input) => createAndDispatchMessage(owner, input).message,
-    choose: (owner, questionMessageId, selected, clientMessageId) =>
-      submitAnswer(owner, { type: "question.answer", questionMessageId, selected, clientMessageId })
-        .message,
+    choose: (owner, questionMessageId, selected, clientMessageId, other) =>
+      submitAnswer(owner, {
+        type: "question.answer",
+        questionMessageId,
+        selected,
+        clientMessageId,
+        ...(other ? { other } : {}),
+      }).message,
+    retry: (owner, invocationId) => retryInvocation(owner, invocationId),
+    dismiss: (owner, invocationId) => {
+      for (const invocation of database.dismissInvocations(
+        owner.roomId,
+        [invocationId],
+        owner.username,
+      )) {
+        broadcastAll({ type: "invocation.updated", invocation });
+        imHub.onInvocationUpdated(invocation);
+      }
+    },
+    extendBudget: (owner, turns) => extendBudget(owner, turns),
+    invocationsFor: (messageId) => database.invocationsForMessage(messageId),
+    participants: (roomId) => participantsOf(roomId),
+    readAttachment: async (id) => {
+      const item = attachments.get(id);
+      if (!item || item.revokedAt) return undefined;
+      return {
+        name: item.name,
+        mime: item.mime,
+        kind: item.kind,
+        data: await readFile(item.filePath),
+      };
+    },
+    // IM 收到的文件存成房主（本机管理员）的待发附件，随这条消息一起认领
+    saveFiles: async (owner, files) => {
+      const ids: string[] = [];
+      for (const file of files) {
+        const stored = await attachments.save({
+          roomId: owner.roomId,
+          uploader: "admin",
+          name: file.name,
+          stream: Readable.from(file.data),
+          truncated: () => false,
+        });
+        ids.push(stored.id);
+      }
+      return {
+        attachments: attachments.claim(ids, { roomId: owner.roomId, uploader: "admin" }),
+        onInsert: (messageId: string) => attachments.bind(ids, messageId),
+      };
+    },
     isWaiting: (questionId) => Boolean(waitingForQuestion(questionId)),
     webUrl: (roomId) =>
       options.publicUrl ? `${options.publicUrl.replace(/\/$/, "")}/#${roomId}` : undefined,

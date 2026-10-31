@@ -19,10 +19,13 @@ import {
   type OutboxItem,
   type StoredConnection,
 } from "./im-store.js";
+import { OPTION_FIELD_PREFIX, OTHER_FIELD } from "./feishu-card.js";
 import {
   USER_TARGET,
   type ImChannelDriver,
   type ImInbound,
+  type ImAction,
+  type ImActionResult,
   type ImKeyValue,
   type ImRich,
   type ImTransport,
@@ -48,7 +51,25 @@ export type ImHubDeps = {
     questionId: string,
     selected: string[],
     clientMessageId: string,
+    other?: string,
   ): ChatMessage;
+  /** 卡片按钮：重试 / 批准、忽略、追加对话轮数（与网页上的同名操作同一套校验） */
+  retry(owner: Participant, invocationId: string): void;
+  dismiss(owner: Participant, invocationId: string): void;
+  extendBudget(owner: Participant, turns: number): void;
+  /** 一条消息触发的调用（进度卡片按它们画） */
+  invocationsFor(messageId: string): Invocation[];
+  /** 读出房间附件的内容，转发到 IM */
+  readAttachment(
+    id: string,
+  ): Promise<{ name: string; mime: string; kind: string; data: Buffer } | undefined>;
+  /** 把 IM 发来的文件存成房主的待发附件，返回发消息时要带上的附件字段 */
+  saveFiles(
+    owner: Participant,
+    files: Array<{ name: string; data: Buffer }>,
+  ): Promise<Pick<CreateMessageInput, "attachments" | "onInsert">>;
+  /** 房间成员（/who 用） */
+  participants(roomId: string): Participant[];
   /** 这条提问是否还在等人回答 */
   isWaiting(questionId: string): boolean;
   /** 网页地址，用于截断长消息时附上全文链接 */
@@ -71,11 +92,21 @@ export const DIGEST_WINDOW_MS = 3 * 60_000;
 const LOGIN_TTL_MS = 10 * 60_000;
 const HELP = [
   "AI Hive 用法：",
-  "· 直接发文字：以你的身份发进当前房间；要让 Agent 干活，在消息里 @ 它，如「@rd-claude 看下测试为什么挂了」",
-  "· Agent 向你提问时，直接回复这条提问，或回复选项字母（多选用逗号隔开，如 A,C）",
+  "· 直接发文字、图片或文件：以你的身份发进当前房间；要让 Agent 干活，在消息里 @ 它，如「@rd-claude 看下测试为什么挂了」",
+  "· Agent 向你提问时，点卡片上的选项，或回复这条提问打字（选项字母也行，多选用逗号隔开，如 A,C）",
   "· /room 查看当前房间，/room 房间ID 切换房间",
+  "· /who 看房间里的 Agent 谁在忙",
+  "· /level 查看推送档位，/level mine|im|agents|all 切换",
   "· /status 查看连接状态",
+  "· /cards on 在飞书后台开通卡片回调后打开卡片按钮（重新扫码会自动开通）",
 ].join("\n");
+
+const LEVEL_TEXT: Record<ImDeliveryLevel, string> = {
+  mine: "与我相关（默认）：给你的最终结果、提到你、问你的问题、需要你处理的异常",
+  im: "仅 IM 发起：只推从这里发起的任务结果和提到你的消息",
+  agents: "全部 Agent 消息：另外把 Agent 的发言每 3 分钟合并推一次",
+  all: "全部消息：房间里每条消息都推",
+};
 
 function describe(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -112,6 +143,8 @@ export class ImHub {
   private closed = false;
   /** 正在把这个连接收到的 IM 消息发进房间：它产生的房间消息不再推回同一个连接 */
   private posting: string | undefined;
+  /** 正在处理这个连接的卡片作答：卡片由回调应答直接更新 */
+  private answeringFromCard: string | undefined;
 
   constructor(private readonly deps: ImHubDeps) {}
 
@@ -390,6 +423,14 @@ export class ImHub {
           if (this.transports.get(connection.id) === transport)
             this.setStatus(connection.id, status, detail);
         },
+        onAction: (action) => {
+          try {
+            return this.handleAction(connection.id, action);
+          } catch (error) {
+            this.deps.log("im card action failed", error);
+            return { toast: { type: "error", text: `操作失败：${describe(error)}` } };
+          }
+        },
       });
       if (this.transports.get(connection.id) === transport) {
         this.setStatus(connection.id, "connected");
@@ -475,13 +516,21 @@ export class ImHub {
       return;
     }
     if (connection.channel === "wechat" && message.chatType !== "p2p") return;
-    if (message.unsupported || !message.text) {
-      this.reply(connection, message.chatId, "目前只支持文字消息。", message.externalId);
+    const files = this.transports.get(connection.id)?.download ? (message.files ?? []) : [];
+    if ((message.unsupported && !files.length) || (!message.text && !files.length)) {
+      this.reply(
+        connection,
+        message.chatId,
+        files.length || message.files?.length
+          ? "目前只支持文字、图片和文件。"
+          : "目前只支持文字消息。",
+        message.externalId,
+      );
       return;
     }
     this.deps.store.touchInbound(connection.id, message.chatId);
     const text = message.text.trim();
-    if (text.startsWith("/")) {
+    if (text.startsWith("/") && !files.length) {
       this.handleCommand(connection, message, text);
       return;
     }
@@ -496,6 +545,10 @@ export class ImHub {
       return;
     }
     const clientMessageId = `im-${digest(`${connection.id}:${message.externalId}`)}`;
+    if (files.length) {
+      void this.inboundWithFiles(connection, owner, message, text, files, clientMessageId);
+      return;
+    }
     let posted: ChatMessage;
     this.posting = connection.id;
     try {
@@ -518,6 +571,79 @@ export class ImHub {
     } finally {
       this.posting = undefined;
     }
+    this.afterInbound(connection, message, posted);
+  }
+
+  /** 带图片 / 文件的消息：先下载存成附件，再以房主身份发进房间 */
+  private async inboundWithFiles(
+    connection: StoredConnection,
+    owner: Participant,
+    message: ImInbound,
+    text: string,
+    files: NonNullable<ImInbound["files"]>,
+    clientMessageId: string,
+  ): Promise<void> {
+    const transport = this.transports.get(connection.id);
+    const downloaded: Array<{ name: string; data: Buffer }> = [];
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        downloaded.push(await transport!.download!(message.externalId, file));
+      } catch (error) {
+        failures.push(
+          `${file.name ?? (file.kind === "image" ? "图片" : "文件")}：${describe(error)}`,
+        );
+      }
+    }
+    if (!downloaded.length && !text) {
+      this.reply(
+        connection,
+        message.chatId,
+        `没能收下附件（${failures.join("；")}）。如果提示没有权限，请在网页上重新扫码连接飞书。`,
+        message.externalId,
+      );
+      return;
+    }
+    let posted: ChatMessage;
+    try {
+      const attachments = downloaded.length ? await this.deps.saveFiles(owner, downloaded) : {};
+      this.posting = connection.id;
+      try {
+        posted = this.deps.post(owner, {
+          content: text,
+          clientMessageId,
+          via: { channel: connection.channel },
+          ...attachments,
+        });
+      } finally {
+        this.posting = undefined;
+      }
+    } catch (error) {
+      this.reply(
+        connection,
+        message.chatId,
+        `没能发进房间：${describe(error)}`,
+        message.externalId,
+      );
+      return;
+    }
+    if (failures.length) {
+      this.reply(
+        connection,
+        message.chatId,
+        `有附件没能收下：${failures.join("；")}`,
+        message.externalId,
+      );
+    }
+    this.afterInbound(connection, message, posted);
+  }
+
+  /** 发进房间之后：记下来源；派了活的回一张进度卡片并标上「处理中」，否则提示用法 */
+  private afterInbound(
+    connection: StoredConnection,
+    message: ImInbound,
+    posted: ChatMessage,
+  ): void {
     this.deps.store.link({
       messageId: posted.id,
       connectionId: connection.id,
@@ -525,7 +651,29 @@ export class ImHub {
       externalId: message.externalId,
       direction: "in",
     });
-    if (!posted.replyToMessageId && posted.mentions.length === 0) {
+    const tasks = this.deps.invocationsFor(posted.id);
+    if (tasks.length) {
+      this.setReaction(connection, posted.id, "Typing");
+      if (this.cardsEnabled(connection)) {
+        const rich = this.taskRich(posted, tasks);
+        this.deps.store.enqueue({
+          connectionId: connection.id,
+          eventKey: `task:${posted.id}`,
+          chatId: message.chatId,
+          ...(connection.channel === "feishu" ? { replyToExternalId: message.externalId } : {}),
+          text: rich.summary,
+          rich,
+        });
+        this.schedulePump();
+      }
+      return;
+    }
+    if (posted.replyToMessageId) {
+      // 回答了提问：标个「完成」
+      this.setReaction(connection, posted.id, "DONE");
+      return;
+    }
+    if (posted.mentions.length === 0) {
       this.reply(
         connection,
         message.chatId,
@@ -625,6 +773,48 @@ export class ImHub {
         this.deps.onConnectionsChanged(room.id);
         return say(`已切换到房间「${room.name}」。`);
       }
+      case "/who": {
+        const agents = this.deps
+          .participants(connection.roomId)
+          .filter((participant) => participant.type === "agent");
+        if (!agents.length) return say("这个房间里还没有 Agent。");
+        const icon = { online: "🟢 空闲", busy: "🔄 忙碌", offline: "⚪ 离线" } as const;
+        return say(
+          [
+            `房间「${this.roomName(connection.roomId)}」里的 Agent：`,
+            ...agents.map((agent) => `${icon[agent.status]}\u3000${agent.username}`),
+          ].join("\n"),
+        );
+      }
+      case "/level": {
+        const target = args[0]?.toLowerCase() as ImDeliveryLevel | undefined;
+        if (!target) {
+          return say(
+            [
+              `当前推送档位：${LEVEL_TEXT[connection.level ?? "mine"]}`,
+              "切换：/level mine | im | agents | all",
+            ].join("\n"),
+          );
+        }
+        if (!(target in LEVEL_TEXT)) return say("档位只能是 mine、im、agents 或 all。");
+        this.deps.store.setLevel(connection.id, target);
+        this.deps.onConnectionsChanged(connection.roomId);
+        return say(`已切换为：${LEVEL_TEXT[target]}`);
+      }
+      case "/cards": {
+        const on = args[0]?.toLowerCase() !== "off";
+        if (!this.deps.drivers[connection.channel]?.richTextLength) {
+          return say("这个渠道不支持卡片。");
+        }
+        this.deps.store.update(connection.id, {
+          config: { ...connection.config, cardCallbacks: on ? "1" : "0" },
+        });
+        return say(
+          on
+            ? "已打开卡片按钮：之后的提问、提醒可以直接在卡片上点。需要飞书应用已开通卡片回调（card.action.trigger）和消息更新权限，否则点了没反应；重新扫码会自动开通。"
+            : "已关闭卡片按钮，提问改回打字作答。",
+        );
+      }
       default:
         return say(`不认识的命令 ${command}。\n${HELP}`);
     }
@@ -643,6 +833,347 @@ export class ImHub {
       current = current.parentMessageId ? this.deps.getMessage(current.parentMessageId) : undefined;
     }
     return undefined;
+  }
+
+  /** 卡片按钮能回调、卡片能原地更新：扫码时申请了卡片回调（或用 /cards on 声明已在后台开通） */
+  private cardsEnabled(connection: StoredConnection): boolean {
+    return (
+      Boolean(this.deps.drivers[connection.channel]?.richTextLength) &&
+      connection.config.cardCallbacks === "1"
+    );
+  }
+
+  /* ---------- 表情回应：处理中 → 完成 ---------- */
+
+  /** 这些连接的应用没有表情权限，不再尝试 */
+  private readonly noReactions = new Set<string>();
+
+  private inboundExternalId(connection: StoredConnection, messageId: string): string | undefined {
+    return this.deps.store
+      .linksOf(messageId)
+      .find((link) => link.connectionId === connection.id && link.direction === "in")?.externalId;
+  }
+
+  private setReaction(connection: StoredConnection, messageId: string, emoji: string): void {
+    const transport = this.transports.get(connection.id);
+    const externalId = this.inboundExternalId(connection, messageId);
+    if (!transport?.react || !externalId || this.noReactions.has(connection.id)) return;
+    void transport.react(externalId, emoji).then(
+      (reactionId) => {
+        if (reactionId) {
+          this.deps.store.kvSet(connection.id, `reaction:${messageId}:${emoji}`, reactionId);
+        }
+      },
+      (error: unknown) => {
+        this.noReactions.add(connection.id);
+        this.deps.log("im reaction failed（重新扫码可开通表情权限）", error);
+      },
+    );
+  }
+
+  private clearReaction(connection: StoredConnection, messageId: string, emoji: string): void {
+    const transport = this.transports.get(connection.id);
+    const externalId = this.inboundExternalId(connection, messageId);
+    const key = `reaction:${messageId}:${emoji}`;
+    const reactionId = this.deps.store.kvGet(connection.id, key);
+    if (!transport?.unreact || !externalId || !reactionId) return;
+    this.deps.store.kvDelete(connection.id, key);
+    void transport.unreact(externalId, reactionId).catch(() => undefined);
+  }
+
+  /* ---------- 飞书派的任务：进度卡片 ---------- */
+
+  private readonly taskTimers = new Map<string, NodeJS.Timeout>();
+
+  private taskRich(message: ChatMessage, tasks: Invocation[]): ImRich {
+    const steps = tasks.map((task) => {
+      const state: NonNullable<ImRich["steps"]>[number]["state"] =
+        task.status === "queued"
+          ? "queued"
+          : task.status === "running" || task.status === "cancelling"
+            ? "running"
+            : task.status === "waiting_human"
+              ? "waiting"
+              : task.status === "completed"
+                ? "done"
+                : "failed";
+      const reply = task.replyMessageId ? this.deps.getMessage(task.replyMessageId) : undefined;
+      const detail =
+        state === "queued"
+          ? task.receivedAt
+            ? "已送达，排队中"
+            : "排队中"
+          : state === "running"
+            ? (task.progress ?? "执行中")
+            : state === "waiting"
+              ? "在等你回答"
+              : state === "done"
+                ? reply
+                  ? `已回复 #${reply.seq}`
+                  : "已完成"
+                : (TASK_STATUS_TEXT[task.status] ?? task.status) +
+                  (task.detail ? `：${oneLine(task.detail, 60)}` : "");
+      return { label: task.agentName, state, detail };
+    });
+    const finished = steps.every((step) => step.state === "done" || step.state === "failed");
+    const failed = steps.some((step) => step.state === "failed");
+    const url = this.deps.webUrl(message.roomId);
+    return {
+      title: `已派给 ${tasks.map((task) => task.agentName).join("、")}`,
+      subtitle: `${this.roomName(message.roomId)} · #${message.seq}`,
+      tone: "reply",
+      tag: finished ? (failed ? "未全部完成" : "已完成") : "进行中",
+      body: `> ${plain(oneLine(message.content, 120))}`,
+      steps,
+      ...(finished && !failed ? { resolved: { text: "已完成", ok: true } } : {}),
+      note: finished ? "结果已单独发来" : "这张卡片会随进度自动更新",
+      ...(url ? { link: { label: `在网页查看 #${message.seq}`, url } } : {}),
+      summary: `已派给 ${tasks.map((task) => task.agentName).join("、")}`,
+    };
+  }
+
+  /** 进度变化时更新卡片（同一张卡片 2 秒内最多改一次，结束状态立即改）并收尾表情 */
+  private trackTask(connection: StoredConnection, invocation: Invocation): void {
+    const messageId = invocation.messageId;
+    if (!this.inboundExternalId(connection, messageId)) return;
+    const message = this.deps.getMessage(messageId);
+    if (!message) return;
+    const tasks = this.deps.invocationsFor(messageId);
+    const settled = (task: Invocation) =>
+      ["completed", "failed", "cancelled", "timed_out", "blocked"].includes(task.status);
+    if (tasks.length && tasks.every(settled)) {
+      const finalKey = `reaction:${messageId}:final`;
+      if (!this.deps.store.kvGet(connection.id, finalKey)) {
+        this.deps.store.kvSet(connection.id, finalKey, "1");
+        this.clearReaction(connection, messageId, "Typing");
+        this.setReaction(
+          connection,
+          messageId,
+          tasks.every((task) => task.status === "completed") ? "DONE" : "CrossMark",
+        );
+      }
+    }
+    if (!this.cardsEnabled(connection)) return;
+    const key = `${connection.id}:${messageId}`;
+    const flush = () => {
+      this.taskTimers.delete(key);
+      const delivery = this.deps.store.deliveryByKey(connection.id, `task:${messageId}`);
+      if (!delivery) return;
+      const rich = this.taskRich(message, this.deps.invocationsFor(messageId));
+      if (delivery.status === "pending") {
+        this.deps.store.setRich(delivery.id, rich, rich.summary);
+        return;
+      }
+      const transport = this.transports.get(connection.id);
+      if (delivery.status !== "sent" || !delivery.externalId || !transport?.updateRich) return;
+      this.deps.store.setRich(delivery.id, rich);
+      void transport.updateRich(delivery.externalId, rich).catch((error: unknown) => {
+        this.deps.log("im task card update failed", error);
+      });
+    };
+    if (tasks.length && tasks.every(settled)) {
+      clearTimeout(this.taskTimers.get(key));
+      flush();
+    } else if (!this.taskTimers.has(key)) {
+      const timer = setTimeout(flush, TASK_CARD_THROTTLE_MS);
+      timer.unref?.();
+      this.taskTimers.set(key, timer);
+    }
+  }
+
+  /* ---------- 卡片交互 ---------- */
+
+  /** 已发出的提醒卡片：调用之后被重试、忽略、恢复或完成，就把卡片改成已处理、去掉按钮 */
+  private settleNotices(connection: StoredConnection, invocation: Invocation): void {
+    const transport = this.transports.get(connection.id);
+    if (!transport?.updateRich || !this.cardsEnabled(connection)) return;
+    for (const delivery of this.deps.store.sentInvocationNotices(connection.id, invocation.id)) {
+      const check = delivery.check;
+      if (!delivery.rich || delivery.rich.resolved || check?.kind !== "invocation") continue;
+      if (
+        !invocation.resolution &&
+        invocation.status === check.status &&
+        invocation.attempts === check.attempts
+      ) {
+        continue;
+      }
+      const rich: ImRich = {
+        ...delivery.rich,
+        resolved: settledLabel(invocation),
+      };
+      this.deps.store.setRich(delivery.id, rich);
+      void transport.updateRich(delivery.externalId!, rich).catch((error: unknown) => {
+        this.deps.log("im notice card update failed", error);
+      });
+    }
+  }
+
+  /** 提问被回答（网页点选、手打回复、另一个 IM）：把已推出去的提问卡片改成已回答 */
+  private settleQuestion(connection: StoredConnection, answer: ChatMessage): void {
+    const questionId = answer.answer?.questionMessageId ?? answer.replyToMessageId;
+    const question = questionId ? this.deps.getMessage(questionId) : undefined;
+    if (question?.kind !== "question") return;
+    const transport = this.transports.get(connection.id);
+    if (!transport?.updateRich || !this.cardsEnabled(connection)) return;
+    const link = this.deps.store
+      .linksOf(question.id)
+      .find((item) => item.connectionId === connection.id && item.direction === "out");
+    if (!link?.externalId) return;
+    const rich = this.answeredQuestion(connection, question, answer);
+    void transport.updateRich(link.externalId, rich).catch((error: unknown) => {
+      this.deps.log("im question card update failed", error);
+    });
+  }
+
+  private answeredQuestion(
+    connection: StoredConnection,
+    question: ChatMessage,
+    answer: ChatMessage | { selected: string[]; other?: string; by: string },
+  ): ImRich {
+    const driver = this.deps.drivers[connection.channel];
+    const base = this.richMessage(connection, question, driver?.richTextLength ?? 4000);
+    const selected = "selected" in answer ? answer.selected : (answer.answer?.selected ?? []);
+    const text =
+      "selected" in answer
+        ? [
+            ...selected.map(
+              (key) =>
+                `${key}：${question.question?.options.find((item) => item.key === key)?.label ?? ""}`,
+            ),
+            ...(answer.other ? [`其它：${answer.other}`] : []),
+          ].join("；")
+        : plain(oneLine(answer.content, 200));
+    const by = "selected" in answer ? answer.by : answer.senderName;
+    return {
+      ...base,
+      selected,
+      resolved: { text: "已回答", ok: true },
+      note: `${by} 的回答：${text}`,
+    };
+  }
+
+  /** 人在卡片上点了按钮：校验是房主本人，再走与网页相同的操作；返回即时提示与更新后的卡片 */
+  private handleAction(connectionId: string, action: ImAction): ImActionResult | undefined {
+    const connection = this.deps.store.getConnection(connectionId);
+    if (!connection || connection.status === "paused") {
+      return { toast: { type: "warning", text: "这个连接已暂停" } };
+    }
+    if (action.operatorId !== connection.ownerActorId) {
+      return { toast: { type: "error", text: "只有房主本人可以操作" } };
+    }
+    const owner = this.ownerOf(connection);
+    if (!owner) {
+      return { toast: { type: "error", text: `在房间里找不到成员 ${connection.ownerName}` } };
+    }
+    const op = action.value.do;
+    if (op === "answer" || op === "answer_form")
+      return this.answerFromCard(connection, owner, action);
+    if (op === "retry" || op === "dismiss" || op === "continue") {
+      return this.invocationFromCard(connection, owner, action, op);
+    }
+    return undefined;
+  }
+
+  private answerFromCard(
+    connection: StoredConnection,
+    owner: Participant,
+    action: ImAction,
+  ): ImActionResult {
+    const questionId = this.deps.store.messageForExternal(connection.id, action.externalId);
+    const question = questionId ? this.deps.getMessage(questionId) : undefined;
+    if (question?.kind !== "question") {
+      return { toast: { type: "error", text: "找不到这条提问" } };
+    }
+    if (!this.deps.isWaiting(question.id)) {
+      const driver = this.deps.drivers[connection.channel];
+      return {
+        toast: { type: "info", text: "这个问题已经回答过了" },
+        rich: {
+          ...this.richMessage(connection, question, driver?.richTextLength ?? 4000),
+          resolved: { text: "已结束", ok: false },
+        },
+      };
+    }
+    const form = action.form ?? {};
+    const keys =
+      action.value.do === "answer"
+        ? [action.value.key ?? ""]
+        : Object.entries(form)
+            .filter(
+              ([name, value]) =>
+                name.startsWith(OPTION_FIELD_PREFIX) && (value === true || value === "true"),
+            )
+            .map(([name]) => name.slice(OPTION_FIELD_PREFIX.length));
+    const other = typeof form[OTHER_FIELD] === "string" ? form[OTHER_FIELD].trim() : "";
+    const picked = keys.filter(Boolean);
+    if (!picked.length && !other) {
+      return { toast: { type: "warning", text: "请先选一个选项，或填写其它答案" } };
+    }
+    const clientMessageId = `im-card-${digest(
+      `${connection.id}:${action.externalId}:${picked.join(",")}:${other}`,
+    )}`;
+    this.posting = connection.id;
+    this.answeringFromCard = connection.id;
+    try {
+      if (question.question) {
+        this.deps.choose(owner, question.id, picked, clientMessageId, other || undefined);
+      } else {
+        this.deps.post(owner, {
+          content: other,
+          clientMessageId,
+          replyToMessageId: question.id,
+          via: { channel: connection.channel },
+        });
+      }
+    } catch (error) {
+      return { toast: { type: "error", text: describe(error) } };
+    } finally {
+      this.posting = undefined;
+      this.answeringFromCard = undefined;
+    }
+    return {
+      toast: { type: "success", text: "已提交" },
+      rich: this.answeredQuestion(connection, question, {
+        selected: picked,
+        ...(other ? { other } : {}),
+        by: owner.username,
+      }),
+    };
+  }
+
+  private invocationFromCard(
+    connection: StoredConnection,
+    owner: Participant,
+    action: ImAction,
+    op: "retry" | "dismiss" | "continue",
+  ): ImActionResult {
+    const delivery = this.deps.store.deliveryByExternal(connection.id, action.externalId);
+    const check = delivery?.check;
+    if (!delivery?.rich || check?.kind !== "invocation") {
+      return { toast: { type: "error", text: "找不到这条任务" } };
+    }
+    const label =
+      op === "dismiss"
+        ? "已忽略"
+        : op === "continue"
+          ? `已追加 ${BUDGET_EXTEND_TURNS} 轮`
+          : delivery.rich.tone === "approval"
+            ? "已批准"
+            : "已重试";
+    try {
+      if (op === "retry") this.deps.retry(owner, check.id);
+      else if (op === "dismiss") this.deps.dismiss(owner, check.id);
+      else this.deps.extendBudget(owner, BUDGET_EXTEND_TURNS);
+    } catch (error) {
+      return { toast: { type: "error", text: describe(error) } };
+    }
+    const rich: ImRich = {
+      ...delivery.rich,
+      resolved: { text: label, ok: op !== "dismiss" },
+      note: `${owner.username} 在飞书上${label.replace(/^已/, "")}`,
+    };
+    this.deps.store.setRich(delivery.id, rich);
+    return { toast: { type: "success", text: label }, rich };
   }
 
   private ownerOf(connection: StoredConnection): Participant | undefined {
@@ -702,6 +1233,14 @@ export class ImHub {
   onMessageCreated(message: ChatMessage): void {
     for (const connection of this.deps.store.listConnections(message.roomId)) {
       if (connection.status === "paused") continue;
+      // 提问被回答了：推出去的提问卡片改成已回答（卡片上点的由回调自己更新）
+      if (
+        (message.answer || message.replyToMessageId) &&
+        message.senderType === "human" &&
+        this.answeringFromCard !== connection.id
+      ) {
+        this.settleQuestion(connection, message);
+      }
       // 从这个连接发进来的消息不再推回去
       if (this.posting === connection.id) continue;
       const decision = this.decide(connection, message);
@@ -748,7 +1287,11 @@ export class ImHub {
    */
   onInvocationUpdated(invocation: Invocation): void {
     for (const connection of this.deps.store.listConnections(invocation.roomId)) {
-      if (connection.status === "paused" || connection.level === "im") continue;
+      if (connection.status === "paused") continue;
+      // 飞书派的任务：进度卡片、处理中/完成表情；已发出的提醒卡片随状态改成已处理
+      this.trackTask(connection, invocation);
+      this.settleNotices(connection, invocation);
+      if (connection.level === "im") continue;
       const owner = this.ownerOf(connection);
       if (!owner) continue;
       const ownTask = this.rootRequesterId(invocation) === owner.id;
@@ -770,7 +1313,9 @@ export class ImHub {
       const trigger = this.deps.getMessage(invocation.messageId);
       const origin = trigger ? this.originOf(trigger, connection.id) : undefined;
       const driver = this.deps.drivers[connection.channel];
-      const rich = driver?.richTextLength ? this.richNotice(invocation, trigger) : undefined;
+      const rich = driver?.richTextLength
+        ? this.richNotice(invocation, trigger, this.cardsEnabled(connection))
+        : undefined;
       this.deps.store.enqueue({
         connectionId: connection.id,
         eventKey: `inv:${invocation.id}:${invocation.attempts}:${invocation.status}`,
@@ -811,13 +1356,24 @@ export class ImHub {
   }
 
   /** 调用状态提醒的卡片：失败、结果未知、被拦下、等批准 */
-  private richNotice(invocation: Invocation, trigger: ChatMessage | undefined): ImRich | undefined {
+  private richNotice(
+    invocation: Invocation,
+    trigger: ChatMessage | undefined,
+    interactive: boolean,
+  ): ImRich | undefined {
     const ref = trigger ? `#${trigger.seq}` : "这条任务";
     const detail = invocation.detail ? invocation.detail.replace(/\s+/g, " ").trim() : "";
     const agent = invocation.agentName;
     const url = this.deps.webUrl(invocation.roomId);
     const subtitle = `${this.roomName(invocation.roomId)}${trigger ? ` · #${trigger.seq}` : ""}`;
     const quote = trigger ? `> ${plain(oneLine(trigger.content, 120))}` : "";
+    const act = (
+      ...items: Array<[string, string, "primary" | "default" | "danger"]>
+    ): Pick<ImRich, "actions"> =>
+      interactive
+        ? { actions: items.map(([label, op, style]) => ({ label, value: { do: op }, style })) }
+        : {};
+    const ignore: [string, string, "default"] = ["忽略", "dismiss", "default"];
     const base = (rich: Omit<ImRich, "subtitle" | "link" | "summary">): ImRich => ({
       ...rich,
       subtitle,
@@ -831,7 +1387,8 @@ export class ImHub {
           tone: "danger",
           tag: "失败",
           body: [quote, detail ? `**原因**：${plain(detail)}` : ""].filter(Boolean).join("\n\n"),
-          note: `可以到网页查看详情，或重试 ${ref}`,
+          note: interactive ? "可以直接重试，或到网页看详情" : `可以到网页查看详情，或重试 ${ref}`,
+          ...act(["重试", "retry", "primary"], ignore),
         });
       case "timed_out":
         return base({
@@ -840,6 +1397,7 @@ export class ImHub {
           tag: "结果未知",
           body: quote,
           note: "长时间没有进展，不代表失败；到网页确认后再决定是否重试",
+          ...act(ignore),
         });
       case "blocked":
         return invocation.blockReason === "guest_approval"
@@ -850,7 +1408,8 @@ export class ImHub {
               body: [`**${plain(invocation.requesterName)}**（访客）请 **${agent}** 处理：`, quote]
                 .filter(Boolean)
                 .join("\n\n"),
-              note: "到网页点「批准」后才会派发",
+              note: interactive ? "批准后才会派发" : "到网页点「批准」后才会派发",
+              ...act(["批准", "retry", "primary"], ignore),
             })
           : base({
               title: `${agent} 已暂停`,
@@ -859,7 +1418,8 @@ export class ImHub {
               body: [quote, `**原因**：${plain(detail || "Agent 对话轮数到了上限")}`]
                 .filter(Boolean)
                 .join("\n\n"),
-              note: "到网页点「继续」",
+              note: interactive ? `点「继续」再给 ${BUDGET_EXTEND_TURNS} 轮` : "到网页点「继续」",
+              ...act(["继续", "continue", "primary"], ignore),
             });
       default:
         return undefined;
@@ -888,11 +1448,13 @@ export class ImHub {
           label: plain(option.label),
         }));
       }
-      note = message.question
-        ? message.question.multiple
-          ? "回复这张卡片作答：选项字母，多选用逗号隔开（如 A,C）；也可以直接回复文字"
-          : "回复这张卡片作答：选项字母（如 A）；也可以直接回复文字"
-        : "回复这张卡片作答";
+      note = this.cardsEnabled(connection)
+        ? "直接点选作答；也可以回复这张卡片打字"
+        : message.question
+          ? message.question.multiple
+            ? "回复这张卡片作答：选项字母，多选用逗号隔开（如 A,C）；也可以直接回复文字"
+            : "回复这张卡片作答：选项字母（如 A）；也可以直接回复文字"
+          : "回复这张卡片作答";
     }
     if (body.length > limit) {
       body = `${body.slice(0, limit)}…`;
@@ -920,6 +1482,9 @@ export class ImHub {
         : {}),
       ...(body ? { body } : {}),
       ...(options ? { options } : {}),
+      ...(question && this.cardsEnabled(connection)
+        ? { choice: { multiple: Boolean(message.question?.multiple) } }
+        : {}),
       ...(note ? { note } : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(url ? { link: { label: `在网页查看 #${message.seq}`, url } } : {}),
@@ -1019,6 +1584,37 @@ export class ImHub {
     }
   }
 
+  /** 把消息的附件以图片或文件发到同一会话，回复在卡片下面；失败只记日志（卡片里有名字和网页入口） */
+  private async forwardFiles(
+    transport: ImTransport,
+    item: OutboxItem,
+    cardExternalId: string | undefined,
+  ): Promise<void> {
+    if (!transport.sendFile) return;
+    const message = this.deps.getMessage(item.messageId!);
+    for (const attachment of (message?.attachments ?? []).slice(0, MAX_FORWARDED_FILES)) {
+      if (attachment.size > MAX_FORWARDED_FILE_BYTES) continue;
+      try {
+        const file = await this.deps.readAttachment(attachment.id);
+        if (!file) continue;
+        await transport.sendFile(
+          item.chatId,
+          {
+            name: file.name,
+            mime: file.mime,
+            // 飞书图片上限 10 MB，超了按文件发
+            kind: file.kind === "image" && file.data.length <= 10 * 1024 * 1024 ? "image" : "file",
+            data: file.data,
+          },
+          cardExternalId ?? item.replyToExternalId,
+        );
+      } catch (error) {
+        this.deps.log("im file forward failed（重新扫码可开通文件权限）", error);
+        return;
+      }
+    }
+  }
+
   /** 一条或多条（合并推送）一起发：有卡片版本就发卡片，否则发纯文本 */
   private async sendItems(items: OutboxItem[]): Promise<void> {
     const first = items[0]!;
@@ -1041,7 +1637,7 @@ export class ImHub {
           ? await transport.sendRich(first.chatId, rich, text, first.replyToExternalId)
           : await transport.sendText(first.chatId, text, first.replyToExternalId);
       for (const item of live) {
-        this.deps.store.markSent(item.id);
+        this.deps.store.markSent(item.id, externalId);
         if (item.messageId) {
           this.deps.store.link({
             messageId: item.messageId,
@@ -1051,6 +1647,10 @@ export class ImHub {
             direction: "out",
           });
         }
+      }
+      // 单条推送带的附件：图片、文件真的发过去（合并推送里只列名字）
+      if (live.length === 1 && first.messageId && !first.eventKey.startsWith("task:")) {
+        void this.forwardFiles(transport, first, externalId);
       }
     } catch (error) {
       for (const item of live) {
@@ -1076,6 +1676,37 @@ function formatSize(bytes: number): string {
 }
 
 /** 合并项按单条长度上限切组 */
+const MAX_FORWARDED_FILES = 5;
+const MAX_FORWARDED_FILE_BYTES = 20 * 1024 * 1024;
+/** 进度卡片 2 秒内最多改一次，避免频繁调接口 */
+const TASK_CARD_THROTTLE_MS = 2_000;
+/** 卡片上「继续」追加的对话轮数（与网页一致） */
+const BUDGET_EXTEND_TURNS = 10;
+const TASK_STATUS_TEXT: Record<string, string> = {
+  failed: "失败",
+  timed_out: "结果未知",
+  cancelled: "已停止",
+  blocked: "已暂停",
+};
+
+/** 提醒卡片被别处处理后的结论 */
+function settledLabel(invocation: Invocation): { text: string; ok: boolean } {
+  if (invocation.resolution) return { text: "已忽略", ok: false };
+  switch (invocation.status) {
+    case "queued":
+    case "running":
+      return { text: "已重新开始", ok: true };
+    case "completed":
+      return { text: "已完成", ok: true };
+    case "cancelled":
+      return { text: "已停止", ok: false };
+    case "waiting_human":
+      return { text: "在等你回答", ok: true };
+    default:
+      return { text: "状态已变化", ok: false };
+  }
+}
+
 function oneLine(text: string, max: number): string {
   const single = text.replace(/\s+/g, " ").trim();
   return single.length > max ? `${single.slice(0, max - 1)}…` : single;

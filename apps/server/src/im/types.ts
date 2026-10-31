@@ -14,12 +14,36 @@ export type ImInbound = {
   text: string;
   /** 这条消息引用回复了哪条 IM 消息（飞书的 parent_id） */
   replyToExternalId?: string;
-  /** 不是文字（图片、语音等），目前只支持文字 */
+  /** 随消息发来的图片、文件（需要再下载） */
+  files?: ImInboundFile[];
+  /** 既不是文字也不是图片/文件（语音、视频等），目前不支持 */
   unsupported?: boolean;
+};
+
+export type ImInboundFile = { key: string; kind: "image" | "file"; name?: string };
+
+/** 人在卡片上点了按钮或提交了表单 */
+export type ImAction = {
+  /** 被点的那张卡片在平台上的消息 ID */
+  externalId: string;
+  chatId: string;
+  operatorId: string;
+  /** 按钮上带的值（我们自己写进卡片的） */
+  value: Record<string, string>;
+  /** 表单提交时各字段的值 */
+  form?: Record<string, unknown>;
+};
+
+/** 点击后的即时反馈：弹一句提示，并可把卡片原地换成新内容 */
+export type ImActionResult = {
+  toast?: { type: "success" | "info" | "warning" | "error"; text: string };
+  rich?: ImRich;
 };
 
 export type ImTransportEvents = {
   onMessage(message: ImInbound): void;
+  /** 卡片交互回调；平台要求几秒内应答，处理必须是同步的轻量操作 */
+  onAction?(action: ImAction): ImActionResult | undefined;
   onStatus(status: "connected" | "error", detail?: string): void;
 };
 
@@ -47,6 +71,24 @@ export type ImRich = {
   sections?: Array<{ title: string; subtitle?: string; body: string }>;
   /** 底部按钮：到网页查看 */
   link?: { label: string; url: string };
+  /** 可点的操作按钮（重试、批准、忽略…）；value 原样回传 */
+  actions?: Array<{
+    label: string;
+    value: Record<string, string>;
+    style?: "primary" | "default" | "danger";
+  }>;
+  /** 提问可以直接在卡片上作答：单选是一排按钮，多选是勾选框加提交，都能另填「其它」 */
+  choice?: { multiple: boolean };
+  /** 已经处理完：显示结论、去掉所有按钮 */
+  resolved?: { text: string; ok: boolean };
+  /** 已选中的选项（作答后高亮） */
+  selected?: string[];
+  /** 任务进度：每个 Agent 一行 */
+  steps?: Array<{
+    label: string;
+    state: "queued" | "running" | "waiting" | "done" | "failed";
+    detail?: string;
+  }>;
   /** 会话列表里的一行预览 */
   summary: string;
 };
@@ -56,6 +98,19 @@ export interface ImTransport {
   start(events: ImTransportEvents): Promise<void>;
   /** 返回平台给新消息的 ID（拿不到时为 undefined） */
   sendText(chatId: string, text: string, replyToExternalId?: string): Promise<string | undefined>;
+  /** 原地更新一张已发出的卡片（尽力而为，失败不影响业务） */
+  updateRich?(externalId: string, rich: ImRich): Promise<void>;
+  /** 给一条消息加表情回应，返回回应 ID（用于之后撤掉） */
+  react?(externalId: string, emoji: string): Promise<string | undefined>;
+  unreact?(externalId: string, reactionId: string): Promise<void>;
+  /** 发图片或文件 */
+  sendFile?(
+    chatId: string,
+    file: { name: string; mime: string; kind: "image" | "file"; data: Buffer },
+    replyToExternalId?: string,
+  ): Promise<string | undefined>;
+  /** 下载入站消息里的图片或文件 */
+  download?(externalId: string, file: ImInboundFile): Promise<{ name: string; data: Buffer }>;
   /** 支持富消息的渠道实现；发送失败时应自行退回纯文本 fallback */
   sendRich?(
     chatId: string,

@@ -67,8 +67,14 @@ class Peer {
 /** 假的 IM 渠道：扫码由测试触发，发出的文字记下来，入站消息由测试注入 */
 class FakeChannel {
   sent: Array<{ chatId: string; text: string; replyTo?: string; rich?: ImRich }> = [];
+  /** 每条发出的消息对应的平台消息 ID */
+  sentIds = new Map<object, string>();
   /** 模拟支持卡片的渠道（飞书） */
   richCards = false;
+  /** 卡片原地更新、表情、文件的调用记录 */
+  updates: Array<{ externalId: string; rich: ImRich }> = [];
+  reactions: Array<{ op: "add" | "remove"; externalId: string; emoji?: string; id?: string }> = [];
+  files: Array<{ chatId: string; name: string; kind: string; size: number; replyTo?: string }> = [];
   events: ImTransportEvents | undefined;
   login: { callbacks: ImLoginCallbacks; resolve: (owner: string) => void } | undefined;
   transports = 0;
@@ -90,7 +96,7 @@ class FakeChannel {
               resolve({
                 ownerActorId: owner,
                 label: "测试机器人",
-                config: { appId: "cli_test" },
+                config: { appId: "cli_test", ...(this.richCards ? { cardCallbacks: "1" } : {}) },
                 secret: "s3cret",
                 identityKey: "appId",
               }),
@@ -110,10 +116,43 @@ class FakeChannel {
           ...(this.richCards
             ? {
                 sendRich: async (chatId: string, rich: ImRich, text: string, replyTo?: string) => {
-                  this.sent.push({ chatId, text, rich, ...(replyTo ? { replyTo } : {}) });
+                  const item = { chatId, text, rich, ...(replyTo ? { replyTo } : {}) };
+                  this.sent.push(item);
+                  this.counter += 1;
+                  this.sentIds.set(item, `out-${this.counter}`);
+                  return `out-${this.counter}`;
+                },
+                updateRich: async (externalId: string, rich: ImRich) => {
+                  this.updates.push({ externalId, rich });
+                },
+                react: async (externalId: string, emoji: string) => {
+                  this.counter += 1;
+                  const id = `reaction-${this.counter}`;
+                  this.reactions.push({ op: "add", externalId, emoji, id });
+                  return id;
+                },
+                unreact: async (externalId: string, id: string) => {
+                  this.reactions.push({ op: "remove", externalId, id });
+                },
+                sendFile: async (
+                  chatId: string,
+                  file: { name: string; kind: string; data: Buffer },
+                  replyTo?: string,
+                ) => {
+                  this.files.push({
+                    chatId,
+                    name: file.name,
+                    kind: file.kind,
+                    size: file.data.length,
+                    ...(replyTo ? { replyTo } : {}),
+                  });
                   this.counter += 1;
                   return `out-${this.counter}`;
                 },
+                download: async (_externalId: string, file: { key: string; name?: string }) => ({
+                  name: file.name ?? `${file.key}.png`,
+                  data: PNG,
+                }),
               }
             : {}),
           close: async () => {
@@ -137,6 +176,11 @@ class FakeChannel {
 }
 
 const OWNER = { Authorization: "Bearer test-token", "Content-Type": "application/json" };
+/** 1×1 PNG */
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 async function until<T>(check: () => T | undefined, timeoutMs = 2_000): Promise<T> {
   const started = Date.now();
@@ -227,7 +271,7 @@ describe("IM 连接", () => {
       expect(result.body.level).toBe(level);
       return connection!.id;
     };
-    return { app, port, api, join, connect, fake, clock, setLevel };
+    return { app, port, api, join, connect, fake, clock, setLevel, base };
   }
 
   it("扫码连接后，房主在 IM 里发的消息以房主身份进入房间并唤醒 Agent，结果回到原会话", async () => {
@@ -414,16 +458,207 @@ describe("IM 连接", () => {
         { key: "A", label: "测试环境" },
         { key: "B", label: "正式环境" },
       ],
-      note: expect.stringContaining("选项字母"),
+      choice: { multiple: false },
+      note: expect.stringContaining("直接点选"),
     });
     // 回到发起任务的那条 IM 消息下面
     expect(pushed.replyTo).toBeDefined();
-    fake.emit({ text: "B" });
+    const externalId = (await until(() => fake.sentIds.get(pushed)))!;
+    // 别人点不算
+    expect(
+      fake.events!.onAction!({
+        externalId,
+        chatId: "chat-1",
+        operatorId: "someone-else",
+        value: { hive: "1", do: "answer", key: "B" },
+      }),
+    ).toMatchObject({ toast: { type: "error" } });
+    const result = fake.events!.onAction!({
+      externalId,
+      chatId: "chat-1",
+      operatorId: "owner-open-id",
+      value: { hive: "1", do: "answer", key: "B" },
+    });
+    expect(result).toMatchObject({
+      toast: { type: "success" },
+      rich: { resolved: { text: "已回答" }, selected: ["B"], note: "rd 的回答：B：正式环境" },
+    });
     const woken = await helper.next(
       (event) => event.type === "agent.mentioned" && event.message.content.startsWith("选择 B"),
     );
     expect((woken as { message: ChatMessage }).message.answer).toMatchObject({ selected: ["B"] });
+    // 再点一次：已经答过了
+    expect(
+      fake.events!.onAction!({
+        externalId,
+        chatId: "chat-1",
+        operatorId: "owner-open-id",
+        value: { hive: "1", do: "answer", key: "A" },
+      }),
+    ).toMatchObject({ toast: { type: "info" }, rich: { resolved: { text: "已结束" } } });
     await client.close();
+  });
+
+  it("多选题在卡片上勾选加「其它」一起提交；网页上答了的提问卡片自动改成已回答", async () => {
+    const { join, connect, fake, port } = await start({ richCards: true });
+    const helper = await join("helper", "agent");
+    const { rd } = await connect();
+    fake.emit({ text: "@helper 准备发布" });
+    const mentioned = await helper.next((event) => event.type === "agent.mentioned");
+    const trigger = (mentioned as { message: ChatMessage }).message;
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+    await rd.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+      requestInit: {
+        headers: {
+          Authorization: "Bearer test-token",
+          "X-Hive-Room": "general",
+          "X-Hive-Agent-Name": "helper",
+        },
+      },
+    });
+    const client = new Client({ name: "im-test", version: "0.1.0" });
+    await client.connect(transport as unknown as Transport);
+    await client.callTool({
+      name: "hive_ask_human",
+      arguments: { question: "要通知哪些人？", options: ["测试", "产品", "运营"], multiple: true },
+    });
+    const card = await until(() => fake.sent.find((item) => item.rich?.choice?.multiple));
+    const externalId = fake.sentIds.get(card)!;
+    expect(
+      fake.events!.onAction!({
+        externalId,
+        chatId: "chat-1",
+        operatorId: "owner-open-id",
+        value: { do: "answer_form" },
+        form: {},
+      }),
+    ).toMatchObject({ toast: { type: "warning" } });
+    const result = fake.events!.onAction!({
+      externalId,
+      chatId: "chat-1",
+      operatorId: "owner-open-id",
+      value: { do: "answer_form" },
+      form: { opt_A: true, opt_B: false, opt_C: true, other: "还有法务" },
+    });
+    expect(result).toMatchObject({ rich: { selected: ["A", "C"], resolved: { ok: true } } });
+    const woken = await helper.next(
+      (event) => event.type === "agent.mentioned" && event.message.kind !== "question",
+    );
+    expect((woken as { message: ChatMessage }).message.content).toBe(
+      "选择 A：测试；C：运营；其它：还有法务",
+    );
+
+    // 再问一个，这次在网页上点选
+    const answerMessage = (woken as { message: ChatMessage }).message;
+    helper.send({ type: "invocation.report", messageId: answerMessage.id, status: "running" });
+    await rd.next(
+      (event) =>
+        event.type === "invocation.updated" &&
+        event.invocation.messageId === answerMessage.id &&
+        event.invocation.status === "running",
+    );
+    await client.callTool({
+      name: "hive_ask_human",
+      arguments: { question: "现在发吗？", options: ["发", "不发"] },
+    });
+    const second = await until(() =>
+      fake.sent.find((item) => item.rich?.body === "现在发吗？" && item.rich.choice),
+    );
+    const question = await rd.next(
+      (event) =>
+        event.type === "message.created" &&
+        event.message.kind === "question" &&
+        event.message.content.includes("现在发吗"),
+    );
+    rd.send({
+      type: "question.answer",
+      questionMessageId: (question as { message: ChatMessage }).message.id,
+      selected: ["A"],
+      clientMessageId: "web-answer",
+    });
+    const updated = await until(() =>
+      fake.updates.find((item) => item.externalId === fake.sentIds.get(second)),
+    );
+    expect(updated.rich).toMatchObject({ resolved: { text: "已回答" }, selected: ["A"] });
+    await client.close();
+  });
+
+  it("飞书派活：回一张进度卡片并随状态更新，消息上先标「处理中」完成后换成「完成」", async () => {
+    const { join, connect, fake } = await start({ richCards: true });
+    const helper = await join("helper", "agent");
+    const { rd } = await connect();
+    fake.emit({ text: "@helper 跑一下测试" });
+    const mentioned = await helper.next((event) => event.type === "agent.mentioned");
+    const trigger = (mentioned as { message: ChatMessage }).message;
+    const card = await until(() => fake.sent.find((item) => item.rich?.steps));
+    expect(card.rich).toMatchObject({
+      title: "已派给 helper",
+      tag: "进行中",
+      steps: [{ label: "helper", state: "queued" }],
+    });
+    const inboundId = card.replyTo!;
+    await until(() =>
+      fake.reactions.find((item) => item.emoji === "Typing" && item.externalId === inboundId),
+    );
+    helper.send({
+      type: "invocation.report",
+      messageId: trigger.id,
+      status: "running",
+      progress: "执行命令：pnpm test",
+    });
+    const running = await until(
+      () => fake.updates.find((item) => item.rich.steps?.[0]?.state === "running"),
+      4_000,
+    );
+    expect(running.rich.steps![0]!.detail).toBe("执行命令：pnpm test");
+    helper.send({
+      type: "message.send",
+      clientMessageId: "done",
+      content: "测试全过",
+      parentMessageId: trigger.id,
+    });
+    const done = await until(() => fake.updates.find((item) => item.rich.resolved));
+    expect(done.rich).toMatchObject({ tag: "已完成", steps: [{ state: "done" }] });
+    await until(() => fake.reactions.find((item) => item.emoji === "DONE"));
+    expect(fake.reactions.some((item) => item.op === "remove")).toBe(true);
+    void rd;
+  });
+
+  it("飞书发来的图片带进房间；房间里带附件的消息把文件真的发过去", async () => {
+    const { join, connect, fake, api, base } = await start({ richCards: true });
+    const helper = await join("helper", "agent");
+    const { rd } = await connect();
+    fake.emit({ text: "@helper 看这张图", files: [{ key: "img_1", kind: "image" }] });
+    const mentioned = await helper.next((event) => event.type === "agent.mentioned");
+    const posted = (mentioned as { message: ChatMessage }).message;
+    expect(posted.attachments).toEqual([
+      expect.objectContaining({ name: "img_1.png", kind: "image" }),
+    ]);
+
+    // 网页上传一个附件，rd 以「全部消息」档发出：卡片之后跟着真实文件
+    const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections;
+    await api("POST", `/api/im/connections/${connection.id}/level`, { level: "all" });
+    const form = new FormData();
+    form.append("file", new Blob([PNG], { type: "image/png" }), "shot.png");
+    const upload = await fetch(`${base}/api/rooms/general/attachments`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test-token" },
+      body: form,
+    });
+    const attachment = (await upload.json()) as { id: string };
+    rd.send({
+      type: "message.send",
+      clientMessageId: "with-file",
+      content: "截图在这",
+      attachmentIds: [attachment.id],
+    });
+    const file = await until(() => fake.files.find((item) => item.name === "shot.png"));
+    expect(file).toMatchObject({ kind: "image", size: PNG.length });
+    const cardItem = fake.sent.find((item) => item.rich?.body === "截图在这")!;
+    expect(file.replyTo).toBe(fake.sentIds.get(cardItem));
   });
 
   it("个人微信必须确认风险；访客身份不能作为发言人", async () => {
@@ -664,6 +899,57 @@ describe("IM 推送档位", () => {
     const digest = await until(() => fake.sent.find((item) => item.rich?.tone === "digest"), 5_000);
     expect(digest.rich).toMatchObject({ title: "2 条新消息" });
     expect(digest.rich!.sections!.map((section) => section.body)).toEqual(["第一句", "第二句"]);
+  });
+
+  it("失败卡片带重试 / 忽略按钮：点重试重新派发并把卡片改成已处理", async () => {
+    const { fake, helper, assign } = await setup({ richCards: true });
+    const trigger = await assign("@helper 部署", "web-act");
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+    helper.send({
+      type: "invocation.report",
+      messageId: trigger.id,
+      status: "failed",
+      detail: "退出码 1",
+    });
+    const notice = await until(() => fake.sent.find((item) => item.rich?.tone === "danger"));
+    expect(notice.rich!.actions!.map((action) => action.label)).toEqual(["重试", "忽略"]);
+    const externalId = fake.sentIds.get(notice)!;
+    const result = fake.events!.onAction!({
+      externalId,
+      chatId: notice.chatId,
+      operatorId: "owner-open-id",
+      value: { hive: "1", do: "retry" },
+    });
+    expect(result).toMatchObject({
+      toast: { type: "success", text: "已重试" },
+      rich: { resolved: { text: "已重试", ok: true } },
+    });
+    const redelivered = await helper.next(
+      (event) => event.type === "agent.mentioned" && event.message.id === trigger.id,
+    );
+    expect(redelivered).toBeDefined();
+    // 已经重试过：再点会被拒绝，提示原因
+    expect(
+      fake.events!.onAction!({
+        externalId,
+        chatId: notice.chatId,
+        operatorId: "owner-open-id",
+        value: { hive: "1", do: "retry" },
+      }),
+    ).toMatchObject({ toast: { type: "error" } });
+  });
+
+  it("命令：/who 看谁在忙，/level 切换推送档位，/cards 开关卡片按钮", async () => {
+    const { fake, id, api } = await setup();
+    fake.emit({ text: "/who" });
+    await until(() => fake.sent.find((item) => item.text.includes("helper")));
+    expect(fake.sent.at(-1)!.text).toMatch(/🟢 空闲\u3000helper/);
+    fake.emit({ text: "/level agents" });
+    await until(() => fake.sent.find((item) => item.text.startsWith("已切换为：全部 Agent 消息")));
+    const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections;
+    expect(connection).toMatchObject({ id, level: "agents" });
+    fake.emit({ text: "/cards on" });
+    await until(() => fake.sent.find((item) => item.text.startsWith("这个渠道不支持卡片")));
   });
 
   it("暂停后不推，恢复后不补发暂停期间的消息", async () => {

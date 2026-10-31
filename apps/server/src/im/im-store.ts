@@ -41,6 +41,23 @@ export type OutboxCheck =
   | { kind: "question"; messageId: string }
   | { kind: "invocation"; id: string; status: string; attempts: number };
 
+type DeliveryRow = {
+  id: string;
+  connection_id: string;
+  event_key: string;
+  message_id: string | null;
+  chat_id: string;
+  reply_to_external_id: string | null;
+  text: string;
+  rich_json: string | null;
+  attempts: number;
+  batch: number;
+  check_json: string | null;
+  created_at: string;
+  status: string;
+  external_id: string | null;
+};
+
 export type OutboxItem = {
   id: string;
   connectionId: string;
@@ -61,6 +78,8 @@ export type OutboxItem = {
   check?: OutboxCheck;
   createdAt?: string;
 };
+
+export type SentDelivery = OutboxItem & { status: string; externalId?: string };
 
 /** 消息与 IM 会话的对应关系：入站消息是「源头」，出站消息记下 IM 侧的消息 ID 供回复引用 */
 export type ImLink = {
@@ -188,6 +207,13 @@ export class ImStore {
     const deliveryColumns = db.pragma("table_info(im_deliveries)") as Array<{ name: string }>;
     if (!deliveryColumns.some((column) => column.name === "rich_json")) {
       db.exec("ALTER TABLE im_deliveries ADD COLUMN rich_json TEXT");
+    }
+    if (!deliveryColumns.some((column) => column.name === "external_id")) {
+      // 发出后平台给的消息 ID：卡片回调、原地更新卡片都靠它找回这条推送
+      db.exec("ALTER TABLE im_deliveries ADD COLUMN external_id TEXT");
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS im_deliveries_external ON im_deliveries(connection_id, external_id)",
+      );
     }
     const columns = db.pragma("table_info(im_connections)") as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "level")) {
@@ -462,12 +488,66 @@ export class ImStore {
     }));
   }
 
-  markSent(id: string): void {
+  markSent(id: string, externalId?: string): void {
     this.db
       .prepare(
-        "UPDATE im_deliveries SET status = 'sent', error = NULL, updated_at = ? WHERE id = ?",
+        "UPDATE im_deliveries SET status = 'sent', error = NULL, external_id = COALESCE(?, external_id), updated_at = ? WHERE id = ?",
       )
-      .run(new Date().toISOString(), id);
+      .run(externalId ?? null, new Date().toISOString(), id);
+  }
+
+  private mapDelivery(row: DeliveryRow): SentDelivery {
+    return {
+      id: row.id,
+      connectionId: row.connection_id,
+      eventKey: row.event_key,
+      ...(row.message_id ? { messageId: row.message_id } : {}),
+      chatId: row.chat_id,
+      ...(row.reply_to_external_id ? { replyToExternalId: row.reply_to_external_id } : {}),
+      text: row.text,
+      ...(row.rich_json ? { rich: JSON.parse(row.rich_json) as ImRich } : {}),
+      attempts: row.attempts,
+      ...(row.batch ? { batch: true } : {}),
+      ...(row.check_json ? { check: JSON.parse(row.check_json) as OutboxCheck } : {}),
+      createdAt: row.created_at,
+      status: row.status,
+      ...(row.external_id ? { externalId: row.external_id } : {}),
+    };
+  }
+
+  /** 按平台消息 ID 找回推送（卡片回调时用） */
+  deliveryByExternal(connectionId: string, externalId: string): SentDelivery | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM im_deliveries WHERE connection_id = ? AND external_id = ?")
+      .get(connectionId, externalId) as DeliveryRow | undefined;
+    return row ? this.mapDelivery(row) : undefined;
+  }
+
+  deliveryByKey(connectionId: string, eventKey: string): SentDelivery | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM im_deliveries WHERE connection_id = ? AND event_key = ?")
+      .get(connectionId, eventKey) as DeliveryRow | undefined;
+    return row ? this.mapDelivery(row) : undefined;
+  }
+
+  /** 已发出、带卡片的调用提醒（调用状态再变时把卡片改成已处理） */
+  sentInvocationNotices(connectionId: string, invocationId: string): SentDelivery[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM im_deliveries WHERE connection_id = ? AND event_key LIKE ? AND status = 'sent'
+           AND external_id IS NOT NULL AND rich_json IS NOT NULL`,
+      )
+      .all(connectionId, `inv:${invocationId}:%`) as DeliveryRow[];
+    return rows.map((row) => this.mapDelivery(row));
+  }
+
+  /** 换掉一条推送的卡片内容（还没发出的发新内容；已发出的由调用方原地更新） */
+  setRich(id: string, rich: ImRich, text?: string): void {
+    this.db
+      .prepare(
+        "UPDATE im_deliveries SET rich_json = ?, text = COALESCE(?, text), updated_at = ? WHERE id = ?",
+      )
+      .run(JSON.stringify(rich), text ?? null, new Date().toISOString(), id);
   }
 
   /** 还没发出的合并项改为立即发送（它其实是交给房主的最终结果） */

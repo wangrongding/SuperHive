@@ -1174,6 +1174,14 @@ export class HiveDatabase {
     return row ? mapInvocation(row) : undefined;
   }
 
+  /** 一条消息触发的所有调用（按创建顺序） */
+  invocationsForMessage(messageId: string): Invocation[] {
+    const rows = this.db
+      .prepare("SELECT * FROM invocations WHERE message_id = ? ORDER BY created_at, rowid")
+      .all(messageId) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
   getInvocationFor(messageId: string, agentId: string): Invocation | undefined {
     const row = this.db
       .prepare("SELECT * FROM invocations WHERE message_id = ? AND agent_id = ?")
