@@ -163,21 +163,33 @@ importers:
       '@fastify/cors':
         specifier: ^10.1.0
         version: 10.1.0
+      '@fastify/multipart':
+        specifier: ^9.4.0
+        version: 9.4.0
       '@fastify/static':
         specifier: ^8.2.0
         version: 8.3.0
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.3.0
+      '@larksuiteoapi/node-sdk':
+        specifier: 1.76.0
+        version: 1.76.0
       '@modelcontextprotocol/sdk':
-        specifier: ^1.17.0
+        specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
+      '@wechatbot/wechatbot':
+        specifier: 2.2.0
+        version: 2.2.0
       better-sqlite3:
         specifier: ^12.2.0
         version: 12.11.1
       fastify:
         specifier: ^5.4.0
         version: 5.10.0
+      qrcode:
+        specifier: 1.5.4
+        version: 1.5.4
       update-notifier:
         specifier: ^7.3.1
         version: 7.3.1
