@@ -83,7 +83,16 @@ const app = await buildApp({
   agentCommandPrefix,
   ...(staticDir ? { staticDir } : {}),
   ...(instanceId ? { instanceId } : {}),
-  ...(agentCli ? { localAgents: { cli: agentCli, serverUrl: localServerUrl } } : {}),
+  ...(agentCli
+    ? {
+        localAgents: {
+          cli: agentCli,
+          serverUrl: localServerUrl,
+          logDir: path.join(path.dirname(databasePath), "agent-logs"),
+        },
+      }
+    : {}),
+  ...(process.env.HIVE_HANDOVER_FILE ? { handoverFile: process.env.HIVE_HANDOVER_FILE } : {}),
   logger: true,
 });
 await app.listen({ host, port });

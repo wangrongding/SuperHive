@@ -34,6 +34,10 @@ class FakeChild implements ChildHandle {
   onExit(listener: (code: number | null, error?: Error) => void) {
     this.exitListeners.push(listener);
   }
+  released = false;
+  release() {
+    this.released = true;
+  }
   kill(signal: NodeJS.Signals) {
     this.signals.push(signal);
     if (signal === "SIGKILL" || this.exitOnTerm) this.exit(signal === "SIGKILL" ? null : 0);
@@ -389,6 +393,56 @@ describe("LocalAgentSupervisor", () => {
     });
     return { supervisor, spawner, timers, advance: (ms: number) => (now += ms) };
   }
+
+  it("hands its agents over to the next Server and the next Server adopts them by pid", () => {
+    const database = new HiveDatabase(":memory:");
+    const first = supervisorWith(database);
+    const agent = first.supervisor.create({ provider: "omp", name: "rd-omp", access: "read-only" });
+    const child = first.spawner.children[0]!;
+    // 换代：只停止跟踪，不结束进程；进程号留在库里
+    first.supervisor.detach();
+    expect(child.signals).toEqual([]);
+    expect(child.released).toBe(true);
+    expect(database.listLocalAgents()[0]?.pid).toBe(child.pid);
+
+    const adopted = new FakeChild(child.pid, "node", [], {});
+    const adopt = vi.fn(() => adopted);
+    const second = supervisorWith(database, { adopt });
+    second.supervisor.start();
+    expect(adopt).toHaveBeenCalledWith(child.pid, { name: "rd-omp" });
+    expect(second.spawner.spawn).not.toHaveBeenCalled();
+    expect(second.supervisor.get(agent.id).pid).toBe(child.pid);
+    expect(second.supervisor.logs(agent.id).join("\n")).toContain("接管仍在运行的 rd-omp");
+
+    // 接管来的进程退出后照常按崩溃处理并重启
+    adopted.exit(1);
+    expect(second.supervisor.get(agent.id).status).toBe("restarting");
+    second.timers.fireNext();
+    expect(second.spawner.spawn).toHaveBeenCalledTimes(1);
+    database.close();
+  });
+
+  it("starts a fresh process when the recorded one is gone, and stops a leftover that should not run", () => {
+    const database = new HiveDatabase(":memory:");
+    const first = supervisorWith(database);
+    const running = first.supervisor.create({ provider: "omp", name: "a", access: "read-only" });
+    const stopped = first.supervisor.create({ provider: "omp", name: "b", access: "read-only" });
+    first.supervisor.detach();
+    database.setLocalAgentAutostart(stopped.id, false);
+
+    const leftover = new FakeChild(1001, "node", [], {});
+    const second = supervisorWith(database, {
+      adopt: (pid) => (pid === 1001 ? leftover : undefined),
+    });
+    second.supervisor.start();
+    // a 的旧进程已经不在：另起一个，并清掉旧进程号
+    expect(second.spawner.spawn).toHaveBeenCalledTimes(1);
+    expect(second.supervisor.get(running.id).pid).toBe(second.spawner.children[0]!.pid);
+    // b 已被手动停止：留下的进程结束掉
+    expect(leftover.signals).toEqual(["SIGTERM"]);
+    expect(second.supervisor.get(stopped.id).status).toBe("stopped");
+    database.close();
+  });
 
   it("restarts with exponential backoff and stops after repeated crashes", () => {
     const database = new HiveDatabase(":memory:");

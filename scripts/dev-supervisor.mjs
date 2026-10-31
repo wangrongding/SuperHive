@@ -62,8 +62,17 @@ export function isWatchedFile(file) {
 
 /** One owner, one update at a time; edits during a build invalidate its ready notification. */
 export class DevSupervisor extends EventEmitter {
-  constructor({ statusPath, build, startServer, debounceMs = 1_500, healthTimeoutMs = 30_000 }) {
+  constructor({
+    statusPath,
+    build,
+    startServer,
+    debounceMs = 1_500,
+    healthTimeoutMs = 30_000,
+    handoverPath,
+  }) {
     super();
+    // 换代时写下交接标记：旧 Server 据此把本机 Agent 留给新 Server 接管，而不是一起结束
+    this.handoverPath = handoverPath;
     this.statusPath = statusPath;
     this.build = build;
     this.startServer = startServer;
@@ -142,6 +151,7 @@ export class DevSupervisor extends EventEmitter {
       this.status("restarting", files);
       const previous = this.server;
       this.server = undefined; // An intentional exit must not be reported as a crash.
+      if (previous) this.markHandover(true);
       await previous?.stop();
       if (this.closed || this.paused || this.pending.size) return;
       await build?.publish?.();
@@ -178,6 +188,19 @@ export class DevSupervisor extends EventEmitter {
     }
   }
 
+  /** 交接标记：true 时写入（Server 只是换代），false 时删除（真正停止，本机 Agent 一起结束） */
+  markHandover(handover) {
+    if (!this.handoverPath) return;
+    try {
+      if (handover) {
+        fs.mkdirSync(path.dirname(this.handoverPath), { recursive: true });
+        fs.writeFileSync(this.handoverPath, `${new Date().toISOString()}\n`, { mode: 0o600 });
+      } else fs.rmSync(this.handoverPath, { force: true });
+    } catch (error) {
+      console.error("[dev] 无法写入 Agent 交接标记：", error);
+    }
+  }
+
   setControlFailure(files, error) {
     this.controlFailure = { files: [...files], error: publicError(error) };
     this.status("failed", files, error);
@@ -205,6 +228,8 @@ export class DevSupervisor extends EventEmitter {
     await this.active;
     const server = this.server;
     this.server = undefined;
+    // 开发 supervisor 自更新（preserveStatus）时 Server 也只是换代；Ctrl+C 才让本机 Agent 一起结束
+    this.markHandover(preserveStatus);
     await server?.stop();
   }
 }
@@ -429,8 +454,10 @@ export async function main() {
   await assertPortAvailable(port, host);
   await assertPortAvailable(webPort, "0.0.0.0");
   const require = createRequire(path.join(repoRoot, "apps/server/package.json"));
+  const handoverPath = path.join(stateDir, "agent-handover");
   const supervisor = new DevSupervisor({
     statusPath,
+    handoverPath,
     build: ({ signal }) => buildWorkspace(repoRoot, { signal, stateDir }),
     startServer: () => {
       const instanceId = randomUUID();
@@ -439,7 +466,7 @@ export async function main() {
         ["--import", require.resolve("tsx"), path.join(repoRoot, "apps/server/src/index.ts")],
         {
           cwd: path.join(repoRoot, "apps/server"),
-          env: { ...process.env, HIVE_INSTANCE_ID: instanceId },
+          env: { ...process.env, HIVE_INSTANCE_ID: instanceId, HIVE_HANDOVER_FILE: handoverPath },
         },
       );
       const probeHost = ["0.0.0.0", "::", "localhost"].includes(host) ? "127.0.0.1" : host;

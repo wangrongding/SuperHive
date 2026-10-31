@@ -114,7 +114,11 @@ describe("Hive WebSocket protocol", () => {
     closeApp = () => app.close();
 
     const response = await app.inject({ method: "GET", url: "/health" });
-    expect(response.json()).toEqual({ status: "ok", instanceId: "test-instance" });
+    expect(response.json()).toEqual({
+      status: "ok",
+      pid: process.pid,
+      instanceId: "test-instance",
+    });
   });
 
   it("can expose the workspace command during local development", async () => {

@@ -67,6 +67,8 @@ type LocalAgentRow = {
   model: string | null;
   autostart: number;
   created_at: string;
+  pid?: number | null;
+  pid_started_at?: string | null;
 };
 
 export type LocalAgentConfig = {
@@ -78,6 +80,9 @@ export type LocalAgentConfig = {
   model: string | null;
   autostart: boolean;
   createdAt: string;
+  /** 上一个 Server 留下、可能仍在运行的进程：Server 交接重启后据此接管，而不是另起一个 */
+  pid?: number | null;
+  pidStartedAt?: string | null;
 };
 
 function mapLocalAgent(row: LocalAgentRow): LocalAgentConfig {
@@ -90,6 +95,8 @@ function mapLocalAgent(row: LocalAgentRow): LocalAgentConfig {
     model: row.model,
     autostart: row.autostart === 1,
     createdAt: row.created_at,
+    pid: row.pid ?? null,
+    pidStartedAt: row.pid_started_at ?? null,
   };
 }
 
@@ -494,6 +501,11 @@ export class HiveDatabase {
         created_at TEXT NOT NULL
       );
     `);
+    const localAgentColumns = this.db.pragma("table_info(local_agents)") as Array<{ name: string }>;
+    if (!localAgentColumns.some((column) => column.name === "pid")) {
+      this.db.exec("ALTER TABLE local_agents ADD COLUMN pid INTEGER");
+      this.db.exec("ALTER TABLE local_agents ADD COLUMN pid_started_at TEXT");
+    }
     const participantColumns = this.db.pragma("table_info(participants)") as Array<{
       name: string;
     }>;
@@ -1457,6 +1469,13 @@ export class HiveDatabase {
     this.db
       .prepare("UPDATE local_agents SET autostart = ? WHERE id = ?")
       .run(autostart ? 1 : 0, id);
+  }
+
+  /** 记下本机 Agent 当前的进程；null 表示已退出 */
+  setLocalAgentProcess(id: string, pid: number | null, startedAt: string | null): void {
+    this.db
+      .prepare("UPDATE local_agents SET pid = ?, pid_started_at = ? WHERE id = ?")
+      .run(pid, startedAt, id);
   }
 
   deleteLocalAgent(id: string): boolean {

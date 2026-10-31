@@ -85,7 +85,23 @@ export type BridgeTuning = {
   /** 隔多少轮或多久重新发送一次完整上下文 */
   fullPromptEveryTurns?: number;
   fullPromptEveryMs?: number;
+  /**
+   * Agent 已经干完活、正要把结果交回时连不上 Server（例如 Server 正在换代重启），
+   * 最多等这么久并反复重试，而不是把整轮当失败重跑一遍
+   */
+  offlineRetryMs?: number;
+  offlineRetryIntervalMs?: number;
 };
+
+/** 连不上 Server 一类的错误：可以等 Server 回来再试，不代表这一轮做错了 */
+export function isServerUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "TypeError" || error.name === "AbortError" || error.name === "TimeoutError")
+    return true;
+  return /ECONNREFUSED|ECONNRESET|fetch failed|socket hang up|聊天室连接|未在 15 秒内确认|\(5\d\d\)/.test(
+    error.message,
+  );
+}
 
 type ActiveBatch = {
   executionId: string;
@@ -158,6 +174,8 @@ export class AgentBridge {
       progressStaleMs: 120_000,
       fullPromptEveryTurns: 8,
       fullPromptEveryMs: 30 * 60_000,
+      offlineRetryMs: 5 * 60_000,
+      offlineRetryIntervalMs: 2_000,
       ...options.tuning,
     };
     this.attachments =
@@ -690,7 +708,10 @@ export class AgentBridge {
       const live = active.messages.filter(
         (message) => !this.recalled.has(message.id) && !active.cancelled.has(message.id),
       );
-      const messagesAfterReply = await this.room.fetchMessages(context.latestSeq);
+      // 结果已经出来了：之后与 Server 的往来如果赶上它重启，等它回来再交，不把整轮重跑
+      const messagesAfterReply = await this.whenOnline("补拉回复前后的消息", () =>
+        this.room.fetchMessages(context.latestSeq),
+      );
       // 经 hive_invoke 发出的委派、hive_ask_human 提的问题只是中间动作，不能当成这一轮的回复，否则最终答复会被吞掉
       const sentWithHiveTool = messagesAfterReply.messages.find(
         (message) =>
@@ -709,8 +730,9 @@ export class AgentBridge {
         // 回复里声明的产物由本机 Bridge 上传成附件，随回复一起发出
         let attachmentIds: string[] = [];
         if (directive.paths.length) {
-          const published = this.publisher
-            ? await this.publisher.publish(directive.paths)
+          const publisher = this.publisher;
+          const published = publisher
+            ? await this.whenOnline("上传附件", () => publisher.publish(directive.paths))
             : {
                 attachmentIds: [],
                 failures: directive.paths.map((item) => ({
@@ -724,13 +746,15 @@ export class AgentBridge {
             this.log(`[hive] 附件 ${failure.path} 未发出：${failure.reason}`);
           }
         }
-        const sent = await this.room.sendMessage({
-          content,
-          ...(attachmentIds.length ? { attachmentIds } : {}),
-          // 同一次执行（含本地重试）复用幂等键；人重试时换新键，确保会发出新回复
-          clientMessageId: `agent-reply-${executionId}`,
-          parentMessageId: pickReplyParent(live).id,
-        });
+        const sent = await this.whenOnline("发送回复", () =>
+          this.room.sendMessage({
+            content,
+            ...(attachmentIds.length ? { attachmentIds } : {}),
+            // 同一次执行（含本地重试）复用幂等键；人重试时换新键，确保会发出新回复
+            clientMessageId: `agent-reply-${executionId}`,
+            parentMessageId: pickReplyParent(live).id,
+          }),
+        );
         replyMessageId = sent.id;
       } else {
         this.log("[hive] 已通过 hive_message_send 发送，不再重复代发。");
@@ -774,6 +798,24 @@ export class AgentBridge {
       if (heartbeat) clearInterval(heartbeat);
       this.room.setTyping(false);
       if (this.active === active) this.active = undefined;
+    }
+  }
+
+  /** 连不上 Server 时等它回来再试；超过 offlineRetryMs 或遇到其它错误照常抛出 */
+  private async whenOnline<T>(label: string, action: () => Promise<T>): Promise<T> {
+    const deadline = Date.now() + this.tuning.offlineRetryMs;
+    let warned = false;
+    for (;;) {
+      try {
+        return await action();
+      } catch (error) {
+        if (this.stopped || !isServerUnavailable(error) || Date.now() >= deadline) throw error;
+        if (!warned) {
+          warned = true;
+          this.log(`[hive] ${label}时连不上 Hive Server，等它恢复后重试`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.tuning.offlineRetryIntervalMs));
+      }
     }
   }
 

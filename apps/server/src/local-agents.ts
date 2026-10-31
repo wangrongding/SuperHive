@@ -1,5 +1,13 @@
-import { execFile, spawn } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type {
@@ -26,13 +34,22 @@ export type ChildHandle = {
   onOutput(listener: (chunk: string) => void): void;
   onExit(listener: (code: number | null, error?: Error) => void): void;
   kill(signal: NodeJS.Signals): void;
+  /** 交接给下一个 Server：停止跟踪输出和退出，但不结束进程 */
+  release?(): void;
 };
 
 export type SpawnAgent = (
   command: string,
   args: string[],
-  options: { env: Record<string, string>; cwd: string },
+  /** logFile：输出写到这个文件而不是管道，Server 退出后 Agent 仍能继续运行 */
+  options: { env: Record<string, string>; cwd: string; logFile?: string },
 ) => ChildHandle;
+
+/** 接管上一个 Server 留下的 Agent 进程；进程已不在或不是这个 Agent 时返回 undefined */
+export type AdoptAgent = (
+  pid: number,
+  options: { name: string; logFile?: string },
+) => ChildHandle | undefined;
 
 export type ProviderProbe = (
   command: string,
@@ -50,6 +67,9 @@ export type LocalAgentSupervisorOptions = {
   isNameInUse: (name: string) => boolean;
   log?: (message: string) => void;
   spawn?: SpawnAgent;
+  adopt?: AdoptAgent;
+  /** Agent 输出日志的目录；设置后 Agent 以独立进程组运行，Server 交接重启时不随之退出 */
+  logDir?: string;
   probe?: ProviderProbe;
   now?: () => number;
   setTimer?: (callback: () => void, ms: number) => { cancel(): void };
@@ -64,6 +84,9 @@ const CRASH_LIMIT = 5;
 const STABLE_RUN_MS = 60_000;
 const STOP_GRACE_MS = 5_000;
 const PROBE_CACHE_MS = 60_000;
+/** 单个 Agent 日志超过这个大小时，下次启动先轮转为 .1 */
+const LOG_FILE_MAX_BYTES = 5 * 1024 * 1024;
+const TAIL_INTERVAL_MS = 1_000;
 
 export const PROVIDER_COMMANDS: Record<LocalAgentProvider, string> = {
   codex: "codex",
@@ -97,32 +120,165 @@ type Runtime = {
 // eslint-disable-next-line no-control-regex
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
+/** 持续读取日志文件新增的内容（从 offset 开始），返回停止函数 */
+function tailFile(file: string, offset: number, listener: (chunk: string) => void): () => void {
+  let position = offset;
+  const buffer = Buffer.alloc(64 * 1024);
+  const read = () => {
+    let fd: number | undefined;
+    try {
+      if (statSync(file).size < position) position = 0;
+      fd = openSync(file, "r");
+      for (;;) {
+        const bytes = readSync(fd, buffer, 0, buffer.length, position);
+        if (bytes <= 0) break;
+        position += bytes;
+        listener(buffer.subarray(0, bytes).toString("utf8"));
+      }
+    } catch {
+      /* 文件还没建好或已被轮转，下次再读 */
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  };
+  const timer = setInterval(read, TAIL_INTERVAL_MS);
+  timer.unref();
+  return () => {
+    clearInterval(timer);
+    read();
+  };
+}
+
+function fileSize(file: string): number {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
 export const defaultSpawnAgent: SpawnAgent = (command, args, options) => {
+  const logFile = options.logFile;
+  let fd: number | undefined;
+  if (logFile) {
+    if (fileSize(logFile) > LOG_FILE_MAX_BYTES) renameSync(logFile, `${logFile}.1`);
+    fd = openSync(logFile, "a");
+  }
+  const offset = logFile ? fileSize(logFile) : 0;
   const child = spawn(command, args, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
-    stdio: ["ignore", "pipe", "pipe"],
+    // 写日志文件的 Agent 自成进程组：Server（及 dev 结束 Server 进程组）退出时不会把它一起带走
+    stdio: fd === undefined ? ["ignore", "pipe", "pipe"] : ["ignore", fd, fd],
+    detached: fd !== undefined && process.platform !== "win32",
   });
+  if (fd !== undefined) closeSync(fd);
   const exitListeners: Array<(code: number | null, error?: Error) => void> = [];
+  const outputListeners: Array<(chunk: string) => void> = [];
   let exited = false;
+  let released = false;
+  let stopTail: (() => void) | undefined;
   const emitExit = (code: number | null, error?: Error) => {
-    if (exited) return;
+    if (exited || released) return;
     exited = true;
+    stopTail?.();
     for (const listener of exitListeners) listener(code, error);
   };
   child.on("error", (error) => emitExit(null, error));
   child.on("close", (code) => emitExit(code));
+  if (logFile) {
+    child.unref();
+    stopTail = tailFile(logFile, offset, (chunk) => {
+      for (const listener of outputListeners) listener(chunk);
+    });
+  }
   return {
     pid: child.pid,
     onOutput(listener) {
-      child.stdout?.setEncoding("utf8").on("data", listener);
-      child.stderr?.setEncoding("utf8").on("data", listener);
+      if (logFile) outputListeners.push(listener);
+      else {
+        child.stdout?.setEncoding("utf8").on("data", listener);
+        child.stderr?.setEncoding("utf8").on("data", listener);
+      }
     },
     onExit(listener) {
       exitListeners.push(listener);
     },
     kill(signal) {
       if (!exited) child.kill(signal);
+    },
+    release() {
+      released = true;
+      stopTail?.();
+      child.removeAllListeners();
+    },
+  };
+};
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * 按 pid 接管：进程还在，并且命令行确实是这个名字的 `ai-hive join`（防止 pid 被别的进程复用），
+ * 之后靠轮询发现它退出、靠信号结束它，输出从日志文件末尾接着读。
+ */
+export const defaultAdoptAgent: AdoptAgent = (pid, options) => {
+  if (process.platform === "win32" || !isAlive(pid)) return undefined;
+  let commandLine: string;
+  try {
+    commandLine = execFileSync("ps", ["-o", "command=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+  } catch {
+    return undefined;
+  }
+  const args = commandLine.trim().split(/\s+/);
+  const nameAt = args.indexOf("--name");
+  if (!args.includes("join") || nameAt < 0 || args[nameAt + 1] !== options.name) return undefined;
+  const exitListeners: Array<(code: number | null, error?: Error) => void> = [];
+  const outputListeners: Array<(chunk: string) => void> = [];
+  let exited = false;
+  const stopTail = options.logFile
+    ? tailFile(options.logFile, fileSize(options.logFile), (chunk) => {
+        for (const listener of outputListeners) listener(chunk);
+      })
+    : undefined;
+  const poll = setInterval(() => {
+    if (isAlive(pid)) return;
+    clearInterval(poll);
+    if (exited) return;
+    exited = true;
+    stopTail?.();
+    for (const listener of exitListeners) listener(null);
+  }, 1_000);
+  poll.unref();
+  return {
+    pid,
+    onOutput(listener) {
+      outputListeners.push(listener);
+    },
+    onExit(listener) {
+      exitListeners.push(listener);
+    },
+    kill(signal) {
+      if (exited) return;
+      try {
+        process.kill(pid, signal);
+      } catch {
+        /* 已经退出 */
+      }
+    },
+    release() {
+      exited = true;
+      clearInterval(poll);
+      stopTail?.();
     },
   };
 };
@@ -142,6 +298,7 @@ export const defaultProbe: ProviderProbe = (command) =>
 export class LocalAgentSupervisor {
   private readonly runtimes = new Map<string, Runtime>();
   private readonly spawnAgent: SpawnAgent;
+  private readonly adoptAgent: AdoptAgent;
   private readonly probe: ProviderProbe;
   private readonly now: () => number;
   private readonly setTimer: NonNullable<LocalAgentSupervisorOptions["setTimer"]>;
@@ -151,6 +308,7 @@ export class LocalAgentSupervisor {
 
   constructor(private readonly options: LocalAgentSupervisorOptions) {
     this.spawnAgent = options.spawn ?? defaultSpawnAgent;
+    this.adoptAgent = options.adopt ?? defaultAdoptAgent;
     this.probe = options.probe ?? defaultProbe;
     this.now = options.now ?? Date.now;
     this.setTimer =
@@ -163,12 +321,50 @@ export class LocalAgentSupervisor {
     this.log = options.log ?? (() => undefined);
   }
 
-  /** 服务启动时恢复上次保存的本机 Agent；手动停止过的保持停止 */
+  /**
+   * 服务启动时恢复上次保存的本机 Agent；手动停止过的保持停止。
+   * 上一个 Server 交接时留下的进程还在跑的，直接接管（它手上的任务不中断），不再另起一个。
+   */
   start(): void {
     for (const config of this.options.database.listLocalAgents()) {
       const runtime = this.track(config);
+      const previous = config.pid
+        ? this.adoptAgent(config.pid, {
+            name: config.name,
+            ...(this.logFile(config) ? { logFile: this.logFile(config)! } : {}),
+          })
+        : undefined;
+      if (previous && config.autostart) {
+        this.appendLog(runtime, `[hive] 接管仍在运行的 ${config.name}（pid ${previous.pid}）\n`);
+        this.attach(
+          runtime,
+          previous,
+          config.pidStartedAt ? Date.parse(config.pidStartedAt) : this.now(),
+        );
+        continue;
+      }
+      // 不该再运行的（已手动停止）结束掉；已经不在的清掉记录
+      previous?.kill("SIGTERM");
+      if (config.pid) this.options.database.setLocalAgentProcess(config.id, null, null);
       if (config.autostart) this.launch(runtime);
     }
+  }
+
+  /**
+   * 交接给下一个 Server（开发时代码更新、Server 换代）：不结束 Agent 进程，只停止跟踪。
+   * 进程号已经落库，新 Server 启动时接管；Agent 断线期间会自行重连，正在跑的任务继续做完。
+   */
+  detach(): void {
+    this.shuttingDown = true;
+    for (const runtime of this.runtimes.values()) {
+      runtime.timer?.cancel();
+      runtime.timer = undefined;
+      runtime.child?.release?.();
+    }
+  }
+
+  private logFile(config: LocalAgentConfig): string | undefined {
+    return this.options.logDir ? path.join(this.options.logDir, `${config.id}.log`) : undefined;
   }
 
   list(): LocalAgent[] {
@@ -334,23 +530,43 @@ export class LocalAgentSupervisor {
       runtime,
       `[hive] 启动 ${config.name}（${config.provider} · ${config.access}）\n`,
     );
+    const logFile = this.logFile(config);
+    if (logFile) mkdirSync(path.dirname(logFile), { recursive: true });
     const child = this.spawnAgent(this.options.cli.command, args, {
       cwd: homedir(),
       env: {
         // token 走环境变量：命令行参数会被同机其他用户通过 ps 看到
         HIVE_AGENT_TOKEN: this.options.joinToken,
-        // 让子进程在 Hive Server 消失（包括被 kill -9）时自行退出，不留孤儿
+        // 让子进程在 Hive Server 消失（包括被 kill -9）且一段时间内没有回来时自行退出，不留孤儿
         HIVE_SUPERVISOR_PID: String(process.pid),
       },
+      ...(logFile ? { logFile } : {}),
     });
+    this.attach(runtime, child, runtime.startedAt);
+  }
+
+  private attach(runtime: Runtime, child: ChildHandle, startedAt: number): void {
+    runtime.phase = "running";
+    runtime.stopping = false;
+    runtime.startedAt = startedAt;
     runtime.child = child;
     runtime.pid = child.pid ?? null;
+    if (child.pid) {
+      this.options.database.setLocalAgentProcess(
+        runtime.config.id,
+        child.pid,
+        new Date(startedAt).toISOString(),
+      );
+    }
     let resolveExited!: () => void;
     runtime.exited = new Promise((resolve) => (resolveExited = resolve));
     child.onOutput((chunk) => this.appendLog(runtime, chunk));
     child.onExit((code, error) => {
       if (runtime.child === child) runtime.child = undefined;
       runtime.lastExitCode = code;
+      if (!this.shuttingDown || runtime.stopping) {
+        this.options.database.setLocalAgentProcess(runtime.config.id, null, null);
+      }
       if (error) this.appendLog(runtime, `[hive] 无法启动：${error.message}\n`);
       resolveExited();
       this.handleExit(runtime, code, error);

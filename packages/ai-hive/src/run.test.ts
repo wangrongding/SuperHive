@@ -35,4 +35,38 @@ describe("watchSupervisor", () => {
     expect(onGone).not.toHaveBeenCalled();
     kill.mockRestore();
   });
+
+  it("waits for a successor Hive Server instead of exiting at once", async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    const alive = new Set([4242]);
+    let successor: number | undefined;
+    const onGone = vi.fn();
+    watchSupervisor("4242", onGone, {
+      intervalMs: 100,
+      isAlive: (pid) => alive.has(pid),
+      graceMs: 1_000,
+      now: () => clock,
+      findSuccessor: async () => successor,
+    });
+    alive.delete(4242);
+    clock = 100;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(onGone).not.toHaveBeenCalled();
+    // 新 Server 起来了：改为看护它
+    successor = 5151;
+    alive.add(5151);
+    clock = 300;
+    await vi.advanceTimersByTimeAsync(200);
+    clock = 5_000;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onGone).not.toHaveBeenCalled();
+    // 新 Server 也走了，且宽限期内没有再出现接管者：退出
+    alive.delete(5151);
+    successor = undefined;
+    await vi.advanceTimersByTimeAsync(100);
+    clock = 7_000;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(onGone).toHaveBeenCalledTimes(1);
+  });
 });

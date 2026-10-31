@@ -426,3 +426,37 @@ test(
     assert.equal(launches, 5);
   },
 );
+
+test("a code update leaves a handover marker so local Agents survive; a real stop removes it", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-dev-handover-"));
+  const handoverPath = path.join(root, ".ai-hive-dev/agent-handover");
+  const seenAtStop = [];
+  const supervisor = new DevSupervisor({
+    statusPath: path.join(root, ".ai-hive-dev/status.json"),
+    handoverPath,
+    debounceMs: 20,
+    build: async () => ({}),
+    startServer: async () => {
+      const server = fakeServer();
+      const stop = server.stop.bind(server);
+      server.stop = async () => {
+        seenAtStop.push(fs.existsSync(handoverPath));
+        await stop();
+      };
+      return server;
+    },
+  });
+  const statuses = [];
+  supervisor.on("status", (status) => statuses.push(status));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  supervisor.changed(["initial-start"], { immediate: true });
+  await until(() => statuses.some((s) => s.state === "ready"));
+  supervisor.changed(["apps/server/src/app.ts"]);
+  await until(() => statuses.filter((s) => s.state === "ready").length === 2);
+  // 换代：停旧 Server 时标记已写好
+  assert.deepEqual(seenAtStop, [true]);
+  await supervisor.close();
+  // 真正停止：标记已删除，本机 Agent 随 Server 一起结束
+  assert.deepEqual(seenAtStop, [true, false]);
+  assert.equal(fs.existsSync(handoverPath), false);
+});

@@ -63,14 +63,23 @@ AI Hive Agent
 
 /**
  * 由本机 Hive Server 拉起时，Server 若被强制结束（kill -9、崩溃）不会通知子进程。
- * 定期检查父进程是否还在，不在就主动离线退出，避免留下占着名字的孤儿 Agent。
+ * 定期检查父进程是否还在。不在了先别急着退：开发时代码更新会换一个新 Server 接管本 Agent，
+ * 在宽限期内通过 findSuccessor 找到新 Server 就改为看护它，手上的任务照常做完；
+ * 宽限期过了还没有新 Server，才离线退出，避免留下占着名字的孤儿 Agent。
  */
 export function watchSupervisor(
   pidValue: string | undefined,
   onGone: () => void,
-  options: { intervalMs?: number; isAlive?: (pid: number) => boolean } = {},
+  options: {
+    intervalMs?: number;
+    isAlive?: (pid: number) => boolean;
+    /** 找接管的新 Server 进程号；省略则原 Server 一消失就退出 */
+    findSuccessor?: () => Promise<number | undefined>;
+    graceMs?: number;
+    now?: () => number;
+  } = {},
 ): (() => void) | undefined {
-  const pid = Number.parseInt(pidValue ?? "", 10);
+  let pid = Number.parseInt(pidValue ?? "", 10);
   if (!Number.isInteger(pid) || pid <= 0) return undefined;
   const isAlive =
     options.isAlive ??
@@ -83,13 +92,47 @@ export function watchSupervisor(
         return (error as NodeJS.ErrnoException).code === "EPERM";
       }
     });
+  const now = options.now ?? Date.now;
+  let orphanSince: number | undefined;
+  let searching = false;
+  let done = false;
   const timer = setInterval(() => {
-    if (isAlive(pid)) return;
-    clearInterval(timer);
-    onGone();
+    if (done || searching) return;
+    if (isAlive(pid)) {
+      orphanSince = undefined;
+      return;
+    }
+    if (!options.findSuccessor) {
+      done = true;
+      clearInterval(timer);
+      onGone();
+      return;
+    }
+    orphanSince ??= now();
+    searching = true;
+    void options
+      .findSuccessor()
+      .catch(() => undefined)
+      .then((successor) => {
+        searching = false;
+        if (done) return;
+        if (successor && successor !== pid && isAlive(successor)) {
+          pid = successor;
+          orphanSince = undefined;
+          return;
+        }
+        if (now() - (orphanSince ?? now()) >= (options.graceMs ?? 120_000)) {
+          done = true;
+          clearInterval(timer);
+          onGone();
+        }
+      });
   }, options.intervalMs ?? 2_000);
   timer.unref();
-  return () => clearInterval(timer);
+  return () => {
+    done = true;
+    clearInterval(timer);
+  };
 }
 
 export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
@@ -410,8 +453,25 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       void stopAll().finally(() => process.exit(0));
     });
   }
-  watchSupervisor(process.env.HIVE_SUPERVISOR_PID, () => {
-    console.error("[hive] 拉起本 Agent 的 Hive Server 已退出，Agent 随之离线。");
-    void stopAll().finally(() => process.exit(0));
-  });
+  const orphanGraceMs = Number.parseInt(process.env.HIVE_ORPHAN_GRACE_MS ?? "", 10);
+  watchSupervisor(
+    process.env.HIVE_SUPERVISOR_PID,
+    () => {
+      console.error(
+        "[hive] 拉起本 Agent 的 Hive Server 已退出且没有新 Server 接管，Agent 随之离线。",
+      );
+      void stopAll().finally(() => process.exit(0));
+    },
+    {
+      ...(Number.isInteger(orphanGraceMs) && orphanGraceMs >= 0 ? { graceMs: orphanGraceMs } : {}),
+      // 新 Server 的 /health 带着它的进程号；同一台机器上能找到它，就说明是换代重启而不是关闭
+      findSuccessor: async () => {
+        const response = await fetch(`${serverUrl}/health`, {
+          signal: AbortSignal.timeout(1_500),
+        });
+        const body = (await response.json()) as { pid?: unknown };
+        return typeof body.pid === "number" ? body.pid : undefined;
+      },
+    },
+  );
 }

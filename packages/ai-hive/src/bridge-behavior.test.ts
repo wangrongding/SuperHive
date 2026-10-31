@@ -54,6 +54,14 @@ class FakeRoom {
   sent: Array<{ content: string; clientMessageId: string; parentMessageId: string }> = [];
   whiteboardCalls = 0;
   participantCalls = 0;
+  /** 模拟 Server 重启：接下来这么多次补拉/发送都连不上 */
+  offlineCalls = 0;
+  private offline(): void {
+    if (this.offlineCalls > 0) {
+      this.offlineCalls -= 1;
+      throw new Error("聊天室连接已断开，稍后将自动重试。");
+    }
+  }
 
   start() {}
   stop() {}
@@ -62,6 +70,7 @@ class FakeRoom {
     return "server rules";
   }
   async fetchMessages(afterSeq: number) {
+    this.offline();
     const messages = this.messages.filter((message) => message.seq > afterSeq);
     return { messages, latestSeq: this.messages.at(-1)?.seq ?? afterSeq };
   }
@@ -77,6 +86,7 @@ class FakeRoom {
     this.reports.push(report);
   }
   async sendMessage(input: { content: string; clientMessageId: string; parentMessageId: string }) {
+    this.offline();
     this.sent.push(input);
     const reply = chat({
       senderId: SELF,
@@ -156,7 +166,13 @@ describe("AgentBridge", () => {
   ) {
     if (state) await store.save(state);
     bridge = new AgentBridge(
-      { ...identity, persona: "p", provider: "codex", token: "t", tuning: { batchWindowMs: 20 } },
+      {
+        ...identity,
+        persona: "p",
+        provider: "codex",
+        token: "t",
+        tuning: { batchWindowMs: 20, offlineRetryIntervalMs: 5 },
+      },
       store,
       responder,
       () => undefined,
@@ -218,6 +234,23 @@ describe("AgentBridge", () => {
     expect(saved?.inflight).toBeUndefined();
     expect(saved?.processedMessageIds).toContain(mention.id);
     expect(saved?.threadId).toBe("thread-1");
+  });
+
+  it("waits for the Hive Server to come back instead of re-running a finished turn", async () => {
+    await startBridge(baseState());
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    // 模型已经给出结果，这时 Server 正在重启：补拉和发送各失败几次后恢复
+    room.offlineCalls = 4;
+    responder.finish("重启期间做完的");
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    expect(room.sent).toHaveLength(1);
+    expect(room.sent[0]).toMatchObject({ content: "重启期间做完的" });
+    // 没有把整轮当失败重跑
+    expect(responder.calls).toHaveLength(1);
+    expect(room.statuses(mention.id)).not.toContain("failed");
   });
 
   it("strips the attachment directive from the reply and reports files it could not publish", async () => {

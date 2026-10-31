@@ -1,6 +1,6 @@
 import { observeRuntime } from "./runtime-observation.js";
 import { randomUUID } from "node:crypto";
-import { createReadStream, existsSync, mkdtempSync } from "node:fs";
+import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { open, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -108,6 +108,11 @@ export type BuildAppOptions = {
    * 本机 Agent：允许本机房主在网页上一键拉起 `ai-hive join` 子进程。
    * 省略即关闭（测试默认关闭），由 index.ts 按运行方式注入 CLI 路径。
    */
+  /**
+   * 交接标记文件：Server 关闭时它存在（且是刚写的），说明只是换代重启（dev 代码更新），
+   * 本机 Agent 不随之结束，由下一个 Server 接管；不存在则照常结束本机 Agent。
+   */
+  handoverFile?: string;
   localAgents?: Omit<
     LocalAgentSupervisorOptions,
     "database" | "joinToken" | "isAgentOnline" | "isNameInUse"
@@ -158,6 +163,18 @@ const roomsQuerySchema = z.object({
     .default("false")
     .transform((value) => value === "true"),
 });
+
+/** 交接标记只在写入后 2 分钟内有效，用后即删，避免过期的标记让真正的关闭也留下进程 */
+function consumeHandover(file: string | undefined): boolean {
+  if (!file) return false;
+  try {
+    const fresh = Date.now() - statSync(file).mtimeMs < 2 * 60_000;
+    rmSync(file, { force: true });
+    return fresh;
+  } catch {
+    return false;
+  }
+}
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
@@ -1522,6 +1539,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.get("/health", async () => ({
     status: "ok",
+    // 本机 Agent 在原 Server 退出后据此认出接管它的新 Server
+    pid: process.pid,
     ...(options.instanceId ? { instanceId: options.instanceId } : {}),
   }));
   app.get("/agent.md", async (_request, reply) => {
@@ -2716,8 +2735,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.addHook("onClose", async () => {
     shuttingDown = true;
-    // 先让本机 Agent 正常离线，再关闭连接与数据库
-    await localAgents?.shutdown();
+    // 换代重启：本机 Agent 交给下一个 Server 接管，正在跑的任务不中断；否则先让它们正常离线
+    if (localAgents && consumeHandover(options.handoverFile)) {
+      localAgents.detach();
+      app.log.info("本机 Agent 已交接给下一个 Server，进程保持运行");
+    } else {
+      await localAgents?.shutdown();
+    }
     await imHub.close();
     clearInterval(heartbeatTimer);
     clearInterval(invocationTimer);
