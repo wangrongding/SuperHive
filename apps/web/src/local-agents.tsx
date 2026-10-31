@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   CreateLocalAgentRequest,
+  KeepAwakeSettings,
+  KeepAwakeState,
   LocalAgent,
   LocalAgentMcpResponse,
   LocalAgentProvider,
@@ -40,7 +42,13 @@ export type LocalAgentsState = {
     measure?: boolean,
   ): Promise<LocalAgentMcpResponse>;
   updateSettings(id: string, settings: { mcpDisabled: string[] }): Promise<LocalAgent>;
+  /** 熄屏后保持在线：这台电脑的设置与实际状态（不是本机房主时为 undefined） */
+  keepAwake: KeepAwakeState | undefined;
+  updateKeepAwake(patch: Partial<KeepAwakeSettings>): Promise<void>;
 };
+
+/** 保持在线状态的刷新间隔（侧栏小月亮用） */
+const KEEP_AWAKE_POLL_MS = 30_000;
 
 const POLL_MS = 2_000;
 
@@ -201,9 +209,36 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     [request],
   );
 
+  const [keepAwake, setKeepAwake] = useState<KeepAwakeState | undefined>();
+  const refreshKeepAwake = useCallback(async () => {
+    const response = await request("/api/local/keep-awake");
+    setKeepAwake((await response.json()) as KeepAwakeState);
+  }, [request]);
+  useEffect(() => {
+    if (!enabled) return;
+    void refreshKeepAwake().catch(() => setKeepAwake(undefined));
+    const timer = window.setInterval(
+      () => void refreshKeepAwake().catch(() => undefined),
+      KEEP_AWAKE_POLL_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [enabled, refreshKeepAwake]);
+  const updateKeepAwake = useCallback(
+    async (patch: Partial<KeepAwakeSettings>) => {
+      const response = await request("/api/local/keep-awake", {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      setKeepAwake((await response.json()) as KeepAwakeState);
+    },
+    [request],
+  );
+
   return {
     enabled,
     reason: session && !session.enabled ? session.reason : undefined,
+    keepAwake,
+    updateKeepAwake,
     providers,
     agents,
     create,

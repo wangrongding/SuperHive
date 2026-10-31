@@ -986,6 +986,31 @@ export type LocalMcpServer = z.infer<typeof localMcpServerSchema>;
 export type LocalAgentMcpResponse = z.infer<typeof localAgentMcpResponseSchema>;
 export type LocalAgent = z.infer<typeof localAgentSchema>;
 export type LocalSessionResponse = z.infer<typeof localSessionResponseSchema>;
+
+/**
+ * 熄屏后保持在线：只阻止系统空闲睡眠，屏幕照常熄灭。设置存在服务端、对这台电脑生效。
+ * whenIm=有启用中的 IM 连接时保持（默认开）；whenTasks=有 Agent 任务在跑时保持（默认关）；
+ * onBattery=用电池时也保持（默认关）。
+ */
+export const keepAwakeSettingsSchema = z.object({
+  whenIm: z.boolean(),
+  whenTasks: z.boolean(),
+  onBattery: z.boolean(),
+});
+export const keepAwakeStateSchema = keepAwakeSettingsSchema.extend({
+  /** 这个系统能不能做（目前只有 macOS） */
+  supported: z.boolean(),
+  /** 实际状态：active=正在阻止睡眠；idle=不需要；battery=用电池中已暂停；disabled=都关了；unsupported；failed */
+  status: z.enum(["active", "idle", "battery", "disabled", "unsupported", "failed"]),
+  power: z.enum(["ac", "battery", "unknown"]),
+  /** 给人看的原因，例如「有 1 个 IM 连接在线」 */
+  reasons: z.array(z.string()),
+  detail: z.string().optional(),
+  since: z.string().datetime().optional(),
+  lastWakeAt: z.string().datetime().optional(),
+});
+export type KeepAwakeSettings = z.infer<typeof keepAwakeSettingsSchema>;
+export type KeepAwakeState = z.infer<typeof keepAwakeStateSchema>;
 export type LocalProviderInfo = z.infer<typeof localProviderInfoSchema>;
 export type LocalDirectoryListing = z.infer<typeof localDirectoryListingSchema>;
 

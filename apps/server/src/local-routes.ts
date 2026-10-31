@@ -4,6 +4,9 @@ import {
   createLocalAgentRequestSchema,
   localAgentProviderSchema,
   updateLocalAgentSettingsRequestSchema,
+  keepAwakeSettingsSchema,
+  type KeepAwakeSettings,
+  type KeepAwakeState,
   type LocalSessionResponse,
 } from "@ai-hive/protocol";
 import { HiveError } from "./database.js";
@@ -35,6 +38,11 @@ const ERROR_STATUS: Record<string, number> = {
 
 export type LocalRoomActions = {
   clearRoom: (roomId: string, username: string) => { messages: number; invocations: number };
+  /** 熄屏后保持在线：控制的是这台电脑，只给本机房主 */
+  keepAwake?: {
+    state(): KeepAwakeState | undefined;
+    update(patch: Partial<KeepAwakeSettings>): KeepAwakeState | undefined;
+  };
 };
 
 export function registerLocalAgentRoutes(
@@ -78,6 +86,25 @@ export function registerLocalAgentRoutes(
     }
     throw error;
   }
+
+  app.get("/api/local/keep-awake", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    const state = rooms.keepAwake?.state();
+    if (!state) return reply.code(404).send({ error: "这个服务没有启用熄屏后保持在线。" });
+    return state;
+  });
+
+  app.put("/api/local/keep-awake", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    const parsed = keepAwakeSettingsSchema.partial().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "参数不正确。" });
+    const patch = Object.fromEntries(
+      Object.entries(parsed.data).filter(([, value]) => value !== undefined),
+    ) as Partial<KeepAwakeSettings>;
+    const state = rooms.keepAwake?.update(patch);
+    if (!state) return reply.code(404).send({ error: "这个服务没有启用熄屏后保持在线。" });
+    return state;
+  });
 
   app.get("/api/local/providers", async (request, reply) => {
     if (deny(request, reply)) return reply;

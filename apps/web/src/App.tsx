@@ -15,6 +15,8 @@ import {
 import type {
   ChatMessage,
   Invocation,
+  KeepAwakeSettings,
+  KeepAwakeState,
   MessagesResponse,
   MetaResponse,
   Participant,
@@ -51,6 +53,7 @@ import {
   providerInfo,
   useLocalAgents,
   DirectoryPicker,
+  type LocalAgentsState,
 } from "./local-agents";
 import { createFrameClock, easeInOutCubic, easeOutQuint } from "./easing";
 import { ShadowContent } from "./shadow-content";
@@ -134,7 +137,7 @@ type AgentAccessMode = "read-only" | "workspace" | "full";
 type AgentSetupStep = 1 | 2 | 3;
 type MessageNotificationMode = "off" | "mentions" | "all";
 type SendShortcut = "modifier-enter" | "enter";
-type SettingsTab = "chat" | "notifications" | "appearance";
+type SettingsTab = "chat" | "notifications" | "appearance" | "computer";
 type TimeFormat = "system" | "24h" | "12h";
 type ThemePreference = "system" | "dark" | "light";
 type InterfaceDensity = "comfortable" | "compact";
@@ -227,6 +230,7 @@ const settingsTabs: Array<{ id: SettingsTab; label: string; description: string 
     { id: "chat", label: t("聊天与输入"), description: t("发送、草稿与时间") },
     { id: "notifications", label: t("通知"), description: t("提及、声音与状态") },
     { id: "appearance", label: t("外观"), description: t("语言、主题、密度与字号") },
+    { id: "computer", label: t("这台电脑"), description: t("熄屏后保持在线") },
   ],
 );
 
@@ -654,6 +658,94 @@ function SettingsSwitch({
         <b />
       </i>
     </button>
+  );
+}
+
+/** 侧栏小月亮的悬停说明 */
+function keepAwakeSummary(state: KeepAwakeState): string {
+  if (state.status === "failed") {
+    return t("熄屏后保持在线没有生效：{0}", { 0: state.detail ?? t("原因未知") });
+  }
+  return t("熄屏后保持在线：{0}，正在阻止系统睡眠（屏幕照常熄灭）", {
+    0: state.reasons.join(t("、")),
+  });
+}
+
+const keepAwakeStatusText: Record<KeepAwakeState["status"], string> = localized(() => ({
+  active: t("正在阻止系统睡眠"),
+  idle: t("现在不需要保持（没有符合条件的 IM 连接或任务），电脑会照常睡眠"),
+  battery: t("正在用电池，已暂停保持在线"),
+  disabled: t("已关闭，电脑会照常睡眠"),
+  unsupported: t("当前系统暂不支持，请在系统电源设置里关闭自动睡眠"),
+  failed: t("没有生效"),
+}));
+
+function KeepAwakeSettingsGroup({ local }: { local: LocalAgentsState }) {
+  const state = local.keepAwake;
+  const [error, setError] = useState<string>();
+  if (!local.enabled || !state) {
+    return (
+      <div className="settings-group">
+        <p className="settings-note">
+          {t("只有在运行 Hive Server 的这台电脑上打开网页，才能修改这些设置。")}
+        </p>
+      </div>
+    );
+  }
+  const disabled = !state.supported;
+  const change = (patch: Partial<KeepAwakeSettings>) => {
+    setError(undefined);
+    local.updateKeepAwake(patch).catch((reason: unknown) => {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    });
+  };
+  return (
+    <div className="settings-group">
+      <div className="settings-section-heading">
+        <div>
+          <h4>{t("熄屏后保持在线")}</h4>
+          <p>
+            {t(
+              "屏幕照常熄灭，只是电脑不进入睡眠，飞书消息和 Agent 任务不会中断。只在下面勾选的情况下生效，其他时候照常睡眠。",
+            )}
+          </p>
+        </div>
+      </div>
+      <SettingsSwitch
+        checked={state.whenIm}
+        disabled={disabled}
+        label={t("连着 IM 时保持在线")}
+        description={t("有飞书、微信连接（包括正在重连）时阻止系统睡眠")}
+        onChange={(checked) => change({ whenIm: checked })}
+      />
+      <SettingsSwitch
+        checked={state.whenTasks}
+        disabled={disabled}
+        label={t("Agent 执行任务时保持在线")}
+        description={t("有任务正在执行时阻止系统睡眠，执行完就恢复")}
+        onChange={(checked) => change({ whenTasks: checked })}
+      />
+      <SettingsSwitch
+        checked={state.onBattery}
+        disabled={disabled}
+        label={t("用电池时也保持")}
+        description={t("默认只在接电源时生效；打开后用电池也不睡眠，比较耗电")}
+        onChange={(checked) => change({ onBattery: checked })}
+      />
+      <p className={`keep-awake-status ${state.status}`} role="status">
+        <strong>{keepAwakeStatusText[state.status]}</strong>
+        {state.status === "active" && state.reasons.length
+          ? t("（{0}）", { 0: state.reasons.join(t("、")) })
+          : ""}
+        {state.status === "failed" && state.detail ? t("：{0}", { 0: state.detail }) : ""}
+      </p>
+      <p className="settings-note">
+        {t(
+          "合上笔记本盖子、手动睡眠仍会睡眠（接着电源和外接显示器时合盖除外）；Hive 重启升级的几秒里不保证。",
+        )}
+      </p>
+      {error && <p className="settings-note error">{error}</p>}
+    </div>
   );
 }
 
@@ -2668,6 +2760,21 @@ export function App({
                 </button>
               </div>
             )}
+            {local.keepAwake &&
+              (local.keepAwake.status === "active" || local.keepAwake.status === "failed") && (
+                <button
+                  type="button"
+                  className={`keep-awake-indicator ${local.keepAwake.status}`}
+                  title={keepAwakeSummary(local.keepAwake)}
+                  aria-label={keepAwakeSummary(local.keepAwake)}
+                  onClick={() => {
+                    setSettingsTab("computer");
+                    setSettingsOpen(true);
+                  }}
+                >
+                  {local.keepAwake.status === "active" ? "☾" : "!"}
+                </button>
+              )}
             <button
               ref={settingsTriggerRef}
               type="button"
@@ -4595,6 +4702,15 @@ export function App({
                   </section>
                 )}
 
+                {settingsTab === "computer" && (
+                  <section id="settings-panel-computer" role="tabpanel" aria-label={t("这台电脑")}>
+                    <div className="settings-panel-heading">
+                      <h3>{t("这台电脑")}</h3>
+                      <p>{t("运行 Hive Server 的这台电脑的设置，对所有房间生效。")}</p>
+                    </div>
+                    <KeepAwakeSettingsGroup local={local} />
+                  </section>
+                )}
                 {settingsTab === "appearance" && (
                   <section id="settings-panel-appearance" role="tabpanel" aria-label={t("外观")}>
                     <div className="settings-panel-heading">

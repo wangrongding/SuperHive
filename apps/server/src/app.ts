@@ -32,6 +32,7 @@ import {
   type Participant,
   type ServerEvent,
   DEFAULT_CACHE_WRITE_ALERT_TOKENS,
+  keepAwakeSettingsSchema,
 } from "@ai-hive/protocol";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { WebSocket } from "ws";
@@ -52,6 +53,7 @@ import {
   type LocalAgentSupervisorOptions,
 } from "./local-agents.js";
 import { registerLocalAgentRoutes } from "./local-routes.js";
+import { KeepAwake } from "./keep-awake.js";
 import { checkLocalRequest } from "./local-access.js";
 import {
   AccessStore,
@@ -98,6 +100,8 @@ export type BuildAppOptions = {
    * 外部 IM 渠道（飞书、个人微信）的驱动；省略即不提供「连接 IM」（测试默认关闭），由 index.ts 注入。
    */
   imDrivers?: Partial<Record<ImChannel, ImChannelDriver>>;
+  /** 熄屏后保持在线（macOS 起 caffeinate）；测试里默认关闭，避免真的阻止睡眠 */
+  keepAwake?: boolean;
   /** IM 凭据加密密钥文件；省略时用进程内随机密钥（重启后已保存的连接需要重新扫码） */
   imKeyPath?: string;
   /** 附件文件目录；省略时放在数据库旁的 attachments/（内存数据库用临时目录） */
@@ -329,7 +333,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     supersedeStale(roomId);
     return removed;
   }
-  registerLocalAgentRoutes(app, localAgents, { clearRoom });
+  registerLocalAgentRoutes(app, localAgents, {
+    clearRoom,
+    keepAwake: {
+      state: () => keepAwake?.state(),
+      update: (patch) => keepAwake?.update(patch),
+    },
+  });
 
   /* ---------- 访问控制：房主（join token）与限时访客 ---------- */
 
@@ -525,6 +535,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (invocation.status === "completed") setImmediate(() => supersedeStale(invocation.roomId));
     // 任务结果和需要人处理的状态推到房主的 IM（失败、被拦下这些往往没有对应的聊天消息）
     imHub.onInvocationUpdated(invocation);
+    scheduleKeepAwake();
     // 所有状态变更都经过这里：委派的子任务一结束就安排回执，放到下一拍避免在派发循环中重入
     if (
       invocation.continuation === "pending" &&
@@ -1479,10 +1490,46 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     isWaiting: (questionId) => Boolean(waitingForQuestion(questionId)),
     webUrl: (roomId) =>
       options.publicUrl ? `${options.publicUrl.replace(/\/$/, "")}/#${roomId}` : undefined,
-    onConnectionsChanged: () => undefined,
+    onConnectionsChanged: () => scheduleKeepAwake(),
     log: (message, detail) => app.log.warn({ detail }, message),
     ...(options.now ? { now: options.now } : {}),
   });
+
+  /* ---------- 熄屏后保持在线 ---------- */
+
+  const keepAwake =
+    (options.keepAwake ?? !process.env.VITEST)
+      ? new KeepAwake({
+          loadSettings: () => {
+            try {
+              const raw = database.getSetting("keepAwake");
+              return raw ? keepAwakeSettingsSchema.parse(JSON.parse(raw)) : undefined;
+            } catch {
+              return undefined;
+            }
+          },
+          saveSettings: (settings) => database.setSetting("keepAwake", JSON.stringify(settings)),
+          // 启用中的 IM 连接（含正在重连的）都算：断网时先释放会让机器睡下去，更难连回来
+          demand: () => ({
+            imConnections: imStore
+              .listConnections()
+              .filter((connection) => connection.status !== "paused").length,
+            runningTasks: database.countActiveInvocations(),
+          }),
+          log: (message, detail) => app.log.info({ detail }, message),
+        })
+      : undefined;
+  let keepAwakeScheduled = false;
+  /** 条件可能变了：合并到下一拍复查一次 */
+  function scheduleKeepAwake(): void {
+    if (!keepAwake || keepAwakeScheduled) return;
+    keepAwakeScheduled = true;
+    setImmediate(() => {
+      keepAwakeScheduled = false;
+      keepAwake.evaluate();
+    });
+  }
+  void keepAwake?.start();
 
   const imErrorStatus: Record<string, number> = {
     IM_DISABLED: 400,
@@ -2839,6 +2886,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.addHook("onClose", async () => {
     shuttingDown = true;
+    keepAwake?.close();
     // 换代重启：本机 Agent 交给下一个 Server 接管，正在跑的任务不中断；否则先让它们正常离线
     if (localAgents && consumeHandover(options.handoverFile)) {
       localAgents.detach();

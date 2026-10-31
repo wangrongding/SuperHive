@@ -59,7 +59,9 @@ for (const file of files) {
 }
 
 if (missing.size > 0) {
-  console.error("[check-release-deps] dist 中引用了未声明的外部包（补进 dependencies，版本对齐 apps/server）：");
+  console.error(
+    "[check-release-deps] dist 中引用了未声明的外部包（补进 dependencies，版本对齐 apps/server）：",
+  );
   for (const [name, refs] of missing) {
     console.error(`  ${name}`);
     for (const ref of refs) console.error(`    ${ref}`);

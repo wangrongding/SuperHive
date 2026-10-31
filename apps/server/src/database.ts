@@ -704,6 +704,21 @@ export class HiveDatabase {
     this.db.close();
   }
 
+  /** 服务端的小设置（存在 meta 表里，JSON） */
+  getSetting(key: string): string | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(`setting:${key}`) as
+      { value: string } | undefined;
+    return row?.value;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      )
+      .run(`setting:${key}`, value);
+  }
+
   getOrCreateToken(configuredToken?: string): string {
     if (configuredToken) {
       this.db
@@ -1172,6 +1187,16 @@ export class HiveDatabase {
     const row = this.db.prepare("SELECT * FROM invocations WHERE id = ?").get(id) as
       InvocationRow | undefined;
     return row ? mapInvocation(row) : undefined;
+  }
+
+  /** 正在执行的调用数（保持唤醒用；等人回答、排队未开始的不算） */
+  countActiveInvocations(): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM invocations WHERE status IN ('running', 'cancelling')",
+      )
+      .get() as { count: number };
+    return row.count;
   }
 
   /** 一条消息触发的所有调用（按创建顺序） */

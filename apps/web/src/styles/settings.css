@@ -641,3 +641,52 @@
     grid-template-columns: minmax(0, 1fr) 20px;
   }
 }
+
+/* 这台电脑：熄屏后保持在线 */
+.keep-awake-status {
+  margin: 8px 0 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.keep-awake-status.active strong {
+  color: var(--success);
+}
+
+.keep-awake-status.failed strong {
+  color: var(--danger);
+}
+
+.keep-awake-status.battery strong {
+  color: var(--warning);
+}
+
+.settings-note {
+  margin: 4px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.settings-note.error {
+  color: var(--danger);
+}
+
+/* 侧栏底部：正在阻止睡眠时的小月亮 */
+.keep-awake-indicator {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 26px;
+}
+
+.keep-awake-indicator.failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}
