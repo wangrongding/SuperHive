@@ -23,6 +23,7 @@ import type {
   RoomsResponse,
   ServerEvent,
   WhiteboardEntry,
+  UsageSummary,
 } from "@ai-hive/protocol";
 import {
   applyMention,
@@ -1780,6 +1781,12 @@ export function App({
       return (await response.json()) as T;
     },
     [base, meta],
+  );
+
+  const loadUsage = useCallback(
+    (roomId: string, days: number) =>
+      authorizedJson<UsageSummary>(`/api/rooms/${encodeURIComponent(roomId)}/usage?days=${days}`),
+    [authorizedJson],
   );
 
   const refreshMentions = useCallback(async () => {
@@ -3824,6 +3831,8 @@ export function App({
           onOpenMessage={openMessage}
           onMarkMentionsRead={markMentionsRead}
           onDismiss={dismissInvocations}
+          usageRoomId={currentRoomId}
+          loadUsage={loadUsage}
           onClose={closeActivity}
         />
       )}

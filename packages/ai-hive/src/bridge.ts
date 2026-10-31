@@ -643,6 +643,10 @@ export class AgentBridge {
       this.log(
         `[hive] 正在处理 ${messages.map((message) => `#${message.seq}`).join("、")}（来自 ${[...new Set(messages.map((message) => message.senderName))].join("、")}）`,
       );
+      const sessionAtStart: "new" | "resumed" = this.state.threadId ? "resumed" : "new";
+      const lastTurnEndedAt = this.state.lastTurnEndedAt
+        ? Date.parse(this.state.lastTurnEndedAt)
+        : NaN;
       const reply = await this.responder.reply({
         instructions: this.instructions,
         prompt: prompt.text,
@@ -706,6 +710,18 @@ export class AgentBridge {
         ...(this.state.threadId ? { threadId: this.state.threadId } : {}),
       });
       active.accepting = false;
+      const turnEndedAt = Date.now();
+      // 续接会话时距上一轮结束的空闲时长：超过提示缓存��效期的整段重写就能归因为「缓存过期」
+      const usage = reply.usage
+        ? {
+            ...reply.usage,
+            session: sessionAtStart,
+            ...(sessionAtStart === "resumed" && Number.isFinite(lastTurnEndedAt)
+              ? { idleMs: Math.max(0, turnEndedAt - lastTurnEndedAt) }
+              : {}),
+          }
+        : undefined;
+      this.state.lastTurnEndedAt = new Date(turnEndedAt).toISOString();
       if (reply.threadId) this.state.threadId = reply.threadId;
       this.notePromptSent(prompt);
 
@@ -787,14 +803,27 @@ export class AgentBridge {
       delete this.state.inflight;
       // 先持久化"已处理"，再对外宣告完成：两步之间崩溃时宁可漏报，也不重复执行
       await this.store.save(this.state);
-      this.reportAll(
-        active.messages.filter((message) => active.cancelled.has(message.id)),
-        {
+      const stopped = active.messages.filter((message) => active.cancelled.has(message.id));
+      for (const [index, message] of stopped.entries()) {
+        this.room.report({
+          messageId: message.id,
           status: "cancelled",
           detail: "本轮已结束，已停止的触发消息未发送回复",
-        },
-      );
-      this.reportAll(live, {
+          // 触发消息全停了也照样花了钱：用量记到第一条上
+          ...(usage && live.length === 0 && index === 0 ? { usage } : {}),
+        });
+      }
+      // 一轮合并处理多条消息时，用量只随第一条上报，避免按消息重复计费
+      const [usageCarrier, ...others] = live;
+      if (usageCarrier) {
+        this.room.report({
+          messageId: usageCarrier.id,
+          status: "completed",
+          ...(replyMessageId ? { replyMessageId } : { detail: "无需回复" }),
+          ...(usage ? { usage } : {}),
+        });
+      }
+      this.reportAll(others, {
         status: "completed",
         ...(replyMessageId ? { replyMessageId } : { detail: "无需回复" }),
       });

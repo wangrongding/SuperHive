@@ -803,6 +803,71 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
     ]);
   });
 
+  it("records a turn's usage even after the invocation finished and summarizes it per agent and day", async () => {
+    const { app, join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agent } = await join("helper", "agent");
+
+    alice.send({ type: "message.send", clientMessageId: "u1", content: "@helper 看一下" });
+    const mention = await agent.next((event) => event.type === "agent.mentioned");
+    const message = mention.type === "agent.mentioned" ? mention.message : undefined;
+    // 先带 parentMessageId 回复，调用已完成；随后到达的用量仍要记账
+    agent.send({
+      type: "message.send",
+      clientMessageId: "u-reply",
+      content: "好",
+      parentMessageId: message!.id,
+    });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "completed",
+    );
+    const usage = {
+      model: "claude-opus-5-5",
+      inputTokens: 100,
+      cacheWriteTokens: 430_000,
+      cacheReadTokens: 0,
+      outputTokens: 50,
+      requests: 1,
+      firstRequest: { inputTokens: 100, cacheWriteTokens: 430_000, cacheReadTokens: 0 },
+      peakContextTokens: 430_100,
+      peakCacheWriteTokens: 430_000,
+      reportedCostUsd: 2.2,
+      session: "new" as const,
+    };
+    agent.send({ type: "invocation.report", messageId: message!.id, status: "completed", usage });
+    const updated = invocationOf(
+      await alice.next(
+        (event) => event.type === "invocation.updated" && Boolean(event.invocation.usage),
+      ),
+    );
+    expect(updated).toMatchObject({ status: "completed", usage });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/rooms/general/usage?days=1",
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(response.statusCode).toBe(200);
+    const summary = response.json();
+    expect(summary.totals).toMatchObject({
+      turns: 1,
+      cacheWriteTokens: 430_000,
+      largeCacheWrites: 1,
+      reportedCostUsd: 2.2,
+    });
+    expect(summary.agents).toEqual([
+      expect.objectContaining({
+        agentName: "helper",
+        models: ["claude-opus-5-5"],
+        latest: expect.objectContaining({ invocationId: updated.id }),
+      }),
+    ]);
+    expect(summary.cells).toEqual([
+      expect.objectContaining({ model: "claude-opus-5-5", turns: 1, day: expect.any(String) }),
+    ]);
+    expect(summary.recent).toHaveLength(1);
+  });
+
   it("queues mentions for offline agents and lets humans cancel and retry", async () => {
     const { join } = await startRoom();
     const { peer: alice } = await join("Alice", "human");

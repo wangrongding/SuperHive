@@ -1,3 +1,4 @@
+import { InvocationUsage } from "./usage";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Invocation, RuntimeEvent } from "@ai-hive/protocol";
@@ -216,6 +217,7 @@ export function InvocationDetails({
               {t("超过 2 分钟未收到新的执行进展，状态待核实；不会因此自动停止或重试。")}
             </p>
           )}
+        {invocation.usage && <InvocationUsage usage={invocation.usage} />}
         {delegation && (
           <section aria-label={t("委派关系")}>
             <h3>{t("委派关系")}</h3>

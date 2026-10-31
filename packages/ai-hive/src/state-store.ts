@@ -37,6 +37,8 @@ export type AgentState = {
   topicSeq?: number;
   /** 当前 Provider 会话所在的工作目录；房间换了工作区就换新会话 */
   workspace?: string;
+  /** 上一轮模型调用结束的时间；用量统计据此判断提示缓存是否可能已经过期 */
+  lastTurnEndedAt?: string;
 };
 
 /**

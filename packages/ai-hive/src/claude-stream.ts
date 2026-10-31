@@ -1,4 +1,5 @@
-import type { RuntimeEvent } from "./hive-protocol.js";
+import type { AgentUsage, RuntimeEvent } from "./hive-protocol.js";
+import { UsageAccumulator, anthropicBuckets } from "./usage.js";
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue | undefined =>
@@ -28,6 +29,8 @@ export class ClaudeStream {
   private failed = false;
   private result?: ClaudeResult;
   private readonly tools = new Map<string, RuntimeEvent["tool"]>();
+  private readonly accounting = new UsageAccumulator();
+  private currentMessageId: string | undefined;
   constructor(private readonly emit: (event: RuntimeEvent) => void) {}
 
   push(chunk: string): void {
@@ -52,6 +55,53 @@ export class ClaudeStream {
     if (!this.discarding && this.buffer.trim()) this.line(this.buffer);
     this.buffer = "";
     return this.result;
+  }
+
+  /** 本轮真实用量（token 数与模型名），没有任何用量时为 undefined */
+  usage(): AgentUsage | undefined {
+    return this.accounting.finish();
+  }
+
+  private account(message: ObjectValue | undefined, id: unknown): void {
+    if (!message) return;
+    this.accounting.setModel(message.model);
+    const buckets = anthropicBuckets(message.usage);
+    if (typeof id === "string" && id && buckets) this.accounting.request(id, buckets);
+  }
+
+  private accountResult(event: ObjectValue): void {
+    this.accounting.setReportedCost(event.total_cost_usd);
+    const models = object(event.modelUsage);
+    const entries = models
+      ? Object.entries(models)
+          .map(([name, value]) => [name, object(value)] as const)
+          .filter((entry): entry is readonly [string, ObjectValue] => Boolean(entry[1]))
+      : [];
+    if (entries.length) {
+      // modelUsage 含 Claude Code 内部的辅助调用，按模型求和作为整轮合计
+      const sum = (key: string) =>
+        entries.reduce((total, [, value]) => total + (integer(value[key], 0, 1e12) ?? 0), 0);
+      this.accounting.setTotals({
+        inputTokens: sum("inputTokens"),
+        cacheWriteTokens: sum("cacheCreationInputTokens"),
+        cacheReadTokens: sum("cacheReadInputTokens"),
+        outputTokens: sum("outputTokens"),
+      });
+      const primary = entries
+        .slice()
+        .sort(
+          (a, b) =>
+            (typeof b[1].costUSD === "number" ? b[1].costUSD : 0) -
+            (typeof a[1].costUSD === "number" ? a[1].costUSD : 0),
+        )[0]!;
+      this.accounting.setModel(
+        typeof primary[1].canonicalModel === "string" ? primary[1].canonicalModel : primary[0],
+      );
+      this.accounting.setContextWindow(primary[1].contextWindow);
+      return;
+    }
+    const buckets = anthropicBuckets(event.usage);
+    if (buckets) this.accounting.setTotals(buckets);
   }
 
   private recovered(): void {
@@ -89,6 +139,7 @@ export class ClaudeStream {
         ...(typeof event.session_id === "string" ? { session_id: event.session_id } : {}),
         is_error: event.is_error === true,
       };
+      this.accountResult(event);
       if (!this.result.is_error) this.recovered();
       return;
     }
@@ -108,6 +159,7 @@ export class ClaudeStream {
     if (event.type === "assistant" && !event.error) {
       this.recovered();
       const message = object(event.message);
+      this.account(message, message?.id);
       if (Array.isArray(message?.content)) for (const block of message.content) this.block(block);
       return;
     }
@@ -119,8 +171,15 @@ export class ClaudeStream {
     if (event.type === "stream_event") {
       const stream = object(event.event);
       if (stream?.type === "message_start") {
+        const message = object(stream.message);
+        if (typeof message?.id === "string") this.currentMessageId = message.id;
+        this.account(message, message?.id);
         this.recovered();
         this.emit({ kind: "activity", phase: "thinking" });
+      } else if (stream?.type === "message_delta") {
+        const buckets = anthropicBuckets(stream.usage);
+        if (this.currentMessageId && buckets)
+          this.accounting.request(this.currentMessageId, buckets);
       } else if (stream?.type === "content_block_start") {
         this.block(stream.content_block);
       } else if (stream?.type === "content_block_delta") {

@@ -132,6 +132,73 @@ function setup(
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("CodexAppServerResponder", () => {
+  it("returns per-turn token usage from thread/tokenUsage/updated with the thread model", async () => {
+    const usage = (input: number, cached: number, output: number, total: number) => ({
+      last: {
+        inputTokens: input,
+        cachedInputTokens: cached,
+        outputTokens: output,
+        reasoningOutputTokens: 0,
+        totalTokens: input + output,
+      },
+      total: {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: total,
+      },
+      modelContextWindow: 400_000,
+    });
+    const { responder } = setup(
+      defaultHandlers({
+        "thread/start": ok({ thread: { id: "thread-new" }, model: "gpt-6-astra" }),
+        "turn/start": (message, server) => {
+          const threadId = message.params.threadId;
+          server.emit({ id: message.id, result: { turn: { id: "turn-1" } } });
+          for (const [index, value] of [
+            usage(50_000, 0, 100, 50_100),
+            usage(51_000, 50_000, 40, 101_140),
+          ].entries()) {
+            server.emit({
+              method: "thread/tokenUsage/updated",
+              params: { threadId, turnId: "turn-1", tokenUsage: value },
+            });
+            // 重复推送同一次响应不应重复计数
+            if (index === 1) {
+              server.emit({
+                method: "thread/tokenUsage/updated",
+                params: { threadId, turnId: "turn-1", tokenUsage: value },
+              });
+            }
+          }
+          server.emit({
+            method: "item/completed",
+            params: { threadId, turnId: "turn-1", item: agentMessage("done", "final_answer") },
+          });
+          server.emit({
+            method: "turn/completed",
+            params: { threadId, turn: { id: "turn-1", status: "completed", items: [] } },
+          });
+        },
+      }),
+    );
+    const reply = await responder.reply({ instructions: "r", prompt: "p" });
+    expect(reply.usage).toEqual({
+      model: "gpt-6-astra",
+      inputTokens: 51_000,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 50_000,
+      outputTokens: 140,
+      requests: 2,
+      firstRequest: { inputTokens: 50_000, cacheWriteTokens: 0, cacheReadTokens: 0 },
+      peakContextTokens: 51_000,
+      peakCacheWriteTokens: 0,
+      contextWindow: 400_000,
+    });
+    await responder.close();
+  });
+
   it("recognizes only initialize method-not-found as explicit unsupported", async () => {
     const { responder } = setup({
       initialize: (m, server) =>

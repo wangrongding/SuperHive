@@ -109,9 +109,11 @@ export class ClaudeCodeResponder implements AgentResponder {
     if (payload.is_error || !payload.result?.trim()) {
       throw new AgentExecutionUncertainError("Claude Code 没有返回可发送的文本，执行结果未知。");
     }
+    const usage = stream.usage();
     return {
       text: payload.result,
       ...(payload.session_id ? { threadId: payload.session_id } : {}),
+      ...(usage ? { usage } : {}),
     };
   }
 }

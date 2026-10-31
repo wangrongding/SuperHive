@@ -30,6 +30,7 @@ import {
   type InvocationBlockReason,
   type Participant,
   type ServerEvent,
+  DEFAULT_CACHE_WRITE_ALERT_TOKENS,
 } from "@ai-hive/protocol";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { WebSocket } from "ws";
@@ -1097,6 +1098,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     if (report.contextSeq !== undefined) {
       inboxCursors.set(agent.id, Math.max(inboxCursors.get(agent.id) ?? 0, report.contextSeq));
+    }
+    // 用量先记账，与调用后续状态如何落定无关：迟到或已停止的回合同样花了钱
+    if (report.usage) {
+      invocation = database.recordUsage(invocation, report.usage);
+      emitInvocation(invocation);
     }
     const now = new Date().toISOString();
     if (report.status === "received") {
@@ -2244,6 +2250,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
       if (!guard(request, reply, params.data.roomId)) return reply;
       return { invocations: database.listInvocations(params.data.roomId) };
+    },
+  );
+
+  app.get<{ Params: { roomId: string }; Querystring: { days?: string } }>(
+    "/api/rooms/:roomId/usage",
+    async (request, reply) => {
+      const params = roomParamsSchema.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "Invalid room parameter." });
+      if (!guard(request, reply, params.data.roomId)) return reply;
+      const days = Math.min(90, Math.max(1, Number.parseInt(request.query.days ?? "7", 10) || 7));
+      const since = new Date((options.now?.() ?? Date.now()) - days * 86_400_000).toISOString();
+      return database.usageSummary(params.data.roomId, since, DEFAULT_CACHE_WRITE_ALERT_TOKENS);
     },
   );
 

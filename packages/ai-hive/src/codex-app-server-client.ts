@@ -1,3 +1,4 @@
+import { UsageAccumulator, codexBuckets } from "./usage.js";
 import { codexStartupFailure } from "./codex-errors.js";
 import { isMissingCodexThread } from "./codex-client.js";
 import { createRequire } from "node:module";
@@ -152,6 +153,7 @@ type ActiveTurn = {
   resolve: (reply: AgentReply) => void;
   reject: (error: Error) => void;
   settled: boolean;
+  usage: UsageAccumulator;
 };
 
 function truncate(text: string, max: number): string {
@@ -202,6 +204,8 @@ function textInput(text: string) {
 
 export class CodexAppServerResponder implements AgentResponder {
   private session: Session | undefined;
+  /** thread/start、thread/resume 返回的实际模型，用于用量归属 */
+  private readonly threadModels = new Map<string, string>();
   private active: ActiveTurn | undefined;
   private executionUncertain = false;
   private readonly log: (message: string) => void;
@@ -259,7 +263,9 @@ export class CodexAppServerResponder implements AgentResponder {
         settled: false,
         resolve,
         reject,
+        usage: new UsageAccumulator(),
       };
+      turn.usage.setModel(this.threadModels.get(threadId) ?? this.options.model);
       this.active = turn;
 
       const onAbort = () => {
@@ -392,6 +398,7 @@ export class CodexAppServerResponder implements AgentResponder {
         );
         const threadId = typeof result?.thread?.id === "string" ? result.thread.id : input.threadId;
         session.loadedThreads.add(threadId);
+        if (typeof result?.model === "string") this.threadModels.set(threadId, result.model);
         return threadId;
       } catch (error) {
         if (!(error instanceof AppServerRpcError) || !isMissingCodexThread(error)) throw error;
@@ -405,6 +412,7 @@ export class CodexAppServerResponder implements AgentResponder {
       throw new Error("Codex app-server thread/start 没有返回线程 ID。");
     }
     session.loadedThreads.add(threadId);
+    if (typeof result?.model === "string") this.threadModels.set(threadId, result.model);
     return threadId;
   }
 
@@ -611,6 +619,17 @@ export class CodexAppServerResponder implements AgentResponder {
         }
         return;
       }
+      case "thread/tokenUsage/updated": {
+        // 每次模型响应后推送一次；last 是这一次响应的用量，total 的累计值可唯一标识这次响应
+        const turn = this.matchesActive(params);
+        const usage = params?.tokenUsage;
+        const buckets = codexBuckets(usage?.last);
+        if (!turn || !buckets) return;
+        const key = String(usage?.total?.totalTokens ?? `update-${Date.now()}`);
+        turn.usage.request(key, buckets);
+        turn.usage.setContextWindow(usage?.modelContextWindow);
+        return;
+      }
       case "turn/completed": {
         const turn = this.matchesActive(params);
         if (turn) this.completeTurn(turn, params.turn);
@@ -670,7 +689,8 @@ export class CodexAppServerResponder implements AgentResponder {
       );
       return;
     }
-    this.finishTurn(turn, { text, threadId: turn.threadId });
+    const usage = turn.usage.finish();
+    this.finishTurn(turn, { text, threadId: turn.threadId, ...(usage ? { usage } : {}) });
   }
 
   private handleExit(session: Session, exit: AppServerExit) {

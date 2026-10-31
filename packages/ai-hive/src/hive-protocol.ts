@@ -115,6 +115,25 @@ export type RuntimeEvent = {
   retryInMs?: number;
 };
 
+/** Keep in sync with agentUsageSchema in @ai-hive/protocol；四个输入桶互斥 */
+export type UsageBuckets = {
+  inputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+  outputTokens: number;
+};
+export type AgentUsage = UsageBuckets & {
+  model?: string;
+  requests: number;
+  firstRequest?: Omit<UsageBuckets, "outputTokens">;
+  peakContextTokens: number;
+  peakCacheWriteTokens: number;
+  contextWindow?: number;
+  reportedCostUsd?: number;
+  session?: "new" | "resumed";
+  idleMs?: number;
+};
+
 export type InvocationReport = {
   type: "invocation.report";
   messageId: string;
@@ -124,6 +143,7 @@ export type InvocationReport = {
   replyMessageId?: string;
   contextSeq?: number;
   runtimeEvent?: RuntimeEvent;
+  usage?: AgentUsage;
 };
 
 export type ServerEvent =

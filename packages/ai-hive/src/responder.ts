@@ -1,4 +1,4 @@
-import type { RuntimeEvent } from "./hive-protocol.js";
+import type { AgentUsage, RuntimeEvent } from "./hive-protocol.js";
 
 export type AgentProvider =
   "codex" | "claude" | "copilot" | "openclaw" | "opencode" | "omp" | "echo";
@@ -21,7 +21,12 @@ export type AgentReplyInput = {
   refreshInstructions?: boolean;
 };
 
-export type AgentReply = { text: string; threadId?: string };
+export type AgentReply = {
+  text: string;
+  threadId?: string;
+  /** 本轮 Runtime 返回的真实用量；不支持的 Provider 不填 */
+  usage?: AgentUsage;
+};
 
 export interface AgentResponder {
   reply(input: AgentReplyInput): Promise<AgentReply>;

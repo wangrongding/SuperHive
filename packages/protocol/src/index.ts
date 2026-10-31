@@ -273,6 +273,103 @@ export const runtimeObservationSchema = z.object({
   history: z.array(runtimeTimelineEntrySchema).max(12),
 });
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
+const tokenCount = z.number().int().min(0).max(1_000_000_000_000);
+/**
+ * 一次调用（Agent 的一轮）实际消耗的 token，取自 Runtime 返回的真实用量，不做估算。
+ * 四个输入桶互斥：inputTokens 是未命中缓存的普通输入，cacheWriteTokens 是写入缓存，
+ * cacheReadTokens 是命中缓存读取；命中率 = cacheRead / (input + cacheWrite + cacheRead)。
+ */
+export const usageBucketsSchema = z.object({
+  inputTokens: tokenCount,
+  cacheWriteTokens: tokenCount,
+  cacheReadTokens: tokenCount,
+  outputTokens: tokenCount,
+});
+export const agentUsageSchema = usageBucketsSchema.extend({
+  model: z.string().max(120).optional(),
+  /** 本轮向模型发出的请求数（工具往返越多越大） */
+  requests: z.number().int().min(0).max(100_000),
+  /** 本轮第一次请求：决定这一轮是续上缓存还是整段重写 */
+  firstRequest: usageBucketsSchema.omit({ outputTokens: true }).optional(),
+  /** 单次请求的最大上下文（三个输入桶之和），近似当前会话大小 */
+  peakContextTokens: tokenCount,
+  /** 单次请求的最大缓存写入；超过阈值时面板提示整段重写 */
+  peakCacheWriteTokens: tokenCount,
+  contextWindow: tokenCount.optional(),
+  /** Runtime 自己按官方价目估的费用（Claude Code 的 total_cost_usd），仅供参考 */
+  reportedCostUsd: z.number().min(0).max(1_000_000).optional(),
+  /** Bridge 补充：这一轮开始时是新会话还是续接旧会话，以及距上一轮结束空闲了多久 */
+  session: z.enum(["new", "resumed"]).optional(),
+  idleMs: z.number().int().min(0).max(31_536_000_000).optional(),
+});
+export type UsageBuckets = z.infer<typeof usageBucketsSchema>;
+export type AgentUsage = z.infer<typeof agentUsageSchema>;
+
+/** 提示缓存默认有效期（Anthropic 为 5 分钟）；续接会话空闲超过它，整段重写多半是缓存过期 */
+export const PROMPT_CACHE_TTL_MS = 5 * 60_000;
+/** 单次缓存写入超过这个值就在面板上标出来 */
+export const DEFAULT_CACHE_WRITE_ALERT_TOKENS = 200_000;
+export type CacheWriteReason = "new_session" | "cache_expired" | "unknown";
+/** 大额缓存写入的可能原因：新会话开局、空闲超过缓存有效期，其余（会话压��、上游换路由等）记为原因不明 */
+export function cacheWriteReason(usage: Pick<AgentUsage, "session" | "idleMs">): CacheWriteReason {
+  if (usage.session === "new") return "new_session";
+  if (usage.idleMs !== undefined && usage.idleMs >= PROMPT_CACHE_TTL_MS) return "cache_expired";
+  return "unknown";
+}
+export function usageInputTokens(usage: UsageBuckets): number {
+  return usage.inputTokens + usage.cacheWriteTokens + usage.cacheReadTokens;
+}
+/** token 加权的缓存命中率；没有输入时为 undefined */
+export function cacheHitRate(usage: UsageBuckets): number | undefined {
+  const input = usageInputTokens(usage);
+  return input > 0 ? usage.cacheReadTokens / input : undefined;
+}
+
+export const usageTotalsSchema = usageBucketsSchema.extend({
+  /** 记录到的 Agent 回合数 */
+  turns: z.number().int().min(0),
+  requests: z.number().int().min(0),
+  reportedCostUsd: z.number().min(0),
+  /** 单次缓存写入超过阈值的回合数 */
+  largeCacheWrites: z.number().int().min(0),
+});
+export const usageRecordSchema = z.object({
+  invocationId: z.string().uuid(),
+  roomId: z.string(),
+  messageId: z.string().uuid(),
+  agentId: z.string().uuid(),
+  agentName: z.string(),
+  createdAt: z.string().datetime(),
+  usage: agentUsageSchema,
+});
+export const usageSummarySchema = z.object({
+  roomId: z.string(),
+  since: z.string().datetime(),
+  cacheWriteAlertTokens: z.number().int().min(1),
+  totals: usageTotalsSchema,
+  agents: z.array(
+    usageTotalsSchema.extend({
+      agentId: z.string().uuid(),
+      agentName: z.string(),
+      models: z.array(z.string()),
+      /** 最近一轮：开局请求与会话大小 */
+      latest: usageRecordSchema.optional(),
+    }),
+  ),
+  /**
+   * 按 Agent × 日期（服务端本地时区）× 模型细分；价格按模型配置在网页端，
+   * 网页据此算出各维度的估算费用，不需要逐条明细。
+   */
+  cells: z.array(
+    usageTotalsSchema.extend({ agentId: z.string().uuid(), day: z.string(), model: z.string() }),
+  ),
+  /** 最近的回合明细（新的在前） */
+  recent: z.array(usageRecordSchema),
+});
+export type UsageTotals = z.infer<typeof usageTotalsSchema>;
+export type UsageRecord = z.infer<typeof usageRecordSchema>;
+export type UsageSummary = z.infer<typeof usageSummarySchema>;
+
 export type RuntimeObservation = z.infer<typeof runtimeObservationSchema>;
 
 export const invocationSchema = z.object({
@@ -301,6 +398,7 @@ export const invocationSchema = z.object({
   detail: z.string().max(500).optional(),
   progress: z.string().max(200).optional(),
   runtime: runtimeObservationSchema.optional(),
+  usage: agentUsageSchema.optional(),
   replyMessageId: z.string().uuid().optional(),
   attempts: z.number().int().min(1),
   createdAt: z.string().datetime(),
@@ -349,6 +447,8 @@ export const invocationReportEventSchema = z.object({
   detail: z.string().trim().max(500).optional(),
   progress: z.string().trim().max(200).optional(),
   runtimeEvent: runtimeEventSchema.optional(),
+  /** 本轮真实用量；同一轮合并处理多条消息时只随其中一条上报，避免重复计费 */
+  usage: agentUsageSchema.optional(),
   replyMessageId: z.string().uuid().optional(),
   /** Agent 本轮已读到的公共消息 seq，Hive MCP 据此只附带之后的新消息 */
   contextSeq: z.number().int().nonnegative().optional(),

@@ -1,4 +1,12 @@
-import { runtimeObservationSchema, type RuntimeObservation } from "@ai-hive/protocol";
+import {
+  agentUsageSchema,
+  runtimeObservationSchema,
+  type AgentUsage,
+  type RuntimeObservation,
+  type UsageRecord,
+  type UsageSummary,
+  type UsageTotals,
+} from "@ai-hive/protocol";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import {
@@ -125,6 +133,7 @@ type InvocationRow = {
   detail: string | null;
   progress: string | null;
   runtime: string | null;
+  usage: string | null;
   reply_message_id: string | null;
   parent_invocation_id: string | null;
   continuation: InvocationContinuation | null;
@@ -295,6 +304,46 @@ function parseMessageMeta(
   }
 }
 
+function parseUsage(value: string | null | undefined): AgentUsage | undefined {
+  try {
+    const parsed = agentUsageSchema.safeParse(JSON.parse(value ?? "null"));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function emptyTotals(): UsageTotals {
+  return {
+    inputTokens: 0,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 0,
+    outputTokens: 0,
+    turns: 0,
+    requests: 0,
+    reportedCostUsd: 0,
+    largeCacheWrites: 0,
+  };
+}
+
+function addUsage(totals: UsageTotals, usage: AgentUsage, alertTokens: number): void {
+  totals.inputTokens += usage.inputTokens;
+  totals.cacheWriteTokens += usage.cacheWriteTokens;
+  totals.cacheReadTokens += usage.cacheReadTokens;
+  totals.outputTokens += usage.outputTokens;
+  totals.turns += 1;
+  totals.requests += usage.requests;
+  totals.reportedCostUsd += usage.reportedCostUsd ?? 0;
+  if (usage.peakCacheWriteTokens >= alertTokens) totals.largeCacheWrites += 1;
+}
+
+/** 服务端本地时区的日期，用作按天汇总的键 */
+function localDay(iso: string): string {
+  const date = new Date(iso);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function mapInvocation(row: InvocationRow): Invocation {
   let runtime: RuntimeObservation | undefined;
   try {
@@ -303,8 +352,10 @@ function mapInvocation(row: InvocationRow): Invocation {
   } catch {
     /* A corrupt optional diagnostic field must not hide the invocation. */
   }
+  const usage = parseUsage(row.usage);
   return {
     ...(runtime ? { runtime } : {}),
+    ...(usage ? { usage } : {}),
     id: row.id,
     roomId: row.room_id,
     messageId: row.message_id,
@@ -489,6 +540,19 @@ export class HiveDatabase {
         UNIQUE(room_id, key)
       );
 
+      -- 用量账本：每个 Agent 回合一行。清空房间不删除，费用统计不会因开新话题而丢失
+      CREATE TABLE IF NOT EXISTS agent_usage (
+        invocation_id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        agent_name TEXT NOT NULL,
+        model TEXT,
+        usage TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS agent_usage_room ON agent_usage(room_id, created_at);
+
       CREATE TABLE IF NOT EXISTS local_agents (
         id TEXT PRIMARY KEY,
         provider TEXT NOT NULL,
@@ -523,6 +587,9 @@ export class HiveDatabase {
         ALTER TABLE invocations ADD COLUMN resolved_by TEXT;
         ALTER TABLE invocations ADD COLUMN resolution_note TEXT;
       `);
+    }
+    if (!invocationColumns.some((column) => column.name === "usage")) {
+      this.db.exec("ALTER TABLE invocations ADD COLUMN usage TEXT");
     }
     if (!invocationColumns.some((column) => column.name === "parent_invocation_id")) {
       // 委派关系与子任务回执状态（见 Invocation.parentInvocationId / continuation）
@@ -1209,6 +1276,113 @@ export class HiveDatabase {
     const invocation = this.getInvocation(id);
     if (!invocation) throw new HiveError("INVOCATION_NOT_FOUND", "Invocation not found.");
     return invocation;
+  }
+
+  /**
+   * 记下一个回合的真实用量：写入账本（同一调用重试后再次上报会覆盖）并挂到调用上。
+   * 用量与调用状态无关——迟到、已停止的回合同样花了钱，一律记账。
+   */
+  recordUsage(
+    invocation: Invocation,
+    usage: AgentUsage,
+    now = new Date().toISOString(),
+  ): Invocation {
+    const json = JSON.stringify(usage);
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO agent_usage(invocation_id, room_id, message_id, agent_id, agent_name, model, usage, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(invocation_id) DO UPDATE SET model = excluded.model, usage = excluded.usage,
+             created_at = excluded.created_at`,
+        )
+        .run(
+          invocation.id,
+          invocation.roomId,
+          invocation.messageId,
+          invocation.agentId,
+          invocation.agentName,
+          usage.model ?? null,
+          json,
+          now,
+        );
+      this.db
+        .prepare("UPDATE invocations SET usage = ?, updated_at = ? WHERE id = ?")
+        .run(json, now, invocation.id);
+    })();
+    return this.getInvocation(invocation.id) ?? invocation;
+  }
+
+  /** 房间在 since 之后的用量汇总：合计、按 Agent、按模型、按天，以及最近的明细 */
+  usageSummary(
+    roomId: string,
+    since: string,
+    alertTokens: number,
+    recentLimit = 100,
+  ): UsageSummary {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM agent_usage WHERE room_id = ? AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 50000`,
+      )
+      .all(roomId, since) as Array<{
+      invocation_id: string;
+      room_id: string;
+      message_id: string;
+      agent_id: string;
+      agent_name: string;
+      model: string | null;
+      usage: string;
+      created_at: string;
+    }>;
+    const totals = emptyTotals();
+    const agents = new Map<string, UsageSummary["agents"][number]>();
+    const cells = new Map<string, UsageSummary["cells"][number]>();
+    const recent: UsageRecord[] = [];
+    for (const row of rows) {
+      const usage = parseUsage(row.usage);
+      if (!usage) continue;
+      const record: UsageRecord = {
+        invocationId: row.invocation_id,
+        roomId: row.room_id,
+        messageId: row.message_id,
+        agentId: row.agent_id,
+        agentName: row.agent_name,
+        createdAt: row.created_at,
+        usage,
+      };
+      if (recent.length < recentLimit) recent.push(record);
+      addUsage(totals, usage, alertTokens);
+      let agent = agents.get(row.agent_id);
+      if (!agent) {
+        // 行按时间倒序，第一次遇到的就是这个 Agent 最近的一轮
+        agent = {
+          ...emptyTotals(),
+          agentId: row.agent_id,
+          agentName: row.agent_name,
+          models: [],
+          latest: record,
+        };
+        agents.set(row.agent_id, agent);
+      }
+      addUsage(agent, usage, alertTokens);
+      const model = usage.model ?? "unknown";
+      if (!agent.models.includes(model)) agent.models.push(model);
+      const day = localDay(row.created_at);
+      const key = JSON.stringify([row.agent_id, day, model]);
+      let cell = cells.get(key);
+      if (!cell) cells.set(key, (cell = { ...emptyTotals(), agentId: row.agent_id, day, model }));
+      addUsage(cell, usage, alertTokens);
+    }
+    return {
+      roomId,
+      since,
+      cacheWriteAlertTokens: alertTokens,
+      totals,
+      agents: [...agents.values()],
+      cells: [...cells.values()].sort((a, b) => b.day.localeCompare(a.day)),
+      recent,
+    };
   }
 
   /** 房间最近的调用记录，外加所有尚未结束的调用（避免长任务被窗口挤掉） */

@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { ChatMessage, Invocation, Participant, RoomSummary } from "@ai-hive/protocol";
+import type {
+  ChatMessage,
+  Invocation,
+  Participant,
+  RoomSummary,
+  UsageSummary,
+} from "@ai-hive/protocol";
 import { delegationSummary, invocationStatusLabel } from "./invocations";
 import { formatRelativeTime } from "./whiteboard";
 import { localized, t } from "./i18n";
+import { UsageSection } from "./usage";
 
 export type ActivityView = "search" | "mentions" | "tasks";
 
@@ -327,6 +334,8 @@ export function ActivityPanel({
   onOpenMessage,
   onMarkMentionsRead,
   onDismiss,
+  usageRoomId,
+  loadUsage,
   onClose,
 }: {
   view: ActivityView;
@@ -343,6 +352,9 @@ export function ActivityPanel({
   onMarkMentionsRead: () => void;
   /** 把不再需要处理的失败、被拦、结果未知一次性标为已处理 */
   onDismiss?: (invocations: Invocation[]) => void;
+  /** 当前房间：任务面板底部显示它的用量统计 */
+  usageRoomId?: string;
+  loadUsage?: (roomId: string, days: number) => Promise<UsageSummary>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -431,6 +443,17 @@ export function ActivityPanel({
       inFlight: tree(sorted.filter(isInFlight)),
     };
   }, [invocationMessages, invocations, isAgentOnline]);
+
+  // 有调用结束（带回用量）时刷新用量统计
+  const usageRefreshKey = useMemo(
+    () =>
+      invocations
+        .filter((invocation) => invocation.usage)
+        .map((invocation) => invocation.updatedAt)
+        .sort()
+        .at(-1) ?? "",
+    [invocations],
+  );
 
   const agentRows = useMemo(
     () => (view === "tasks" ? agentRuntimeRows(participants, invocations) : []),
@@ -641,6 +664,10 @@ export function ActivityPanel({
                 )}
               </>
             ))}
+
+          {view === "tasks" && usageRoomId && loadUsage && (
+            <UsageSection roomId={usageRoomId} load={loadUsage} refreshKey={usageRefreshKey} />
+          )}
         </div>
       </div>
     </div>

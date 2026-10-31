@@ -138,8 +138,8 @@ class ControlledResponder implements AgentResponder {
     this.steered.push(prompt);
     return this.steerResult;
   }
-  finish(text = "完成", threadId = "thread-1") {
-    this.resolvers.shift()?.resolve({ text, threadId });
+  finish(text = "完成", threadId = "thread-1", usage?: AgentReply["usage"]) {
+    this.resolvers.shift()?.resolve({ text, threadId, ...(usage ? { usage } : {}) });
   }
   fail(message: string | Error = "boom") {
     this.resolvers.shift()?.reject(message instanceof Error ? message : new Error(message));
@@ -432,6 +432,41 @@ describe("AgentBridge", () => {
     await waitUntil(() => room.statuses(second.id).includes("completed"));
     expect(room.sent).toHaveLength(1);
     expect(responder.calls).toHaveLength(1);
+  });
+
+  it("reports a turn's usage once, tagged with new/resumed session and idle time", async () => {
+    await startBridge(baseState());
+    const usage = {
+      inputTokens: 10,
+      cacheWriteTokens: 400_000,
+      cacheReadTokens: 0,
+      outputTokens: 20,
+      requests: 1,
+      peakContextTokens: 400_010,
+      peakCacheWriteTokens: 400_000,
+    };
+    const first = chat();
+    const second = chat({ senderName: "Bob", content: "@agent-a 还有这个" });
+    room.messages.push(first, second);
+    room.handlers.onMention(first, first.seq, false);
+    room.handlers.onMention(second, second.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    responder.finish("好", "thread-1", usage);
+    await waitUntil(() => room.statuses(second.id).includes("completed"));
+    const withUsage = room.reports.filter((report) => report.usage);
+    expect(withUsage).toHaveLength(1);
+    expect(withUsage[0]).toMatchObject({ messageId: first.id, status: "completed" });
+    expect(withUsage[0]!.usage).toEqual({ ...usage, session: "new" });
+
+    const third = chat({ content: "@agent-a 再来" });
+    room.messages.push(third);
+    room.handlers.onMention(third, third.seq, false);
+    await waitUntil(() => responder.calls.length === 2);
+    responder.finish("好", "thread-1", usage);
+    await waitUntil(() => room.statuses(third.id).includes("completed"));
+    const resumed = room.reports.find((report) => report.messageId === third.id && report.usage);
+    expect(resumed?.usage?.session).toBe("resumed");
+    expect(resumed?.usage?.idleMs).toBeGreaterThanOrEqual(0);
   });
 
   it("steers late mentions into the running turn and falls back to queueing", async () => {

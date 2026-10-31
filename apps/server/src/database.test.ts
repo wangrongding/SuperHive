@@ -184,6 +184,50 @@ describe("HiveDatabase", () => {
     expect(db.listPendingContinuations()).toEqual([]);
   });
 
+  it("keeps the usage ledger across retries and room clears, and splits it by agent, day and model", () => {
+    const usage = (model: string, write: number, read: number) => ({
+      model,
+      inputTokens: 10,
+      cacheWriteTokens: write,
+      cacheReadTokens: read,
+      outputTokens: 5,
+      requests: 2,
+      peakContextTokens: write + read + 10,
+      peakCacheWriteTokens: write,
+    });
+    const first = db.createMessage(human, {
+      content: "@agent-a a",
+      clientMessageId: "u-1",
+    }).message;
+    const second = db.createMessage(human, {
+      content: "@agent-b b",
+      clientMessageId: "u-2",
+    }).message;
+    const a = db.createInvocation({ message: first, agent: agentA, status: "running" }).invocation;
+    const b = db.createInvocation({ message: second, agent: agentB, status: "running" }).invocation;
+    db.recordUsage(a, usage("claude-opus-5-5", 1_000, 0), "2026-10-30T10:00:00.000Z");
+    // 同一调用再次上报（重试）覆盖而不是重复计数
+    db.recordUsage(a, usage("claude-opus-5-5", 300_000, 0), "2026-10-31T10:00:00.000Z");
+    db.recordUsage(b, usage("gpt-6-astra", 0, 50_000), "2026-10-31T11:00:00.000Z");
+    expect(db.getInvocation(a.id)?.usage?.cacheWriteTokens).toBe(300_000);
+
+    db.clearRoom("general");
+    const summary = db.usageSummary("general", "2026-10-01T00:00:00.000Z", 200_000);
+    expect(summary.totals).toMatchObject({
+      turns: 2,
+      cacheWriteTokens: 300_000,
+      cacheReadTokens: 50_000,
+      largeCacheWrites: 1,
+    });
+    expect(summary.agents.map((agent) => agent.agentName)).toEqual(["agent-b", "agent-a"]);
+    expect(summary.cells.map((cell) => [cell.model, cell.turns])).toEqual([
+      ["gpt-6-astra", 1],
+      ["claude-opus-5-5", 1],
+    ]);
+    expect(summary.recent[0]?.invocationId).toBe(b.id);
+    expect(db.usageSummary("general", "2026-11-01T00:00:00.000Z", 200_000).totals.turns).toBe(0);
+  });
+
   it("limits each agent's replies per minute", () => {
     const root = db.createMessage(human, { content: "root", clientMessageId: "rate-root" }).message;
     for (let index = 0; index < LIMITS.maxAgentRepliesPerMinute; index += 1) {
