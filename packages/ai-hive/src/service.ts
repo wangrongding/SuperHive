@@ -127,6 +127,7 @@ function readState(statePath: string): ServiceState | undefined {
       logPath: value.logPath,
       startedAt: value.startedAt,
       ...(startOptions ? { startOptions } : {}),
+      ...(typeof value.shutdownToken === "string" ? { shutdownToken: value.shutdownToken } : {}),
     };
   } catch {
     return undefined;
