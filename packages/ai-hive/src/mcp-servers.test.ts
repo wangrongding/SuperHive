@@ -92,7 +92,10 @@ describe("Codex MCP", () => {
   });
 
   it("turns the disabled list into -c overrides and never disables hive", () => {
-    expect(codexMcpDisableOverrides(["chrome-devtools", "with.dot", "hive"])).toEqual([
+    const configured = new Set(["chrome-devtools", "with.dot", "hive"]);
+    expect(
+      codexMcpDisableOverrides(["chrome-devtools", "with.dot", "hive", "removed"], configured),
+    ).toEqual([
       "mcp_servers.chrome-devtools.enabled=false",
       'mcp_servers."with.dot".enabled=false',
     ]);

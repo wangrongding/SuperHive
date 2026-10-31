@@ -329,7 +329,7 @@ describe("local agent routes", () => {
 
   it("previews MCP servers before launch and starts the agent with the unchecked ones off", async () => {
     const settingsDir = mkdtempSync(path.join(tmpdir(), "hive-agent-settings-"));
-    const listMcp = vi.fn(async (args: string[]) =>
+    const listMcp = vi.fn<(args: string[]) => Promise<string>>(async () =>
       JSON.stringify({
         servers: [
           { name: "rea", scope: "user", transport: "stdio", enabled: true, configurable: true },

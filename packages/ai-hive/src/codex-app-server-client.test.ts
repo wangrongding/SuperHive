@@ -140,8 +140,11 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("CodexAppServerResponder", () => {
   it("disables unchecked MCP servers and restarts app-server when the selection changes", async () => {
-    const settingsFile = path.join(mkdtempSync(path.join(tmpdir(), "hive-codex-")), "s.json");
+    const dir = mkdtempSync(path.join(tmpdir(), "hive-codex-"));
+    const settingsFile = path.join(dir, "s.json");
     writeFileSync(settingsFile, JSON.stringify({ mcpDisabled: ["chrome-devtools"] }));
+    writeFileSync(path.join(dir, "config.toml"), '[mcp_servers.chrome-devtools]\ncommand = "x"\n');
+    vi.stubEnv("CODEX_HOME", dir);
     const { responder, servers } = setup(defaultHandlers(), { settingsFile });
 
     await responder.reply({ instructions: "r", prompt: "p" });
@@ -156,6 +159,7 @@ describe("CodexAppServerResponder", () => {
     expect(servers[1]!.args.join(" ")).not.toContain("enabled=false");
     // 新进程续接原来的线程
     expect(servers[1]!.methods()).toContain("thread/resume");
+    vi.unstubAllEnvs();
   });
 
   it("returns per-turn token usage from thread/tokenUsage/updated with the thread model", async () => {

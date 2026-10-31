@@ -167,10 +167,17 @@ function tomlKey(name: string): string {
   return /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
 }
 
-/** 按勾选关闭 Codex 的 MCP：-c mcp_servers.名称.enabled=false */
-export function codexMcpDisableOverrides(disabled: string[]): string[] {
+/**
+ * 按勾选关闭 Codex 的 MCP：-c mcp_servers.名称.enabled=false。
+ * 只给 config.toml 里实际存在的名称生成：对不存在的名称，Codex 会把它当成一个不完整的新条目，
+ * 以 "invalid transport" 拒绝启动（设置里可能留着已从 Codex 配置删掉的旧名字）。
+ */
+export function codexMcpDisableOverrides(
+  disabled: string[],
+  configured: ReadonlySet<string> = new Set(discoverCodexMcpServers().map((server) => server.name)),
+): string[] {
   return disabled
-    .filter((name) => name !== "hive")
+    .filter((name) => name !== "hive" && configured.has(name))
     .map((name) => `mcp_servers.${tomlKey(name)}.enabled=false`);
 }
 
