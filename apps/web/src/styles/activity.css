@@ -90,7 +90,8 @@
   top: 8px;
   bottom: 8px;
   left: calc(var(--sidebar-width) + 4px);
-  width: min(440px, calc(100vw - var(--sidebar-width) - 24px));
+  /* 提及、任务面板放消息预览和用量表格，比搜索框更需要横向空间 */
+  width: min(640px, calc(100vw - var(--sidebar-width) - 24px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
