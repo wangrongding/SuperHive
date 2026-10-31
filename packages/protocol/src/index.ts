@@ -817,6 +817,8 @@ export const createLocalAgentRequestSchema = z.object({
   /** workspace / full 必填：本机绝对路径 */
   cwd: z.string().trim().min(1).max(4096).optional(),
   model: z.string().trim().min(1).max(200).optional(),
+  /** 接入时就关掉的本机 MCP（仅 Claude Code / Codex），之后可在 Agent 设置里改 */
+  mcpDisabled: z.array(z.string().trim().min(1).max(200)).max(200).optional(),
 });
 
 export const localAgentSchema = z.object({

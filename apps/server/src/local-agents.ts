@@ -430,25 +430,50 @@ export class LocalAgentSupervisor {
   /** 这个 Agent 会加载的本机 MCP 及启用状态；measure 时逐个连上估算开局 token（结果缓存 10 分钟） */
   async mcpServers(id: string, measure: boolean): Promise<LocalAgentMcpResponse> {
     const { config } = this.require(id);
-    if (!MCP_SELECTABLE.has(config.provider)) {
+    return this.listMcpFor(id, config.provider, config.cwd, this.writeSettings(config), measure);
+  }
+
+  /** 接入新 Agent 前预览：这个 provider 在该目录下会加载哪些本机 MCP（默认全部启用） */
+  mcpCandidates(
+    provider: LocalAgentProvider,
+    cwd: string | undefined,
+    measure: boolean,
+  ): Promise<LocalAgentMcpResponse> {
+    const resolved = cwd ? resolveWorkspace(cwd) : null;
+    return this.listMcpFor(
+      `new:${provider}:${resolved ?? ""}`,
+      provider,
+      resolved,
+      undefined,
+      measure,
+    );
+  }
+
+  private async listMcpFor(
+    cacheKey: string,
+    provider: LocalAgentProvider,
+    cwd: string | null,
+    settingsFile: string | undefined,
+    measure: boolean,
+  ): Promise<LocalAgentMcpResponse> {
+    if (!MCP_SELECTABLE.has(provider)) {
       return { supported: false, servers: [], baselineTokens: null };
     }
-    const cachedEntry = this.measureCache.get(id);
+    const cachedEntry = this.measureCache.get(cacheKey);
     const cached =
       cachedEntry && this.now() - cachedEntry.at < MCP_MEASURE_CACHE_MS
         ? cachedEntry.result
         : undefined;
-    const file = this.writeSettings(config);
     const stdout = await this.listMcp([
       "mcp",
       "list",
       "--provider",
-      config.provider,
+      provider,
       "--cwd",
-      config.cwd ?? homedir(),
-      ...(file ? ["--agent-settings", file] : []),
+      cwd ?? homedir(),
+      ...(settingsFile ? ["--agent-settings", settingsFile] : []),
       "--json",
-      ...(measure && config.provider === "claude" ? ["--measure"] : []),
+      ...(measure && provider === "claude" ? ["--measure"] : []),
     ]);
     const line = stdout.trim().split("\n").at(-1) ?? "";
     let servers: LocalAgentMcpResponse["servers"];
@@ -468,9 +493,9 @@ export class LocalAgentSupervisor {
     const result: LocalAgentMcpResponse = {
       supported: true,
       servers,
-      baselineTokens: config.provider === "claude" ? CLAUDE_BASELINE_TOKENS : null,
+      baselineTokens: provider === "claude" ? CLAUDE_BASELINE_TOKENS : null,
     };
-    if (measure) this.measureCache.set(id, { at: this.now(), result });
+    if (measure) this.measureCache.set(cacheKey, { at: this.now(), result });
     return result;
   }
 
@@ -518,6 +543,9 @@ export class LocalAgentSupervisor {
       access: request.access,
       cwd,
       model: request.model ?? null,
+      ...(request.mcpDisabled && MCP_SELECTABLE.has(request.provider)
+        ? { mcpDisabled: [...new Set(request.mcpDisabled)].sort() }
+        : {}),
     });
     const runtime = this.track(config);
     this.launch(runtime);

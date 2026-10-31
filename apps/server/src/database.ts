@@ -1637,8 +1637,8 @@ export class HiveDatabase {
     };
     this.db
       .prepare(
-        `INSERT INTO local_agents(id, provider, name, name_key, access, cwd, model, autostart, created_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO local_agents(id, provider, name, name_key, access, cwd, model, autostart, created_at, mcp_disabled)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         config.id,
@@ -1650,6 +1650,7 @@ export class HiveDatabase {
         config.model,
         1,
         config.createdAt,
+        JSON.stringify(config.mcpDisabled ?? []),
       );
     return config;
   }

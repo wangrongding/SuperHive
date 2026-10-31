@@ -58,6 +58,82 @@ function estimateStartTokens(
   return total;
 }
 
+/** 本机 MCP 勾选列表与开局 token 估算；Agent 设置弹窗和接入表单共用 */
+export function McpChecklist({
+  data,
+  failed,
+  disabled,
+  measuring,
+  busy,
+  onToggle,
+}: {
+  data: LocalAgentMcpResponse | undefined;
+  failed: boolean;
+  disabled: Set<string>;
+  measuring: boolean;
+  busy: boolean;
+  onToggle: (name: string) => void;
+}) {
+  const estimate = data ? estimateStartTokens(data, disabled) : undefined;
+  return (
+    <>
+      {!data && !failed && <p className="agent-mcp-hint">{t("正在读取 MCP 列表…")}</p>}
+      {data && !data.supported && (
+        <p className="agent-mcp-hint">{t("这个 Agent 类型暂不支持在 Hive 里开关 MCP。")}</p>
+      )}
+      {data?.supported && data.servers.length === 0 && (
+        <p className="agent-mcp-hint">{t("这台电脑上没有配置额外的 MCP，只加载 hive。")}</p>
+      )}
+      {data?.supported && data.servers.length > 0 && (
+        <ul className="agent-mcp-list" aria-label={t("本机 MCP")}>
+          {data.servers.map((server) => {
+            const on = server.configurable ? !disabled.has(server.name) : server.enabled;
+            const size = server.measurement
+              ? server.measurement.ok
+                ? t("{0} 个工具 · 约 {1} token", {
+                    0: server.measurement.tools,
+                    1: formatTokens(server.measurement.tokens),
+                  })
+                : t("无法估算：{0}", { 0: server.measurement.error })
+              : measuring
+                ? t("正在估算…")
+                : "";
+            const heavy = server.measurement?.ok === true && server.measurement.tokens >= 50_000;
+            return (
+              <li key={server.name} className={on ? "" : "off"}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={!server.configurable || busy}
+                    onChange={() => onToggle(server.name)}
+                  />
+                  <span className="agent-mcp-copy">
+                    <strong>{server.name}</strong>
+                    <small>
+                      {scopeLabels[server.scope]} · {server.transport}
+                      {size ? " · " : ""}
+                      {size && <span className={heavy ? "agent-mcp-heavy" : ""}>{size}</span>}
+                      {!server.configurable &&
+                        ` · ${server.disabledByCli ? t("已在 CLI 配置里关闭") : t("插件提供，不能在这里开关")}`}
+                    </small>
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {estimate !== undefined && (
+        <p className="agent-mcp-estimate">
+          {t("按当前勾选，每个新会话开局约 {0} token（估算）。", { 0: formatTokens(estimate) })}
+        </p>
+      )}
+    </>
+  );
+}
+
 /**
  * 本机 Agent 的设置：勾选它加载哪些本机 MCP。每个 MCP 的工具定义都会在每个会话开局整段发给模型，
  * 体积大的会让每次新会话、每次缓存过期都多花一大笔，所以把大小标出来让房主自己取舍。
@@ -138,7 +214,6 @@ export function AgentSettingsDialog({
     }
   }
 
-  const estimate = data ? estimateStartTokens(data, disabled) : undefined;
   const needsRestart = agent.settingsPendingRestart === true;
 
   return (
@@ -170,60 +245,14 @@ export function AgentSettingsDialog({
         </header>
 
         <div className="invite-dialog-body">
-          {!data && !error && <p className="agent-mcp-hint">{t("正在读取 MCP 列表…")}</p>}
-          {data && !data.supported && (
-            <p className="agent-mcp-hint">{t("这个 Agent 类型暂不支持在 Hive 里开关 MCP。")}</p>
-          )}
-          {data?.supported && data.servers.length === 0 && (
-            <p className="agent-mcp-hint">{t("这台电脑上没有配置额外的 MCP，只加载 hive。")}</p>
-          )}
-          {data?.supported && data.servers.length > 0 && (
-            <ul className="agent-mcp-list" aria-label={t("本机 MCP")}>
-              {data.servers.map((server) => {
-                const on = server.configurable ? !disabled.has(server.name) : server.enabled;
-                const size = server.measurement
-                  ? server.measurement.ok
-                    ? t("{0} 个工具 · 约 {1} token", {
-                        0: server.measurement.tools,
-                        1: formatTokens(server.measurement.tokens),
-                      })
-                    : t("无法估算：{0}", { 0: server.measurement.error })
-                  : measuring
-                    ? t("正在估算…")
-                    : "";
-                const heavy =
-                  server.measurement?.ok === true && server.measurement.tokens >= 50_000;
-                return (
-                  <li key={server.name} className={on ? "" : "off"}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        disabled={!server.configurable || saving}
-                        onChange={() => toggle(server.name)}
-                      />
-                      <span className="agent-mcp-copy">
-                        <strong>{server.name}</strong>
-                        <small>
-                          {scopeLabels[server.scope]} · {server.transport}
-                          {size ? " · " : ""}
-                          {size && <span className={heavy ? "agent-mcp-heavy" : ""}>{size}</span>}
-                          {!server.configurable &&
-                            ` · ${server.disabledByCli ? t("已在 CLI 配置里关闭") : t("插件提供，不能在这里开关")}`}
-                        </small>
-                      </span>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-
-          {estimate !== undefined && (
-            <p className="agent-mcp-estimate">
-              {t("按当前勾选，每个新会话开局约 {0} token（估算）。", { 0: formatTokens(estimate) })}
-            </p>
-          )}
+          <McpChecklist
+            data={data}
+            failed={error !== undefined}
+            disabled={disabled}
+            measuring={measuring}
+            busy={saving}
+            onToggle={toggle}
+          />
           <p className="agent-mcp-hint">
             {needsRestart
               ? t("这个 Agent 是在支持此设置之前启动的，保存后需要重启一次才会生效。")

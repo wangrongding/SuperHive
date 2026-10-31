@@ -9,6 +9,7 @@ import type {
   LocalSessionResponse,
 } from "@ai-hive/protocol";
 import { localized, t } from "./i18n";
+import { McpChecklist } from "./agent-settings-dialog";
 
 /**
  * 本机 Agent：页面运行在 Hive Server 所在电脑上时，可以直接在网页上拉起 Agent。
@@ -32,6 +33,12 @@ export type LocalAgentsState = {
   clearRoom(roomId: string, username: string): Promise<void>;
   /** Agent 会加载的本机 MCP；measure 时逐个连上估算开局 token */
   mcpServers(id: string, measure?: boolean): Promise<LocalAgentMcpResponse>;
+  /** 接入前预览：provider 在该目录下会加载的本机 MCP */
+  mcpCandidates(
+    provider: LocalAgentProvider,
+    cwd: string | undefined,
+    measure?: boolean,
+  ): Promise<LocalAgentMcpResponse>;
   updateSettings(id: string, settings: { mcpDisabled: string[] }): Promise<LocalAgent>;
 };
 
@@ -170,6 +177,17 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     [request],
   );
 
+  const mcpCandidates = useCallback(
+    async (provider: LocalAgentProvider, cwd: string | undefined, measure = false) => {
+      const query = new URLSearchParams({ provider });
+      if (cwd) query.set("cwd", cwd);
+      if (measure) query.set("measure", "1");
+      const response = await request(`/api/local/mcp?${query.toString()}`);
+      return (await response.json()) as LocalAgentMcpResponse;
+    },
+    [request],
+  );
+
   const updateSettings = useCallback(
     async (id: string, settings: { mcpDisabled: string[] }) => {
       const response = await request(`/api/local/agents/${id}/settings`, {
@@ -195,6 +213,7 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     directories,
     clearRoom,
     mcpServers,
+    mcpCandidates,
     updateSettings,
   };
 }
@@ -487,6 +506,41 @@ export function LocalLaunch({
   const info = providerInfo(local, provider);
   const launched = local.agents.find((agent) => agent.id === launchedId);
 
+  // Claude Code / Codex 接入时就能选加载哪些本机 MCP，不必先接入再去设置里改
+  const mcpSelectable = provider === "claude" || provider === "codex";
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [mcpData, setMcpData] = useState<LocalAgentMcpResponse | undefined>();
+  const [mcpFailed, setMcpFailed] = useState(false);
+  const [mcpMeasuring, setMcpMeasuring] = useState(false);
+  const [mcpDisabled, setMcpDisabled] = useState<Set<string>>(() => new Set());
+  const { mcpCandidates } = local;
+  const mcpCwd = access === "read-only" ? undefined : cwd.trim() || undefined;
+  useEffect(() => {
+    if (!mcpSelectable || !mcpOpen) return;
+    let cancelled = false;
+    setMcpFailed(false);
+    const load = async () => {
+      try {
+        const listed = await mcpCandidates(provider, mcpCwd);
+        if (cancelled) return;
+        setMcpData(listed);
+        setMcpMeasuring(true);
+        const measured = await mcpCandidates(provider, mcpCwd, true);
+        if (!cancelled) setMcpData(measured);
+      } catch {
+        if (!cancelled) setMcpFailed(true);
+      } finally {
+        if (!cancelled) setMcpMeasuring(false);
+      }
+    };
+    // 手输目录时等停下来再读
+    const timer = window.setTimeout(() => void load(), 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [mcpCandidates, mcpCwd, mcpOpen, mcpSelectable, provider]);
+
   const submit = async () => {
     setSubmitting(true);
     setError(undefined);
@@ -496,6 +550,7 @@ export function LocalLaunch({
         name: name.trim(),
         access,
         ...(access === "read-only" ? {} : { cwd: cwd.trim() }),
+        ...(mcpSelectable && mcpDisabled.size > 0 ? { mcpDisabled: [...mcpDisabled] } : {}),
       });
       setLaunchedId(agent.id);
     } catch (cause) {
@@ -584,6 +639,34 @@ export function LocalLaunch({
                 />
               )}
             </div>
+          )}
+          {mcpSelectable && (
+            <details
+              className="local-launch-mcp"
+              onToggle={(event) => setMcpOpen((event.currentTarget as HTMLDetailsElement).open)}
+            >
+              <summary>
+                {mcpDisabled.size > 0
+                  ? t("本机 MCP：已关闭 {0} 个", { 0: mcpDisabled.size })
+                  : t("本机 MCP：全部加载（可选择）")}
+              </summary>
+              <McpChecklist
+                data={mcpData}
+                failed={mcpFailed}
+                disabled={mcpDisabled}
+                measuring={mcpMeasuring}
+                busy={submitting}
+                onToggle={(name) =>
+                  setMcpDisabled((current) => {
+                    const next = new Set(current);
+                    if (next.has(name)) next.delete(name);
+                    else next.add(name);
+                    return next;
+                  })
+                }
+              />
+              {mcpFailed && <p className="agent-mcp-hint">{t("没能读取 MCP 列表。")}</p>}
+            </details>
           )}
           {info && !info.installed && (
             <p className="local-agent-error">

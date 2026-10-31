@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   createLocalAgentRequestSchema,
+  localAgentProviderSchema,
   updateLocalAgentSettingsRequestSchema,
   type LocalSessionResponse,
 } from "@ai-hive/protocol";
@@ -128,6 +129,25 @@ export function registerLocalAgentRoutes(
       },
     );
   }
+
+  /** 接入前预览：某个 provider 在该目录下会加载的本机 MCP；?measure=1 时估算开局 token */
+  app.get<{ Querystring: { provider?: string; cwd?: string; measure?: string } }>(
+    "/api/local/mcp",
+    async (request, reply) => {
+      if (deny(request, reply)) return reply;
+      const provider = localAgentProviderSchema.safeParse(request.query.provider);
+      if (!provider.success) return reply.code(400).send({ error: "参数不正确。" });
+      try {
+        return await supervisor!.mcpCandidates(
+          provider.data,
+          request.query.cwd?.trim() || undefined,
+          request.query.measure === "1",
+        );
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
 
   /** 这个 Agent 会加载的本机 MCP；?measure=1 时逐个连上估算开局 token（较慢） */
   app.get<{ Params: { id: string }; Querystring: { measure?: string } }>(

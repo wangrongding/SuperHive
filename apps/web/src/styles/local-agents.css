@@ -348,3 +348,19 @@
   font-weight: var(--weight-medium);
   vertical-align: 1px;
 }
+
+/* 接入时选择本机 MCP */
+.local-launch-mcp {
+  display: grid;
+  gap: 8px;
+}
+
+.local-launch-mcp[open] {
+  gap: 10px;
+}
+
+.local-launch-mcp > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}

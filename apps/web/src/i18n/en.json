@@ -790,5 +790,8 @@
   "已保存。": "Saved.",
   "保存中…": "Saving…",
   "保存并重启": "Save and restart",
-  "设置（MCP 等）": "Settings (MCP, etc.)"
+  "设置（MCP 等）": "Settings (MCP, etc.)",
+  "本机 MCP：已关闭 {0} 个": "Local MCP: {0} turned off",
+  "本机 MCP：全部加载（可选择）": "Local MCP: all loaded (choose)",
+  "没能读取 MCP 列表。": "Couldn't read the MCP list."
 }

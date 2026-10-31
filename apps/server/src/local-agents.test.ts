@@ -327,6 +327,42 @@ describe("local agent routes", () => {
     rmSync(settingsDir, { recursive: true, force: true });
   });
 
+  it("previews MCP servers before launch and starts the agent with the unchecked ones off", async () => {
+    const settingsDir = mkdtempSync(path.join(tmpdir(), "hive-agent-settings-"));
+    const listMcp = vi.fn(async (args: string[]) =>
+      JSON.stringify({
+        servers: [
+          { name: "rea", scope: "user", transport: "stdio", enabled: true, configurable: true },
+        ],
+      }),
+    );
+    const { app, owner, spawner } = await setup({ settingsDir, listMcp });
+    const preview = await app.inject({
+      method: "GET",
+      url: "/api/local/mcp?provider=claude",
+      headers: owner,
+    });
+    expect(preview.json()).toMatchObject({ supported: true, servers: [{ name: "rea" }] });
+    expect(listMcp.mock.calls[0]![0]).not.toContain("--agent-settings");
+    expect(
+      (await app.inject({ method: "GET", url: "/api/local/mcp?provider=nope", headers: owner }))
+        .statusCode,
+    ).toBe(400);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/local/agents",
+      headers: owner,
+      payload: { provider: "claude", name: "rd-claude", access: "read-only", mcpDisabled: ["rea"] },
+    });
+    expect(created.json().agent.mcpDisabled).toEqual(["rea"]);
+    const args = spawner.children[0]!.args;
+    const file = args[args.indexOf("--agent-settings") + 1]!;
+    // 第一次启动就按选择加载，不需要接入后再改一次
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ mcpDisabled: ["rea"] });
+    rmSync(settingsDir, { recursive: true, force: true });
+  });
+
   it("validates access, working directory and name before starting anything", async () => {
     const { app, owner, spawner } = await setup();
     const post = (payload: object) =>
