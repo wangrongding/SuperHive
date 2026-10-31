@@ -203,8 +203,8 @@ describe("HiveDatabase", () => {
       content: "@agent-b b",
       clientMessageId: "u-2",
     }).message;
-    const a = db.createInvocation({ message: first, agent: agentA, status: "running" }).invocation;
-    const b = db.createInvocation({ message: second, agent: agentB, status: "running" }).invocation;
+    const a = db.createInvocation({ message: first, agent: agentA, status: "queued" }).invocation;
+    const b = db.createInvocation({ message: second, agent: agentB, status: "queued" }).invocation;
     db.recordUsage(a, usage("claude-opus-5-5", 1_000, 0), "2026-10-30T10:00:00.000Z");
     // 同一调用再次上报（重试）覆盖而不是重复计数
     db.recordUsage(a, usage("claude-opus-5-5", 300_000, 0), "2026-10-31T10:00:00.000Z");
