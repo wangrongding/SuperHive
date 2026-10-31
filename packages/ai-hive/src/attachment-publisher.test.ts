@@ -9,6 +9,18 @@ import {
 } from "./attachment-publisher.js";
 
 describe("parseAttachmentDirective", () => {
+  it("accepts Windows line endings and file:// URLs", () => {
+    const parsed = parseAttachmentDirective(
+      "做好了。\r\n\r\n<hive-attachments>\r\nout\\report.md\r\n</hive-attachments>\r\n",
+    );
+    expect(parsed).toEqual({ text: "做好了。", paths: ["out\\report.md"] });
+    const url = process.platform === "win32" ? "file:///C:/repo/out.txt" : "file:///repo/out.txt";
+    const expected = process.platform === "win32" ? "C:\\repo\\out.txt" : "/repo/out.txt";
+    expect(
+      parseAttachmentDirective(`ok\n<hive-attachments>\n${url}\n</hive-attachments>`).paths,
+    ).toEqual([expected]);
+  });
+
   it("取出回复末尾的附件声明并从正文去掉", () => {
     const parsed = parseAttachmentDirective(
       "做好了，见附件。\n\n<hive-attachments>\noutput/a.jpg\n- `output/b.png`\nfile:///tmp/c.txt\noutput/a.jpg\n</hive-attachments>\n",

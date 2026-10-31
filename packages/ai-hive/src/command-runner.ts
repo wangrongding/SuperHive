@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { AgentCancelledError } from "./responder.js";
+import { assertWindowsCommandLine, commandFor } from "./windows-command.js";
 
 export type CommandResult = { stdout: string; stderr: string };
 export type CommandRunner = (
@@ -19,11 +20,21 @@ export const defaultCommandRunner: CommandRunner = (command, args, options) =>
       reject(new AgentCancelledError());
       return;
     }
+    let resolved;
+    try {
+      resolved = commandFor(command, args);
+      // Copilot / OpenClaw 把整段提示放在参数里：Windows 命令行有长度上限，超出时给出明确原因
+      assertWindowsCommandLine(resolved.command, resolved.args, command);
+    } catch (error) {
+      reject(error);
+      return;
+    }
     const child = execFile(
-      command,
-      args,
+      resolved.command,
+      resolved.args,
       {
         cwd: options.cwd,
+        windowsHide: true,
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,
         ...(options.signal ? { signal: options.signal } : {}),

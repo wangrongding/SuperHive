@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMentioned, parseMentions, stripUnsafeCharacters } from "./index.js";
+import { roomWorkspaceSchema, isMentioned, parseMentions, stripUnsafeCharacters } from "./index.js";
 
 describe("mentions", () => {
   it("parses unicode names, de-duplicates case-insensitively, and ignores @all semantics", () => {
@@ -31,5 +31,24 @@ describe("parseMentions 跳过代码", () => {
     expect(parseMentions("~~~\n@rd\n")).toEqual([]);
     expect(parseMentions("未闭合的 ` 反引号 @carol")).toEqual(["carol"]);
     expect(parseMentions("邮件 me@example.com 与中文后直接@小明")).toEqual(["小明"]);
+  });
+});
+
+describe("roomWorkspaceSchema", () => {
+  it("accepts POSIX, home, Windows drive and UNC absolute paths, rejects relative ones", () => {
+    for (const ok of [
+      "/srv/app",
+      "~",
+      "~/code",
+      "~\\code",
+      "C:\\Users\\me\\code",
+      "d:/work",
+      "\\\\server\\share\\x",
+    ]) {
+      expect(roomWorkspaceSchema.safeParse(ok).success, ok).toBe(true);
+    }
+    for (const bad of ["code", "C:code", "./x", "\\\\"]) {
+      expect(roomWorkspaceSchema.safeParse(bad).success, bad).toBe(false);
+    }
   });
 });

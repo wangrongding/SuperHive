@@ -1,21 +1,19 @@
 import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
-const cliPath = new URL("./cli.ts", import.meta.url);
+// fileURLToPath：Windows 上 URL.pathname 是 /C:/...，不能当本机路径用
+const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
 
 async function runCli(...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(process.execPath, [
-    "--import",
-    "tsx",
-    cliPath.pathname,
-    ...args,
-  ]);
+  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, ...args]);
   return stdout;
 }
 
-describe("service CLI", () => {
+// 每个用例都要冷启动 node + tsx，Windows 上单次要 3–4 秒
+describe("service CLI", { timeout: 60_000 }, () => {
   it("lists restart in the top-level help", async () => {
     await expect(runCli("--help")).resolves.toContain("ai-hive restart [选项]");
   });

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { commandFor } from "./windows-command.js";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -258,7 +259,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   const command = commands[provider];
 
   if (provider !== "echo") {
-    const check = spawnSync(command, ["--version"], { encoding: "utf8" });
+    const probe = commandFor(command, ["--version"]);
+    const check = spawnSync(probe.command, probe.args, { encoding: "utf8", windowsHide: true });
     if (check.error && (check.error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
         `找不到 ${providerLabels[provider]} 命令 “${command}”。请先安装 CLI 并完成登录或配置。`,
@@ -353,11 +355,16 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       token: token!,
     };
     if (provider === "openclaw" && parsed.values["openclaw-configure-mcp"]) {
-      const configured = spawnSync(
-        command,
-        ["mcp", "set", openClawHiveMcpName(hive), openClawHiveMcpConfig(hive)],
-        { encoding: "utf8" },
-      );
+      const configure = commandFor(command, [
+        "mcp",
+        "set",
+        openClawHiveMcpName(hive),
+        openClawHiveMcpConfig(hive),
+      ]);
+      const configured = spawnSync(configure.command, configure.args, {
+        encoding: "utf8",
+        windowsHide: true,
+      });
       if (configured.status !== 0) {
         throw new Error(
           `无法配置 OpenClaw Hive MCP：${configured.stderr || configured.error?.message}`,

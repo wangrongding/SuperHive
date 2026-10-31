@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { measureMcpServer, type McpMeasurement } from "./mcp-measure.js";
+import { commandFor } from "./windows-command.js";
 import {
   discoverClaudeMcpServers,
   discoverCodexMcpServers,
@@ -35,8 +36,10 @@ type CodexListedServer = { name?: unknown; enabled?: unknown; transport?: { type
 
 /** Codex 自己列出的全部 MCP（含插件提供的）；读不到时返回 undefined */
 function codexListed(command: string): CodexListedServer[] | undefined {
-  const result = spawnSync(command, ["mcp", "list", "--json"], {
+  const list = commandFor(command, ["mcp", "list", "--json"]);
+  const result = spawnSync(list.command, list.args, {
     encoding: "utf8",
+    windowsHide: true,
     timeout: 20_000,
   });
   if (result.status !== 0) return undefined;

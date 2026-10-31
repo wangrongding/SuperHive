@@ -140,6 +140,9 @@ function localAgent(overrides: Partial<LocalAgent> = {}): LocalAgent {
   } as LocalAgent;
 }
 
+// 这组是长流程的整页交互测试，较慢的机器（如 Windows 办公机）上单个用例可能超过默认 5 秒
+vi.setConfig({ testTimeout: 60_000 });
+
 describe("App mention autocomplete", () => {
   beforeEach(() => {
     FakeWebSocket.instances.length = 0;

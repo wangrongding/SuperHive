@@ -670,7 +670,11 @@ export const roomWorkspaceSchema = z
   .trim()
   .min(1)
   .max(4096)
-  .regex(/^(\/|~(\/|$))/, "请填写绝对路径（以 / 或 ~ 开头）");
+  // POSIX 绝对路径、~、Windows 盘符路径（C:\ 或 C:/）与 UNC（\\server\share）
+  .regex(
+    /^(\/|~([\\/]|$)|[A-Za-z]:[\\/]|\\\\[^\\])/,
+    "请填写绝对路径（以 /、~ 或盘符如 C:\\ 开头）",
+  );
 
 export const createRoomRequestSchema = z.object({
   id: roomIdSchema,

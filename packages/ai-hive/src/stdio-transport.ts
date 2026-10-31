@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { commandFor } from "./windows-command.js";
 import { createInterface } from "node:readline";
 
 /**
@@ -33,9 +34,11 @@ const STDERR_TAIL_LIMIT = 4_000;
 
 /** 默认传输：spawn 子进程，stdout 按行读取，stderr 透传并保留尾部 */
 export const spawnStdioTransport: StdioTransportFactory = (command, args, options) => {
-  const child = spawn(command, args, {
+  const resolved = commandFor(command, args);
+  const child = spawn(resolved.command, resolved.args, {
     cwd: options.cwd,
     stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
     ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
   });
   const lineListeners: Array<(line: string) => void> = [];

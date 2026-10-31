@@ -17,7 +17,8 @@ const MAX_ENTRIES = 500;
 export function expandHome(input: string): string {
   const trimmed = input.trim();
   if (trimmed === "~") return homedir();
-  if (trimmed.startsWith("~/")) return path.join(homedir(), trimmed.slice(2));
+  // Windows 上也认 ~\
+  if (/^~[\\/]/.test(trimmed)) return path.join(homedir(), trimmed.slice(2));
   return trimmed;
 }
 

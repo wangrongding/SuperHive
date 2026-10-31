@@ -1,6 +1,7 @@
 import { openAsBlob } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { MAX_ATTACHMENT_BYTES } from "./hive-protocol.js";
 import type { AgentAccessMode } from "./responder.js";
 
@@ -9,22 +10,33 @@ import type { AgentAccessMode } from "./responder.js";
  * 只认回复结尾的这一段，正文里顺带提到标记（例如解释用法）不会被当成声明。
  */
 const directivePattern =
-  /(?:^|\n)[ \t]*<hive-attachments>[ \t]*\n([\s\S]*?)\n[ \t]*<\/hive-attachments>[ \t]*$/i;
+  /(?:^|\r?\n)[ \t]*<hive-attachments>[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*<\/hive-attachments>[ \t]*$/i;
 const MAX_PUBLISHED = 10;
 
 export type AttachmentDirective = { text: string; paths: string[] };
+
+/** file:// 链接按 URL 规则还原成本机路径（Windows 的 file:///C:/x 是 C:\x，不是 /C:/x） */
+function fromFileUrl(value: string): string {
+  if (!/^file:\/\//i.test(value)) return value;
+  try {
+    return fileURLToPath(value);
+  } catch {
+    return value.replace(/^file:\/\//i, "");
+  }
+}
 
 /** 取出回复里的附件声明并从正文中去掉；没有声明时原样返回 */
 export function parseAttachmentDirective(text: string): AttachmentDirective {
   const paths: string[] = [];
   const stripped = text.trimEnd().replace(directivePattern, (_match, body: string) => {
     for (const line of body.split(/\r?\n/)) {
-      const value = line
-        .trim()
-        .replace(/^[-*]\s+/, "")
-        .replace(/^`(.*)`$/, "$1")
-        .replace(/^file:\/\//, "")
-        .trim();
+      const value = fromFileUrl(
+        line
+          .trim()
+          .replace(/^[-*]\s+/, "")
+          .replace(/^`(.*)`$/, "$1")
+          .trim(),
+      );
       if (value && !paths.includes(value)) paths.push(value);
     }
     return "";

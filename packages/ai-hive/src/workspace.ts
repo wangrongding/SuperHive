@@ -11,7 +11,8 @@ export type RoomWorkspace = {
 };
 
 function expandHome(input: string): string {
-  return input === "~" || input.startsWith("~/") ? path.join(homedir(), input.slice(1)) : input;
+  // Windows 上也认 ~\
+  return input === "~" || /^~[\\/]/.test(input) ? path.join(homedir(), input.slice(1)) : input;
 }
 
 function realDirectory(input: string): string | undefined {

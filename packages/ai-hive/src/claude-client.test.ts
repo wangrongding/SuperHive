@@ -215,7 +215,8 @@ describe("ClaudeCodeResponder", () => {
     expect(Object.keys(config.mcpServers)).toEqual(["chrome-devtools", "hive"]);
     expect(config.mcpServers.hive?.url).toBe("http://localhost:8787/mcp");
     // 本机 MCP 配置可能含密钥：只写进本人可读的临时文件，不放进命令行参数，用完删除
-    expect(seen?.mode).toBe(0o600);
+    // Windows 没有 POSIX 权限位，靠用户目录的 ACL 保护
+    if (process.platform !== "win32") expect(seen?.mode).toBe(0o600);
     expect(args.join(" ")).not.toContain("test-token");
     expect(existsSync(seen!.file)).toBe(false);
 

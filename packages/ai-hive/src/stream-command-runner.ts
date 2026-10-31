@@ -1,14 +1,17 @@
 import { spawn } from "node:child_process";
 import { AgentCancelledError } from "./responder.js";
 import type { CommandRunner } from "./command-runner.js";
+import { commandFor } from "./windows-command.js";
 
 /** Consume stdout incrementally, without buffering private tool output or forwarding stderr. */
 export const streamCommandRunner: CommandRunner = (command, args, options) =>
   new Promise((resolve, reject) => {
     if (options.signal?.aborted) return reject(new AgentCancelledError());
-    const child = spawn(command, args, {
+    const resolved = commandFor(command, args);
+    const child = spawn(resolved.command, resolved.args, {
       cwd: options.cwd,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
       ...(options.signal ? { signal: options.signal } : {}),
     });
     let failure: Error | undefined;

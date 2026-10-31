@@ -21,6 +21,7 @@ import type {
 } from "@ai-hive/protocol";
 import { HiveError, type HiveDatabase, type LocalAgentConfig } from "./database.js";
 import { expandHome } from "./local-directories.js";
+import { commandFor } from "./windows-command.js";
 
 /**
  * 本机 Agent 管家：在 Hive Server 所在电脑上，按房主在网页上的选择拉起 `ai-hive join` 子进程。
@@ -177,7 +178,13 @@ export const defaultSpawnAgent: SpawnAgent = (command, args, options) => {
   const logFile = options.logFile;
   let fd: number | undefined;
   if (logFile) {
-    if (fileSize(logFile) > LOG_FILE_MAX_BYTES) renameSync(logFile, `${logFile}.1`);
+    if (fileSize(logFile) > LOG_FILE_MAX_BYTES) {
+      try {
+        renameSync(logFile, `${logFile}.1`);
+      } catch {
+        // Windows 上旧进程还开着这个文件时不能改名：本次接着追加，下次再轮转
+      }
+    }
     fd = openSync(logFile, "a");
   }
   const offset = logFile ? fileSize(logFile) : 0;
@@ -186,7 +193,9 @@ export const defaultSpawnAgent: SpawnAgent = (command, args, options) => {
     env: { ...process.env, ...options.env },
     // 写日志文件的 Agent 自成进程组：Server（及 dev 结束 Server 进程组）退出时不会把它一起带走
     stdio: fd === undefined ? ["ignore", "pipe", "pipe"] : ["ignore", fd, fd],
-    detached: fd !== undefined && process.platform !== "win32",
+    // Windows 上不 detached 的子进程会被放进「父进程退出即全部结束」的作业对象，交接重启时会被一起结束
+    detached: fd !== undefined,
+    windowsHide: true,
   });
   if (fd !== undefined) closeSync(fd);
   const exitListeners: Array<(code: number | null, error?: Error) => void> = [];
@@ -221,7 +230,9 @@ export const defaultSpawnAgent: SpawnAgent = (command, args, options) => {
       exitListeners.push(listener);
     },
     kill(signal) {
-      if (!exited) child.kill(signal);
+      if (exited) return;
+      if (child.pid && process.platform === "win32") killTree(child.pid);
+      else child.kill(signal);
     },
     release() {
       released = true;
@@ -245,16 +256,9 @@ function isAlive(pid: number): boolean {
  * 之后靠轮询发现它退出、靠信号结束它，输出从日志文件末尾接着读。
  */
 export const defaultAdoptAgent: AdoptAgent = (pid, options) => {
-  if (process.platform === "win32" || !isAlive(pid)) return undefined;
-  let commandLine: string;
-  try {
-    commandLine = execFileSync("ps", ["-o", "command=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: 5_000,
-    });
-  } catch {
-    return undefined;
-  }
+  if (!isAlive(pid)) return undefined;
+  const commandLine = processCommandLine(pid);
+  if (!commandLine) return undefined;
   const args = commandLine.trim().split(/\s+/);
   const nameAt = args.indexOf("--name");
   if (!args.includes("join") || nameAt < 0 || args[nameAt + 1] !== options.name) return undefined;
@@ -285,6 +289,10 @@ export const defaultAdoptAgent: AdoptAgent = (pid, options) => {
     },
     kill(signal) {
       if (exited) return;
+      if (process.platform === "win32") {
+        killTree(pid);
+        return;
+      }
       try {
         process.kill(pid, signal);
       } catch {
@@ -301,14 +309,26 @@ export const defaultAdoptAgent: AdoptAgent = (pid, options) => {
 
 export const defaultProbe: ProviderProbe = (command) =>
   new Promise((resolve) => {
-    execFile(command, ["--version"], { timeout: 5_000, encoding: "utf8" }, (error, stdout) => {
-      if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
-        resolve({ installed: false, version: null });
-        return;
-      }
-      const version = stdout.trim().split("\n")[0]?.trim() || null;
-      resolve({ installed: true, version: error ? null : version });
-    });
+    let probe;
+    try {
+      probe = commandFor(command, ["--version"]);
+    } catch {
+      resolve({ installed: true, version: null });
+      return;
+    }
+    execFile(
+      probe.command,
+      probe.args,
+      { timeout: 5_000, encoding: "utf8", windowsHide: true },
+      (error, stdout) => {
+        if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+          resolve({ installed: false, version: null });
+          return;
+        }
+        const version = stdout.trim().split("\n")[0]?.trim() || null;
+        resolve({ installed: true, version: error ? null : version });
+      },
+    );
   });
 
 export class LocalAgentSupervisor {
@@ -788,14 +808,43 @@ export class LocalAgentSupervisor {
 /** workspace / full 的目录必须真实存在且是绝对路径；取 realpath 存储，拒绝文件系统根目录 */
 /** 进程的命令行里是否带某个参数（读不到时按没有处理） */
 function processHasArgument(pid: number | undefined, argument: string): boolean {
-  if (!pid) return false;
+  return pid ? (processCommandLine(pid)?.includes(argument) ?? false) : false;
+}
+
+/** 读进程的完整命令行：macOS / Linux 用 ps，Windows 用 PowerShell 查 Win32_Process；读不到返回 undefined */
+function processCommandLine(pid: number): string | undefined {
   try {
-    return execFileSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" }).includes(
-      argument,
-    );
+    if (process.platform === "win32") {
+      return (
+        execFileSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `(Get-CimInstance Win32_Process -Filter "ProcessId=${Math.trunc(pid)}").CommandLine`,
+          ],
+          { encoding: "utf8", timeout: 10_000, windowsHide: true },
+        ).trim() || undefined
+      );
+    }
+    return execFileSync("ps", ["-o", "args=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/**
+ * Windows 上结束整棵进程树：信号在 Windows 上一律是强制结束，而且只结束 Agent 自己，
+ * 它起的 claude / codex 与工具命令会留下来。taskkill /T 连同子进程一起结束。
+ */
+function killTree(pid: number): void {
+  execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => {
+    /* 已经退出时 taskkill 报错，忽略 */
+  });
 }
 
 export function resolveWorkspace(input: string | undefined): string {
