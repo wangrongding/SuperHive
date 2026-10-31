@@ -77,7 +77,21 @@ function button(
   };
 }
 
-/** 一排按钮：放进分栏里横向排开，窄屏自动换行 */
+/**
+ * 按钮排版：少而短的横排一行；多了或文字长就竖排、每个占满一行。
+ * 飞书电脑端的分栏不会换行，横排放不下时按钮文字会被截成「rd-…」。
+ */
+export function buttonLayout(
+  buttons: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const label = (item: Record<string, unknown>) =>
+    String((item.text as { content?: string } | undefined)?.content ?? "");
+  const total = buttons.reduce((sum, item) => sum + label(item).length, 0);
+  if (buttons.length <= 3 && total <= 18) return [buttonRow(buttons)];
+  return buttons.map((item) => ({ ...item, width: "fill" }));
+}
+
+/** 一排按钮：放进分栏里横向排开 */
 function buttonRow(buttons: Array<Record<string, unknown>>) {
   return {
     tag: "column_set",
@@ -254,7 +268,7 @@ export function renderFeishuCard(rich: ImRich): Record<string, unknown> {
       behaviors: [{ type: "open_url", default_url: rich.link.url }],
     });
   }
-  if (buttons.length) elements.push(buttonRow(buttons));
+  if (buttons.length) elements.push(...buttonLayout(buttons));
   return {
     schema: "2.0",
     config: {

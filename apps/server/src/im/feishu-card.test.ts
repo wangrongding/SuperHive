@@ -180,4 +180,31 @@ describe("飞书卡片", () => {
       }),
     ).toMatchObject({ value: { do: "answer_form" }, form: { opt_A: true } });
   });
+
+  it("按钮多或文字长时竖排占满一行，少而短时横排", () => {
+    const many = renderFeishuCard({
+      title: "选择对话对象",
+      tone: "reply",
+      actions: ["rd-claude · 空闲", "rd-claude2 · 忙碌", "rd-codex · 空闲", "不指定"].map(
+        (label) => ({ label, value: { do: "target", agent: label } }),
+      ),
+      summary: "x",
+    }) as any;
+    expect(many.body.elements.map((item: any) => [item.tag, item.width])).toEqual([
+      ["button", "fill"],
+      ["button", "fill"],
+      ["button", "fill"],
+      ["button", "fill"],
+    ]);
+    const few = renderFeishuCard({
+      title: "失败",
+      tone: "danger",
+      actions: [
+        { label: "重试", value: { do: "retry" } },
+        { label: "忽略", value: { do: "dismiss" } },
+      ],
+      summary: "x",
+    }) as any;
+    expect(few.body.elements[0].tag).toBe("column_set");
+  });
 });
