@@ -83,6 +83,8 @@ export type ImRich = {
   resolved?: { text: string; ok: boolean };
   /** 已选中的选项（作答后高亮） */
   selected?: string[];
+  /** 底部一行小字（当前发给谁） */
+  footer?: string;
   /** 任务进度：每个 Agent 一行 */
   steps?: Array<{
     label: string;

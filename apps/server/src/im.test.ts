@@ -718,14 +718,18 @@ describe("IM 推送档位", () => {
       });
       return { status: response.status, body: (await response.json()) as Record<string, any> };
     };
-    const join = async (username: string, participantType: "human" | "agent") => {
+    const join = async (
+      username: string,
+      participantType: "human" | "agent",
+      roomId = "general",
+    ) => {
       const peer = await Peer.connect(`ws://127.0.0.1:${port}/ws`);
       peers.push(peer);
       peer.send({
         type: "participant.join",
         username,
         participantType,
-        roomId: "general",
+        roomId,
         token: "test-token",
       });
       await peer.next((event) => event.type === "room.snapshot");
@@ -971,6 +975,123 @@ describe("IM 推送档位", () => {
     expect(connection).toMatchObject({ id, level: "agents" });
     fake.emit({ text: "/cards on" });
     await until(() => fake.sent.find((item) => item.text.startsWith("这个渠道不支持卡片")));
+  });
+
+  it("选对话对象：/to 卡片点选后不带 @ 自动发给它，回复哪个 Agent 的卡片就发给谁", async () => {
+    const { fake, helper, join } = await setup({ richCards: true });
+    const codex = await join("rd-codex", "agent");
+    fake.emit({ text: "/to" });
+    const picker = await until(() => fake.sent.find((item) => item.rich?.title === "选择对话对象"));
+    expect(picker.rich!.actions!.map((action) => action.label)).toEqual([
+      "helper · 空闲",
+      "rd-codex · 空闲",
+      "不指定",
+    ]);
+    const externalId = fake.sentIds.get(picker)!;
+    const click = (operatorId: string, agent: string) =>
+      fake.events!.onAction!({
+        externalId,
+        chatId: picker.chatId,
+        operatorId,
+        value: { hive: "1", do: "target", agent },
+      });
+    expect(click("someone-else", "rd-codex")).toMatchObject({ toast: { type: "error" } });
+    const picked = click("owner-open-id", "rd-codex");
+    expect(picked).toMatchObject({ rich: { tag: "当前：rd-codex" } });
+    // 重复回调：结果一样，不出错
+    expect(click("owner-open-id", "rd-codex")).toMatchObject({ rich: { tag: "当前：rd-codex" } });
+
+    fake.emit({ text: "看下构建为什么慢" });
+    const toCodex = await codex.next((event) => event.type === "agent.mentioned");
+    expect((toCodex as { message: ChatMessage }).message.content).toBe(
+      "@rd-codex 看下构建为什么慢",
+    );
+    // 简写临时找别人
+    fake.emit({ text: "help 你也看看" });
+    const toHelper = await helper.next((event) => event.type === "agent.mentioned");
+    expect((toHelper as { message: ChatMessage }).message.content).toBe("@helper 你也看看");
+    // 回复 helper 的卡片：发给 helper，而不是当前对象
+    helper.send({
+      type: "message.send",
+      clientMessageId: "h-reply",
+      content: "我看了，是缓存问题 @rd",
+    });
+    const card = await until(() => fake.sent.find((item) => item.rich?.body?.includes("缓存问题")));
+    expect(card.rich).toMatchObject({
+      footer: "当前：general → rd-codex",
+      actions: [{ label: "切换对象", value: { do: "to" } }],
+    });
+    fake.emit({ text: "怎么修？", replyToExternalId: fake.sentIds.get(card)! });
+    const followUp = await helper.next((event) => event.type === "agent.mentioned");
+    expect((followUp as { message: ChatMessage }).message.content).toBe("@helper 怎么修？");
+  });
+
+  it("简写对上多个 Agent 弹卡片选，选完带着原消息发出且只发一次；没对上按普通文字处理", async () => {
+    const { fake, join, rd } = await setup({ richCards: true });
+    const one = await join("rd-claude", "agent");
+    await join("rd-claude2", "agent");
+    fake.emit({ text: "@rd-cl 看下这个" });
+    const picker = await until(() => fake.sent.find((item) => item.rich?.tag === "选一个"));
+    expect(picker.rich!.actions!.map((action) => action.label)).toEqual([
+      "rd-claude",
+      "rd-claude2",
+    ]);
+    const action = picker.rich!.actions![0]!;
+    const click = () =>
+      fake.events!.onAction!({
+        externalId: fake.sentIds.get(picker)!,
+        chatId: picker.chatId,
+        operatorId: "owner-open-id",
+        value: { hive: "1", ...action.value },
+      });
+    expect(click()).toMatchObject({ rich: { resolved: { text: "已发给 rd-claude" } } });
+    const woken = await one.next((event) => event.type === "agent.mentioned");
+    expect((woken as { message: ChatMessage }).message.content).toBe("@rd-claude 看下这个");
+    expect(click()).toMatchObject({ toast: { type: "info" }, rich: { resolved: { ok: false } } });
+    // 没对上：原样进房间，提示用法
+    fake.emit({ text: "today 天气不错" });
+    const plainMessage = await rd.next(
+      (event) => event.type === "message.created" && event.message.content === "today 天气不错",
+    );
+    expect((plainMessage as { message: ChatMessage }).message.mentions).toEqual([]);
+  });
+
+  it("/room 卡片点一下切换房间，并恢复那个房间选过的对象；旧连接退回文字编号", async () => {
+    const { fake, join, api, id } = await setup({ richCards: true });
+    await api("POST", "/api/rooms", { id: "proj", name: "项目" });
+    await join("rd", "human", "proj");
+    await join("rd-omp", "agent", "proj");
+    fake.emit({ text: "/room" });
+    const picker = await until(() => fake.sent.find((item) => item.rich?.title === "切换房间"));
+    const labels = picker.rich!.actions!.map((action) => action.label);
+    expect(labels[0]).toMatch(/^● general · \d+ 人在线/);
+    expect(labels).toContainEqual(expect.stringMatching(/^项目 · /));
+    const switched = fake.events!.onAction!({
+      externalId: fake.sentIds.get(picker)!,
+      chatId: picker.chatId,
+      operatorId: "owner-open-id",
+      value: { hive: "1", do: "room", room: "proj" },
+    });
+    expect(switched).toMatchObject({ rich: { title: "已切换到 项目", tag: "当前：未指定" } });
+    const [connection] = (await api("GET", "/api/rooms/proj/im")).body.connections;
+    expect(connection.id).toBe(id);
+    fake.emit({ text: "/to omp" });
+    await until(() => fake.sent.find((item) => item.text === "之后不带 @ 的消息都发给 rd-omp。"));
+
+    // 旧连接（没开卡片按钮）：文字列表 + 回编号
+    fake.emit({ text: "/cards off" });
+    await until(() => fake.sent.find((item) => item.text.startsWith("已关闭卡片按钮")));
+    fake.emit({ text: "/room" });
+    const list = await until(() => fake.sent.find((item) => item.text.includes("回复编号切换")));
+    const generalIndex = list.text.split("\n").find((line) => line.includes("general"))![0];
+    fake.emit({ text: generalIndex! });
+    await until(() => fake.sent.find((item) => item.text.startsWith("已切换到房间「general」")));
+    fake.emit({ text: "/room proj" });
+    const back = await until(() =>
+      fake.sent.find((item) => item.text.startsWith("已切换到房间「项目」")),
+    );
+    // 回到项目房间时恢复上次选的对象
+    expect(back.text).toContain("对话对象：rd-omp");
   });
 
   it("暂停后不推，恢复后不补发暂停期间的消息", async () => {

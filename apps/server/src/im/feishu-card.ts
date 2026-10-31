@@ -226,6 +226,13 @@ export function renderFeishuCard(rich: ImRich): Record<string, unknown> {
       }),
     );
   }
+  if (rich.footer && !rich.resolved) {
+    elements.push(
+      markdown(`<font color='grey'>${escapeCardMarkdown(plainText(rich.footer, 120))}</font>`, {
+        text_size: "notation",
+      }),
+    );
+  }
   const buttons: Array<Record<string, unknown>> = rich.resolved
     ? []
     : (rich.actions ?? []).map((action, index) =>

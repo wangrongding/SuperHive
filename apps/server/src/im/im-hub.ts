@@ -20,6 +20,7 @@ import {
   type StoredConnection,
 } from "./im-store.js";
 import { OPTION_FIELD_PREFIX, OTHER_FIELD } from "./feishu-card.js";
+import { applyChoice, matchAgents, resolveAliases } from "./im-routing.js";
 import {
   USER_TARGET,
   type ImChannelDriver,
@@ -70,6 +71,8 @@ export type ImHubDeps = {
   ): Promise<Pick<CreateMessageInput, "attachments" | "onInsert">>;
   /** 房间成员（/who 用） */
   participants(roomId: string): Participant[];
+  /** 房间里进行中、等人回答的任务数（房间卡片上显示） */
+  roomTasks(roomId: string): { running: number; waiting: number };
   /** 这条提问是否还在等人回答 */
   isWaiting(questionId: string): boolean;
   /** 网页地址，用于截断长消息时附上全文链接 */
@@ -94,11 +97,14 @@ const HELP = [
   "AI Hive 用法：",
   "· 直接发文字、图片或文件：以你的身份发进当前房间；要让 Agent 干活，在消息里 @ 它，如「@rd-claude 看下测试为什么挂了」",
   "· Agent 向你提问时，点卡片上的选项，或回复这条提问打字（选项字母也行，多选用逗号隔开，如 A,C）",
-  "· /room 查看当前房间，/room 房间ID 切换房间",
+  "· /to 选对话对象：选好后直接打字就发给它；也可以 /to codex。临时找别人写 @简写，如 @codex",
+  "· 回复某个 Agent 的卡片，就是接着跟它说",
+  "· /room 切换房间（点卡片或回编号），/room 房间ID 直接切",
   "· /who 看房间里的 Agent 谁在忙",
   "· /level 查看推送档位，/level mine|im|agents|all 切换",
   "· /status 查看连接状态",
   "· /cards on 在飞书后台开通卡片回调后打开卡片按钮（重新扫码会自动开通）",
+  "· 机器人菜单：飞书开发者后台 → 机器人 → 自定义菜单，菜单项选「推送事件」，事件 key 填 to、room、who、level、help",
 ].join("\n");
 
 const LEVEL_TEXT: Record<ImDeliveryLevel, string> = {
@@ -545,18 +551,37 @@ export class ImHub {
       return;
     }
     const clientMessageId = `im-${digest(`${connection.id}:${message.externalId}`)}`;
+    // 只回了一个数字：选上一条文字菜单里的那一项（没开卡片按钮的连接用）
+    if (!files.length && /^\d{1,2}$/.test(text)) {
+      if (this.pickFromTextMenu(connection, owner, message, Number(text))) return;
+    }
+    // 明确回复了提问卡片就是作答；否则按「回复了谁的卡片 → 简写 → 当前对话对象」决定发给谁
+    const quoted = this.quotedQuestion(connection, message);
+    let content = text;
+    let routed = false;
+    if (!quoted && text) {
+      const route = this.route(connection, message, text);
+      if (!route) return;
+      content = route.content;
+      routed = route.routed;
+    }
     if (files.length) {
-      void this.inboundWithFiles(connection, owner, message, text, files, clientMessageId);
+      void this.inboundWithFiles(connection, owner, message, content, files, clientMessageId);
       return;
     }
     let posted: ChatMessage;
     this.posting = connection.id;
     try {
-      const question = this.questionFor(connection, message, text);
+      // 指定了对话对象时，没有引用提问的消息一律发给对象，不再猜是在回答哪个提问
+      const question =
+        quoted ??
+        (routed || this.targetOf(connection)
+          ? undefined
+          : this.recentQuestion(connection, message, content));
       posted = question
         ? this.answer(owner, question, text, clientMessageId, connection.channel)
         : this.deps.post(owner, {
-            content: text,
+            content,
             clientMessageId,
             via: { channel: connection.channel },
           });
@@ -655,7 +680,7 @@ export class ImHub {
     if (tasks.length) {
       this.setReaction(connection, posted.id, "Typing");
       if (this.cardsEnabled(connection)) {
-        const rich = this.taskRich(posted, tasks);
+        const rich = this.taskRich(connection, posted, tasks);
         this.deps.store.enqueue({
           connectionId: connection.id,
           eventKey: `task:${posted.id}`,
@@ -684,16 +709,22 @@ export class ImHub {
   }
 
   /** 这条 IM 消息是不是在回答 Agent 的提问：引用回复了推过来的提问，或没有 @ 任何人且会话里有在等的提问 */
-  private questionFor(
+  private quotedQuestion(
+    connection: StoredConnection,
+    message: ImInbound,
+  ): ChatMessage | undefined {
+    if (!message.replyToExternalId) return undefined;
+    const id = this.deps.store.messageForExternal(connection.id, message.replyToExternalId);
+    const quoted = id ? this.deps.getMessage(id) : undefined;
+    return quoted?.kind === "question" && this.deps.isWaiting(quoted.id) ? quoted : undefined;
+  }
+
+  /** 没有引用、也没 @ 任何人：会话里最近一条还在等回答的提问 */
+  private recentQuestion(
     connection: StoredConnection,
     message: ImInbound,
     text: string,
   ): ChatMessage | undefined {
-    if (message.replyToExternalId) {
-      const id = this.deps.store.messageForExternal(connection.id, message.replyToExternalId);
-      const quoted = id ? this.deps.getMessage(id) : undefined;
-      if (quoted?.kind === "question" && this.deps.isWaiting(quoted.id)) return quoted;
-    }
     if (/@[\p{L}\p{N}_.-]/u.test(text)) return undefined;
     // 网页任务的提问是按人发到私聊的（user: 目标），在私聊里作答时两种会话标识都要查
     const recent = [
@@ -754,24 +785,71 @@ export class ImHub {
       case "/room": {
         const target = args[0];
         if (!target) {
-          const rooms = this.deps
-            .listRoomIds()
-            .filter((id) => this.deps.findParticipant(id, connection.ownerName)?.type === "human");
+          if (this.cardsEnabled(connection)) {
+            this.enqueueCard(
+              connection,
+              message.chatId,
+              "room",
+              message.externalId,
+              this.roomPicker(connection),
+            );
+            return;
+          }
+          const rooms = this.memberRooms(connection);
+          this.saveTextMenu(connection, { kind: "room", items: rooms.map((room) => room.id) });
           return say(
-            `当前房间：${this.roomName(connection.roomId)}（${connection.roomId}）\n可切换：${rooms.join("、") || "无"}\n切换：/room 房间ID`,
+            [
+              `当前房间：${this.roomName(connection.roomId)}`,
+              ...rooms.map(
+                (room, index) =>
+                  `${index + 1}. ${room.name}${room.id === connection.roomId ? "（当前）" : ""}`,
+              ),
+              "回复编号切换，或 /room 房间ID",
+            ].join("\n"),
           );
         }
-        const room = this.deps.getRoom(target);
-        if (!room || room.archivedAt) return say(`没有房间 ${target}。`);
-        const member = this.deps.findParticipant(room.id, connection.ownerName);
-        if (!member || member.type !== "human") {
-          return say(`你还不是房间「${room.name}」的成员，请先在网页上进入一次。`);
+        const failure = this.switchRoom(connection, target);
+        return say(failure ?? this.roomSwitchedText(connection));
+      }
+      case "/to": {
+        const arg = args.join(" ").trim();
+        if (arg) {
+          if (["off", "0", "无", "不指定"].includes(arg.toLowerCase())) {
+            this.setTarget(connection, undefined);
+            return say("已取消指定对话对象。");
+          }
+          const hits = matchAgents(arg.replace(/^@/, ""), this.agentNames(connection.roomId), true);
+          if (hits.length !== 1) {
+            return say(
+              hits.length
+                ? `对上了多个：${hits.join("、")}，请写得更具体些。`
+                : `房间里没有 ${arg}。`,
+            );
+          }
+          this.setTarget(connection, hits[0]);
+          return say(`之后不带 @ 的消息都发给 ${hits[0]}。`);
         }
-        const previous = connection.roomId;
-        this.deps.store.update(connection.id, { roomId: room.id });
-        this.deps.onConnectionsChanged(previous);
-        this.deps.onConnectionsChanged(room.id);
-        return say(`已切换到房间「${room.name}」。`);
+        if (this.cardsEnabled(connection)) {
+          this.enqueueCard(
+            connection,
+            message.chatId,
+            "to",
+            message.externalId,
+            this.agentPicker(connection),
+          );
+          return;
+        }
+        const agents = this.agentNames(connection.roomId);
+        this.saveTextMenu(connection, { kind: "target", items: agents });
+        const current = this.targetOf(connection);
+        return say(
+          [
+            `当前对话对象：${current ?? "未指定"}`,
+            ...agents.map((agent, index) => `${index + 1}. ${agent}`),
+            "0. 不指定",
+            "回复编号选择，或 /to 名字（可简写）",
+          ].join("\n"),
+        );
       }
       case "/who": {
         const agents = this.deps
@@ -885,7 +963,11 @@ export class ImHub {
 
   private readonly taskTimers = new Map<string, NodeJS.Timeout>();
 
-  private taskRich(message: ChatMessage, tasks: Invocation[]): ImRich {
+  private taskRich(
+    connection: StoredConnection,
+    message: ChatMessage,
+    tasks: Invocation[],
+  ): ImRich {
     const steps = tasks.map((task) => {
       const state: NonNullable<ImRich["steps"]>[number]["state"] =
         task.status === "queued"
@@ -927,6 +1009,8 @@ export class ImHub {
       steps,
       ...(finished && !failed ? { resolved: { text: "已完成", ok: true } } : {}),
       note: finished ? "结果已单独发来" : "这张卡片会随进度自动更新",
+      ...this.footerFor(connection),
+      ...(this.cardsEnabled(connection) ? { actions: [SWITCH_TARGET_ACTION] } : {}),
       ...(url ? { link: { label: `在网页查看 #${message.seq}`, url } } : {}),
       summary: `已派给 ${tasks.map((task) => task.agentName).join("、")}`,
     };
@@ -959,7 +1043,7 @@ export class ImHub {
       this.taskTimers.delete(key);
       const delivery = this.deps.store.deliveryByKey(connection.id, `task:${messageId}`);
       if (!delivery) return;
-      const rich = this.taskRich(message, this.deps.invocationsFor(messageId));
+      const rich = this.taskRich(connection, message, this.deps.invocationsFor(messageId));
       if (delivery.status === "pending") {
         this.deps.store.setRich(delivery.id, rich, rich.summary);
         return;
@@ -979,6 +1063,337 @@ export class ImHub {
       timer.unref?.();
       this.taskTimers.set(key, timer);
     }
+  }
+
+  /* ---------- 发给谁：当前对话对象、简写、回复卡片 ---------- */
+
+  private agentNames(roomId: string): string[] {
+    return this.deps
+      .participants(roomId)
+      .filter((participant) => participant.type === "agent")
+      .map((participant) => participant.username);
+  }
+
+  /** 这个连接在当前房间选定的对话对象（每个房间各记一个，一直有效直到手动更换） */
+  private targetOf(connection: StoredConnection, roomId = connection.roomId): string | undefined {
+    const name = this.deps.store.kvGet(connection.id, `target:${roomId}`);
+    // 对象被移出房间就当没选
+    return name && this.agentNames(roomId).includes(name) ? name : undefined;
+  }
+
+  private setTarget(connection: StoredConnection, agent: string | undefined): void {
+    if (agent) this.deps.store.kvSet(connection.id, `target:${connection.roomId}`, agent);
+    else this.deps.store.kvDelete(connection.id, `target:${connection.roomId}`);
+  }
+
+  /** 回复的是哪张卡片：Agent 的回复 / 提到你 → 它；进度卡片 → 这次派到的 Agent；提醒卡片 → 那个 Agent */
+  private agentsOfCard(connection: StoredConnection, externalId: string): string[] {
+    const agents = this.agentNames(connection.roomId);
+    const messageId = this.deps.store.messageForExternal(connection.id, externalId);
+    const message = messageId ? this.deps.getMessage(messageId) : undefined;
+    if (message?.senderType === "agent" && message.kind !== "question") {
+      return agents.includes(message.senderName) ? [message.senderName] : [];
+    }
+    const delivery = this.deps.store.deliveryByExternal(connection.id, externalId);
+    if (delivery?.eventKey.startsWith("task:")) {
+      const names = this.deps
+        .invocationsFor(delivery.eventKey.slice("task:".length))
+        .map((invocation) => invocation.agentName);
+      return [...new Set(names)].filter((name) => agents.includes(name));
+    }
+    if (delivery?.check?.kind === "invocation") {
+      const invocation = this.deps.getInvocation(delivery.check.id);
+      return invocation && agents.includes(invocation.agentName) ? [invocation.agentName] : [];
+    }
+    return [];
+  }
+
+  /**
+   * 决定这条消息发给谁，返回改写后的正文；简写对上多个 Agent 时先发一张选择卡片，返回 undefined。
+   * routed=消息里的 @ 是这里补上的（不再按「最近的提问」猜它是在作答）。
+   */
+  private route(
+    connection: StoredConnection,
+    message: ImInbound,
+    text: string,
+  ): { content: string; routed: boolean } | undefined {
+    const hasMention = /@[\p{L}\p{N}_.-]/u.test(text);
+    if (message.replyToExternalId && !hasMention) {
+      const names = this.agentsOfCard(connection, message.replyToExternalId);
+      if (names.length) {
+        return { content: `${names.map((name) => `@${name}`).join(" ")} ${text}`, routed: true };
+      }
+    }
+    const alias = resolveAliases(text, this.agentNames(connection.roomId));
+    if (alias.kind === "resolved") return { content: alias.content, routed: true };
+    if (alias.kind === "ambiguous") {
+      this.askWhichAgent(connection, message, text, alias.token, alias.candidates);
+      return undefined;
+    }
+    const target = hasMention ? undefined : this.targetOf(connection);
+    return target
+      ? { content: `@${target} ${text}`, routed: true }
+      : { content: text, routed: false };
+  }
+
+  /** 简写对上多个 Agent：记下原消息，让人点一个（或回编号） */
+  private askWhichAgent(
+    connection: StoredConnection,
+    message: ImInbound,
+    text: string,
+    token: string,
+    candidates: string[],
+  ): void {
+    const id = digest(`${connection.id}:${message.externalId}`).slice(0, 16);
+    this.deps.store.kvSet(
+      connection.id,
+      `pending:${id}`,
+      JSON.stringify({
+        text,
+        token,
+        externalId: message.externalId,
+        chatId: message.chatId,
+        chatType: message.chatType,
+        senderId: message.senderId,
+      }),
+    );
+    const prompt = `「${token}」对上了 ${candidates.length} 个 Agent，发给谁？`;
+    if (this.cardsEnabled(connection)) {
+      this.enqueueCard(connection, message.chatId, `pick:${id}`, message.externalId, {
+        title: prompt,
+        subtitle: this.roomName(connection.roomId),
+        tone: "question",
+        tag: "选一个",
+        body: `> ${plain(oneLine(text, 120))}`,
+        actions: candidates.map((agent, index) => ({
+          label: agent,
+          value: { do: "pick", agent, id },
+          style: index === 0 ? "primary" : "default",
+        })),
+        note: "点一下就带着这条消息发出",
+        summary: prompt,
+      });
+      return;
+    }
+    this.saveTextMenu(connection, { kind: "pick", items: candidates, id });
+    this.reply(
+      connection,
+      message.chatId,
+      [
+        prompt,
+        ...candidates.map((agent, index) => `${index + 1}. ${agent}`),
+        "回复编号即可发出",
+      ].join("\n"),
+      message.externalId,
+    );
+  }
+
+  /** 把挂起的那条消息按选中的 Agent 发出 */
+  private sendPending(
+    connection: StoredConnection,
+    owner: Participant,
+    id: string,
+    agent: string,
+  ): { ok: true } | { ok: false; reason: string } {
+    const raw = this.deps.store.kvGet(connection.id, `pending:${id}`);
+    if (!raw) return { ok: false, reason: "这条消息已经发出过了" };
+    if (!this.agentNames(connection.roomId).includes(agent)) {
+      return { ok: false, reason: `房间里没有 ${agent}` };
+    }
+    const pending = JSON.parse(raw) as {
+      text: string;
+      token: string;
+      externalId: string;
+      chatId: string;
+      chatType: "p2p" | "group";
+      senderId: string;
+    };
+    let posted: ChatMessage;
+    this.posting = connection.id;
+    try {
+      posted = this.deps.post(owner, {
+        content: applyChoice(pending.text, pending.token, agent),
+        // 与原消息直接发进房间时同一个幂等键：重复点击只发一次
+        clientMessageId: `im-${digest(`${connection.id}:${pending.externalId}`)}`,
+        via: { channel: connection.channel },
+      });
+    } catch (error) {
+      return { ok: false, reason: describe(error) };
+    } finally {
+      this.posting = undefined;
+    }
+    this.deps.store.kvDelete(connection.id, `pending:${id}`);
+    this.afterInbound(
+      connection,
+      {
+        externalId: pending.externalId,
+        chatId: pending.chatId,
+        chatType: pending.chatType,
+        senderId: pending.senderId,
+        text: pending.text,
+      },
+      posted,
+    );
+    return { ok: true };
+  }
+
+  /* ---------- 选择卡片：对话对象、房间 ---------- */
+
+  private agentPicker(connection: StoredConnection, title = "选择对话对象"): ImRich {
+    const current = this.targetOf(connection);
+    const agents = this.deps
+      .participants(connection.roomId)
+      .filter((participant) => participant.type === "agent");
+    const state = { online: "空闲", busy: "忙碌", offline: "离线" } as const;
+    return {
+      title,
+      subtitle: this.roomName(connection.roomId),
+      tone: "reply",
+      tag: `当前：${current ?? "未指定"}`,
+      ...(agents.length ? {} : { body: "这个房间里还没有 Agent。" }),
+      actions: [
+        ...agents.map((agent) => ({
+          label: `${agent.username} · ${state[agent.status]}`,
+          value: { do: "target", agent: agent.username },
+          style: agent.username === current ? ("primary" as const) : ("default" as const),
+        })),
+        {
+          label: "不指定",
+          value: { do: "target", agent: "" },
+          style: current ? ("default" as const) : ("primary" as const),
+        },
+      ],
+      note: "选好后直接打字就发给它（每个房间各记一个，一直有效）；临时找别人可以写 @简写，如 @codex",
+      summary: `${title}：当前 ${current ?? "未指定"}`,
+    };
+  }
+
+  private memberRooms(connection: StoredConnection): Array<{ id: string; name: string }> {
+    return this.deps
+      .listRoomIds()
+      .filter((id) => this.deps.findParticipant(id, connection.ownerName)?.type === "human")
+      .map((id) => ({ id, name: this.roomName(id) }));
+  }
+
+  private roomPicker(connection: StoredConnection): ImRich {
+    const rooms = this.memberRooms(connection);
+    return {
+      title: "切换房间",
+      subtitle: `当前：${this.roomName(connection.roomId)}`,
+      tone: "reply",
+      tag: `${rooms.length} 个房间`,
+      actions: rooms.map((room) => {
+        const online = this.deps
+          .participants(room.id)
+          .filter((participant) => participant.status !== "offline").length;
+        const tasks = this.deps.roomTasks(room.id);
+        const extra = [
+          `${online} 人在线`,
+          ...(tasks.running ? [`${tasks.running} 个进行中`] : []),
+          ...(tasks.waiting ? [`${tasks.waiting} 个等你回答`] : []),
+        ].join(" · ");
+        return {
+          label: `${room.id === connection.roomId ? "● " : ""}${room.name} · ${extra}`,
+          value: { do: "room", room: room.id },
+          style: room.id === connection.roomId ? ("primary" as const) : ("default" as const),
+        };
+      }),
+      note: "点一下就切换；切过去会恢复你在那个房间选过的对话对象",
+      summary: `切换房间：当前 ${this.roomName(connection.roomId)}`,
+    };
+  }
+
+  /** 切换房间；返回失败原因 */
+  private switchRoom(connection: StoredConnection, roomId: string): string | undefined {
+    const room = this.deps.getRoom(roomId);
+    if (!room || room.archivedAt) return `没有房间 ${roomId}。`;
+    const member = this.deps.findParticipant(room.id, connection.ownerName);
+    if (!member || member.type !== "human") {
+      return `你还不是房间「${room.name}」的成员，请先在网页上进入一次。`;
+    }
+    const previous = connection.roomId;
+    if (previous === room.id) return undefined;
+    this.deps.store.update(connection.id, { roomId: room.id });
+    this.deps.onConnectionsChanged(previous);
+    this.deps.onConnectionsChanged(room.id);
+    return undefined;
+  }
+
+  private enqueueCard(
+    connection: StoredConnection,
+    chatId: string,
+    key: string,
+    replyTo: string | undefined,
+    rich: ImRich,
+  ): void {
+    this.deps.store.enqueue({
+      connectionId: connection.id,
+      eventKey: `ui:${key}:${randomUUID()}`,
+      chatId,
+      ...(replyTo && connection.channel === "feishu" && !replyTo.startsWith("menu:")
+        ? { replyToExternalId: replyTo }
+        : {}),
+      text: rich.summary,
+      rich,
+    });
+    this.schedulePump();
+  }
+
+  /* ---------- 文字菜单：没开卡片按钮的连接回编号 ---------- */
+
+  private saveTextMenu(
+    connection: StoredConnection,
+    menu: { kind: "room" | "target" | "pick"; items: string[]; id?: string },
+  ): void {
+    this.deps.store.kvSet(connection.id, "menu", JSON.stringify({ ...menu, at: this.now() }));
+  }
+
+  private pickFromTextMenu(
+    connection: StoredConnection,
+    owner: Participant,
+    message: ImInbound,
+    index: number,
+  ): boolean {
+    const raw = this.deps.store.kvGet(connection.id, "menu");
+    if (!raw) return false;
+    const menu = JSON.parse(raw) as {
+      kind: "room" | "target" | "pick";
+      items: string[];
+      id?: string;
+      at: number;
+    };
+    if (this.now() - menu.at > TEXT_MENU_TTL_MS) return false;
+    const item = index === 0 && menu.kind === "target" ? "" : menu.items[index - 1];
+    if (item === undefined) return false;
+    this.deps.store.kvDelete(connection.id, "menu");
+    const say = (text: string) => this.reply(connection, message.chatId, text, message.externalId);
+    if (menu.kind === "room") {
+      const failure = this.switchRoom(connection, item);
+      say(failure ?? this.roomSwitchedText(connection));
+    } else if (menu.kind === "target") {
+      this.setTarget(connection, item || undefined);
+      say(item ? `之后不带 @ 的消息都发给 ${item}。` : "已取消指定对话对象。");
+    } else {
+      const result = this.sendPending(connection, owner, menu.id!, item);
+      if (!result.ok) say(result.reason);
+    }
+    return true;
+  }
+
+  private roomSwitchedText(connection: StoredConnection): string {
+    const current = this.deps.store.getConnection(connection.id) ?? connection;
+    const target = this.targetOf(current);
+    return `已切换到房间「${this.roomName(current.roomId)}」。${
+      target ? `对话对象：${target}。` : "还没选对话对象，发 /to 选一个。"
+    }`;
+  }
+
+  /** 回复、进度卡片底部：当前发给谁，旁边一个「切换」 */
+  private footerFor(connection: StoredConnection): Pick<ImRich, "footer"> {
+    if (!this.cardsEnabled(connection)) return {};
+    return {
+      footer: `当前：${this.roomName(connection.roomId)} → ${this.targetOf(connection) ?? "未指定"}`,
+    };
   }
 
   /* ---------- 卡片交互 ---------- */
@@ -1070,6 +1485,52 @@ export class ImHub {
       return this.answerFromCard(connection, owner, action);
     if (op === "retry" || op === "dismiss" || op === "continue") {
       return this.invocationFromCard(connection, owner, action, op);
+    }
+    if (op === "target") {
+      const agent = action.value.agent ?? "";
+      if (agent && !this.agentNames(connection.roomId).includes(agent)) {
+        return { toast: { type: "error", text: `房间里没有 ${agent}` } };
+      }
+      this.setTarget(connection, agent || undefined);
+      return {
+        toast: { type: "success", text: agent ? `之后直接打字就发给 ${agent}` : "已取消指定" },
+        rich: this.agentPicker(connection),
+      };
+    }
+    if (op === "room") {
+      const failure = this.switchRoom(connection, action.value.room ?? "");
+      if (failure) return { toast: { type: "error", text: failure } };
+      const current = this.deps.store.getConnection(connection.id) ?? connection;
+      return {
+        toast: { type: "success", text: `已切换到 ${this.roomName(current.roomId)}` },
+        // 卡片原地变成新房间的对象选择
+        rich: this.agentPicker(current, `已切换到 ${this.roomName(current.roomId)}`),
+      };
+    }
+    if (op === "to") {
+      this.enqueueCard(connection, action.chatId, "to", undefined, this.agentPicker(connection));
+      return { toast: { type: "info", text: "已发来选择卡片" } };
+    }
+    if (op === "pick") {
+      const delivery = this.deps.store.deliveryByExternal(connection.id, action.externalId);
+      const result = this.sendPending(
+        connection,
+        owner,
+        action.value.id ?? "",
+        action.value.agent ?? "",
+      );
+      const base = delivery?.rich;
+      if (!result.ok) {
+        return {
+          toast: { type: "info", text: result.reason },
+          ...(base ? { rich: { ...base, resolved: { text: "已处理", ok: false } } } : {}),
+        };
+      }
+      const rich: ImRich | undefined = base
+        ? { ...base, resolved: { text: `已发给 ${action.value.agent}`, ok: true } }
+        : undefined;
+      if (delivery && rich) this.deps.store.setRich(delivery.id, rich);
+      return { toast: { type: "success", text: "已发出" }, ...(rich ? { rich } : {}) };
     }
     return undefined;
   }
@@ -1490,6 +1951,9 @@ export class ImHub {
       ...(question && this.cardsEnabled(connection)
         ? { choice: { multiple: Boolean(message.question?.multiple) } }
         : {}),
+      ...(!question && message.senderType === "agent" && this.cardsEnabled(connection)
+        ? { ...this.footerFor(connection), actions: [SWITCH_TARGET_ACTION] }
+        : {}),
       ...(note ? { note } : {}),
       ...(attachments.length ? { attachments } : {}),
       ...(url ? { link: { label: `在网页查看 #${message.seq}`, url } } : {}),
@@ -1683,6 +2147,13 @@ function formatSize(bytes: number): string {
 /** 合并项按单条长度上限切组 */
 const MAX_FORWARDED_FILES = 5;
 const MAX_FORWARDED_FILE_BYTES = 20 * 1024 * 1024;
+const SWITCH_TARGET_ACTION = {
+  label: "切换对象",
+  value: { do: "to" },
+  style: "default" as const,
+};
+/** 文字编号菜单的有效期 */
+const TEXT_MENU_TTL_MS = 10 * 60_000;
 /** 进度卡片 2 秒内最多改一次，避免频繁调接口 */
 const TASK_CARD_THROTTLE_MS = 2_000;
 /** 卡片上「继续」追加的对话轮数（与网页一致） */

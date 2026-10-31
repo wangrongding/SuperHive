@@ -1439,6 +1439,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     extendBudget: (owner, turns) => extendBudget(owner, turns),
     invocationsFor: (messageId) => database.invocationsForMessage(messageId),
     participants: (roomId) => participantsOf(roomId),
+    roomTasks: (roomId) => {
+      const invocations = database.listInvocations(roomId);
+      return {
+        running: invocations.filter((item) =>
+          ["queued", "running", "cancelling"].includes(item.status),
+        ).length,
+        waiting: invocations.filter((item) => item.status === "waiting_human").length,
+      };
+    },
     readAttachment: async (id) => {
       const item = attachments.get(id);
       if (!item || item.revokedAt) return undefined;
