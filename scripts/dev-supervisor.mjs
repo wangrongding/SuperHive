@@ -8,7 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { clearTimeout, setTimeout } from "node:timers";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   DevError,
   publicError,
@@ -466,7 +466,12 @@ export async function main() {
       const formattedHost = probeHost.includes(":") ? `[${probeHost}]` : probeHost;
       const server = startProcess(
         process.execPath,
-        ["--import", require.resolve("tsx"), path.join(repoRoot, "apps/server/src/index.ts")],
+        // --import 要的是 URL：Windows 上 C:\... 这样的路径会被当成 c: 协议报错
+        [
+          "--import",
+          pathToFileURL(require.resolve("tsx")).href,
+          path.join(repoRoot, "apps/server/src/index.ts"),
+        ],
         {
           cwd: path.join(repoRoot, "apps/server"),
           env: {
