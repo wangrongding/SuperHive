@@ -686,8 +686,10 @@
   background: var(--danger-soft);
 }
 
-.access-card {
+/* 叠加在 .login-card 上；login.css 在后面加载，必须提高优先级，否则会沿用两栏布局把内容挤成一列竖排 */
+.login-card.access-card {
   max-width: 460px;
+  min-height: 0;
   grid-template-columns: 1fr;
 }
 

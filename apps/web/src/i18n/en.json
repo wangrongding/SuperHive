@@ -829,5 +829,6 @@
   "这一轮没有发出模型请求，用量为零。": "No model request was made in this turn; usage is zero.",
   "本轮结果未知，已收到的用量照常记账": "This turn's result is unknown; usage received so far is still recorded",
   "价格与提醒设置": "Prices and alerts",
-  "价格（每百万 token，美元）": "Prices (USD per million tokens)"
+  "价格（每百万 token，美元）": "Prices (USD per million tokens)",
+  "正在自动重试，服务恢复后会直接进入。": "Retrying automatically; you'll be let in as soon as the server is back."
 }

@@ -40,6 +40,8 @@ function stripInviteFromHash(roomId: string) {
  * 访问入口：本机房主直接进入；带邀请链接的先兑换成访客会话；
  * 已有访客会话的按会话进入；都没有就提示需要邀请。到期或被移除时回到这里。
  */
+const UNREACHABLE_RETRY_MS = 2_000;
+
 export function AccessGate() {
   useLocale();
   const [base] = useState(serverBase);
@@ -79,6 +81,14 @@ export function AccessGate() {
   useEffect(() => {
     void evaluate();
   }, [evaluate]);
+
+  // 连不上通常是 Server 正在重启（开发时代码更新、升级）：自动重试，恢复后直接进入，不用手动刷新
+  const unreachable = state.kind === "none" && state.reason === "unreachable";
+  useEffect(() => {
+    if (!unreachable) return;
+    const timer = window.setInterval(() => void evaluate(), UNREACHABLE_RETRY_MS);
+    return () => window.clearInterval(timer);
+  }, [evaluate, unreachable]);
 
   if (state.kind === "loading") return null;
   if (state.kind === "owner") {
@@ -213,6 +223,11 @@ function NoAccess({
       <div className="login-form-heading">
         <h2>{reason === "unreachable" ? t("连接失败") : t("需要邀请")}</h2>
         <p className="login-copy">{reasonText[reason]}</p>
+        {reason === "unreachable" && (
+          <p className="fine-print" role="status">
+            {t("正在自动重试，服务恢复后会直接进入。")}
+          </p>
+        )}
         {detail && <p className="fine-print">{detail}</p>}
       </div>
       <button type="button" className="access-retry" onClick={onRetry}>
