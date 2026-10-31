@@ -757,7 +757,7 @@
 
 /* ---------- 房间新建 / 管理 ---------- */
 .room-dialog {
-  width: min(440px, 100%);
+  width: min(600px, 100%);
   max-height: min(640px, calc(100dvh - 48px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
