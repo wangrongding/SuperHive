@@ -43,7 +43,13 @@ import {
 } from "./invocations";
 import { WhiteboardPanel, upsertWhiteboardEntry } from "./whiteboard";
 import { ActivityPanel, isInFlight, needsAttention, type ActivityView } from "./activity";
-import { LocalAgentList, LocalLaunch, providerInfo, useLocalAgents } from "./local-agents";
+import {
+  LocalAgentList,
+  LocalLaunch,
+  providerInfo,
+  useLocalAgents,
+  DirectoryPicker,
+} from "./local-agents";
 import { createFrameClock, easeInOutCubic, easeOutQuint } from "./easing";
 import { ShadowContent } from "./shadow-content";
 import {
@@ -800,6 +806,7 @@ export function App({
   const [roomDialogId, setRoomDialogId] = useState("");
   const [roomDialogName, setRoomDialogName] = useState("");
   const [roomDialogWorkspace, setRoomDialogWorkspace] = useState("");
+  const [roomWorkspacePicking, setRoomWorkspacePicking] = useState(false);
   const [roomDialogError, setRoomDialogError] = useState<string>();
   const [roomDialogBusy, setRoomDialogBusy] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
@@ -1305,6 +1312,7 @@ export function App({
       setRoomDialogId(dialog.mode === "manage" ? dialog.room.id : "");
       setRoomDialogName(dialog.mode === "manage" ? dialog.room.name : "");
       setRoomDialogWorkspace(dialog.mode === "manage" ? (dialog.room.workspace ?? "") : "");
+      setRoomWorkspacePicking(false);
       setRoomDialog(dialog);
     },
     [],
@@ -4522,20 +4530,42 @@ export function App({
               {isOwner && (
                 <label className="room-field">
                   <span>工作区（可选）</span>
-                  <input
-                    value={roomDialogWorkspace}
-                    onChange={(event) => setRoomDialogWorkspace(event.target.value)}
-                    maxLength={4096}
-                    placeholder="例如 ~/Coding/my-project，留空用各 Agent 自己的目录"
-                    spellCheck={false}
-                    autoComplete="off"
-                  />
+                  <div className="local-launch-cwd-row">
+                    <input
+                      value={roomDialogWorkspace}
+                      onChange={(event) => setRoomDialogWorkspace(event.target.value)}
+                      maxLength={4096}
+                      placeholder="例如 ~/Coding/my-project，留空用各 Agent 自己的目录"
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                    {local.enabled && (
+                      <button
+                        type="button"
+                        aria-expanded={roomWorkspacePicking}
+                        onClick={() => setRoomWorkspacePicking((current) => !current)}
+                      >
+                        选择…
+                      </button>
+                    )}
+                  </div>
                   <small>
                     这台电脑上的目录。本机 Agent
                     在这个房间改在这里工作（需在它允许的范围内：启动目录及其上一级，或用
                     --allow-root 追加）；修改后 Agent 等手上的任务做完再切换，并开始新会话。
                   </small>
                 </label>
+              )}
+              {isOwner && roomWorkspacePicking && local.enabled && (
+                <DirectoryPicker
+                  load={local.directories}
+                  value={roomDialogWorkspace}
+                  onPick={(picked) => {
+                    setRoomDialogWorkspace(picked);
+                    setRoomWorkspacePicking(false);
+                  }}
+                  onClose={() => setRoomWorkspacePicking(false)}
+                />
               )}
               {roomDialogError && (
                 <p className="room-dialog-error" role="alert">

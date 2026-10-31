@@ -181,7 +181,7 @@ function shortenPath(target: string, home: string): string {
   return target.startsWith(`${home}/`) ? `~${target.slice(home.length)}` : target;
 }
 
-function DirectoryPicker({
+export function DirectoryPicker({
   load,
   value,
   onPick,
