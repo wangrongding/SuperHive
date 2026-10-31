@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ImChannel, ImConnection, ImDeliveryLevel } from "@ai-hive/protocol";
 import type { SecretBox } from "./secret-box.js";
+import type { ImRich } from "./types.js";
 
 /** 渠道私有的非机密配置，如飞书 appId、区域；机密部分加密后单独存放 */
 export type ImConfig = Record<string, string>;
@@ -50,7 +51,10 @@ export type OutboxItem = {
   /** 目标会话；以 user: 开头时表示发到这个人的私聊 */
   chatId: string;
   replyToExternalId?: string;
+  /** 纯文本版本：不支持富消息的渠道、或卡片发送失败时用 */
   text: string;
+  /** 富消息版本（飞书卡片） */
+  rich?: ImRich;
   attempts: number;
   /** 合并推送：攒一段时间后与同一会话的其它合并项一起发 */
   batch?: boolean;
@@ -181,6 +185,10 @@ export class ImStore {
         PRIMARY KEY (connection_id, key)
       );
     `);
+    const deliveryColumns = db.pragma("table_info(im_deliveries)") as Array<{ name: string }>;
+    if (!deliveryColumns.some((column) => column.name === "rich_json")) {
+      db.exec("ALTER TABLE im_deliveries ADD COLUMN rich_json TEXT");
+    }
     const columns = db.pragma("table_info(im_connections)") as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "level")) {
       db.exec("ALTER TABLE im_connections ADD COLUMN level TEXT");
@@ -398,8 +406,8 @@ export class ImStore {
     const now = new Date().toISOString();
     const result = this.db
       .prepare(
-        `INSERT OR IGNORE INTO im_deliveries(id, connection_id, event_key, message_id, chat_id, reply_to_external_id, text, status, attempts, next_at, batch, check_json, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO im_deliveries(id, connection_id, event_key, message_id, chat_id, reply_to_external_id, text, rich_json, status, attempts, next_at, batch, check_json, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)`,
       )
       .run(
         randomUUID(),
@@ -409,6 +417,7 @@ export class ImStore {
         item.chatId,
         item.replyToExternalId ?? null,
         item.text,
+        item.rich ? JSON.stringify(item.rich) : null,
         now,
         item.batch ? 1 : 0,
         item.check ? JSON.stringify(item.check) : null,
@@ -431,6 +440,7 @@ export class ImStore {
       chat_id: string;
       reply_to_external_id: string | null;
       text: string;
+      rich_json: string | null;
       attempts: number;
       batch: number;
       check_json: string | null;
@@ -444,6 +454,7 @@ export class ImStore {
       chatId: row.chat_id,
       ...(row.reply_to_external_id ? { replyToExternalId: row.reply_to_external_id } : {}),
       text: row.text,
+      ...(row.rich_json ? { rich: JSON.parse(row.rich_json) as ImRich } : {}),
       attempts: row.attempts,
       ...(row.batch ? { batch: true } : {}),
       ...(row.check_json ? { check: JSON.parse(row.check_json) as OutboxCheck } : {}),

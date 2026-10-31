@@ -24,6 +24,7 @@ import {
   type ImChannelDriver,
   type ImInbound,
   type ImKeyValue,
+  type ImRich,
   type ImTransport,
 } from "./types.js";
 
@@ -687,6 +688,9 @@ export class ImHub {
       messageId: message.id,
       ...this.target(connection, origin),
       text: this.format(message, driver?.maxTextLength ?? 1800),
+      ...(driver?.richTextLength
+        ? { rich: this.richMessage(connection, message, driver.richTextLength) }
+        : {}),
       ...(options.batch ? { batch: true } : {}),
       ...(options.check ? { check: options.check } : {}),
     });
@@ -766,10 +770,12 @@ export class ImHub {
       const trigger = this.deps.getMessage(invocation.messageId);
       const origin = trigger ? this.originOf(trigger, connection.id) : undefined;
       const driver = this.deps.drivers[connection.channel];
+      const rich = driver?.richTextLength ? this.richNotice(invocation, trigger) : undefined;
       this.deps.store.enqueue({
         connectionId: connection.id,
         eventKey: `inv:${invocation.id}:${invocation.attempts}:${invocation.status}`,
         ...this.target(connection, origin),
+        ...(rich ? { rich } : {}),
         text: this.clip(
           `${this.roomName(invocation.roomId)} - ${invocation.agentName}\n${notice}`,
           invocation.roomId,
@@ -802,6 +808,123 @@ export class ImHub {
       default:
         return undefined;
     }
+  }
+
+  /** 调用状态提醒的卡片：失败、结果未知、被拦下、等批准 */
+  private richNotice(invocation: Invocation, trigger: ChatMessage | undefined): ImRich | undefined {
+    const ref = trigger ? `#${trigger.seq}` : "这条任务";
+    const detail = invocation.detail ? invocation.detail.replace(/\s+/g, " ").trim() : "";
+    const agent = invocation.agentName;
+    const url = this.deps.webUrl(invocation.roomId);
+    const subtitle = `${this.roomName(invocation.roomId)}${trigger ? ` · #${trigger.seq}` : ""}`;
+    const quote = trigger ? `> ${plain(oneLine(trigger.content, 120))}` : "";
+    const base = (rich: Omit<ImRich, "subtitle" | "link" | "summary">): ImRich => ({
+      ...rich,
+      subtitle,
+      summary: `${rich.title}${detail ? `：${detail}` : ""}`,
+      ...(url ? { link: { label: `到网页处理 ${ref}`, url } } : {}),
+    });
+    switch (invocation.status) {
+      case "failed":
+        return base({
+          title: `${agent} 处理失败`,
+          tone: "danger",
+          tag: "失败",
+          body: [quote, detail ? `**原因**：${plain(detail)}` : ""].filter(Boolean).join("\n\n"),
+          note: `可以到网页查看详情，或重试 ${ref}`,
+        });
+      case "timed_out":
+        return base({
+          title: `${agent} 结果未知`,
+          tone: "warning",
+          tag: "结果未知",
+          body: quote,
+          note: "长时间没有进展，不代表失败；到网页确认后再决定是否重试",
+        });
+      case "blocked":
+        return invocation.blockReason === "guest_approval"
+          ? base({
+              title: `访客的任务等你批准`,
+              tone: "approval",
+              tag: "待批准",
+              body: [`**${plain(invocation.requesterName)}**（访客）请 **${agent}** 处理：`, quote]
+                .filter(Boolean)
+                .join("\n\n"),
+              note: "到网页点「批准」后才会派发",
+            })
+          : base({
+              title: `${agent} 已暂停`,
+              tone: "warning",
+              tag: "已暂停",
+              body: [quote, `**原因**：${plain(detail || "Agent 对话轮数到了上限")}`]
+                .filter(Boolean)
+                .join("\n\n"),
+              note: "到网页点「继续」",
+            });
+      default:
+        return undefined;
+    }
+  }
+
+  /** 房间消息的卡片：Agent 回复、@ 房主、提问（选项单独列出） */
+  private richMessage(connection: StoredConnection, message: ChatMessage, limit: number): ImRich {
+    const sender = message.senderName;
+    const url = this.deps.webUrl(message.roomId);
+    let body = plain(message.content);
+    let options: ImRich["options"];
+    let note: string | undefined;
+    if (message.kind === "question") {
+      // 正文开头是「@提问对象 ❓ 问题」，后面跟（单选）和逐行选项、作答提示：卡片里分开展示
+      const lines = body.split("\n");
+      const marker = lines.findIndex((line) => /^（(单选|可多选)）$/u.test(line.trim()));
+      body = (marker >= 0 ? lines.slice(0, marker) : lines)
+        .join("\n")
+        .replace(/^(＠\S+\s+)?❓\s*/u, "")
+        .replace(/\s*（(点选选项|回复这条消息)[^）]*）\s*$/u, "")
+        .trim();
+      if (message.question) {
+        options = message.question.options.map((option) => ({
+          key: option.key,
+          label: plain(option.label),
+        }));
+      }
+      note = message.question
+        ? message.question.multiple
+          ? "回复这张卡片作答：选项字母，多选用逗号隔开（如 A,C）；也可以直接回复文字"
+          : "回复这张卡片作答：选项字母（如 A）；也可以直接回复文字"
+        : "回复这张卡片作答";
+    }
+    if (body.length > limit) {
+      body = `${body.slice(0, limit)}…`;
+      note = [note, `正文太长已截断，全文见网页 #${message.seq}`].filter(Boolean).join("；");
+    }
+    const mentioned = this.mentionsOwner(message, connection);
+    const question = message.kind === "question";
+    const title = question
+      ? `${sender} 有问题问你`
+      : message.senderType === "human"
+        ? `${sender} 的消息`
+        : mentioned
+          ? `${sender} 提到了你`
+          : `${sender} 的回复`;
+    const attachments = (message.attachments ?? []).map((item) => ({
+      name: item.name,
+      size: formatSize(item.size),
+    }));
+    return {
+      title,
+      subtitle: `${this.roomName(message.roomId)} · #${message.seq}`,
+      tone: question ? "question" : mentioned ? "mention" : "reply",
+      ...(question
+        ? { tag: message.question ? (message.question.multiple ? "多选" : "单选") : "待回答" }
+        : {}),
+      ...(body ? { body } : {}),
+      ...(options ? { options } : {}),
+      ...(note ? { note } : {}),
+      ...(attachments.length ? { attachments } : {}),
+      ...(url ? { link: { label: `在网页查看 #${message.seq}`, url } } : {}),
+      summary: `${sender}：${oneLine(body || attachments[0]?.name || "", 60)}`,
+    };
   }
 
   private formatAttachments(message: ChatMessage): string[] {
@@ -878,23 +1001,26 @@ export class ImHub {
       }
       for (const item of due) {
         if (item.batch) continue;
-        await this.sendItems([item], item.text);
+        await this.sendItems([item]);
       }
       for (const items of batches.values()) {
         const oldest = Date.parse(items[0]!.createdAt ?? new Date(this.now()).toISOString());
         if (this.now() - oldest < DIGEST_WINDOW_MS) continue;
         const connection = this.deps.store.getConnection(items[0]!.connectionId);
-        const limit = (connection && this.deps.drivers[connection.channel]?.maxTextLength) ?? 1800;
-        for (const group of chunk(items, limit)) {
-          await this.sendItems(group, group.map((item) => item.text).join("\n\n———\n\n"));
-        }
+        const driver = connection ? this.deps.drivers[connection.channel] : undefined;
+        const limit =
+          (items.every((item) => item.rich) ? driver?.richTextLength : undefined) ??
+          driver?.maxTextLength ??
+          1800;
+        for (const group of chunk(items, limit)) await this.sendItems(group);
       }
     } finally {
       this.pumping = false;
     }
   }
 
-  private async sendItems(items: OutboxItem[], text: string): Promise<void> {
+  /** 一条或多条（合并推送）一起发：有卡片版本就发卡片，否则发纯文本 */
+  private async sendItems(items: OutboxItem[]): Promise<void> {
     const first = items[0]!;
     const transport = this.transports.get(first.connectionId);
     const connection = this.deps.store.getConnection(first.connectionId);
@@ -905,12 +1031,15 @@ export class ImHub {
       return false;
     });
     if (!live.length) return;
+    const text = live.map((item) => item.text).join("\n\n———\n\n");
+    const rich = live.every((item) => item.rich)
+      ? combineRich(live.map((item) => item.rich!))
+      : undefined;
     try {
-      const externalId = await transport.sendText(
-        first.chatId,
-        live.length === items.length ? text : live.map((item) => item.text).join("\n\n———\n\n"),
-        first.replyToExternalId,
-      );
+      const externalId =
+        rich && transport.sendRich
+          ? await transport.sendRich(first.chatId, rich, text, first.replyToExternalId)
+          : await transport.sendText(first.chatId, text, first.replyToExternalId);
       for (const item of live) {
         this.deps.store.markSent(item.id);
         if (item.messageId) {
@@ -947,6 +1076,38 @@ function formatSize(bytes: number): string {
 }
 
 /** 合并项按单条长度上限切组 */
+function oneLine(text: string, max: number): string {
+  const single = text.replace(/\s+/g, " ").trim();
+  return single.length > max ? `${single.slice(0, max - 1)}…` : single;
+}
+
+/** 合并推送：多条卡片合成一张，每条一节 */
+function combineRich(items: ImRich[]): ImRich {
+  if (items.length === 1) return items[0]!;
+  const subtitles = [
+    ...new Set(items.map((item) => item.subtitle?.split(" · ")[0]).filter(Boolean)),
+  ];
+  const link = items.find((item) => item.link)?.link;
+  return {
+    title: `${items.length} 条新消息`,
+    ...(subtitles.length ? { subtitle: subtitles.join("、") } : {}),
+    tone: "digest",
+    sections: items.map((item) => ({
+      title: item.title,
+      ...(item.subtitle ? { subtitle: item.subtitle } : {}),
+      body: [
+        item.body ?? "",
+        ...(item.options ?? []).map((option) => `**${option.key}**\u3000${option.label}`),
+        ...(item.attachments ?? []).map((file) => `📎 ${file.name}（${file.size}）`),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    })),
+    ...(link ? { link: { label: "在网页查看", url: link.url } } : {}),
+    summary: items.map((item) => item.summary).join("；"),
+  };
+}
+
 function chunk(items: OutboxItem[], limit: number): OutboxItem[][] {
   const groups: OutboxItem[][] = [];
   let current: OutboxItem[] = [];

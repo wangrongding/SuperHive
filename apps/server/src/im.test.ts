@@ -11,6 +11,7 @@ import type {
   ImChannelDriver,
   ImInbound,
   ImLoginCallbacks,
+  ImRich,
   ImTransportEvents,
 } from "./im/types.js";
 
@@ -65,7 +66,9 @@ class Peer {
 
 /** 假的 IM 渠道：扫码由测试触发，发出的文字记下来，入站消息由测试注入 */
 class FakeChannel {
-  sent: Array<{ chatId: string; text: string; replyTo?: string }> = [];
+  sent: Array<{ chatId: string; text: string; replyTo?: string; rich?: ImRich }> = [];
+  /** 模拟支持卡片的渠道（飞书） */
+  richCards = false;
   events: ImTransportEvents | undefined;
   login: { callbacks: ImLoginCallbacks; resolve: (owner: string) => void } | undefined;
   transports = 0;
@@ -76,6 +79,7 @@ class FakeChannel {
     return {
       channel,
       maxTextLength: 200,
+      ...(this.richCards ? { richTextLength: 1000 } : {}),
       login: (callbacks) =>
         new Promise((resolve, reject) => {
           callbacks.signal.addEventListener("abort", () => reject(new Error("已取消")));
@@ -103,6 +107,15 @@ class FakeChannel {
             this.counter += 1;
             return `out-${this.counter}`;
           },
+          ...(this.richCards
+            ? {
+                sendRich: async (chatId: string, rich: ImRich, text: string, replyTo?: string) => {
+                  this.sent.push({ chatId, text, rich, ...(replyTo ? { replyTo } : {}) });
+                  this.counter += 1;
+                  return `out-${this.counter}`;
+                },
+              }
+            : {}),
           close: async () => {
             this.closes += 1;
           },
@@ -144,8 +157,9 @@ describe("IM 连接", () => {
     close = undefined;
   });
 
-  async function start() {
+  async function start(options: { richCards?: boolean } = {}) {
     const fake = new FakeChannel();
+    fake.richCards = Boolean(options.richCards);
     const clock = { offset: 0 };
     const app = await buildApp({
       databasePath: ":memory:",
@@ -365,6 +379,53 @@ describe("IM 连接", () => {
     await client.close();
   });
 
+  it("提问卡片：正文只留问题，选项单独列出，回复字母照样作答", async () => {
+    const { join, connect, fake, port } = await start({ richCards: true });
+    const helper = await join("helper", "agent");
+    const { rd } = await connect();
+    fake.emit({ text: "@helper 发布一下" });
+    const mentioned = await helper.next((event) => event.type === "agent.mentioned");
+    const trigger = (mentioned as { message: ChatMessage }).message;
+    helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+    await rd.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+      requestInit: {
+        headers: {
+          Authorization: "Bearer test-token",
+          "X-Hive-Room": "general",
+          "X-Hive-Agent-Name": "helper",
+        },
+      },
+    });
+    const client = new Client({ name: "im-test", version: "0.1.0" });
+    await client.connect(transport as unknown as Transport);
+    await client.callTool({
+      name: "hive_ask_human",
+      arguments: { question: "发到哪个环境？", options: ["测试环境", "正式环境"] },
+    });
+    const pushed = await until(() => fake.sent.find((item) => item.rich?.tone === "question"));
+    expect(pushed.rich).toMatchObject({
+      title: "helper 有问题问你",
+      tag: "单选",
+      body: "发到哪个环境？",
+      options: [
+        { key: "A", label: "测试环境" },
+        { key: "B", label: "正式环境" },
+      ],
+      note: expect.stringContaining("选项字母"),
+    });
+    // 回到发起任务的那条 IM 消息下面
+    expect(pushed.replyTo).toBeDefined();
+    fake.emit({ text: "B" });
+    const woken = await helper.next(
+      (event) => event.type === "agent.mentioned" && event.message.content.startsWith("选择 B"),
+    );
+    expect((woken as { message: ChatMessage }).message.answer).toMatchObject({ selected: ["B"] });
+    await client.close();
+  });
+
   it("个人微信必须确认风险；访客身份不能作为发言人", async () => {
     const { api, join } = await start();
     await join("rd", "human");
@@ -398,8 +459,9 @@ describe("IM 推送档位", () => {
     close = undefined;
   });
 
-  async function setup() {
+  async function setup(options: { richCards?: boolean } = {}) {
     const fake = new FakeChannel();
+    fake.richCards = Boolean(options.richCards);
     const clock = { offset: 0 };
     const app = await buildApp({
       databasePath: ":memory:",
@@ -560,6 +622,48 @@ describe("IM 推送档位", () => {
     clock.offset = 4 * 60_000;
     const digest = await until(() => fake.sent.find((item) => item.text.includes("第一句")), 5_000);
     expect(digest.text).toContain("第二句");
+  });
+
+  it("支持卡片的渠道：回复、失败提醒和合并推送都发卡片，纯文本留作退路", async () => {
+    const { fake, helper, assign, clock, setLevel } = await setup({ richCards: true });
+    const trigger = await assign("@helper 看一下 <T> 泛型", "web-rich");
+    helper.send({
+      type: "message.send",
+      clientMessageId: "r1",
+      content: "**结论**：可以\n- 第一点",
+      parentMessageId: trigger.id,
+    });
+    const reply = await until(() => fake.sent.find((item) => item.rich?.body?.includes("结论")));
+    expect(reply.rich).toMatchObject({
+      title: "helper 的回复",
+      tone: "reply",
+      subtitle: expect.stringMatching(/^general · #\d+$/),
+      body: "**结论**：可以\n- 第一点",
+    });
+    expect(reply.text).toContain("general - helper");
+
+    const second = await assign("@helper 再跑一次", "web-rich-2");
+    helper.send({ type: "invocation.report", messageId: second.id, status: "running" });
+    helper.send({
+      type: "invocation.report",
+      messageId: second.id,
+      status: "failed",
+      detail: "退出码 1",
+    });
+    const failed = await until(() => fake.sent.find((item) => item.rich?.tone === "danger"));
+    expect(failed.rich).toMatchObject({
+      title: "helper 处理失败",
+      tag: "失败",
+      body: expect.stringContaining("**原因**：退出码 1"),
+    });
+
+    await setLevel("agents");
+    helper.send({ type: "message.send", clientMessageId: "d1", content: "第一句" });
+    helper.send({ type: "message.send", clientMessageId: "d2", content: "第二句" });
+    clock.offset = 4 * 60_000;
+    const digest = await until(() => fake.sent.find((item) => item.rich?.tone === "digest"), 5_000);
+    expect(digest.rich).toMatchObject({ title: "2 条新消息" });
+    expect(digest.rich!.sections!.map((section) => section.body)).toEqual(["第一句", "第二句"]);
   });
 
   it("暂停后不推，恢复后不补发暂停期间的消息", async () => {

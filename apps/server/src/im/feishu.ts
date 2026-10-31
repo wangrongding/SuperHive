@@ -1,9 +1,11 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { ImConfig } from "./im-store.js";
+import { FEISHU_CARD_BODY_LIMIT, renderFeishuCard } from "./feishu-card.js";
 import {
   USER_TARGET,
   type ImChannelDriver,
   type ImInbound,
+  type ImRich,
   type ImLoginCallbacks,
   type ImLoginResult,
   type ImTransport,
@@ -145,11 +147,41 @@ class FeishuTransport implements ImTransport {
   }
 
   async sendText(chatId: string, text: string, replyTo?: string): Promise<string | undefined> {
-    const content = JSON.stringify({ text });
+    return this.send(chatId, "text", JSON.stringify({ text }), replyTo);
+  }
+
+  /** 发消息卡片；卡片被拒（客户端或格式不支持等）时退回纯文本，消息不丢 */
+  async sendRich(
+    chatId: string,
+    rich: ImRich,
+    fallback: string,
+    replyTo?: string,
+  ): Promise<string | undefined> {
+    try {
+      return await this.send(
+        chatId,
+        "interactive",
+        JSON.stringify(renderFeishuCard(rich)),
+        replyTo,
+      );
+    } catch (error) {
+      console.warn(
+        `[im] 飞书卡片发送失败，已改发文字：${error instanceof Error ? error.message : String(error)}`,
+      );
+      return this.sendText(chatId, fallback, replyTo);
+    }
+  }
+
+  private async send(
+    chatId: string,
+    msgType: "text" | "interactive",
+    content: string,
+    replyTo?: string,
+  ): Promise<string | undefined> {
     if (replyTo) {
       const result = await this.client.im.message.reply({
         path: { message_id: replyTo },
-        data: { msg_type: "text", content },
+        data: { msg_type: msgType, content },
       });
       if (result.code === 0) return result.data?.message_id;
       // 原消息被撤回等情况下退回到直接发到会话
@@ -160,7 +192,7 @@ class FeishuTransport implements ImTransport {
       params: { receive_id_type: toUser ? "open_id" : "chat_id" },
       data: {
         receive_id: toUser ? chatId.slice(USER_TARGET.length) : chatId,
-        msg_type: "text",
+        msg_type: msgType,
         content,
       },
     });
@@ -198,6 +230,7 @@ async function botName(
 export const feishuDriver: ImChannelDriver = {
   channel: "feishu",
   maxTextLength: 4000,
+  richTextLength: FEISHU_CARD_BODY_LIMIT,
   async login(callbacks: ImLoginCallbacks): Promise<ImLoginResult> {
     let domain = "feishu";
     const result = await lark.registerApp({
