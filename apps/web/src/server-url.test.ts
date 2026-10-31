@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
+import { resolveServerBase, resolveShareBase, resolveWebSocketUrl } from "./server-url";
 
 describe("resolveServerBase", () => {
   it("uses the Hive Server on 8787 for any Vite development port", () => {
@@ -67,5 +67,45 @@ describe("resolveWebSocketUrl", () => {
         advertisedUrl: "wss://hive.example.com/custom/ws",
       }),
     ).toBe("wss://hive.example.com/custom/ws");
+  });
+});
+
+describe("resolveShareBase", () => {
+  const location = (hostname: string) => ({
+    protocol: "http:",
+    hostname,
+    port: "5188",
+    pathname: "/",
+    origin: `http://${hostname}:5188`,
+  });
+
+  it("replaces localhost with the server's LAN host in development", () => {
+    expect(
+      resolveShareBase({
+        development: true,
+        location: location("localhost"),
+        advertisedUrl: "http://192.168.1.110:8787",
+      }),
+    ).toBe("http://192.168.1.110:5188");
+  });
+
+  it("keeps a page already opened on a reachable host", () => {
+    expect(
+      resolveShareBase({
+        development: true,
+        location: location("10.0.0.5"),
+        advertisedUrl: "http://192.168.1.110:8787",
+      }),
+    ).toBe("http://10.0.0.5:5188");
+  });
+
+  it("uses the advertised server URL in production", () => {
+    expect(
+      resolveShareBase({
+        development: false,
+        location: location("localhost"),
+        advertisedUrl: "https://hive.example.com/",
+      }),
+    ).toBe("https://hive.example.com");
   });
 });

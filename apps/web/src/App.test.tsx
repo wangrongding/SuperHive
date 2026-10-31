@@ -455,8 +455,9 @@ describe("App mention autocomplete", () => {
     );
     await user.click(within(inviteDialog).getByRole("button", { name: "生成并复制链接" }));
     expect(await within(inviteDialog).findByText("已复制邀请链接")).toBeTruthy();
+    // 页面开在 localhost 上时，邀请链接换成 Server 公布的局域网地址，别人才打得开
     expect(await navigator.clipboard.readText()).toBe(
-      `${window.location.origin}/#general?invite=hvi_test`,
+      `http://10.0.0.8:${window.location.port}/#general?invite=hvi_test`,
     );
     await user.click(within(inviteDialog).getByRole("button", { name: "关闭" }));
     const membersTrigger = screen.getByRole("button", { name: "打开成员列表" });

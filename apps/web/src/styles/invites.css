@@ -258,13 +258,20 @@
 }
 
 .invite-created {
+  /* minmax(0, 1fr) 与 min-width: 0：不换行的长链接不能把卡片和弹窗撑宽 */
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 14px;
   background: var(--bg-elevated);
   animation: pop-in var(--duration) var(--ease-out);
+}
+
+.invite-created > code {
+  overflow-wrap: anywhere;
 }
 
 .invite-created-head {

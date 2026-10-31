@@ -104,7 +104,7 @@ import {
 import { InvocationDock, dockInvocations } from "./invocation-dock";
 import { IM_CHANNEL_LABELS } from "./im-api";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
-import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
+import { resolveServerBase, resolveShareBase, resolveWebSocketUrl } from "./server-url";
 import {
   LOCALE_OPTIONS,
   getLocale,
@@ -2279,11 +2279,12 @@ export function App({
    * 开发环境页面由 Vite 提供，沿用当前页面地址。
    */
   function inviteLink(): string {
-    const origin =
-      import.meta.env.DEV || !meta?.httpUrl
-        ? `${window.location.origin}${window.location.pathname}`
-        : meta.httpUrl;
-    return `${origin.replace(/\/$/, "")}/#${currentRoomId}`;
+    const origin = resolveShareBase({
+      development: import.meta.env.DEV,
+      location: window.location,
+      advertisedUrl: meta?.httpUrl,
+    });
+    return `${origin}/#${currentRoomId}`;
   }
 
   async function copyCommand() {
