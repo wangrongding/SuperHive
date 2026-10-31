@@ -68,6 +68,8 @@ export type LocalAgentSupervisorOptions = {
   isAgentOnline: (name: string) => boolean;
   /** 该名字是否已被其他在线成员占用（不含本机 Agent 自己） */
   isNameInUse: (name: string) => boolean;
+  /** 经 WebSocket 请这个名字的 Agent 自行退出；发出了就返回 true（Windows 上用来代替结束信号） */
+  requestShutdown?: (name: string) => boolean;
   log?: (message: string) => void;
   spawn?: SpawnAgent;
   adopt?: AdoptAgent;
@@ -773,7 +775,11 @@ export class LocalAgentSupervisor {
     const child = runtime.child;
     if (!child) return;
     runtime.stopping = true;
-    child.kill("SIGTERM");
+    // Windows 上「信号」都是强制结束，Agent 来不及下线：先经连接请它自己退出，宽限期过了再结束进程树
+    const asked =
+      process.platform === "win32" &&
+      (this.options.requestShutdown?.(runtime.config.name) ?? false);
+    if (!asked) child.kill("SIGTERM");
     let forced: { cancel(): void } | undefined;
     await Promise.race([
       runtime.exited,

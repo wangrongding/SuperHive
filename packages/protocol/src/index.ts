@@ -566,6 +566,11 @@ export const agentMentionedEventSchema = z.object({
   /** 人在 UI 中显式重试：Agent 应忽略本地"已处理"记录重新执行 */
   retry: z.boolean().optional(),
 });
+/** 本机 Hive Server 请它拉起的 Agent 自行退出（Windows 上没有可用的结束信号，信号一律是强制结束） */
+export const agentShutdownEventSchema = z.object({
+  type: z.literal("agent.shutdown"),
+});
+
 export const agentCancelEventSchema = z.object({
   type: z.literal("agent.cancel"),
   messageId: z.string().uuid(),
@@ -634,6 +639,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   roomClearedEventSchema,
   agentMentionedEventSchema,
   agentCancelEventSchema,
+  agentShutdownEventSchema,
   invocationUpdatedEventSchema,
   whiteboardUpdatedEventSchema,
   whiteboardRemovedEventSchema,

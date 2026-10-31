@@ -52,9 +52,9 @@ export class CopilotResponder implements AgentResponder {
   async reply(input: AgentReplyInput): Promise<AgentReply> {
     const sessionId = input.threadId ?? randomUUID();
     const access = this.options.access ?? "read-only";
+    // 提示走标准输入（不带 -p 时 Copilot 读管道输入）：放在参数里会受命令行长度限制，
+    // Windows 上 32767 字符，十几条长消息就超了，也会出现在进程列表里
     const args = [
-      "--prompt",
-      withInstructions(input),
       "--output-format",
       "json",
       "--stream",
@@ -94,6 +94,7 @@ export class CopilotResponder implements AgentResponder {
     try {
       result = await (this.options.runner ?? defaultCommandRunner)(this.options.command, args, {
         cwd: this.options.cwd,
+        input: withInstructions(input),
         ...(input.signal ? { signal: input.signal } : {}),
       });
     } catch (error) {

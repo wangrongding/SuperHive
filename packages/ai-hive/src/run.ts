@@ -392,6 +392,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
         ...(workspace.note ? { workspaceNote: workspace.note } : {}),
         ...(hooks?.onRoomsChanged ? { onRoomsChanged: hooks.onRoomsChanged } : {}),
         ...(hooks?.onArchived ? { onArchived: hooks.onArchived } : {}),
+        ...(process.env.HIVE_SUPERVISOR_PID ? { onShutdown: () => shutdownOnRequest() } : {}),
       },
       store,
       buildResponder(hive, workspace.cwd),
@@ -399,6 +400,17 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   }
 
   let stopAll: () => Promise<void>;
+  let shuttingDown = false;
+  /**
+   * 拉起本进程的本机 Hive Server 请它退出：正常离线后退出。只有由本机 Server 拉起的 Agent
+   * （带 HIVE_SUPERVISOR_PID）才响应，手动运行的 Agent 不会被远端 Server 关掉。
+   */
+  function shutdownOnRequest() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log("[hive] 本机 Hive Server 请求停止，正常离线后退出。");
+    void stopAll().finally(() => process.exit(0));
+  }
   if (roomId !== undefined) {
     // 单房间模式在启动时确定房间工作区；之后房间改了工作区需要重启 Agent
     const room = (await fetchRooms(serverUrl, token).catch(() => [])).find(

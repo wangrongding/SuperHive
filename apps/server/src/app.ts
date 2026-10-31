@@ -310,6 +310,19 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         joinToken,
         isAgentOnline: (name) => onlineAnywhere(name, true),
         isNameInUse: (name) => onlineAnywhere(name, false),
+        requestShutdown: (name) => {
+          const suffix = `:${name.toLocaleLowerCase()}`;
+          let sent = false;
+          for (const [key, set] of onlineByName) {
+            if (!key.endsWith(suffix)) continue;
+            for (const connection of set) {
+              if (connection.participant?.type !== "agent") continue;
+              send(connection.socket, { type: "agent.shutdown" });
+              sent = true;
+            }
+          }
+          return sent;
+        },
       })
     : undefined;
   /**

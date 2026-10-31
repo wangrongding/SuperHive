@@ -176,6 +176,7 @@ export class AgentBridge {
       workspaceNote?: string;
       onRoomsChanged?: (room: RoomSummary) => void;
       onArchived?: () => void;
+      onShutdown?: () => void;
       tuning?: BridgeTuning;
     },
     private readonly store: StateStore,
@@ -230,6 +231,7 @@ export class AgentBridge {
         onCancel: (messageId) => this.cancel(messageId),
         onMessageDeleted: (message) => this.onRecalled(message.id),
         ...(this.options.onRoomsChanged ? { onRoomsChanged: this.options.onRoomsChanged } : {}),
+        ...(this.options.onShutdown ? { onShutdown: this.options.onShutdown } : {}),
         onError: (error) => {
           this.log(`[hive] ${error.message}`);
           if (error instanceof RoomClientError && error.code === "ROOM_ARCHIVED") {

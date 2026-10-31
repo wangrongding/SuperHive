@@ -54,6 +54,10 @@ describe("CopilotResponder", () => {
     expect(args.join(" ")).toContain("X-Hive-Agent-Name");
     expect(args).toContain("--resume=00000000-0000-4000-8000-000000000001");
     expect(args).toContain("gpt-5");
+    // 提示走标准输入，不进命令行（Windows 命令行有长度上限）
+    expect(args).not.toContain("--prompt");
+    expect(args.join(" ")).not.toContain("Shared context");
+    expect(runner.mock.calls[0]?.[2]).toMatchObject({ input: "Shared context" });
   });
 
   it("starts a new session with --session-id when there is no prior threadId", async () => {

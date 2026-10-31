@@ -31,6 +31,8 @@ type ServiceState = {
   logPath: string;
   startedAt: string;
   startOptions?: ServiceStartOptions;
+  /** 请 Server 正常退出用的口令（POST /api/local/shutdown）；Windows 上没有 SIGTERM 可用 */
+  shutdownToken?: string;
 };
 
 const startUsage = `
@@ -178,7 +180,7 @@ async function fetchPublicUrl(healthUrl: string, fallback: string): Promise<stri
 function printStarted(state: ServiceState, alreadyRunning = false): void {
   const defaultDataDir = pathsFor().dataDir;
   const dataDirArgument =
-    state.dataDir === defaultDataDir ? "" : ` --data-dir ${JSON.stringify(state.dataDir)}`;
+    state.dataDir === defaultDataDir ? "" : ` --data-dir ${shellQuote(state.dataDir)}`;
   const restartCommand = `npx ai-hive restart${dataDirArgument}`;
   const stopCommand =
     state.dataDir === defaultDataDir ? "npx ai-hive stop" : `npx ai-hive stop${dataDirArgument}`;
@@ -245,6 +247,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
   const formattedProbeHost = probeHost.includes(":") ? `[${probeHost}]` : probeHost;
   const healthUrl = `http://${formattedProbeHost}:${port}/health`;
   const fallbackPublicUrl = parsed.values["public-url"] ?? new URL(healthUrl).origin;
+  const shutdownToken = randomUUID();
   const serverEnv: NodeJS.ProcessEnv = {
     ...process.env,
     HIVE_HOST: parsed.values.host,
@@ -252,6 +255,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
     HIVE_DATABASE: servicePaths.databasePath,
     HIVE_STATIC_DIR: staticDir,
     HIVE_INSTANCE_ID: instanceId,
+    HIVE_SHUTDOWN_TOKEN: shutdownToken,
     ...(parsed.values["public-url"] ? { HIVE_PUBLIC_URL: parsed.values["public-url"] } : {}),
     ...(parsed.values.token ? { HIVE_TOKEN: parsed.values.token } : {}),
     ...(parsed.values["no-local-agents"] ? { HIVE_LOCAL_AGENTS: "0" } : {}),
@@ -262,6 +266,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
     const state: ServiceState = {
       pid: process.pid,
       instanceId,
+      shutdownToken,
       healthUrl,
       publicUrl: fallbackPublicUrl,
       dataDir: servicePaths.dataDir,
@@ -305,6 +310,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
     pid: child.pid,
     instanceId,
     healthUrl,
+    shutdownToken,
     publicUrl: fallbackPublicUrl,
     dataDir: servicePaths.dataDir,
     logPath: servicePaths.logPath,
@@ -357,8 +363,19 @@ export async function stopService(args = process.argv.slice(3)): Promise<void> {
     throw new Error(`PID ${state.pid} 与记录的 Hive 实例不匹配，为避免停止其他进程，已拒绝操作。`);
   }
 
-  process.kill(state.pid, "SIGTERM");
-  const deadline = Date.now() + 5_000;
+  // 先请 Server 自己退出（让本机 Agent 正常下线、IM 断开）；Windows 上信号就是强制结束，只能这样
+  const asked = state.shutdownToken
+    ? await fetch(new URL("/api/local/shutdown", state.healthUrl), {
+        method: "POST",
+        headers: { "x-hive-shutdown": state.shutdownToken },
+        signal: AbortSignal.timeout(3_000),
+      }).then(
+        (response) => response.ok,
+        () => false,
+      )
+    : false;
+  if (!asked) process.kill(state.pid, "SIGTERM");
+  const deadline = Date.now() + (asked ? 10_000 : 5_000);
   while (processExists(state.pid) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -417,4 +434,16 @@ export async function restartService(args = process.argv.slice(3)): Promise<void
   await stopService(parsed.values["data-dir"] ? ["--data-dir", parsed.values["data-dir"]] : []);
   console.log("[hive] 正在重新启动 Hive Server…");
   await startService(startArgs);
+}
+
+/**
+ * 给用户复制的命令里的路径加引号。不能用 JSON.stringify：它会把 Windows 路径的 \ 写成 \\，
+ * 照抄到 PowerShell / cmd 里就是错的路径。
+ */
+export function shellQuote(value: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") {
+    return /^[\w@+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '""')}"`;
+  }
+  if (/^[\w@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

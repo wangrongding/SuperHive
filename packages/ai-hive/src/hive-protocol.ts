@@ -168,6 +168,7 @@ export type ServerEvent =
   | { type: "message.deleted"; message: ChatMessage }
   | { type: "agent.mentioned"; message: ChatMessage; latestSeq: number; retry?: boolean }
   | { type: "agent.cancel"; messageId: string }
+  | { type: "agent.shutdown" }
   | { type: "invocation.updated"; invocation: Invocation }
   | { type: "presence.changed"; participant: Participant }
   | { type: "rooms.changed"; room: RoomSummary }

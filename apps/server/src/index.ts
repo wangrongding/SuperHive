@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { buildApp } from "./app.js";
 import { feishuDriver } from "./im/feishu.js";
 import type { ImChannelDriver } from "./im/types.js";
@@ -96,6 +97,37 @@ const app = await buildApp({
   ...(process.env.HIVE_HANDOVER_FILE ? { handoverFile: process.env.HIVE_HANDOVER_FILE } : {}),
   logger: true,
 });
+/**
+ * 让启动本 Server 的程序（ai-hive stop、dev supervisor）请它正常退出：Windows 上没有 SIGTERM，
+ * 结束进程就是强制结束，Agent 下线、IM 断开、交接文件这些收尾都不会执行。
+ * 只接受本机回环请求，并且要带上启动时经环境变量传入的口令。
+ */
+const shutdownToken = process.env.HIVE_SHUTDOWN_TOKEN;
+let closing = false;
+function shutdown() {
+  if (closing) return;
+  closing = true;
+  void app.close().finally(() => process.exit(0));
+}
+if (shutdownToken) {
+  const expected = Buffer.from(shutdownToken);
+  app.post("/api/local/shutdown", async (request, reply) => {
+    const provided = Buffer.from(String(request.headers["x-hive-shutdown"] ?? ""));
+    // 来自本机：回环地址，或本机自己的网卡地址（只监听某块网卡时，本机请求也从那个地址来）
+    const remote = (request.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
+    const local =
+      remote === "127.0.0.1" ||
+      remote === "::1" ||
+      Object.values(networkInterfaces()).some((entries) =>
+        (entries ?? []).some((entry) => entry.address === remote),
+      );
+    if (!local || provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      return reply.code(403).send({ error: "不允许。" });
+    }
+    setImmediate(shutdown);
+    return reply.code(202).send({ ok: true });
+  });
+}
 await app.listen({ host, port });
 
 const addresses = new Set([
@@ -111,8 +143,7 @@ app.log.info(
   `Agent: ${agentCommandPrefix} join --server ${publicUrl} --name my-agent --token <JOIN_TOKEN>`,
 );
 
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => {
-    void app.close().finally(() => process.exit(0));
-  });
+// SIGBREAK：Windows 控制台的 Ctrl+Break
+for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) {
+  process.once(signal, shutdown);
 }

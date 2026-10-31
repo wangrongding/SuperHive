@@ -461,22 +461,38 @@ export async function main() {
     build: ({ signal }) => buildWorkspace(repoRoot, { signal, stateDir }),
     startServer: () => {
       const instanceId = randomUUID();
+      const shutdownToken = randomUUID();
+      const probeHost = ["0.0.0.0", "::", "localhost"].includes(host) ? "127.0.0.1" : host;
+      const formattedHost = probeHost.includes(":") ? `[${probeHost}]` : probeHost;
       const server = startProcess(
         process.execPath,
         ["--import", require.resolve("tsx"), path.join(repoRoot, "apps/server/src/index.ts")],
         {
           cwd: path.join(repoRoot, "apps/server"),
-          env: { ...process.env, HIVE_INSTANCE_ID: instanceId, HIVE_HANDOVER_FILE: handoverPath },
+          env: {
+            ...process.env,
+            HIVE_INSTANCE_ID: instanceId,
+            HIVE_HANDOVER_FILE: handoverPath,
+            HIVE_SHUTDOWN_TOKEN: shutdownToken,
+          },
+          // Windows：请 Server 自己退出，它才会写交接、让本机 Agent 继续运行由新 Server 接管
+          gracefulStop: () =>
+            globalThis
+              .fetch(`http://${formattedHost}:${port}/api/local/shutdown`, {
+                method: "POST",
+                headers: { "x-hive-shutdown": shutdownToken },
+                signal: globalThis.AbortSignal.timeout(3_000),
+              })
+              .then((response) => response.ok),
         },
       );
-      const probeHost = ["0.0.0.0", "::", "localhost"].includes(host) ? "127.0.0.1" : host;
-      const formattedHost = probeHost.includes(":") ? `[${probeHost}]` : probeHost;
       server.ready = (options) =>
         waitForHealth(`http://${formattedHost}:${port}/health`, instanceId, server, options);
       return server;
     },
   });
-  const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  // Windows 上的 pnpm.cmd 由 startProcess 解析成 node + pnpm.cjs 直接运行
+  const pnpm = "pnpm";
   let web;
   let stopWatching;
   let reloadWatcher;

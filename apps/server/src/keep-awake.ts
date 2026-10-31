@@ -43,6 +43,27 @@ async function readMacPower(): Promise<"ac" | "battery" | "unknown"> {
   });
 }
 
+/** Windows：PowerLineStatus 为 Online 表示接着电源；没有电池的台式机也是 Online */
+async function readWindowsPower(): Promise<"ac" | "battery" | "unknown"> {
+  return new Promise((resolve) => {
+    execFile(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus",
+      ],
+      { timeout: 15_000, windowsHide: true },
+      (error, stdout) => {
+        if (error) return resolve("unknown");
+        const value = String(stdout).trim();
+        resolve(value === "Online" ? "ac" : value === "Offline" ? "battery" : "unknown");
+      },
+    );
+  });
+}
+
 /**
  * 熄屏后保持在线：需要时用系统自带的 caffeinate -i 阻止空闲睡眠（屏幕照常熄灭），不需要时释放。
  * - 最多一个子进程；-w 绑定 Server 进程，Server 被强杀时系统也会自动释放，不留孤儿断言。
@@ -75,7 +96,7 @@ export class KeepAwake {
   }
 
   get supported(): boolean {
-    return this.platform === "darwin";
+    return this.platform === "darwin" || this.platform === "win32";
   }
 
   async start(): Promise<void> {
@@ -101,7 +122,9 @@ export class KeepAwake {
   }
 
   private async refreshPower(): Promise<void> {
-    this.power = await (this.deps.readPower ?? readMacPower)();
+    this.power = await (
+      this.deps.readPower ?? (this.platform === "win32" ? readWindowsPower : readMacPower)
+    )();
   }
 
   update(patch: Partial<KeepAwakeSettings>): KeepAwakeState {
@@ -143,7 +166,10 @@ export class KeepAwake {
 
   private acquire(): void {
     try {
-      const child = (this.deps.spawnAssertion ?? spawnCaffeinate)(process.pid);
+      const child = (
+        this.deps.spawnAssertion ??
+        (this.platform === "win32" ? spawnWindowsAssertion : spawnCaffeinate)
+      )(process.pid);
       this.child = child;
       this.since = new Date(this.now()).toISOString();
       child.once("error", (error) => this.lost(child, error.message));
@@ -223,6 +249,26 @@ export class KeepAwake {
     clearInterval(this.tickTimer);
     this.release();
   }
+}
+
+/**
+ * Windows 版的 caffeinate -i -w：常驻一个 PowerShell，用 SetThreadExecutionState(ES_CONTINUOUS |
+ * ES_SYSTEM_REQUIRED) 声明「系统需要保持运行」（只阻止睡眠，不阻止熄屏），再 Wait-Process 等 Server 退出。
+ * 这个声明绑定在调用它的线程上：进程结束（被我们结束、或 Server 退出后自己结束）时系统自动收回。
+ * 不用 powercfg /requestsoverride：要管理员权限，而且会改全局设置。
+ */
+function spawnWindowsAssertion(pid: number): ChildProcess {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$api = Add-Type -Name Power -Namespace HiveKeepAwake -PassThru -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint flags);'",
+    // 0x80000001 = ES_CONTINUOUS | ES_SYSTEM_REQUIRED；返回 0 表示失败
+    "if ($api::SetThreadExecutionState([uint32]2147483649) -eq 0) { exit 3 }",
+    `Wait-Process -Id ${Math.trunc(pid)}`,
+  ].join("; ");
+  return spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
 }
 
 /** -i 只阻止空闲睡眠（屏幕照常熄灭）；-w 绑定 Server 进程，Server 不在了断言自动解除 */

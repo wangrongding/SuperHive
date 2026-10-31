@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import console from "node:console";
 import fs from "node:fs";
 import path from "node:path";
@@ -29,11 +29,58 @@ export function publicError(error) {
 
 export class DevError extends Error {}
 
-/** Start in a private process group, never signal arbitrary pnpm/node processes. */
-export function startProcess(command, args, { stopGraceMs = 12_000, ...options } = {}) {
-  const child = spawn(command, args, {
+/**
+ * Windows: npm/pnpm 的 .cmd 垫片不能直接 spawn（ENOENT / EINVAL），经 cmd.exe 又会改写参数。
+ * 读出垫片真正运行的目标：.exe 直接运行，.js 用 node 运行。与 packages/ai-hive/src/windows-command.ts 同一做法。
+ */
+export function resolveWindowsCommand(command, args, env = process.env) {
+  if (process.platform !== "win32") return { command, args };
+  const pick = (name) => Object.entries(env).find(([key]) => key.toLowerCase() === name)?.[1];
+  const extensions = (pick("pathext") ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const isFile = (file) => {
+    try {
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const bases = /[\\/]/.test(command)
+    ? [command]
+    : (pick("path") ?? "")
+        .split(";")
+        .filter(Boolean)
+        .map((dir) => path.win32.join(dir, command));
+  let found;
+  for (const base of bases) {
+    found = [base, ...extensions.map((ext) => base + ext)].find(
+      (file) => path.win32.extname(file) && isFile(file),
+    );
+    if (found) break;
+  }
+  if (!found || !/\.(cmd|bat)$/i.test(found)) return { command: found ?? command, args };
+  const target = [...fs.readFileSync(found, "utf8").matchAll(/"%~?dp0%?\\([^"]+)"/gi)].at(-1)?.[1];
+  if (!target) throw new DevError(`无法直接运行 ${found}；请确认它是 npm / pnpm 生成的启动脚本。`);
+  const resolved = path.win32.join(path.win32.dirname(found), target);
+  return /\.(c|m)?js$/i.test(resolved)
+    ? { command: process.execPath, args: [resolved, ...args] }
+    : { command: resolved, args };
+}
+
+/**
+ * Start in a private process group, never signal arbitrary pnpm/node processes.
+ * gracefulStop：Windows 上没有 SIGTERM，先用它请进程自己退出（例如 Server 的关闭接口），
+ * 宽限期过后再结束整棵进程树。
+ */
+export function startProcess(
+  command,
+  args,
+  { stopGraceMs = 12_000, gracefulStop, ...options } = {},
+) {
+  const resolved = resolveWindowsCommand(command, args, options.env ?? process.env);
+  const child = spawn(resolved.command, resolved.args, {
     stdio: "inherit",
     detached: process.platform !== "win32",
+    windowsHide: true,
     ...options,
   });
   let finished = false;
@@ -52,8 +99,16 @@ export function startProcess(command, args, { stopGraceMs = 12_000, ...options }
   function signalTree(signal) {
     if (!child.pid) return;
     try {
-      if (process.platform === "win32") child.kill(signal);
-      else process.kill(-child.pid, signal);
+      // Windows：child.kill 只结束直接子进程（例如 pnpm），孙进程（vite、server）会留下占着端口
+      if (process.platform === "win32") {
+        if (!finished)
+          execFile(
+            "taskkill",
+            ["/PID", String(child.pid), "/T", "/F"],
+            { windowsHide: true },
+            () => {},
+          );
+      } else process.kill(-child.pid, signal);
     } catch (error) {
       if (error.code !== "ESRCH") throw error;
     }
@@ -70,7 +125,14 @@ export function startProcess(command, args, { stopGraceMs = 12_000, ...options }
     },
     stop() {
       stopping ??= (async () => {
-        signalTree("SIGTERM");
+        const asked =
+          process.platform === "win32" && gracefulStop
+            ? await gracefulStop().then(
+                (ok) => ok === true,
+                () => false,
+              )
+            : false;
+        if (!asked) signalTree("SIGTERM");
         const timeout = setTimeout(() => signalTree("SIGKILL"), stopGraceMs);
         try {
           await exited;

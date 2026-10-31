@@ -113,7 +113,17 @@ describe("熄屏后保持在线", () => {
     expect(keepAwake.state().status).toBe("active");
   });
 
-  it("不是 macOS 时如实显示不支持，不起进程", async () => {
+  it("Windows 也支持：有 IM 时起断言进程", async () => {
+    const { keepAwake, children, demand } = setup({ platform: "win32" });
+    current = keepAwake;
+    demand.imConnections = 1;
+    await keepAwake.start();
+    keepAwake.evaluate();
+    expect(children).toHaveLength(1);
+    expect(keepAwake.state()).toMatchObject({ supported: true, status: "active" });
+  });
+
+  it("macOS、Windows 以外如实显示不支持，不起进程", async () => {
     const { keepAwake, children, demand } = setup({ platform: "linux" });
     current = keepAwake;
     demand.imConnections = 1;
