@@ -7,6 +7,7 @@ import type {
   LocalProviderInfo,
   LocalSessionResponse,
 } from "@ai-hive/protocol";
+import { localized, t } from "./i18n";
 
 /**
  * 本机 Agent：页面运行在 Hive Server 所在电脑上时，可以直接在网页上拉起 Agent。
@@ -39,7 +40,7 @@ async function readError(response: Response): Promise<string> {
   } catch {
     // 非 JSON 响应
   }
-  return `请求失败（${response.status}）`;
+  return t("请求失败（{0}）", { 0: response.status });
 }
 
 /** active 为 true（接入面板打开）时每 2 秒刷新状态；关闭后保留最后一次结果 */
@@ -55,12 +56,12 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
       .then((response) => (response.ok ? (response.json() as Promise<LocalSessionResponse>) : null))
       .then((value) => {
         if (cancelled) return;
-        const resolved = value ?? { enabled: false as const, reason: "无法确认是否在本机" };
+        const resolved = value ?? { enabled: false as const, reason: t("无法确认是否在本机") };
         tokenRef.current = resolved.enabled ? resolved.ownerToken : undefined;
         setSession(resolved);
       })
       .catch(() => {
-        if (!cancelled) setSession({ enabled: false, reason: "无法连接 Hive Server" });
+        if (!cancelled) setSession({ enabled: false, reason: t("无法连接 Hive Server") });
       });
     return () => {
       cancelled = true;
@@ -206,26 +207,26 @@ export function DirectoryPicker({
   useEffect(() => browse(value || undefined), [browse, value]);
 
   return (
-    <div className="directory-picker" role="group" aria-label="选择工作目录">
+    <div className="directory-picker" role="group" aria-label={t("选择工作目录")}>
       <div className="directory-picker-bar">
         <button
           type="button"
           disabled={!listing?.parent}
-          aria-label="上一级目录"
+          aria-label={t("上一级目录")}
           onClick={() => listing?.parent && browse(listing.parent)}
         >
-          ↑ 上一级
+          {t("↑ 上一级")}
         </button>
         <code title={listing?.path}>
-          {listing ? shortenPath(listing.path, listing.defaults.home) : "加载中…"}
+          {listing ? shortenPath(listing.path, listing.defaults.home) : t("加载中…")}
         </code>
         {listing && (
           <>
             <button type="button" onClick={() => browse(listing.defaults.launch)}>
-              Hive 目录
+              {t("Hive 目录")}
             </button>
             <button type="button" onClick={() => browse(listing.defaults.home)}>
-              家目录
+              {t("家目录")}
             </button>
           </>
         )}
@@ -240,15 +241,15 @@ export function DirectoryPicker({
           </li>
         ))}
         {listing && listing.entries.length === 0 && (
-          <li className="directory-picker-empty">（没有子目录）</li>
+          <li className="directory-picker-empty">{t("（没有子目录）")}</li>
         )}
       </ul>
       {listing?.truncated && (
-        <p className="directory-picker-empty">子目录过多，只列出了前 500 个。</p>
+        <p className="directory-picker-empty">{t("子目录过多，只列出了前 500 个。")}</p>
       )}
       <div className="directory-picker-actions">
         <button type="button" onClick={onClose}>
-          取消
+          {t("取消")}
         </button>
         <button
           type="button"
@@ -258,7 +259,7 @@ export function DirectoryPicker({
             if (listing) onPick(listing.path);
           }}
         >
-          选择当前目录
+          {t("选择当前目录")}
         </button>
       </div>
     </div>
@@ -272,19 +273,19 @@ export function providerInfo(
   return local.providers?.find((item) => item.provider === provider);
 }
 
-const statusLabels: Record<LocalAgent["status"], string> = {
-  starting: "启动中",
-  running: "运行中",
-  restarting: "重启中",
-  stopped: "已停止",
-  crashed: "已崩溃",
-};
+const statusLabels: Record<LocalAgent["status"], string> = localized(() => ({
+  starting: t("启动中"),
+  running: t("运行中"),
+  restarting: t("重启中"),
+  stopped: t("已停止"),
+  crashed: t("已崩溃"),
+}));
 
-const accessLabels: Record<LocalAgent["access"], string> = {
-  "read-only": "只读",
-  workspace: "工作区",
-  full: "完全访问",
-};
+const accessLabels: Record<LocalAgent["access"], string> = localized(() => ({
+  "read-only": t("只读"),
+  workspace: t("工作区"),
+  full: t("完全访问"),
+}));
 
 function LogViewer({
   load: fetchLogs,
@@ -312,8 +313,8 @@ function LogViewer({
   }, [agentId, fetchLogs]);
   if (error) return <p className="local-agent-error">{error}</p>;
   return (
-    <pre className="local-agent-logs" aria-label="最近日志">
-      {lines === undefined ? "加载中…" : lines.slice(-200).join("\n") || "（暂无输出）"}
+    <pre className="local-agent-logs" aria-label={t("最近日志")}>
+      {lines === undefined ? t("加载中…") : lines.slice(-200).join("\n") || t("（暂无输出）")}
     </pre>
   );
 }
@@ -338,8 +339,8 @@ export function LocalAgentList({ local }: { local: LocalAgentsState }) {
   };
 
   return (
-    <section className="local-agents" aria-label="本机 Agent">
-      <h4>本机 Agent</h4>
+    <section className="local-agents" aria-label={t("本机 Agent")}>
+      <h4>{t("本机 Agent")}</h4>
       <ul>
         {local.agents.map((agent) => {
           const live = agent.status !== "stopped" && agent.status !== "crashed";
@@ -350,7 +351,7 @@ export function LocalAgentList({ local }: { local: LocalAgentsState }) {
                 <span className="local-agent-name">{agent.name}</span>
                 <span className="local-agent-meta">
                   {agent.provider} · {accessLabels[agent.access]} · {statusLabels[agent.status]}
-                  {agent.restarts > 0 ? ` · 重启 ${agent.restarts} 次` : ""}
+                  {agent.restarts > 0 ? t(" · 重启 {0} 次", { 0: agent.restarts }) : ""}
                 </span>
                 <span className="local-agent-actions">
                   {live ? (
@@ -360,14 +361,14 @@ export function LocalAgentList({ local }: { local: LocalAgentsState }) {
                         disabled={busy === agent.id}
                         onClick={() => void run(agent.id, () => local.act(agent.id, "restart"))}
                       >
-                        重启
+                        {t("重启")}
                       </button>
                       <button
                         type="button"
                         disabled={busy === agent.id}
                         onClick={() => void run(agent.id, () => local.act(agent.id, "stop"))}
                       >
-                        停止
+                        {t("停止")}
                       </button>
                     </>
                   ) : (
@@ -377,16 +378,16 @@ export function LocalAgentList({ local }: { local: LocalAgentsState }) {
                         disabled={busy === agent.id}
                         onClick={() => void run(agent.id, () => local.act(agent.id, "start"))}
                       >
-                        启动
+                        {t("启动")}
                       </button>
                       <button
                         type="button"
                         className="danger"
                         disabled={busy === agent.id}
-                        aria-label={`删除 ${agent.name}`}
+                        aria-label={t("删除 {0}", { 0: agent.name })}
                         onClick={() => void run(agent.id, () => local.remove(agent.id))}
                       >
-                        删除
+                        {t("删除")}
                       </button>
                     </>
                   )}
@@ -397,7 +398,7 @@ export function LocalAgentList({ local }: { local: LocalAgentsState }) {
                       setOpenLogs((current) => (current === agent.id ? undefined : agent.id))
                     }
                   >
-                    日志
+                    {t("日志")}
                   </button>
                 </span>
               </div>
@@ -483,16 +484,18 @@ export function LocalLaunch({
         <div className={`local-launch-result ${launched.status}`} role="status">
           {launched.status === "running" ? (
             <p>
-              <strong>{launched.name}</strong> 已上线，在消息里输入 <code>@{launched.name}</code>{" "}
-              试试。
+              <strong>{launched.name}</strong> {t("已上线，在消息里输入")}{" "}
+              <code>@{launched.name}</code> {t("试试。")}
             </p>
           ) : launched.status === "crashed" ? (
             <p>
-              <strong>{launched.name}</strong> 启动失败：{launched.lastError ?? "请查看上方的日志"}
+              <strong>{launched.name}</strong> {t("启动失败：")}
+              {launched.lastError ?? t("请查看上方的日志")}
             </p>
           ) : (
             <p>
-              正在启动 <strong>{launched.name}</strong>…首次启动可能需要十几秒。
+              {t("正在启动")} <strong>{launched.name}</strong>
+              {t("…首次启动可能需要十几秒。")}
             </p>
           )}
         </div>
@@ -505,39 +508,40 @@ export function LocalLaunch({
           }}
         >
           <label>
-            <span>名称</span>
+            <span>{t("名称")}</span>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={32}
               required
-              aria-label="Agent 名称"
+              aria-label={t("Agent 名称")}
             />
           </label>
           {access === "full" && (
             <p className="local-launch-warning" role="note">
-              完全访问没有任何沙箱：Agent
-              可以执行你这个系统用户能做的一切，包括读写任意文件、运行命令和联网。
+              {t(
+                "完全访问没有任何沙箱：Agent 可以执行你这个系统用户能做的一切，包括读写任意文件、运行命令和联网。",
+              )}
             </p>
           )}
           {access !== "read-only" && (
             <div className="local-launch-cwd">
               <label>
-                <span>工作目录</span>
+                <span>{t("工作目录")}</span>
                 <div className="local-launch-cwd-row">
                   <input
                     value={cwd}
                     onChange={(event) => setCwd(event.target.value)}
-                    placeholder="默认使用启动 Hive 的目录，也可输入 ~/project"
+                    placeholder={t("默认使用启动 Hive 的目录，也可输入 ~/project")}
                     required
-                    aria-label="工作目录"
+                    aria-label={t("工作目录")}
                   />
                   <button
                     type="button"
                     aria-expanded={picking}
                     onClick={() => setPicking((current) => !current)}
                   >
-                    选择…
+                    {t("选择…")}
                   </button>
                 </div>
               </label>
@@ -556,7 +560,8 @@ export function LocalLaunch({
           )}
           {info && !info.installed && (
             <p className="local-agent-error">
-              本机没有找到 <code>{info.command}</code> 命令，请先安装 {providerLabel} 并完成登录。
+              {t("本机没有找到")} <code>{info.command}</code> {t("命令，请先安装")} {providerLabel}{" "}
+              {t("并完成登录。")}
             </p>
           )}
           {error && (
@@ -569,12 +574,12 @@ export function LocalLaunch({
             className="local-launch-button"
             disabled={submitting || !name.trim() || (info !== undefined && !info.installed)}
           >
-            {submitting ? "正在启动…" : "在本机启动"}
+            {submitting ? t("正在启动…") : t("在本机启动")}
           </button>
         </form>
       )}
       <details className="local-launch-command">
-        <summary>或复制命令，到其他终端运行</summary>
+        <summary>{t("或复制命令，到其他终端运行")}</summary>
         {children}
       </details>
     </div>

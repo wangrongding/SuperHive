@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatMessage, Invocation, Participant, RoomSummary } from "@ai-hive/protocol";
 import { delegationSummary, invocationStatusLabel } from "./invocations";
 import { formatRelativeTime } from "./whiteboard";
+import { localized, t } from "./i18n";
 
 export type ActivityView = "search" | "mentions" | "tasks";
 
@@ -131,7 +132,7 @@ export function orderByDelegation(
 /** 列表预览只保留文字：去掉代码块、强调、行内代码、引用与列表等 Markdown 标记 */
 export function plainPreview(content: string): string {
   return content
-    .replace(/```[\s\S]*?```/g, " [代码] ")
+    .replace(/```[\s\S]*?```/g, t(" [代码] "))
     .replace(/`([^`]*)`/g, "$1")
     .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, "$1$2")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
@@ -192,7 +193,7 @@ function ResultList({
   now: number;
 }) {
   return (
-    <ul className="activity-results" role="listbox" aria-label="结果">
+    <ul className="activity-results" role="listbox" aria-label={t("结果")}>
       {items.map((item, localIndex) => {
         const index = offset + localIndex;
         return (
@@ -225,7 +226,7 @@ function ResultList({
                 <time dateTime={item.message.createdAt}>
                   {formatRelativeTime(item.message.createdAt, now)}
                 </time>
-                {item.unread && <span className="activity-unread" aria-label="未读" />}
+                {item.unread && <span className="activity-unread" aria-label={t("未读")} />}
               </span>
               <span className="activity-result-text">
                 <Highlight text={preview(item.message.content, 160)} query={query} />
@@ -239,13 +240,13 @@ function ResultList({
   );
 }
 
-const runtimeStateLabels: Record<AgentRuntimeState, string> = {
-  waiting: "等你回答",
-  attention: "需要处理",
-  working: "工作中",
-  idle: "空闲",
-  offline: "离线",
-};
+const runtimeStateLabels: Record<AgentRuntimeState, string> = localized(() => ({
+  waiting: t("等你回答"),
+  attention: t("需要处理"),
+  working: t("工作中"),
+  idle: t("空闲"),
+  offline: t("离线"),
+}));
 
 /** 当前房间 Agent 一览：谁在干嘛、谁卡住了，点击跳到它正在处理的消息 */
 function AgentRuntimeList({
@@ -258,14 +259,14 @@ function AgentRuntimeList({
   onOpen: (message: ChatMessage) => void;
 }) {
   return (
-    <section aria-label="成员状态">
-      <h3 className="activity-section-label">成员状态 · 当前房间</h3>
+    <section aria-label={t("成员状态")}>
+      <h3 className="activity-section-label">{t("成员状态 · 当前房间")}</h3>
       <ul className="agent-runtime-list">
         {rows.map((row) => {
           const message = row.current ? messageFor(row.current) : undefined;
           const counts = [
-            row.attention ? `${row.attention} 个需处理` : undefined,
-            row.inFlight ? `${row.inFlight} 个进行中` : undefined,
+            row.attention ? t("{0} 个需处理", { 0: row.attention }) : undefined,
+            row.inFlight ? t("{0} 个进行中", { 0: row.inFlight }) : undefined,
           ]
             .filter(Boolean)
             .join(" · ");
@@ -294,7 +295,10 @@ function AgentRuntimeList({
                 <button
                   type="button"
                   className="agent-runtime-row"
-                  aria-label={`@${row.participant.username} ${runtimeStateLabels[row.state]}，跳到当前任务`}
+                  aria-label={t("@{0} {1}，跳到当前任务", {
+                    0: row.participant.username,
+                    1: runtimeStateLabels[row.state],
+                  })}
                   onClick={() => onOpen(message)}
                 >
                   {content}
@@ -472,7 +476,8 @@ export function ActivityPanel({
     }
   };
 
-  const title = view === "search" ? "搜索消息" : view === "mentions" ? "提及我" : "Agent 任务";
+  const title =
+    view === "search" ? t("搜索消息") : view === "mentions" ? t("提及我") : t("Agent 任务");
 
   const listProps = {
     roomName,
@@ -484,7 +489,7 @@ export function ActivityPanel({
 
   return (
     <div className="activity-layer">
-      <button type="button" className="activity-scrim" aria-label="关闭" onClick={onClose} />
+      <button type="button" className="activity-scrim" aria-label={t("关闭")} onClick={onClose} />
       <div
         ref={panelRef}
         className={`activity-panel ${view}`}
@@ -499,8 +504,8 @@ export function ActivityPanel({
               ref={inputRef}
               type="search"
               value={query}
-              placeholder="搜索所有房间的消息…"
-              aria-label="搜索消息"
+              placeholder={t("搜索所有房间的消息…")}
+              aria-label={t("搜索消息")}
               aria-controls="activity-results"
               aria-activedescendant={items.length ? `activity-option-${activeIndex}` : undefined}
               onChange={(event) => setQuery(event.target.value)}
@@ -509,7 +514,7 @@ export function ActivityPanel({
             <h2>{title}</h2>
           )}
           {view === "mentions" && (
-            <div className="activity-filter" role="group" aria-label="筛选提及">
+            <div className="activity-filter" role="group" aria-label={t("筛选提及")}>
               <button
                 type="button"
                 aria-pressed={mentionFilter === "unread"}
@@ -518,7 +523,7 @@ export function ActivityPanel({
                   setActiveIndex(0);
                 }}
               >
-                未读{unreadMentions > 0 ? ` ${unreadMentions}` : ""}
+                {t("未读{0}", { 0: unreadMentions > 0 ? ` ${unreadMentions}` : "" })}
               </button>
               <button
                 type="button"
@@ -528,16 +533,16 @@ export function ActivityPanel({
                   setActiveIndex(0);
                 }}
               >
-                全部
+                {t("全部")}
               </button>
             </div>
           )}
           {view === "mentions" && unreadMentions > 0 && (
             <button type="button" className="activity-header-action" onClick={onMarkMentionsRead}>
-              全部标为已读
+              {t("全部标为已读")}
             </button>
           )}
-          <button type="button" className="activity-close" aria-label="关闭" onClick={onClose}>
+          <button type="button" className="activity-close" aria-label={t("关闭")} onClick={onClose}>
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
               <path d="m6 6 12 12M18 6 6 18" />
             </svg>
@@ -547,11 +552,13 @@ export function ActivityPanel({
         <div className="activity-body" id="activity-results">
           {view === "search" &&
             (searchState.status === "idle" ? (
-              <p className="activity-empty">输入关键词，按 ↑↓ 选择、Enter 跳到原文。</p>
+              <p className="activity-empty">{t("输入关键词，按 ↑↓ 选择、Enter 跳到原文。")}</p>
             ) : searchState.status === "error" ? (
-              <p className="activity-empty">搜索失败，请稍后重试。</p>
+              <p className="activity-empty">{t("搜索失败，请稍后重试。")}</p>
             ) : searchState.status === "done" && items.length === 0 ? (
-              <p className="activity-empty">没有找到包含“{searchState.query}”的消息。</p>
+              <p className="activity-empty">
+                {t("没有找到包含“{0}”的消息。", { 0: searchState.query })}
+              </p>
             ) : (
               <ResultList items={items} query={searchState.query} {...listProps} />
             ))}
@@ -560,8 +567,8 @@ export function ActivityPanel({
             (items.length === 0 ? (
               <p className="activity-empty">
                 {mentionFilter === "unread" && mentions.length > 0
-                  ? "提及都已读完。"
-                  : "还没有人在任何房间 @ 你。"}
+                  ? t("提及都已读完。")
+                  : t("还没有人在任何房间 @ 你。")}
               </p>
             ) : (
               <ResultList items={items} {...listProps} />
@@ -577,26 +584,28 @@ export function ActivityPanel({
 
           {view === "tasks" &&
             (items.length === 0 ? (
-              <p className="activity-empty">当前没有进行中或需要处理的 Agent 调用。</p>
+              <p className="activity-empty">{t("当前没有进行中或需要处理的 Agent 调用。")}</p>
             ) : (
               <>
                 {taskItems.waiting.length > 0 && (
-                  <section aria-label="等你回答">
+                  <section aria-label={t("等你回答")}>
                     <h3 className="activity-section-label">
-                      等你回答 · {taskItems.waiting.length}
+                      {t("等你回答 · {0}", { 0: taskItems.waiting.length })}
                     </h3>
                     <ResultList items={taskItems.waiting} {...listProps} />
                   </section>
                 )}
                 {taskItems.attention.length > 0 && (
-                  <section aria-label="需要处理">
+                  <section aria-label={t("需要处理")}>
                     <h3 className="activity-section-label">
-                      需要处理 · {taskItems.attention.length}
+                      {t("需要处理 ·")} {taskItems.attention.length}
                       {onDismiss && (
                         <button
                           type="button"
                           className="activity-section-action"
-                          title="把这些失败、被拦、结果未知的调用都标为已处理，记录仍可在消息下查看"
+                          title={t(
+                            "把这些失败、被拦、结果未知的调用都标为已处理，记录仍可在消息下查看",
+                          )}
                           onClick={() =>
                             onDismiss(
                               invocations.filter(
@@ -607,7 +616,7 @@ export function ActivityPanel({
                             )
                           }
                         >
-                          全部忽略
+                          {t("全部忽略")}
                         </button>
                       )}
                     </h3>
@@ -619,8 +628,10 @@ export function ActivityPanel({
                   </section>
                 )}
                 {taskItems.inFlight.length > 0 && (
-                  <section aria-label="进行中">
-                    <h3 className="activity-section-label">进行中 · {taskItems.inFlight.length}</h3>
+                  <section aria-label={t("进行中")}>
+                    <h3 className="activity-section-label">
+                      {t("进行中 · {0}", { 0: taskItems.inFlight.length })}
+                    </h3>
                     <ResultList
                       items={taskItems.inFlight}
                       {...listProps}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { InvocationDetails } from "./invocation-details";
 import type { ChatMessage, Invocation, Participant } from "@ai-hive/protocol";
+import { localized, t } from "./i18n";
 
 /** 人点一次「继续」为当前 Agent 对话追加的轮数，同时放宽连续轮数、转交深度和单链条数 */
 export const BUDGET_EXTEND_TURNS = 10;
@@ -114,12 +115,14 @@ export function groupInvocationsByMessage(
   return groups;
 }
 
-const continuationLabels: Record<NonNullable<Invocation["continuation"]>, string> = {
-  pending: "结果待回执",
-  delivered: "结果已回执",
-  consumed: "结果已被取走",
-  failed: "回执失败",
-};
+const continuationLabels: Record<NonNullable<Invocation["continuation"]>, string> = localized(
+  () => ({
+    pending: t("结果待回执"),
+    delivered: t("结果已回执"),
+    consumed: t("结果已被取走"),
+    failed: t("回执失败"),
+  }),
+);
 
 export type DelegationView = {
   /** 上游：谁派来的；relation 区分 hive_invoke 委派和普通 @ 转交 */
@@ -141,7 +144,7 @@ export function delegationView(
   const downstream = list
     .filter((candidate) => candidate.parentInvocationId === invocation.id)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const relation = invocation.continuation ? "委派" : "转交";
+  const relation = invocation.continuation ? t("委派") : t("转交");
   const upstream =
     invocation.requesterType === "agent"
       ? {
@@ -175,8 +178,15 @@ export function delegationLines(
   if (!view) return undefined;
   const upstream = view.upstream
     ? view.upstream.invocation
-      ? `@${view.upstream.requesterName} ${view.upstream.relation}（上游调用：${invocationStatusLabel(view.upstream.invocation, true)}）`
-      : `@${view.upstream.requesterName} ${view.upstream.relation}（上游调用不在当前已加载的记录里）`
+      ? t("@{0} {1}（上游调用：{2}）", {
+          0: view.upstream.requesterName,
+          1: view.upstream.relation,
+          2: invocationStatusLabel(view.upstream.invocation, true),
+        })
+      : t("@{0} {1}（上游调用不在当前已加载的记录里）", {
+          0: view.upstream.requesterName,
+          1: view.upstream.relation,
+        })
     : undefined;
   return {
     ...(upstream ? { upstream } : {}),
@@ -198,7 +208,8 @@ export function delegationSummary(
   const view = delegationView(invocation, all);
   if (!view) return undefined;
   const parts: string[] = [];
-  if (view.upstream) parts.push(`由 @${view.upstream.requesterName} ${view.upstream.relation}`);
+  if (view.upstream)
+    parts.push(t("由 @{0} {1}", { 0: view.upstream.requesterName, 1: view.upstream.relation }));
   if (view.continuation) parts.push(view.continuation);
   if (view.downstream.length) {
     const open = view.downstream.filter((child) =>
@@ -208,8 +219,8 @@ export function delegationSummary(
     ).length;
     parts.push(
       open
-        ? `派出 ${view.downstream.length} 个子任务，${open} 个未结束`
-        : `派出的 ${view.downstream.length} 个子任务都已结束`,
+        ? t("派出 {0} 个子任务，{1} 个未结束", { 0: view.downstream.length, 1: open })
+        : t("派出的 {0} 个子任务都已结束", { 0: view.downstream.length }),
     );
   }
   return parts.join(" · ");
@@ -217,59 +228,60 @@ export function delegationSummary(
 
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}秒`;
+  if (seconds < 60) return t("{0}秒", { 0: seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分钟`;
+  if (minutes < 60) return t("{0}分钟", { 0: minutes });
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
-  return rest ? `${hours}小时${rest}分` : `${hours}小时`;
+  return rest ? t("{0}小时{1}分", { 0: hours, 1: rest }) : t("{0}小时", { 0: hours });
 }
 
 export function invocationStatusLabel(invocation: Invocation, agentOnline: boolean): string {
   const error = invocation.runtime?.lastError;
   if (invocation.status === "running" && error && !error.recoveredAt) {
     return error.code === 429
-      ? "服务限流 · HTTP 429"
-      : `API 异常${error.code ? ` · HTTP ${error.code}` : ""}`;
+      ? t("服务限流 · HTTP 429")
+      : t("API 异常{0}", { 0: error.code ? ` · HTTP ${error.code}` : "" });
   }
   switch (invocation.status as string) {
     case "queued":
-      if (invocation.receivedAt) return "已送达，排队中";
-      return agentOnline ? "排队中" : "等待上线";
+      if (invocation.receivedAt) return t("已送达，排队中");
+      return agentOnline ? t("排队中") : t("等待上线");
     case "running":
-      return "进行中";
+      return t("进行中");
     case "completed":
-      return "已完成";
+      return t("已完成");
     case "failed":
-      return "失败";
+      return t("失败");
     case "blocked":
-      return invocation.blockReason === "guest_approval" ? "等房主批准" : "已暂停";
+      return invocation.blockReason === "guest_approval" ? t("等房主批准") : t("已暂停");
     case "timed_out":
-      return "结果未知";
+      return t("结果未知");
     case "cancelled":
-      return "已停止";
+      return t("已停止");
     case "cancelling":
-      return "正在停止 · 待确认";
+      return t("正在停止 · 待确认");
     case "waiting_human":
-      return "等你回答";
+      return t("等你回答");
     default:
-      return "状态待核实";
+      return t("状态待核实");
   }
 }
 
 function invocationHint(invocation: Invocation, agentOnline: boolean): string | undefined {
-  if (invocation.status === "cancelling") return "已请求停止，等待 Runtime 确认；确认前不能重试。";
+  if (invocation.status === "cancelling")
+    return t("已请求停止，等待 Runtime 确认；确认前不能重试。");
   if (invocation.status === "timed_out") {
-    return [invocation.detail, "长时间未收到结果，这不一定是失败，迟到的回复仍可能到达。"]
+    return [invocation.detail, t("长时间未收到结果，这不一定是失败，迟到的回复仍可能到达。")]
       .filter(Boolean)
       .join(" · ");
   }
   if (invocation.status === "queued" && !invocation.receivedAt && !agentOnline) {
-    return `${invocation.agentName} 当前离线，上线后会自动收到这条消息。`;
+    return t("{0} 当前离线，上线后会自动收到这条消息。", { 0: invocation.agentName });
   }
   if (invocation.status === "running") return invocation.progress ?? invocation.detail;
   if (invocation.status === "waiting_human") {
-    return [invocation.detail, "回复它的提问即可继续"].filter(Boolean).join(" · ");
+    return [invocation.detail, t("回复它的提问即可继续")].filter(Boolean).join(" · ");
   }
   return invocation.detail;
 }
@@ -320,7 +332,7 @@ export function InvocationChips({
   const selected = invocations.find((invocation) => invocation.id === selectedId);
   return (
     <>
-      <div className="invocation-row" role="list" aria-label="Agent 调用状态">
+      <div className="invocation-row" role="list" aria-label={t("Agent 调用状态")}>
         {invocations.map((invocation) => {
           const agentOnline = participants.some(
             (participant) =>
@@ -364,14 +376,16 @@ export function InvocationChips({
                 <ElapsedTime since={invocation.startedAt ?? invocation.updatedAt} />
               )}
               {invocation.attempts > 1 && (
-                <span className="invocation-attempts">第{invocation.attempts}次</span>
+                <span className="invocation-attempts">
+                  {t("第{0}次", { 0: invocation.attempts })}
+                </span>
               )}
               {delegation && <span className="invocation-delegation">{delegation}</span>}
               {invocation.resolution && (
                 <span className="invocation-resolution">
                   {invocation.resolution.kind === "dismissed"
-                    ? `${invocation.resolution.by ?? ""}已忽略`
-                    : (invocation.resolution.note ?? "已被后续处理取代")}
+                    ? t("{0}已忽略", { 0: invocation.resolution.by ?? "" })
+                    : (invocation.resolution.note ?? t("已被后续处理取代"))}
                 </span>
               )}
             </>
@@ -379,11 +393,11 @@ export function InvocationChips({
           const ariaSummary = [
             `@${invocation.agentName}`,
             label,
-            invocation.attempts > 1 ? `第${invocation.attempts}次` : undefined,
+            invocation.attempts > 1 ? t("第{0}次", { 0: invocation.attempts }) : undefined,
             hint,
           ]
             .filter(Boolean)
-            .join("，");
+            .join(t("，"));
           return (
             <div
               key={invocation.id}
@@ -396,43 +410,46 @@ export function InvocationChips({
               <button
                 type="button"
                 className="invocation-summary"
-                aria-label={`${ariaSummary}，查看调用详情`}
+                aria-label={t("{0}，查看调用详情", { 0: ariaSummary })}
                 aria-haspopup="dialog"
                 onClick={() => setSelectedId(invocation.id)}
               >
                 {summary}
                 <span className="invocation-details-affordance" aria-hidden="true">
-                  详情 ›
+                  {t("详情 ›")}
                 </span>
               </button>
               {onLocate && canJumpTo(invocation.messageId) && (
                 <button
                   type="button"
                   className="invocation-action subtle"
-                  aria-label={`${ariaSummary}，定位到原消息`}
+                  aria-label={t("{0}，定位到原消息", { 0: ariaSummary })}
                   onClick={() => onLocate(invocation.messageId)}
                 >
-                  原消息
+                  {t("原消息")}
                 </button>
               )}
               {jumpTarget && (
                 <button
                   type="button"
                   className="invocation-action"
-                  aria-label={`${ariaSummary}，跳到回复`}
+                  aria-label={t("{0}，跳到回复", { 0: ariaSummary })}
                   onClick={() => onJump(jumpTarget)}
                 >
-                  查看回复
+                  {t("查看回复")}
                 </button>
               )}
               {isExtendableBlock(invocation) ? (
                 <button
                   type="button"
                   className="invocation-action primary"
-                  aria-label={`为 Agent 对话追加 ${BUDGET_EXTEND_TURNS} 轮，恢复 @${invocation.agentName}`}
+                  aria-label={t("为 Agent 对话追加 {0} 轮，恢复 @{1}", {
+                    0: BUDGET_EXTEND_TURNS,
+                    1: invocation.agentName,
+                  })}
                   onClick={onExtend}
                 >
-                  继续 {BUDGET_EXTEND_TURNS} 轮
+                  {t("继续 {0} 轮", { 0: BUDGET_EXTEND_TURNS })}
                 </button>
               ) : (
                 canRetryInvocation(invocation) &&
@@ -440,10 +457,10 @@ export function InvocationChips({
                   <button
                     type="button"
                     className={`invocation-action ${invocation.blockReason === "guest_approval" ? "primary" : ""}`}
-                    aria-label={`${invocation.blockReason === "guest_approval" ? "批准" : "重试"} @${invocation.agentName}`}
+                    aria-label={`${invocation.blockReason === "guest_approval" ? t("批准") : t("重试")} @${invocation.agentName}`}
                     onClick={() => onRetry(invocation)}
                   >
-                    {invocation.blockReason === "guest_approval" ? "批准" : "重试"}
+                    {invocation.blockReason === "guest_approval" ? t("批准") : t("重试")}
                   </button>
                 )
               )}
@@ -453,21 +470,21 @@ export function InvocationChips({
                   <button
                     type="button"
                     className="invocation-action subtle"
-                    aria-label={`忽略 @${invocation.agentName} 的这次调用`}
-                    title="标为已处理，不再算作需要处理；记录仍保留"
+                    aria-label={t("忽略 @{0} 的这次调用", { 0: invocation.agentName })}
+                    title={t("标为已处理，不再算作需要处理；记录仍保留")}
                     onClick={() => onDismiss(invocation)}
                   >
-                    忽略
+                    {t("忽略")}
                   </button>
                 )}
               {canCancelInvocation(invocation) && (
                 <button
                   type="button"
                   className="invocation-action subtle"
-                  aria-label={`停止 @${invocation.agentName}`}
+                  aria-label={t("停止 @{0}", { 0: invocation.agentName })}
                   onClick={() => onCancel(invocation)}
                 >
-                  停止
+                  {t("停止")}
                 </button>
               )}
             </div>

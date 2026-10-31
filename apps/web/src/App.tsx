@@ -102,6 +102,15 @@ import { InvocationDock, dockInvocations } from "./invocation-dock";
 import { IM_CHANNEL_LABELS } from "./im-api";
 import { ProviderLogo, providerLogoName } from "./provider-logos";
 import { resolveServerBase, resolveWebSocketUrl } from "./server-url";
+import {
+  LOCALE_OPTIONS,
+  getLocale,
+  getLocalePreference,
+  localized,
+  setLocalePreference,
+  t,
+  useLocale,
+} from "./i18n";
 
 const storedUsernameKey = "ai-hive.username";
 const storedRoomKey = "ai-hive.room";
@@ -167,24 +176,28 @@ const selectableAgentProviders = [
   "openclaw",
 ] as const;
 
-const agentProviderDescriptions: Record<SelectableAgentProvider, string> = {
-  codex: "OpenAI 编程 Agent",
+const agentProviderDescriptions: Record<SelectableAgentProvider, string> = localized(() => ({
+  codex: t("OpenAI 编程 Agent"),
   claude: "Anthropic CLI",
-  copilot: "GitHub 编程助手",
-  openclaw: "本地自主 Agent",
-  opencode: "开源终端 Agent，模型自选",
-  omp: "oh-my-pi 终端 Agent",
-};
+  copilot: t("GitHub 编程助手"),
+  openclaw: t("本地自主 Agent"),
+  opencode: t("开源终端 Agent，模型自选"),
+  omp: t("oh-my-pi 终端 Agent"),
+}));
 
 const agentAccessOptions: Array<{
   id: AgentAccessMode;
   label: string;
   description: string;
-}> = [
-  { id: "read-only", label: "只读", description: "推荐。只读取与规划，不写入工作区。" },
-  { id: "workspace", label: "工作区", description: "可在当前终端目录内读写文件、运行命令。" },
-  { id: "full", label: "完全访问", description: "不设 Hive 沙箱，可执行当前系统用户的所有操作。" },
-];
+}> = localized(() => [
+  { id: "read-only", label: t("只读"), description: t("推荐。只读取与规划，不写入工作区。") },
+  { id: "workspace", label: t("工作区"), description: t("可在当前终端目录内读写文件、运行命令。") },
+  {
+    id: "full",
+    label: t("完全访问"),
+    description: t("不设 Hive 沙箱，可执行当前系统用户的所有操作。"),
+  },
+]);
 
 const messageNotificationModes = ["off", "mentions", "all"] as const;
 
@@ -192,25 +205,27 @@ const messageNotificationOptions: Array<{
   id: MessageNotificationMode;
   label: string;
   description: string;
-}> = [
-  { id: "off", label: "关闭通知", description: "不弹系统通知，提示音不受影响" },
-  { id: "mentions", label: "@ 我时通知", description: "只有消息里提到我才提醒" },
-  { id: "all", label: "当前房间任意消息", description: "所在房间的每条新消息都提醒" },
-];
+}> = localized(() => [
+  { id: "off", label: t("关闭通知"), description: t("不弹系统通知，提示音不受影响") },
+  { id: "mentions", label: t("@ 我时通知"), description: t("只有消息里提到我才提醒") },
+  { id: "all", label: t("当前房间任意消息"), description: t("所在房间的每条新消息都提醒") },
+]);
 
-const agentSetupSteps: Array<{ step: AgentSetupStep; label: string }> = [
-  { step: 1, label: "选择 Agent" },
-  { step: 2, label: "设置权限" },
-  { step: 3, label: "复制命令" },
-];
+const agentSetupSteps: Array<{ step: AgentSetupStep; label: string }> = localized(() => [
+  { step: 1, label: t("选择 Agent") },
+  { step: 2, label: t("设置权限") },
+  { step: 3, label: t("复制命令") },
+]);
 
 /** "继续"按钮一次追加的 Agent 互相对话轮数 */
 
-const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = [
-  { id: "chat", label: "聊天与输入", description: "发送、草稿与时间" },
-  { id: "notifications", label: "通知", description: "提及、声音与状态" },
-  { id: "appearance", label: "外观", description: "主题、密度与字号" },
-];
+const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = localized(
+  () => [
+    { id: "chat", label: t("聊天与输入"), description: t("发送、草稿与时间") },
+    { id: "notifications", label: t("通知"), description: t("提及、声音与状态") },
+    { id: "appearance", label: t("外观"), description: t("语言、主题、密度与字号") },
+  ],
+);
 
 function storedSendShortcut(): SendShortcut {
   return localStorage.getItem(storedSendShortcutKey) === "enter" ? "enter" : "modifier-enter";
@@ -395,11 +410,11 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   );
 }
 
-const themeOptions: Array<{ value: ThemePreference; label: string }> = [
-  { value: "dark", label: "深色" },
-  { value: "system", label: "自动" },
-  { value: "light", label: "浅色" },
-];
+const themeOptions: Array<{ value: ThemePreference; label: string }> = localized(() => [
+  { value: "dark", label: t("深色") },
+  { value: "system", label: t("自动") },
+  { value: "light", label: t("浅色") },
+]);
 
 function ThemeGlyph({ theme }: { theme: ThemePreference }) {
   if (theme === "dark") {
@@ -431,13 +446,13 @@ function ThemeSwitcher({
   value: ThemePreference;
   onChange: (value: ThemePreference) => void;
 }) {
-  const currentLabel = themeOptions.find((option) => option.value === value)?.label ?? "自动";
+  const currentLabel = themeOptions.find((option) => option.value === value)?.label ?? t("自动");
   return (
     <div
       className={`theme-switcher ${value}`}
       role="radiogroup"
-      aria-label="颜色主题"
-      title={`当前：${currentLabel}`}
+      aria-label={t("颜色主题")}
+      title={t("当前：{0}", { 0: currentLabel })}
     >
       <span className="theme-switcher-indicator" aria-hidden="true" />
       {themeOptions.map((option) => (
@@ -471,9 +486,9 @@ function HiveLogo({ compact = false }: { compact?: boolean }) {
 }
 
 function participantStatusLabel(status: Participant["status"]): string {
-  if (status === "online") return "在线";
-  if (status === "busy") return "正在处理";
-  return "离线";
+  if (status === "online") return t("在线");
+  if (status === "busy") return t("正在处理");
+  return t("离线");
 }
 
 function agentProviderLabel(provider?: string): string {
@@ -575,9 +590,9 @@ function dateDividerLabel(iso: string): string {
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  if (date.toDateString() === today.toDateString()) return "今天";
-  if (date.toDateString() === yesterday.toDateString()) return "昨天";
-  return date.toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
+  if (date.toDateString() === today.toDateString()) return t("今天");
+  if (date.toDateString() === yesterday.toDateString()) return t("昨天");
+  return date.toLocaleDateString(getLocale(), { year: "numeric", month: "long", day: "numeric" });
 }
 
 function avatarHue(name: string): number {
@@ -651,23 +666,23 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
           </div>
           <div className="login-thesis">
             <h1>
-              让人类与 Agent，
-              <span>沿着同一条思路工作。</span>
+              {t("让人类与 Agent，")}
+              <span>{t("沿着同一条思路工作。")}</span>
             </h1>
-            <p>把消息、协作者与本地 Agent 放进一个实时工作区，所有人都看见同一份上下文。</p>
+            <p>{t("把消息、协作者与本地 Agent 放进一个实时工作区，所有人都看见同一份上下文。")}</p>
           </div>
           <div className="signal-map" aria-hidden="true">
             <span className="signal-node human">RD</span>
             <span className="signal-node agent">AI</span>
             <span className="signal-node agent secondary">AI</span>
-            <p>3 位协作者 · 同一条实时对话</p>
+            <p>{t("3 位协作者 · 同一条实时对话")}</p>
           </div>
         </section>
 
         <section className="login-form-panel">
           <div className="login-form-heading">
-            <h2>进入 AI Hive</h2>
-            <p className="login-copy">选择一个在当前房间中可识别的名字。</p>
+            <h2>{t("进入 AI Hive")}</h2>
+            <p className="login-copy">{t("选择一个在当前房间中可识别的名字。")}</p>
           </div>
           <form
             onSubmit={(event) => {
@@ -676,7 +691,7 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
               if (clean) onJoin(clean);
             }}
           >
-            <label htmlFor="username">你的用户名</label>
+            <label htmlFor="username">{t("你的用户名")}</label>
             <input
               id="username"
               name="username"
@@ -684,19 +699,19 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
               onChange={(event) => setUsername(event.target.value)}
               maxLength={32}
               pattern="[A-Za-z0-9_.\-\u4e00-\u9fff]+"
-              placeholder="例如 rongding…"
+              placeholder={t("例如 rongding…")}
               autoComplete="username"
               spellCheck={false}
             />
             <button type="submit">
-              <span>进入聊天室</span>
+              <span>{t("进入聊天室")}</span>
               <Icon name="arrow-right" />
             </button>
           </form>
-          <p className="fine-print">支持中英文、数字、点、下划线与连字符。</p>
+          <p className="fine-print">{t("支持中英文、数字、点、下划线与连字符。")}</p>
           <div className="login-trust">
             <Icon name="shield" size={16} />
-            <span>仅在局域网内共享，Agent 权限留在本机。</span>
+            <span>{t("仅在局域网内共享，Agent 权限留在本机。")}</span>
           </div>
         </section>
       </main>
@@ -715,6 +730,9 @@ export function App({
   ownerToken?: string;
   onAccessLost?: (reason: "expired" | "revoked") => void;
 } = {}) {
+  // 语言切换后整棵界面重新渲染，t() 取到新语言
+  useLocale();
+  const localePreference = getLocalePreference();
   const [meta, setMeta] = useState<MetaResponse>();
   const [username, setUsername] = useState(
     () => guest?.username ?? localStorage.getItem(storedUsernameKey) ?? "",
@@ -924,7 +942,7 @@ export function App({
     [mentionContext, participants, username],
   );
   const selectedAgentCommand = useMemo(() => {
-    if (!meta) return "加载中…";
+    if (!meta) return t("加载中…");
     return agentCommandFor(meta, agentProvider, username, agentAccess);
   }, [agentAccess, agentProvider, meta, username]);
   const showNotificationPrompt =
@@ -994,7 +1012,7 @@ export function App({
   );
   const formatMessageTime = useCallback(
     (iso: string) =>
-      new Date(iso).toLocaleTimeString([], {
+      new Date(iso).toLocaleTimeString(getLocale(), {
         hour: "2-digit",
         minute: "2-digit",
         ...(timeFormat === "system" ? {} : { hour12: timeFormat === "12h" }),
@@ -1072,7 +1090,9 @@ export function App({
       .catch((reason: unknown) => {
         setConnectionState("offline");
         setError(
-          `无法连接 Hive Server。请确认服务已启动并检查网络：${reason instanceof Error ? reason.message : String(reason)}`,
+          t("无法连接 Hive Server。请确认服务已启动并检查网络：{0}", {
+            0: reason instanceof Error ? reason.message : String(reason),
+          }),
         );
       });
   }, [base, ownerToken]);
@@ -1470,7 +1490,7 @@ export function App({
     const response = await fetch(`${base}/api/rooms?includeArchived=true`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    if (!response.ok) throw new Error(`房间列表拉取失败 (${response.status})`);
+    if (!response.ok) throw new Error(t("房间列表拉取失败 ({0})", { 0: response.status }));
     const payload = (await response.json()) as RoomsResponse;
     setRooms(sortRooms(payload.rooms));
     setReadSeqs((current) => {
@@ -1502,7 +1522,7 @@ export function App({
         `${base}/api/rooms/${encodeURIComponent(currentRoomId)}/messages?afterSeq=${afterSeq}`,
         { headers: { Authorization: `Bearer ${authToken}` } },
       );
-      if (!response.ok) throw new Error(`增量消息拉取失败 (${response.status})`);
+      if (!response.ok) throw new Error(t("增量消息拉取失败 ({0})", { 0: response.status }));
       const payload = (await response.json()) as MessagesResponse;
       setMessages((current) => mergeMessages(current, payload.messages));
       latestSeqRef.current = Math.max(latestSeqRef.current, payload.latestSeq);
@@ -1589,11 +1609,11 @@ export function App({
             if (shouldNotify && document.visibilityState !== "visible") {
               showBrowserNotification(
                 mentioned
-                  ? `${event.message.senderName} 在 AI Hive 提到了你`
+                  ? t("{0} 在 AI Hive 提到了你", { 0: event.message.senderName })
                   : `${event.message.senderName} · # ${event.message.roomId}`,
                 event.message.content.slice(0, 180) ||
                   (event.message.attachments?.length
-                    ? `[${event.message.attachments.length} 个附件]`
+                    ? t("[{0} 个附件]", { 0: event.message.attachments.length })
                     : ""),
               );
             }
@@ -1630,14 +1650,14 @@ export function App({
               (event.participant.status === "online" && previousStatus === "offline"))
           ) {
             showBrowserNotification(
-              `${event.participant.username} ${event.participant.status === "online" ? "已上线" : "已离线"}`,
+              `${event.participant.username} ${event.participant.status === "online" ? t("已上线") : t("已离线")}`,
               `#${event.participant.roomId} · ${agentProviderLabel(event.participant.provider)}`,
             );
           }
         } else if (event.type === "rooms.changed") {
           upsertRoom(event.room);
           if (event.room.id === currentRoomId && event.room.archivedAt) {
-            setError(`房间 # ${event.room.name} 已被归档，已切换回默认房间。`);
+            setError(t("房间 # {0} 已被归档，已切换回默认房间。", { 0: event.room.name }));
             switchRoom("general");
           }
         } else if (event.type === "room.activity") {
@@ -1659,22 +1679,24 @@ export function App({
             reconnectAllowed = false;
             setConnectionState("offline");
             setError(
-              `用户名 ${username} 已被同名 Agent 或其他身份占用，请点击右上角“退出”后更换用户名。`,
+              t("用户名 {0} 已被同名 Agent 或其他身份占用，请点击右上角“退出”后更换用户名。", {
+                0: username,
+              }),
             );
             socket.close();
           } else if (event.code === "ROOM_ARCHIVED") {
             reconnectAllowed = false;
-            setError(`房间 # ${currentRoomId} 已归档，无法加入，已切换回默认房间。`);
+            setError(t("房间 # {0} 已归档，无法加入，已切换回默认房间。", { 0: currentRoomId }));
             socket.close();
             switchRoom("general");
           } else if (event.code === "FORBIDDEN") {
-            setError("只能撤回自己发送的消息。");
+            setError(t("只能撤回自己发送的消息。"));
           } else if (event.code === "MESSAGE_NOT_FOUND" || event.code === "DELETE_FAILED") {
-            setError("撤回失败：消息不存在或已被处理。");
+            setError(t("撤回失败：消息不存在或已被处理。"));
           } else if (event.code === "INVOCATION_NOT_RETRYABLE") {
-            setError("这次调用当前无法重试：它可能已在进行中，或触发消息已被撤回。");
+            setError(t("这次调用当前无法重试：它可能已在进行中，或触发消息已被撤回。"));
           } else if (event.code === "INVOCATION_NOT_FOUND") {
-            setError("找不到这次调用，它可能属于其他房间或已被清理。");
+            setError(t("找不到这次调用，它可能属于其他房间或已被清理。"));
           } else if (
             event.code === "INVALID_ANSWER" ||
             event.code === "QUESTION_CLOSED" ||
@@ -1739,11 +1761,11 @@ export function App({
 
   const authorizedJson = useCallback(
     async <T,>(path: string): Promise<T> => {
-      if (!meta || !authToken) throw new Error("尚未连接 Hive Server。");
+      if (!meta || !authToken) throw new Error(t("尚未连接 Hive Server。"));
       const response = await fetch(`${base}${path}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
-      if (!response.ok) throw new Error(`请求失败 (${response.status})`);
+      if (!response.ok) throw new Error(t("请求失败 ({0})", { 0: response.status }));
       return (await response.json()) as T;
     },
     [base, meta],
@@ -1873,7 +1895,7 @@ export function App({
     if (messages.some((message) => message.id === crossRoomJumpId)) {
       jumpToMessage(crossRoomJumpId);
     } else {
-      setError("这条消息较早，不在最近加载的记录里。");
+      setError(t("这条消息较早，不在最近加载的记录里。"));
     }
   }, [crossRoomJumpId, messages]);
 
@@ -2033,7 +2055,7 @@ export function App({
         1500,
       );
     } catch {
-      setError("浏览器未允许自动复制，请选中消息文本后手动复制。");
+      setError(t("浏览器未允许自动复制，请选中消息文本后手动复制。"));
     }
   }
 
@@ -2047,14 +2069,14 @@ export function App({
         1500,
       );
     } catch {
-      setError("浏览器未允许自动复制，请手动输入序号。");
+      setError(t("浏览器未允许自动复制，请手动输入序号。"));
     }
   }
 
   function recallMessage(messageId: string) {
     const socket = socketRef.current;
     if (socket?.readyState !== WebSocket.OPEN) {
-      setError("当前未连接到 Hive Server，无法撤回。");
+      setError(t("当前未连接到 Hive Server，无法撤回。"));
       return;
     }
     socket.send(JSON.stringify({ type: "message.delete", messageId }));
@@ -2064,14 +2086,14 @@ export function App({
   function sendClientEvent(payload: Record<string, unknown>, failure: string): void {
     const socket = socketRef.current;
     if (socket?.readyState !== WebSocket.OPEN) {
-      setError(`当前未连接到 Hive Server，${failure}`);
+      setError(t("当前未连接到 Hive Server，{0}", { 0: failure }));
       return;
     }
     socket.send(JSON.stringify(payload));
   }
 
   function retryInvocation(invocation: Invocation) {
-    sendClientEvent({ type: "invocation.retry", invocationId: invocation.id }, "无法重试。");
+    sendClientEvent({ type: "invocation.retry", invocationId: invocation.id }, t("无法重试。"));
   }
 
   // 走 HTTP：「Agent 任务」面板里的调用可能属于其它房间，WebSocket 只作用于当前房间
@@ -2086,20 +2108,25 @@ export function App({
         if (!response.ok) throw new Error(`(${response.status})`);
       })
       .catch((reason: unknown) =>
-        setError(`无法忽略：${reason instanceof Error ? reason.message : String(reason)}`),
+        setError(
+          t("无法忽略：{0}", { 0: reason instanceof Error ? reason.message : String(reason) }),
+        ),
       );
   }
 
   function cancelInvocation(invocation: Invocation) {
-    sendClientEvent({ type: "invocation.cancel", invocationId: invocation.id }, "无法停止。");
+    sendClientEvent({ type: "invocation.cancel", invocationId: invocation.id }, t("无法停止。"));
   }
 
   function extendAgentBudget() {
-    sendClientEvent({ type: "budget.extend", turns: BUDGET_EXTEND_TURNS }, "无法继续 Agent 对话。");
+    sendClientEvent(
+      { type: "budget.extend", turns: BUDGET_EXTEND_TURNS },
+      t("无法继续 Agent 对话。"),
+    );
   }
 
   function removeWhiteboardEntry(entry: WhiteboardEntry) {
-    sendClientEvent({ type: "whiteboard.remove", entryId: entry.id }, "无法移除白板条目。");
+    sendClientEvent({ type: "whiteboard.remove", entryId: entry.id }, t("无法移除白板条目。"));
   }
 
   function jumpToMessage(messageId: string) {
@@ -2140,9 +2167,9 @@ export function App({
   async function copyShareMarkdown() {
     try {
       await copyTextToClipboard(buildShareMarkdown(selectedMessages, currentRoomName));
-      setShareFeedback("Markdown 已复制到剪贴板");
+      setShareFeedback(t("Markdown 已复制到剪贴板"));
     } catch {
-      setShareFeedback("复制失败：剪贴板不可用");
+      setShareFeedback(t("复制失败：剪贴板不可用"));
     }
   }
 
@@ -2153,7 +2180,7 @@ export function App({
         type: "text/markdown;charset=utf-8",
       }),
     );
-    setShareFeedback("已下载 Markdown 文件");
+    setShareFeedback(t("已下载 Markdown 文件"));
   }
 
   async function exportShareImage() {
@@ -2170,9 +2197,9 @@ export function App({
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      setShareFeedback("图片已导出");
+      setShareFeedback(t("图片已导出"));
     } catch {
-      setShareFeedback("图片导出失败，请重试。");
+      setShareFeedback(t("图片导出失败，请重试。"));
     } finally {
       setShareBusy(false);
     }
@@ -2199,12 +2226,12 @@ export function App({
       window.setTimeout(() => setCommandCopied(false), 1500);
     } catch {
       setCommandCopied(false);
-      setCopyError("浏览器未允许自动复制，请选中上方命令后手动复制。");
+      setCopyError(t("浏览器未允许自动复制，请选中上方命令后手动复制。"));
     }
   }
 
   async function roomRequest(path: string, method: string, body: unknown): Promise<RoomSummary> {
-    if (!meta) throw new Error("尚未连接 Hive Server。");
+    if (!meta) throw new Error(t("尚未连接 Hive Server。"));
     const response = await fetch(`${base}${path}`, {
       method,
       headers: {
@@ -2213,10 +2240,10 @@ export function App({
       },
       body: JSON.stringify(body),
     });
-    if (response.status === 409) throw new Error("房间 ID 已存在，请换一个。");
+    if (response.status === 409) throw new Error(t("房间 ID 已存在，请换一个。"));
     if (!response.ok) {
       const failure = (await response.json().catch(() => ({}))) as { error?: string };
-      throw new Error(failure.error ?? `房间操作失败 (${response.status})`);
+      throw new Error(failure.error ?? t("房间操作失败 ({0})", { 0: response.status }));
     }
     const payload = (await response.json()) as { room: RoomSummary };
     return payload.room;
@@ -2225,7 +2252,7 @@ export function App({
   async function submitCreateRoom() {
     const id = roomDialogId.trim();
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
-      setRoomDialogError("房间 ID 只能包含字母、数字、下划线和连字符。");
+      setRoomDialogError(t("房间 ID 只能包含字母、数字、下划线和连字符。"));
       return;
     }
     setRoomDialogBusy(true);
@@ -2250,7 +2277,7 @@ export function App({
   async function submitRenameRoom(room: RoomSummary) {
     const name = roomDialogName.trim();
     if (!name) {
-      setRoomDialogError("显示名称不能为空。");
+      setRoomDialogError(t("显示名称不能为空。"));
       return;
     }
     setRoomDialogBusy(true);
@@ -2271,7 +2298,7 @@ export function App({
   }
 
   function startNewTopic() {
-    sendClientEvent({ type: "topic.start" }, "无法开启新话题。");
+    sendClientEvent({ type: "topic.start" }, t("无法开启新话题。"));
   }
 
   async function clearRoom(room: RoomSummary) {
@@ -2307,14 +2334,14 @@ export function App({
   return (
     <main className="app-shell">
       <a className="skip-link" href="#main-content">
-        跳到消息区
+        {t("跳到消息区")}
       </a>
 
       {mobilePanel && (
         <button
           className="panel-scrim"
           type="button"
-          aria-label="关闭侧栏"
+          aria-label={t("关闭侧栏")}
           onClick={() => closeMobilePanel()}
         />
       )}
@@ -2322,7 +2349,7 @@ export function App({
       <section className={`workspace ${membersCollapsed ? "members-collapsed" : ""}`}>
         <aside
           className={`rooms-panel panel ${mobilePanel === "rooms" ? "mobile-open" : ""}`}
-          aria-label="房间列表"
+          aria-label={t("房间列表")}
         >
           <div className="sidebar-header">
             <div className="brand">
@@ -2335,53 +2362,53 @@ export function App({
               aria-live="polite"
               title={
                 connectionState === "online"
-                  ? "Hive 已在线"
+                  ? t("Hive 已在线")
                   : connectionState === "connecting"
-                    ? "正在连接"
-                    : "连接已中断"
+                    ? t("正在连接")
+                    : t("连接已中断")
               }
             >
               <span aria-hidden="true" />
               <span className="connection-label">
                 {connectionState === "online"
-                  ? "Hive 已在线"
+                  ? t("Hive 已在线")
                   : connectionState === "connecting"
-                    ? "正在连接"
-                    : "连接已中断"}
+                    ? t("正在连接")
+                    : t("连接已中断")}
               </span>
             </div>
             <button
               ref={roomsCloseRef}
               className="panel-close"
               type="button"
-              aria-label="关闭房间列表"
+              aria-label={t("关闭房间列表")}
               onClick={() => closeMobilePanel()}
             >
               <Icon name="close" />
             </button>
           </div>
-          <nav className="sidebar-actions" aria-label="快捷操作">
+          <nav className="sidebar-actions" aria-label={t("快捷操作")}>
             {isOwner && (
               <button
                 className="sidebar-action room-create"
                 type="button"
-                aria-label="新建房间"
+                aria-label={t("新建房间")}
                 aria-haspopup="dialog"
                 onClick={(event) => openRoomDialog({ mode: "create" }, event.currentTarget)}
               >
                 <Icon name="plus" size={16} />
-                <span>新建房间</span>
+                <span>{t("新建房间")}</span>
               </button>
             )}
             <button
               type="button"
               className={`sidebar-action ${activityView === "search" ? "active" : ""}`}
-              aria-label="搜索消息"
+              aria-label={t("搜索消息")}
               aria-haspopup="dialog"
               onClick={(event) => openActivity("search", event.currentTarget)}
             >
               <Icon name="search" size={16} />
-              <span>搜索</span>
+              <span>{t("搜索")}</span>
               <kbd className="sidebar-shortcut" aria-hidden="true">
                 {modifierKeyLabel === "Cmd" ? "⌘K" : "Ctrl K"}
               </kbd>
@@ -2390,13 +2417,15 @@ export function App({
               type="button"
               className={`sidebar-action ${activityView === "mentions" ? "active" : ""}`}
               aria-label={
-                unreadMentionCount > 0 ? `提及我，${unreadMentionCount} 条未读` : "提及我"
+                unreadMentionCount > 0
+                  ? t("提及我，{0} 条未读", { 0: unreadMentionCount })
+                  : t("提及我")
               }
               aria-haspopup="dialog"
               onClick={(event) => openActivity("mentions", event.currentTarget)}
             >
               <Icon name="at" size={16} />
-              <span>提及我</span>
+              <span>{t("提及我")}</span>
               {unreadMentionCount > 0 && (
                 <span className="sidebar-badge accent" aria-hidden="true">
                   {unreadMentionCount > 99 ? "99+" : unreadMentionCount}
@@ -2406,12 +2435,15 @@ export function App({
             <button
               type="button"
               className={`sidebar-action ${activityView === "tasks" ? "active" : ""}`}
-              aria-label={`Agent 任务${taskCounts.inFlight ? `，${taskCounts.inFlight} 个进行中` : ""}${taskCounts.attention ? `，${taskCounts.attention} 个需要处理` : ""}`}
+              aria-label={t("Agent 任务{0}{1}", {
+                0: taskCounts.inFlight ? t("，{0} 个进行中", { 0: taskCounts.inFlight }) : "",
+                1: taskCounts.attention ? t("，{0} 个需要处理", { 0: taskCounts.attention }) : "",
+              })}
               aria-haspopup="dialog"
               onClick={(event) => openActivity("tasks", event.currentTarget)}
             >
               <Icon name="activity" size={16} />
-              <span>Agent 任务</span>
+              <span>{t("Agent 任务")}</span>
               {taskCounts.inFlight > 0 && (
                 <span className="sidebar-badge running" aria-hidden="true">
                   {taskCounts.inFlight}
@@ -2425,7 +2457,7 @@ export function App({
             </button>
           </nav>
           <div className="sidebar-section-label">
-            <span>房间</span>
+            <span>{t("房间")}</span>
             <span className="panel-meta">{activeRoomCount}</span>
           </div>
           <div className="room-list">
@@ -2442,19 +2474,22 @@ export function App({
                 >
                   <span className="room-item-name"># {room.name}</span>
                   <span className="room-item-meta">
-                    {room.archivedAt ? "已归档" : `${room.onlineCount} 在线`}
+                    {room.archivedAt ? t("已归档") : t("{0} 在线", { 0: room.onlineCount })}
                   </span>
                   {room.id !== currentRoomId &&
                     !room.archivedAt &&
                     room.latestSeq > (readSeqs[room.id] ?? 0) && (
-                      <span className="room-unread" aria-label={`# ${room.name} 有未读消息`} />
+                      <span
+                        className="room-unread"
+                        aria-label={t("# {0} 有未读消息", { 0: room.name })}
+                      />
                     )}
                 </button>
                 {isOwner && (
                   <button
                     type="button"
                     className="room-item-manage"
-                    aria-label={`管理房间 ${room.name}`}
+                    aria-label={t("管理房间 {0}", { 0: room.name })}
                     aria-haspopup="dialog"
                     onClick={(event) =>
                       openRoomDialog({ mode: "manage", room }, event.currentTarget)
@@ -2471,7 +2506,7 @@ export function App({
             className="room-archived-toggle"
             onClick={() => setShowArchivedRooms((current) => !current)}
           >
-            {showArchivedRooms ? "隐藏已归档房间" : "显示已归档房间"}
+            {showArchivedRooms ? t("隐藏已归档房间") : t("显示已归档房间")}
           </button>
           <div
             className="sidebar-user"
@@ -2489,9 +2524,9 @@ export function App({
             }}
           >
             {userMenuOpen && (
-              <div className="user-menu" role="menu" aria-label="用户菜单">
+              <div className="user-menu" role="menu" aria-label={t("用户菜单")}>
                 <div className="user-menu-theme">
-                  <span>主题</span>
+                  <span>{t("主题")}</span>
                   <ThemeSwitcher
                     value={themePreference}
                     onChange={(value) => {
@@ -2510,7 +2545,7 @@ export function App({
                   }}
                 >
                   <Icon name="settings" size={15} />
-                  <span>设置</span>
+                  <span>{t("设置")}</span>
                 </button>
                 <button
                   type="button"
@@ -2523,7 +2558,7 @@ export function App({
                   }}
                 >
                   <Icon name="logout" size={15} />
-                  <span>退出</span>
+                  <span>{t("退出")}</span>
                 </button>
               </div>
             )}
@@ -2531,7 +2566,7 @@ export function App({
               ref={settingsTriggerRef}
               type="button"
               className="sidebar-user-chip"
-              aria-label="用户菜单"
+              aria-label={t("用户菜单")}
               aria-haspopup="menu"
               aria-expanded={userMenuOpen}
               onClick={() => setUserMenuOpen((current) => !current)}
@@ -2541,7 +2576,7 @@ export function App({
               </span>
               <span className="identity-copy">
                 <strong>{username}</strong>
-                <small>当前身份</small>
+                <small>{t("当前身份")}</small>
               </span>
               <Icon name="more" size={16} />
             </button>
@@ -2553,7 +2588,7 @@ export function App({
             <button
               type="button"
               className="header-button mobile-only"
-              aria-label="打开房间列表"
+              aria-label={t("打开房间列表")}
               aria-expanded={mobilePanel === "rooms"}
               onClick={(event) => openMobilePanel("rooms", event.currentTarget)}
             >
@@ -2562,11 +2597,11 @@ export function App({
             <div className="chat-title">
               <h1>{currentRoomName}</h1>
               <span>
-                {online.length} 位在线 · {messages.length} 条消息
+                {online.length} {t("位在线 ·")} {messages.length} {t("条消息")}
                 {currentRoomWorkspace && (
                   <span
                     className="chat-title-workspace"
-                    title={`房间工作区：${currentRoomWorkspace}`}
+                    title={t("房间工作区：{0}", { 0: currentRoomWorkspace })}
                   >
                     {" "}
                     · {currentRoomWorkspace.split("/").filter(Boolean).at(-1)}
@@ -2579,26 +2614,26 @@ export function App({
                 type="button"
                 className="header-button new-topic"
                 disabled={messages.length === 0 || messages.at(-1)?.kind === "topic"}
-                title="开启新话题：房间里的 Agent 会丢弃之前的会话，从新会话开始；历史消息保留"
+                title={t("开启新话题：房间里的 Agent 会丢弃之前的会话，从新会话开始；历史消息保留")}
                 onClick={startNewTopic}
               >
                 <Icon name="plus" size={16} />
-                <span>新话题</span>
+                <span>{t("新话题")}</span>
               </button>
               <button
                 type="button"
                 className={`header-button share-fab ${shareMode ? "active" : ""}`}
-                aria-label={shareMode ? "退出分享模式" : "分享对话"}
+                aria-label={shareMode ? t("退出分享模式") : t("分享对话")}
                 aria-pressed={shareMode}
                 onClick={() => (shareMode ? exitShareMode() : setShareMode(true))}
               >
                 <Icon name="share" size={16} />
-                <span>{shareMode ? "取消" : "分享"}</span>
+                <span>{shareMode ? t("取消") : t("分享")}</span>
               </button>
               <button
                 type="button"
                 className="header-button members-drawer-toggle"
-                aria-label="打开成员列表"
+                aria-label={t("打开成员列表")}
                 aria-expanded={mobilePanel === "members"}
                 onClick={(event) => openMobilePanel("members", event.currentTarget)}
               >
@@ -2607,9 +2642,9 @@ export function App({
               <button
                 type="button"
                 className="header-button desktop-only"
-                aria-label={membersCollapsed ? "显示成员与白板" : "隐藏成员与白板"}
+                aria-label={membersCollapsed ? t("显示成员与白板") : t("隐藏成员与白板")}
                 aria-pressed={!membersCollapsed}
-                title={membersCollapsed ? "显示成员与白板" : "隐藏成员与白板"}
+                title={membersCollapsed ? t("显示成员与白板") : t("隐藏成员与白板")}
                 onClick={() =>
                   setMembersCollapsed((current) => {
                     localStorage.setItem(storedMembersCollapsedKey, String(!current));
@@ -2628,7 +2663,7 @@ export function App({
                   <span>{error}</span>
                   <button
                     type="button"
-                    aria-label="关闭错误提示"
+                    aria-label={t("关闭错误提示")}
                     onClick={() => setError(undefined)}
                   >
                     <Icon name="close" size={16} />
@@ -2639,38 +2674,38 @@ export function App({
                 <div
                   className="notification-prompt budget-prompt"
                   role="status"
-                  aria-label="Agent 连续对话已暂停"
+                  aria-label={t("Agent 连续对话已暂停")}
                 >
                   <Icon name="shield" size={18} />
                   <p>
-                    <strong>Agent 连续对话已暂停，等待你确认</strong>
-                    {pausedAgentNames.slice(0, 3).join("、")}
-                    {pausedAgentNames.length > 3 ? " 等" : ""} 的调用触及了轮数上限。
+                    <strong>{t("Agent 连续对话已暂停，等待你确认")}</strong>
+                    {pausedAgentNames.slice(0, 3).join(t("、"))}
+                    {pausedAgentNames.length > 3 ? t(" 等") : ""} {t("的调用触及了轮数上限。")}
                   </p>
                   <div className="notification-prompt-actions">
                     <button type="button" className="primary" onClick={extendAgentBudget}>
-                      继续 {BUDGET_EXTEND_TURNS} 轮
+                      {t("继续 {0} 轮", { 0: BUDGET_EXTEND_TURNS })}
                     </button>
                   </div>
                 </div>
               )}
               {showNotificationPrompt && (
-                <div className="notification-prompt" role="status" aria-label="开启浏览器通知">
+                <div className="notification-prompt" role="status" aria-label={t("开启浏览器通知")}>
                   <Icon name="bell" size={18} />
                   <p>
-                    <strong>开启浏览器通知</strong>
-                    页面不在前台时，有人 @ 你会收到系统提醒。
+                    <strong>{t("开启浏览器通知")}</strong>
+                    {t("页面不在前台时，有人 @ 你会收到系统提醒。")}
                   </p>
                   <div className="notification-prompt-actions">
                     <button type="button" onClick={dismissNotificationPrompt}>
-                      暂不
+                      {t("暂不")}
                     </button>
                     <button
                       type="button"
                       className="primary"
                       onClick={() => void ensureNotificationPermission()}
                     >
-                      开启
+                      {t("开启")}
                     </button>
                   </div>
                 </div>
@@ -2684,7 +2719,7 @@ export function App({
             }}
             className="message-list"
             role="log"
-            aria-label="聊天室消息"
+            aria-label={t("聊天室消息")}
             aria-live="polite"
             onScroll={handleMessageListScroll}
           >
@@ -2693,12 +2728,13 @@ export function App({
                 {messagesLoaded && messages.length === 0 && (
                   <div className="empty-state">
                     <HiveLogo />
-                    <h2>今天在 #{currentRoomName} 协作什么？</h2>
+                    <h2>{t("今天在 #{0} 协作什么？", { 0: currentRoomName })}</h2>
                     <p>
-                      发出第一条消息，或输入 <code>@agent-name</code> 邀请一个 Agent 参与。
+                      {t("发出第一条消息，或输入")} <code>@agent-name</code>{" "}
+                      {t("邀请一个 Agent 参与。")}
                     </p>
                     <button type="button" onClick={() => textareaRef.current?.focus()}>
-                      开始一条消息
+                      {t("开始一条消息")}
                       <Icon name="arrow-right" size={16} />
                     </button>
                   </div>
@@ -2716,7 +2752,10 @@ export function App({
                       className="load-earlier"
                       onClick={() => setVisibleLimit((current) => current + 100)}
                     >
-                      显示更早的 {Math.min(hiddenCount, 100)} 条消息（共隐藏 {hiddenCount} 条）
+                      {t("显示更早的 {0} 条消息（共隐藏 {1} 条）", {
+                        0: Math.min(hiddenCount, 100),
+                        1: hiddenCount,
+                      })}
                     </button>
                   ) : (
                     earlierTopicCount > 0 &&
@@ -2726,7 +2765,7 @@ export function App({
                         className="load-earlier"
                         onClick={() => setExpandedTopicId(currentTopic.id)}
                       >
-                        显示更早的话题（{earlierTopicCount} 条消息）
+                        {t("显示更早的话题（{0} 条消息）", { 0: earlierTopicCount })}
                       </button>
                     )
                   )}
@@ -2746,7 +2785,7 @@ export function App({
                           <span>
                             {message.content} · {formatMessageTime(message.createdAt)}
                           </span>
-                          <small>之前的消息不再作为 Agent 的上下文</small>
+                          <small>{t("之前的消息不再作为 Agent 的上下文")}</small>
                         </div>
                       ) : (
                         <article
@@ -2796,7 +2835,7 @@ export function App({
                                 {message.senderType === "agent" && <b>Agent</b>}
                                 {message.via && (
                                   <span className="message-via">
-                                    来自{IM_CHANNEL_LABELS[message.via.channel]}
+                                    {t("来自{0}", { 0: IM_CHANNEL_LABELS[message.via.channel] })}
                                   </span>
                                 )}
                                 <time dateTime={message.createdAt}>
@@ -2805,15 +2844,15 @@ export function App({
                                 <button
                                   type="button"
                                   className="message-seq"
-                                  title="复制序号引用（可用于在聊天中引用这条消息）"
-                                  aria-label={`复制消息序号 #${message.seq}`}
+                                  title={t("复制序号引用（可用于在聊天中引用这条消息）")}
+                                  aria-label={t("复制消息序号 #{0}", { 0: message.seq })}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     void copySeqReference(message);
                                   }}
                                 >
                                   {copiedMessageId === `seq:${message.id}`
-                                    ? "已复制"
+                                    ? t("已复制")
                                     : `#${message.seq}`}
                                 </button>
                               </header>
@@ -2822,8 +2861,8 @@ export function App({
                               <p className="message-recalled">
                                 {message.senderName.toLocaleLowerCase() ===
                                 username.toLocaleLowerCase()
-                                  ? "你撤回了一条消息"
-                                  : `${message.senderName} 撤回了一条消息`}
+                                  ? t("你撤回了一条消息")
+                                  : t("{0} 撤回了一条消息", { 0: message.senderName })}
                               </p>
                             ) : (
                               message.content && (
@@ -2874,13 +2913,13 @@ export function App({
                                 <button
                                   type="button"
                                   className="question-answer"
-                                  aria-label={`回答 ${message.senderName} 的提问`}
+                                  aria-label={t("回答 {0} 的提问", { 0: message.senderName })}
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     answerQuestion(message);
                                   }}
                                 >
-                                  {answering?.id === message.id ? "正在回答…" : "回答"}
+                                  {answering?.id === message.id ? t("正在回答…") : t("回答")}
                                 </button>
                               )}
                             {invocationsByMessage.has(message.id) && (
@@ -2906,7 +2945,7 @@ export function App({
                               }`}
                               role="checkbox"
                               aria-checked={selectedMessageIds.has(message.id)}
-                              aria-label={`选择 ${message.senderName} 的消息`}
+                              aria-label={t("选择 {0} 的消息", { 0: message.senderName })}
                             >
                               {selectedMessageIds.has(message.id) && (
                                 <Icon name="check" size={12} />
@@ -2918,8 +2957,8 @@ export function App({
                                 <button
                                   type="button"
                                   className="message-action seq"
-                                  title="复制序号引用"
-                                  aria-label={`复制消息序号 #${message.seq}`}
+                                  title={t("复制序号引用")}
+                                  aria-label={t("复制消息序号 #{0}", { 0: message.seq })}
                                   onClick={() => void copySeqReference(message)}
                                 >
                                   {copiedMessageId === `seq:${message.id}`
@@ -2930,8 +2969,8 @@ export function App({
                               <button
                                 type="button"
                                 className="message-action"
-                                aria-label="复制消息原文"
-                                title="复制消息"
+                                aria-label={t("复制消息原文")}
+                                title={t("复制消息")}
                                 onClick={() => void copyMessageContent(message)}
                               >
                                 <Icon
@@ -2944,7 +2983,7 @@ export function App({
                                 <button
                                   type="button"
                                   className="message-action"
-                                  aria-label={`在输入框中提及 ${message.senderName}`}
+                                  aria-label={t("在输入框中提及 {0}", { 0: message.senderName })}
                                   title={`@${message.senderName}`}
                                   onClick={() => appendMention(message.senderName)}
                                 >
@@ -2954,29 +2993,29 @@ export function App({
                                 <span
                                   className="message-recall-confirm"
                                   role="group"
-                                  aria-label="确认撤回"
+                                  aria-label={t("确认撤回")}
                                 >
-                                  <span>撤回这条消息？</span>
+                                  <span>{t("撤回这条消息？")}</span>
                                   <button
                                     type="button"
                                     onClick={() => setRecallCandidateId(undefined)}
                                   >
-                                    取消
+                                    {t("取消")}
                                   </button>
                                   <button
                                     type="button"
                                     className="danger"
                                     onClick={() => recallMessage(message.id)}
                                   >
-                                    撤回
+                                    {t("撤回")}
                                   </button>
                                 </span>
                               ) : (
                                 <button
                                   type="button"
                                   className="message-action danger"
-                                  aria-label="撤回这条消息"
-                                  title="撤回"
+                                  aria-label={t("撤回这条消息")}
+                                  title={t("撤回")}
                                   onClick={() => setRecallCandidateId(message.id)}
                                 >
                                   <Icon name="undo" size={13} />
@@ -2997,7 +3036,7 @@ export function App({
                         .filter((participant) => participant.status === "busy")
                         .map((participant) => participant.username)
                         .join(", ")}{" "}
-                      正在思考
+                      {t("正在思考")}
                     </div>
                   )}
                   <div ref={messagesEndRef} />
@@ -3006,35 +3045,35 @@ export function App({
             </ShadowContent>
           </div>
           {shareMode && (
-            <div className="share-bar" role="toolbar" aria-label="分享选中的消息">
+            <div className="share-bar" role="toolbar" aria-label={t("分享选中的消息")}>
               <span className="share-count" role="status">
-                已选 {selectedMessages.length} 条
+                {t("已选 {0} 条", { 0: selectedMessages.length })}
               </span>
               <button type="button" onClick={toggleSelectAllMessages}>
                 {messages.length > 0 && selectedMessageIds.size === messages.length
-                  ? "清空"
-                  : "全选"}
+                  ? t("清空")
+                  : t("全选")}
               </button>
               <button
                 type="button"
                 disabled={selectedMessages.length === 0 || shareBusy}
                 onClick={() => void copyShareMarkdown()}
               >
-                复制 Markdown
+                {t("复制 Markdown")}
               </button>
               <button
                 type="button"
                 disabled={selectedMessages.length === 0 || shareBusy}
                 onClick={downloadShareMarkdown}
               >
-                下载 .md
+                {t("下载 .md")}
               </button>
               <button
                 type="button"
                 disabled={selectedMessages.length === 0 || shareBusy}
                 onClick={() => void exportShareImage()}
               >
-                {shareBusy ? "导出中…" : "导出图片"}
+                {shareBusy ? t("导出中…") : t("导出图片")}
               </button>
               {shareFeedback && (
                 <span className="share-feedback" role="status">
@@ -3042,7 +3081,7 @@ export function App({
                 </span>
               )}
               <button type="button" className="share-exit" onClick={exitShareMode}>
-                退出
+                {t("退出")}
               </button>
             </div>
           )}
@@ -3051,7 +3090,7 @@ export function App({
               <div ref={shareCardRef} className="share-card">
                 <header className="share-card-header">
                   <strong># {currentRoomName}</strong>
-                  <span>AI HIVE · 对话分享</span>
+                  <span>{t("AI HIVE · 对话分享")}</span>
                 </header>
                 {selectedMessages.map((message) => (
                   <div
@@ -3090,7 +3129,9 @@ export function App({
                   </div>
                 ))}
                 <footer className="share-card-footer">
-                  <span>导出于 {formatShareTimestamp(new Date().toISOString())}</span>
+                  <span>
+                    {t("导出于 {0}", { 0: formatShareTimestamp(new Date().toISOString()) })}
+                  </span>
                   <span>AI Hive</span>
                 </footer>
               </div>
@@ -3101,8 +3142,8 @@ export function App({
               <button
                 type="button"
                 className="jump-to-bottom"
-                aria-label="滚动到底部"
-                title="回到最新消息"
+                aria-label={t("滚动到底部")}
+                title={t("回到最新消息")}
                 onClick={jumpToLatest}
               >
                 <Icon name="arrow-down" size={16} />
@@ -3110,14 +3151,14 @@ export function App({
             )}
             {pendingNewMessages > 0 && !mentionContext && (
               <button type="button" className="jump-pill" onClick={jumpToLatest}>
-                ↓ {pendingNewMessages} 条新消息
+                {t("↓ {0} 条新消息", { 0: pendingNewMessages })}
               </button>
             )}
             {mentionContext && (
               <div className="mention-menu" id="mention-suggestions" role="listbox">
                 <div className="mention-menu-heading">
-                  <span>提及成员</span>
-                  <small>{mentionSuggestions.length} 个匹配</small>
+                  <span>{t("提及成员")}</span>
+                  <small>{t("{0} 个匹配", { 0: mentionSuggestions.length })}</small>
                 </div>
                 {mentionSuggestions.length > 0 ? (
                   <div className="mention-options">
@@ -3151,7 +3192,7 @@ export function App({
                         <span className="mention-member-copy">
                           <strong>@{participant.username}</strong>
                           <small>
-                            {participant.type === "agent" ? "Agent" : "用户"} ·{" "}
+                            {participant.type === "agent" ? "Agent" : t("用户")} ·{" "}
                             {participantStatusLabel(participant.status)}
                           </small>
                         </span>
@@ -3163,17 +3204,17 @@ export function App({
                     ))}
                   </div>
                 ) : (
-                  <div className="mention-empty">没有找到匹配的成员</div>
+                  <div className="mention-empty">{t("没有找到匹配的成员")}</div>
                 )}
                 <div className="mention-menu-footer">
                   <span>
-                    <kbd>↑↓</kbd> 选择
+                    <kbd>↑↓</kbd> {t("选择")}
                   </span>
                   <span>
-                    <kbd>Enter</kbd> 或 <kbd>Tab</kbd> 补全
+                    <kbd>Enter</kbd> {t("或")} <kbd>Tab</kbd> {t("补全")}
                   </span>
                   <span>
-                    <kbd>Esc</kbd> 关闭
+                    <kbd>Esc</kbd> {t("关闭")}
                   </span>
                 </div>
               </div>
@@ -3194,12 +3235,12 @@ export function App({
             />
             {answering && answering.roomId === currentRoomId && (
               <div className="composer-answering" role="status">
-                <strong>回答 @{answering.senderName} 的提问</strong>
+                <strong>{t("回答 @{0} 的提问", { 0: answering.senderName })}</strong>
                 <span>{answering.content.replace(/\s+/g, " ")}</span>
                 <button
                   type="button"
-                  aria-label="取消回答"
-                  title="取消回答，改为普通消息"
+                  aria-label={t("取消回答")}
+                  title={t("取消回答，改为普通消息")}
                   onClick={() => setAnswering(undefined)}
                 >
                   ×
@@ -3333,8 +3374,8 @@ export function App({
                       sendMessage();
                     }
                   }}
-                  placeholder="发送消息，输入 @ 选择成员…"
-                  aria-label="消息"
+                  placeholder={t("发送消息，输入 @ 选择成员…")}
+                  aria-label={t("消息")}
                   aria-autocomplete="list"
                   aria-controls={mentionContext ? "mention-suggestions" : undefined}
                   aria-expanded={Boolean(mentionContext)}
@@ -3350,8 +3391,8 @@ export function App({
                   type="button"
                   className="composer-attach"
                   onClick={() => fileInputRef.current?.click()}
-                  aria-label="添加附件"
-                  title="添加图片或文件（也可以粘贴截图、拖入文件）"
+                  aria-label={t("添加附件")}
+                  title={t("添加图片或文件（也可以粘贴截图、拖入文件）")}
                 >
                   <PaperclipIcon />
                 </button>
@@ -3367,25 +3408,27 @@ export function App({
                 />
                 {(attachmentNotice || attachmentQueue.failed) && (
                   <span className="composer-notice" role="status">
-                    {attachmentNotice ?? "有附件上传失败，请重试或移除后再发送"}
+                    {attachmentNotice ?? t("有附件上传失败，请重试或移除后再发送")}
                   </span>
                 )}
                 <span className="composer-hint">
                   {sendShortcut === "modifier-enter" ? (
                     <>
-                      <kbd>{modifierKeyLabel} + Enter</kbd> 发送 · <kbd>Enter</kbd> 换行
+                      <kbd>{modifierKeyLabel} + Enter</kbd> {t("发送 ·")} <kbd>Enter</kbd>{" "}
+                      {t("换行")}
                     </>
                   ) : (
                     <>
-                      <kbd>Enter</kbd> 发送 · <kbd>Shift + Enter</kbd> 换行
+                      <kbd>Enter</kbd> {t("发送 ·")} <kbd>Shift + Enter</kbd> {t("换行")}
                     </>
                   )}
                 </span>
                 <div className="composer-actions">
                   {draftTooLong ? (
                     <span className="char-count danger" role="alert">
-                      超出 {(draft.trim().length - MAX_MESSAGE_LENGTH).toLocaleString()}{" "}
-                      字，无法发送
+                      {t("超出 {0} 字，无法发送", {
+                        0: (draft.trim().length - MAX_MESSAGE_LENGTH).toLocaleString(),
+                      })}
                     </span>
                   ) : (
                     draft.length > MAX_MESSAGE_LENGTH * MESSAGE_LENGTH_WARNING_RATIO && (
@@ -3399,9 +3442,9 @@ export function App({
                     className="composer-send"
                     onClick={sendMessage}
                     disabled={!canSend || connectionState !== "online"}
-                    title="发送"
+                    title={t("发送")}
                   >
-                    <span className="sr-only">发送</span>
+                    <span className="sr-only">{t("发送")}</span>
                     <Icon name="arrow-up" size={18} />
                   </button>
                 </div>
@@ -3412,13 +3455,13 @@ export function App({
 
         <aside
           className={`members-panel panel ${mobilePanel === "members" ? "mobile-open" : ""}`}
-          aria-label="成员列表"
+          aria-label={t("成员列表")}
         >
           <div className="panel-heading side-panel-heading">
             <div
               className="side-tabs"
               role="tablist"
-              aria-label="侧栏视图"
+              aria-label={t("侧栏视图")}
               onKeyDown={(event) => {
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                 event.preventDefault();
@@ -3445,8 +3488,8 @@ export function App({
                 onClick={() => setSidePanelTab("members")}
               >
                 <Icon name="users" size={15} />
-                成员
-                <span className="side-tab-count" aria-label={`${online.length} 位在线`}>
+                {t("成员")}
+                <span className="side-tab-count" aria-label={t("{0} 位在线", { 0: online.length })}>
                   {online.length}
                 </span>
               </button>
@@ -3461,14 +3504,17 @@ export function App({
                 onClick={() => setSidePanelTab("whiteboard")}
               >
                 <Icon name="board" size={15} />
-                白板
+                {t("白板")}
                 {whiteboard.size > 0 && (
                   <span
                     className={`side-tab-count ${whiteboardBlockedCount > 0 ? "warning" : ""}`}
                     aria-label={
                       whiteboardBlockedCount > 0
-                        ? `${whiteboard.size} 条，其中 ${whiteboardBlockedCount} 条阻塞`
-                        : `${whiteboard.size} 条`
+                        ? t("{0} 条，其中 {1} 条阻塞", {
+                            0: whiteboard.size,
+                            1: whiteboardBlockedCount,
+                          })
+                        : t("{0} 条", { 0: whiteboard.size })
                     }
                   >
                     {whiteboard.size}
@@ -3480,7 +3526,7 @@ export function App({
               ref={membersCloseRef}
               className="panel-close"
               type="button"
-              aria-label="关闭成员列表"
+              aria-label={t("关闭成员列表")}
               onClick={() => closeMobilePanel()}
             >
               <Icon name="close" />
@@ -3543,8 +3589,11 @@ export function App({
                           {participant.username}
                           {participant.type === "agent" &&
                             localAgentNames.has(participant.username.toLocaleLowerCase()) && (
-                              <span className="member-local-badge" title="由本机 Hive Server 启动">
-                                本机
+                              <span
+                                className="member-local-badge"
+                                title={t("由本机 Hive Server 启动")}
+                              >
+                                {t("本机")}
                               </span>
                             )}
                           {isOwner && authToken && participant.access && (
@@ -3566,7 +3615,7 @@ export function App({
                               <GuestAccessBadge participant={participant} now={accessNow} />
                             </>
                           ) : participant.type === "agent" ? (
-                            `${agentProviderLabel(participant.provider)} · ${participant.persona || "通用协作 Agent"}`
+                            `${agentProviderLabel(participant.provider)} · ${participant.persona || t("通用协作 Agent")}`
                           ) : (
                             "Human"
                           )}
@@ -3580,7 +3629,9 @@ export function App({
                     </div>
                   </div>
                 ))}
-                {offline.length > 0 && <p className="offline-label">离线 · {offline.length}</p>}
+                {offline.length > 0 && (
+                  <p className="offline-label">{t("离线 · {0}", { 0: offline.length })}</p>
+                )}
                 {offline.map((participant) => (
                   <div key={participant.id} className="member-row">
                     <div className="member muted">
@@ -3621,18 +3672,18 @@ export function App({
                               <GuestAccessBadge participant={participant} now={accessNow} />
                             </>
                           ) : participant.type === "agent" ? (
-                            `${agentProviderLabel(participant.provider)} · 离线`
+                            t("{0} · 离线", { 0: agentProviderLabel(participant.provider) })
                           ) : (
-                            "Human · 离线"
+                            t("Human · 离线")
                           )}
                         </small>
                       </span>
-                      <span className="status-dot offline" aria-label="离线" />
+                      <span className="status-dot offline" aria-label={t("离线")} />
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="member-invite" role="group" aria-label="添加成员">
+              <div className="member-invite" role="group" aria-label={t("添加成员")}>
                 {isOwner ? (
                   <button
                     type="button"
@@ -3642,8 +3693,8 @@ export function App({
                   >
                     <Icon name="user-plus" size={16} />
                     <span>
-                      <strong>邀请成员</strong>
-                      <small>生成限时链接，到期后自动失效</small>
+                      <strong>{t("邀请成员")}</strong>
+                      <small>{t("生成限时链接，到期后自动失效")}</small>
                     </span>
                   </button>
                 ) : (
@@ -3656,8 +3707,8 @@ export function App({
                     >
                       <Icon name="plug" size={16} />
                       <span>
-                        <strong>带入我的 Agent</strong>
-                        <small>只能进本房间，和你同时到期</small>
+                        <strong>{t("带入我的 Agent")}</strong>
+                        <small>{t("只能进本房间，和你同时到期")}</small>
                       </span>
                     </button>
                   )
@@ -3666,15 +3717,15 @@ export function App({
                   <button
                     type="button"
                     className="member-invite-action sidebar-agent-entry"
-                    aria-label="接入 Agent"
+                    aria-label={t("接入 Agent")}
                     aria-haspopup="dialog"
                     aria-expanded={agentDialogOpen}
                     onClick={(event) => openAgentDialog(event.currentTarget)}
                   >
                     <Icon name="plug" size={16} />
                     <span>
-                      <strong>接入 Agent</strong>
-                      <small>选择运行时并复制接入命令</small>
+                      <strong>{t("接入 Agent")}</strong>
+                      <small>{t("选择运行时并复制接入命令")}</small>
                     </span>
                   </button>
                 )}
@@ -3687,8 +3738,8 @@ export function App({
                   >
                     <Icon name="message" size={16} />
                     <span>
-                      <strong>连接 IM</strong>
-                      <small>扫码接入飞书或微信，在手机上给房间发消息</small>
+                      <strong>{t("连接 IM")}</strong>
+                      <small>{t("扫码接入飞书或微信，在手机上给房间发消息")}</small>
                     </span>
                   </button>
                 )}
@@ -3761,7 +3812,7 @@ export function App({
           <button
             className="agent-dialog-scrim"
             type="button"
-            aria-label="关闭 Agent 接入弹窗"
+            aria-label={t("关闭 Agent 接入弹窗")}
             onClick={closeAgentDialog}
           />
           <div
@@ -3774,27 +3825,29 @@ export function App({
           >
             <header className="agent-dialog-header">
               <div>
-                <h2 id="agent-dialog-title">把 Agent 接入 Hive</h2>
+                <h2 id="agent-dialog-title">{t("把 Agent 接入 Hive")}</h2>
                 <p id="agent-dialog-description">
                   {local.enabled
-                    ? "三步完成：选择 Agent、设置本机权限，然后一键在本机启动（也可以复制命令）。"
-                    : "三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。"}
+                    ? t(
+                        "三步完成：选择 Agent、设置本机权限，然后一键在本机启动（也可以复制命令）。",
+                      )
+                    : t("三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。")}
                 </p>
               </div>
               <button
                 ref={agentDialogCloseRef}
                 className="agent-dialog-close"
                 type="button"
-                aria-label="关闭"
+                aria-label={t("关闭")}
                 onClick={closeAgentDialog}
               >
                 <Icon name="close" />
               </button>
             </header>
 
-            <ol className="agent-steps" aria-label="接入步骤">
+            <ol className="agent-steps" aria-label={t("接入步骤")}>
               {agentSetupSteps.map(({ step, label: baseLabel }) => {
-                const label = step === 3 && local.enabled ? "启动 Agent" : baseLabel;
+                const label = step === 3 && local.enabled ? t("启动 Agent") : baseLabel;
                 const state =
                   step === agentStep ? "current" : step < agentStep ? "done" : "upcoming";
                 return (
@@ -3806,7 +3859,7 @@ export function App({
                     {state === "done" ? (
                       <button
                         type="button"
-                        aria-label={`返回第 ${step} 步：${label}`}
+                        aria-label={t("返回第 {0} 步：{1}", { 0: step, 1: label })}
                         onClick={() => goToAgentStep(step)}
                       >
                         <span className="agent-step-index" aria-hidden="true">
@@ -3831,20 +3884,21 @@ export function App({
               <div className="agent-step-heading">
                 <h3 id="agent-step-title" ref={agentStepHeadingRef} tabIndex={-1}>
                   {agentStep === 1
-                    ? "选择要接入的 Agent"
+                    ? t("选择要接入的 Agent")
                     : agentStep === 2
-                      ? `允许 ${agentProviderLabel(agentProvider)} 在本机做什么？`
+                      ? t("允许 {0} 在本机做什么？", { 0: agentProviderLabel(agentProvider) })
                       : local.enabled
-                        ? "在本机启动"
-                        : "复制命令，到终端运行"}
+                        ? t("在本机启动")
+                        : t("复制命令，到终端运行")}
                 </h3>
-                {agentStep === 1 && <p>接入命令会根据所选 Agent 的运行环境自动调整。</p>}
+                {agentStep === 1 && <p>{t("接入命令会根据所选 Agent 的运行环境自动调整。")}</p>}
                 {agentStep === 2 && (
-                  <p>权限只在 Agent 所在电脑生效，Hive Server 始终只转发消息。默认只读。</p>
+                  <p>{t("权限只在 Agent 所在电脑生效，Hive Server 始终只转发消息。默认只读。")}</p>
                 )}
                 {agentStep === 3 && (
                   <p>
-                    将以 <code>{agentNameFor(username, agentProvider)}</code> 身份加入 · 权限：
+                    {t("将以")} <code>{agentNameFor(username, agentProvider)}</code>{" "}
+                    {t("身份加入 · 权限：")}
                     <strong className={`agent-access-label ${agentAccess}`}>
                       {agentAccessOptions.find((option) => option.id === agentAccess)?.label}
                     </strong>
@@ -3893,7 +3947,7 @@ export function App({
                             if (!info) return agentProviderDescriptions[provider];
                             return info.installed
                               ? `${agentProviderDescriptions[provider]}${info.version ? ` · ${info.version}` : ""}`
-                              : "本机未安装";
+                              : t("本机未安装");
                           })()}
                         </small>
                       </span>
@@ -3942,28 +3996,32 @@ export function App({
                   </div>
                   {agentProvider === "openclaw" && (
                     <p className="openclaw-access-note">
-                      OpenClaw 的实际权限还需在其 Agent / Gateway 中设置；Hive
-                      不会自动改写全局策略。
+                      {t(
+                        "OpenClaw 的实际权限还需在其 Agent / Gateway 中设置；Hive 不会自动改写全局策略。",
+                      )}
                     </p>
                   )}
                   {agentProvider === "omp" && agentAccess === "workspace" && (
                     <p className="openclaw-access-note">
-                      omp 不会把文件写入限制在当前目录内；需要目录隔离时请选择 OpenCode、Codex 或
-                      Claude Code。
+                      {t(
+                        "omp 不会把文件写入限制在当前目录内；需要目录隔离时请选择 OpenCode、Codex 或 Claude Code。",
+                      )}
                     </p>
                   )}
                   {fullAccessConfirmationOpen && agentAccess !== "full" && (
                     <div className="full-access-confirmation" role="alert">
                       <div>
-                        <strong>确认移除本机安全边界？</strong>
+                        <strong>{t("确认移除本机安全边界？")}</strong>
                         <p>
-                          {agentProviderLabel(agentProvider)}{" "}
-                          将可以执行当前系统用户有权进行的操作；房间消息可能触发文件、命令或网络操作。
+                          {t(
+                            "{0} 将可以执行当前系统用户有权进行的操作；房间消息可能触发文件、命令或网络操作。",
+                            { 0: agentProviderLabel(agentProvider) },
+                          )}
                         </p>
                       </div>
                       <div className="full-access-actions">
                         <button type="button" onClick={() => setFullAccessConfirmationOpen(false)}>
-                          取消
+                          {t("取消")}
                         </button>
                         <button
                           type="button"
@@ -3972,7 +4030,7 @@ export function App({
                             setFullAccessConfirmationOpen(false);
                           }}
                         >
-                          我了解风险，开启完全访问
+                          {t("我了解风险，开启完全访问")}
                         </button>
                       </div>
                     </div>
@@ -3992,12 +4050,12 @@ export function App({
                             <i />
                             <i />
                           </span>
-                          <small>终端</small>
+                          <small>{t("终端")}</small>
                         </div>
                         <code>{selectedAgentCommand}</code>
                         <button type="button" disabled={!meta} onClick={() => void copyCommand()}>
                           <Icon name={commandCopied ? "check" : "copy"} size={16} />
-                          <span>{commandCopied ? "已复制到剪贴板" : "复制命令"}</span>
+                          <span>{commandCopied ? t("已复制到剪贴板") : t("复制命令")}</span>
                         </button>
                       </div>
                       {copyError && (
@@ -4007,22 +4065,27 @@ export function App({
                       )}
                       {meta?.agentCommand && !meta.agentCommand.startsWith("npx") && (
                         <p className="command-dev-note">
-                          开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码，
-                          而非已发布的 npm 包。
+                          {t(
+                            "开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码， 而非已发布的 npm 包。",
+                          )}
                         </p>
                       )}
-                      <ol className="agent-next-steps" aria-label="接入后的操作">
+                      <ol className="agent-next-steps" aria-label={t("接入后的操作")}>
                         <li>
-                          在 {agentProviderLabel(agentProvider)} 所在电脑的终端运行这条命令，Agent
-                          会加入所有房间并保持每个房间的独立上下文。
+                          {t(
+                            "在 {0} 所在电脑的终端运行这条命令，Agent 会加入所有房间并保持每个房间的独立上下文。",
+                            { 0: agentProviderLabel(agentProvider) },
+                          )}
                         </li>
                         <li>
-                          在消息中输入 <code>@{agentNameFor(username, agentProvider)}</code>{" "}
-                          即可让它响应；没被 @ 时它只会旁听。
+                          {t("在消息中输入")} <code>@{agentNameFor(username, agentProvider)}</code>{" "}
+                          {t("即可让它响应；没被 @ 时它只会旁听。")}
                         </li>
                         <li>
-                          终端按 <kbd>Ctrl + C</kbd> 即可让它离线。只想加入单个房间可在命令后追加{" "}
-                          <code>--room 房间ID</code>。
+                          {t("终端按")} <kbd>Ctrl + C</kbd>{" "}
+                          {t("即可让它离线。只想加入单个房间可在命令后追加")}{" "}
+                          <code>{t("--room 房间ID")}</code>
+                          {t("。")}
                         </li>
                       </ol>
                     </>
@@ -4047,10 +4110,10 @@ export function App({
               {agentStep === 3 && (
                 <div className="agent-dialog-links">
                   <details className="connection-details">
-                    <summary>查看连接信息</summary>
+                    <summary>{t("查看连接信息")}</summary>
                     <dl>
                       <div>
-                        <dt>服务地址</dt>
+                        <dt>{t("服务地址")}</dt>
                         <dd>
                           <code>{meta?.httpUrl ?? base}</code>
                         </dd>
@@ -4069,7 +4132,7 @@ export function App({
                     target="_blank"
                     rel="noreferrer"
                   >
-                    行为与安全规则 <Icon name="external" size={15} />
+                    {t("行为与安全规则")} <Icon name="external" size={15} />
                   </a>
                 </div>
               )}
@@ -4079,7 +4142,7 @@ export function App({
                     type="button"
                     onClick={() => goToAgentStep((agentStep - 1) as AgentSetupStep)}
                   >
-                    上一步
+                    {t("上一步")}
                   </button>
                 )}
                 {agentStep < 3 ? (
@@ -4088,12 +4151,12 @@ export function App({
                     className="primary"
                     onClick={() => goToAgentStep((agentStep + 1) as AgentSetupStep)}
                   >
-                    <span>下一步</span>
+                    <span>{t("下一步")}</span>
                     <Icon name="arrow-right" size={16} />
                   </button>
                 ) : (
                   <button type="button" onClick={closeAgentDialog}>
-                    完成
+                    {t("完成")}
                   </button>
                 )}
               </div>
@@ -4107,7 +4170,7 @@ export function App({
           <button
             className="settings-dialog-scrim"
             type="button"
-            aria-label="关闭设置"
+            aria-label={t("关闭设置")}
             onClick={closeSettings}
           />
           <div
@@ -4119,19 +4182,19 @@ export function App({
           >
             <header className="settings-dialog-header">
               <div>
-                <h2 id="settings-dialog-title">偏好设置</h2>
+                <h2 id="settings-dialog-title">{t("偏好设置")}</h2>
               </div>
               <button
                 ref={settingsCloseRef}
                 type="button"
-                aria-label="关闭设置"
+                aria-label={t("关闭设置")}
                 onClick={closeSettings}
               >
                 <Icon name="close" />
               </button>
             </header>
             <div className="settings-dialog-layout">
-              <nav className="settings-tabs" aria-label="设置分类" role="tablist">
+              <nav className="settings-tabs" aria-label={t("设置分类")} role="tablist">
                 {settingsTabs.map((tab, index) => (
                   <button
                     type="button"
@@ -4171,20 +4234,24 @@ export function App({
 
               <div className="settings-dialog-content">
                 {settingsTab === "chat" && (
-                  <section id="settings-panel-chat" role="tabpanel" aria-label="聊天与输入">
+                  <section id="settings-panel-chat" role="tabpanel" aria-label={t("聊天与输入")}>
                     <div className="settings-panel-heading">
-                      <h3>聊天与输入</h3>
-                      <p>控制消息如何编辑、发送和显示。</p>
+                      <h3>{t("聊天与输入")}</h3>
+                      <p>{t("控制消息如何编辑、发送和显示。")}</p>
                     </div>
 
                     <div className="settings-group">
                       <div className="settings-section-heading">
                         <div>
-                          <h4>发送消息</h4>
-                          <p>选择在输入框中发送消息的快捷键。</p>
+                          <h4>{t("发送消息")}</h4>
+                          <p>{t("选择在输入框中发送消息的快捷键。")}</p>
                         </div>
                       </div>
-                      <div className="shortcut-selector" role="radiogroup" aria-label="发送快捷键">
+                      <div
+                        className="shortcut-selector"
+                        role="radiogroup"
+                        aria-label={t("发送快捷键")}
+                      >
                         <button
                           type="button"
                           role="radio"
@@ -4196,8 +4263,8 @@ export function App({
                           }}
                         >
                           <span>
-                            <strong>组合键发送</strong>
-                            <small>推荐，Enter 可以安心换行</small>
+                            <strong>{t("组合键发送")}</strong>
+                            <small>{t("推荐，Enter 可以安心换行")}</small>
                           </span>
                           <kbd>{modifierKeyLabel} + Enter</kbd>
                           <i aria-hidden="true">
@@ -4215,8 +4282,8 @@ export function App({
                           }}
                         >
                           <span>
-                            <strong>Enter 发送</strong>
-                            <small>使用 Shift + Enter 换行</small>
+                            <strong>{t("Enter 发送")}</strong>
+                            <small>{t("使用 Shift + Enter 换行")}</small>
                           </span>
                           <kbd>Enter</kbd>
                           <i aria-hidden="true">
@@ -4229,8 +4296,8 @@ export function App({
                     <div className="settings-group divided">
                       <SettingsSwitch
                         checked={autoSaveDraft}
-                        label="自动保存草稿"
-                        description="刷新或重新打开页面后恢复未发送内容"
+                        label={t("自动保存草稿")}
+                        description={t("刷新或重新打开页面后恢复未发送内容")}
                         onChange={(checked) => {
                           setAutoSaveDraft(checked);
                           localStorage.setItem(storedAutoSaveDraftKey, String(checked));
@@ -4243,10 +4310,14 @@ export function App({
                       />
                       <div className="settings-inline-row">
                         <span>
-                          <strong>时间格式</strong>
-                          <small>消息时间戳的显示方式</small>
+                          <strong>{t("时间格式")}</strong>
+                          <small>{t("消息时间戳的显示方式")}</small>
                         </span>
-                        <div className="compact-choice" role="radiogroup" aria-label="时间格式">
+                        <div
+                          className="compact-choice"
+                          role="radiogroup"
+                          aria-label={t("时间格式")}
+                        >
                           {(["system", "24h", "12h"] as const).map((value) => (
                             <button
                               type="button"
@@ -4260,10 +4331,10 @@ export function App({
                               key={value}
                             >
                               {value === "system"
-                                ? "系统"
+                                ? t("系统")
                                 : value === "24h"
-                                  ? "24 小时"
-                                  : "12 小时"}
+                                  ? t("24 小时")
+                                  : t("12 小时")}
                             </button>
                           ))}
                         </div>
@@ -4273,10 +4344,10 @@ export function App({
                 )}
 
                 {settingsTab === "notifications" && (
-                  <section id="settings-panel-notifications" role="tabpanel" aria-label="通知">
+                  <section id="settings-panel-notifications" role="tabpanel" aria-label={t("通知")}>
                     <div className="settings-panel-heading">
-                      <h3>通知</h3>
-                      <p>只在你需要关注时发出清晰信号。</p>
+                      <h3>{t("通知")}</h3>
+                      <p>{t("只在你需要关注时发出清晰信号。")}</p>
                     </div>
                     {notificationPermission !== "granted" &&
                       notificationPermission !== "default" && (
@@ -4284,31 +4355,31 @@ export function App({
                           <Icon name="shield" size={16} />
                           <span>
                             {notificationPermission === "unsupported"
-                              ? "当前浏览器不支持系统通知。"
-                              : "系统通知已被浏览器阻止，请在站点权限中重新允许。"}
+                              ? t("当前浏览器不支持系统通知。")
+                              : t("系统通知已被浏览器阻止，请在站点权限中重新允许。")}
                           </span>
                         </div>
                       )}
                     {notificationPermission === "default" && messageNotifications !== "off" && (
                       <div className="notification-permission-note" role="status">
                         <Icon name="bell" size={16} />
-                        <span>浏览器尚未授权通知，当前选项要等授权后才会生效。</span>
+                        <span>{t("浏览器尚未授权通知，当前选项要等授权后才会生效。")}</span>
                         <button type="button" onClick={() => void ensureNotificationPermission()}>
-                          立即授权
+                          {t("立即授权")}
                         </button>
                       </div>
                     )}
                     <div className="settings-group">
                       <div className="settings-section-heading">
                         <div>
-                          <h4>消息通知</h4>
-                          <p>页面不在前台时，通过系统通知提醒我。</p>
+                          <h4>{t("消息通知")}</h4>
+                          <p>{t("页面不在前台时，通过系统通知提醒我。")}</p>
                         </div>
                       </div>
                       <div
                         className="shortcut-selector notification-modes"
                         role="radiogroup"
-                        aria-label="消息通知"
+                        aria-label={t("消息通知")}
                       >
                         {messageNotificationOptions.map((option) => (
                           <button
@@ -4336,8 +4407,8 @@ export function App({
                     <div className="settings-group divided settings-switch-list">
                       <SettingsSwitch
                         checked={notificationSound}
-                        label="新消息提示音"
-                        description="收到其他成员的新消息时播放轻提示音"
+                        label={t("新消息提示音")}
+                        description={t("收到其他成员的新消息时播放轻提示音")}
                         onChange={(checked) => {
                           setNotificationSound(checked);
                           localStorage.setItem(storedNotificationSoundKey, String(checked));
@@ -4347,32 +4418,36 @@ export function App({
                       <SettingsSwitch
                         checked={presenceNotifications}
                         disabled={notificationPermission === "unsupported"}
-                        label="Agent 上下线"
-                        description="页面不在前台时，提醒 Agent 离线或重新上线"
+                        label={t("Agent 上下线")}
+                        description={t("页面不在前台时，提醒 Agent 离线或重新上线")}
                         onChange={(checked) => void updatePresenceNotifications(checked)}
                       />
                     </div>
                     <p className="settings-local-note">
-                      浏览器通知只在页面不处于前台时显示；提示音设置独立生效。
+                      {t("浏览器通知只在页面不处于前台时显示；提示音设置独立生效。")}
                     </p>
                   </section>
                 )}
 
                 {settingsTab === "appearance" && (
-                  <section id="settings-panel-appearance" role="tabpanel" aria-label="外观">
+                  <section id="settings-panel-appearance" role="tabpanel" aria-label={t("外观")}>
                     <div className="settings-panel-heading">
-                      <h3>外观</h3>
-                      <p>调整界面气氛与信息密度，不影响其他成员。</p>
+                      <h3>{t("外观")}</h3>
+                      <p>{t("调整界面气氛与信息密度，不影响其他成员。")}</p>
                     </div>
 
                     <div className="settings-group">
                       <div className="settings-section-heading">
                         <div>
-                          <h4>界面主题</h4>
-                          <p>系统主题变化时可以自动跟随。</p>
+                          <h4>{t("界面主题")}</h4>
+                          <p>{t("系统主题变化时可以自动跟随。")}</p>
                         </div>
                       </div>
-                      <div className="visual-choice-grid" role="radiogroup" aria-label="界面主题">
+                      <div
+                        className="visual-choice-grid"
+                        role="radiogroup"
+                        aria-label={t("界面主题")}
+                      >
                         {(["system", "dark", "light"] as const).map((value) => (
                           <button
                             type="button"
@@ -4389,7 +4464,11 @@ export function App({
                               <span />
                             </i>
                             <strong>
-                              {value === "system" ? "跟随系统" : value === "dark" ? "深色" : "浅色"}
+                              {value === "system"
+                                ? t("跟随系统")
+                                : value === "dark"
+                                  ? t("深色")
+                                  : t("浅色")}
                             </strong>
                           </button>
                         ))}
@@ -4399,10 +4478,38 @@ export function App({
                     <div className="settings-group divided settings-switch-list">
                       <div className="settings-inline-row">
                         <span>
-                          <strong>界面密度</strong>
-                          <small>控制成员和消息之间的留白</small>
+                          <strong>{t("界面语言")}</strong>
+                          <small>{t("只影响你自己看到的界面，聊天内容不翻译")}</small>
                         </span>
-                        <div className="compact-choice" role="radiogroup" aria-label="界面密度">
+                        <div
+                          className="compact-choice"
+                          role="radiogroup"
+                          aria-label={t("界面语言")}
+                        >
+                          {LOCALE_OPTIONS.map((option) => (
+                            <button
+                              type="button"
+                              role="radio"
+                              aria-checked={localePreference === option.value}
+                              className={localePreference === option.value ? "active" : ""}
+                              onClick={() => setLocalePreference(option.value)}
+                              key={option.value}
+                            >
+                              {option.value === "system" ? t(option.label) : option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="settings-inline-row">
+                        <span>
+                          <strong>{t("界面密度")}</strong>
+                          <small>{t("控制成员和消息之间的留白")}</small>
+                        </span>
+                        <div
+                          className="compact-choice"
+                          role="radiogroup"
+                          aria-label={t("界面密度")}
+                        >
                           {(["comfortable", "compact"] as const).map((value) => (
                             <button
                               type="button"
@@ -4415,17 +4522,21 @@ export function App({
                               }}
                               key={value}
                             >
-                              {value === "comfortable" ? "舒适" : "紧凑"}
+                              {value === "comfortable" ? t("舒适") : t("紧凑")}
                             </button>
                           ))}
                         </div>
                       </div>
                       <div className="settings-inline-row">
                         <span>
-                          <strong>消息字号</strong>
-                          <small>只调整消息正文和输入文字</small>
+                          <strong>{t("消息字号")}</strong>
+                          <small>{t("只调整消息正文和输入文字")}</small>
                         </span>
-                        <div className="compact-choice" role="radiogroup" aria-label="消息字号">
+                        <div
+                          className="compact-choice"
+                          role="radiogroup"
+                          aria-label={t("消息字号")}
+                        >
                           {(["small", "standard", "large"] as const).map((value) => (
                             <button
                               type="button"
@@ -4438,15 +4549,19 @@ export function App({
                               }}
                               key={value}
                             >
-                              {value === "small" ? "小" : value === "standard" ? "标准" : "大"}
+                              {value === "small"
+                                ? t("小")
+                                : value === "standard"
+                                  ? t("标准")
+                                  : t("大")}
                             </button>
                           ))}
                         </div>
                       </div>
                       <SettingsSwitch
                         checked={reduceMotion}
-                        label="减少动态效果"
-                        description="关闭浮层、状态和界面的过渡动画"
+                        label={t("减少动态效果")}
+                        description={t("关闭浮层、状态和界面的过渡动画")}
                         onChange={(checked) => {
                           setReduceMotion(checked);
                           localStorage.setItem(storedReduceMotionKey, String(checked));
@@ -4457,7 +4572,7 @@ export function App({
                 )}
 
                 <p className="settings-local-note settings-persistence-note">
-                  所有偏好即时生效，并且只保存在当前浏览器中。
+                  {t("所有偏好即时生效，并且只保存在当前浏览器中。")}
                 </p>
               </div>
             </div>
@@ -4470,7 +4585,7 @@ export function App({
           <button
             className="room-dialog-scrim"
             type="button"
-            aria-label="关闭房间弹窗"
+            aria-label={t("关闭房间弹窗")}
             onClick={closeRoomDialog}
           />
           <div
@@ -4483,13 +4598,15 @@ export function App({
             <header className="room-dialog-header">
               <div>
                 <h2 id="room-dialog-title">
-                  {roomDialog.mode === "create" ? "新建房间" : `房间设置 · # ${roomDialog.room.id}`}
+                  {roomDialog.mode === "create"
+                    ? t("新建房间")
+                    : t("房间设置 · # {0}", { 0: roomDialog.room.id })}
                 </h2>
               </div>
               <button
                 ref={roomDialogCloseRef}
                 type="button"
-                aria-label="关闭"
+                aria-label={t("关闭")}
                 onClick={closeRoomDialog}
               >
                 <Icon name="close" />
@@ -4505,37 +4622,41 @@ export function App({
             >
               {roomDialog.mode === "create" && (
                 <label className="room-field">
-                  <span>房间 ID</span>
+                  <span>{t("房间 ID")}</span>
                   <input
                     value={roomDialogId}
                     onChange={(event) => setRoomDialogId(event.target.value)}
                     maxLength={64}
-                    placeholder="例如 frontend"
+                    placeholder={t("例如 frontend")}
                     spellCheck={false}
                     autoComplete="off"
                   />
-                  <small>仅字母、数字、下划线与连字符；创建后不可修改，Agent 用它加入。</small>
+                  <small>
+                    {t("仅字母、数字、下划线与连字符；创建后不可修改，Agent 用它加入。")}
+                  </small>
                 </label>
               )}
               <label className="room-field">
-                <span>显示名称{roomDialog.mode === "create" ? "（可选）" : ""}</span>
+                <span>
+                  {t("显示名称{0}", { 0: roomDialog.mode === "create" ? t("（可选）") : "" })}
+                </span>
                 <input
                   value={roomDialogName}
                   onChange={(event) => setRoomDialogName(event.target.value)}
                   maxLength={64}
-                  placeholder={roomDialog.mode === "create" ? "默认与房间 ID 相同" : ""}
+                  placeholder={roomDialog.mode === "create" ? t("默认与房间 ID 相同") : ""}
                 />
-                <small>仅影响界面展示，可随时修改。</small>
+                <small>{t("仅影响界面展示，可随时修改。")}</small>
               </label>
               {isOwner && (
                 <label className="room-field">
-                  <span>工作区（可选）</span>
+                  <span>{t("工作区（可选）")}</span>
                   <div className="local-launch-cwd-row">
                     <input
                       value={roomDialogWorkspace}
                       onChange={(event) => setRoomDialogWorkspace(event.target.value)}
                       maxLength={4096}
-                      placeholder="例如 ~/Coding/my-project，留空用各 Agent 自己的目录"
+                      placeholder={t("例如 ~/Coding/my-project，留空用各 Agent 自己的目录")}
                       spellCheck={false}
                       autoComplete="off"
                     />
@@ -4545,14 +4666,14 @@ export function App({
                         aria-expanded={roomWorkspacePicking}
                         onClick={() => setRoomWorkspacePicking((current) => !current)}
                       >
-                        选择…
+                        {t("选择…")}
                       </button>
                     )}
                   </div>
                   <small>
-                    这台电脑上的目录。本机 Agent
-                    在这个房间改在这里工作（需在它允许的范围内：启动目录及其上一级，或用
-                    --allow-root 追加）；修改后 Agent 等手上的任务做完再切换，并开始新会话。
+                    {t(
+                      "这台电脑上的目录。本机 Agent 在这个房间改在这里工作（需在它允许的范围内：启动目录及其上一级，或用 --allow-root 追加）；修改后 Agent 等手上的任务做完再切换，并开始新会话。",
+                    )}
                   </small>
                 </label>
               )}
@@ -4577,19 +4698,19 @@ export function App({
                 !roomDialog.room.archivedAt && (
                   <div className="room-archive-confirmation" role="alert">
                     <div>
-                      <strong>确认归档该房间？</strong>
-                      <p>归档后成员无法再加入，历史消息保留；随时可以恢复。</p>
+                      <strong>{t("确认归档该房间？")}</strong>
+                      <p>{t("归档后成员无法再加入，历史消息保留；随时可以恢复。")}</p>
                     </div>
                     <div className="room-archive-actions">
                       <button type="button" onClick={() => setArchiveConfirmOpen(false)}>
-                        取消
+                        {t("取消")}
                       </button>
                       <button
                         type="button"
                         disabled={roomDialogBusy}
                         onClick={() => void setRoomArchived(roomDialog.room, true)}
                       >
-                        确认归档
+                        {t("确认归档")}
                       </button>
                     </div>
                   </div>
@@ -4597,23 +4718,23 @@ export function App({
               {roomDialog.mode === "manage" && clearConfirmOpen && (
                 <div className="room-archive-confirmation" role="alert">
                   <div>
-                    <strong>确认清空 # {roomDialog.room.name}？</strong>
+                    <strong>{t("确认清空 # {0}？", { 0: roomDialog.room.name })}</strong>
                     <p>
-                      将删除这个房间的全部消息和 Agent
-                      调用记录，所有成员都会看到房间被清空，无法恢复。白板保留；房间里的 Agent
-                      会从新会话开始。
+                      {t(
+                        "将删除这个房间的全部消息和 Agent 调用记录，所有成员都会看到房间被清空，无法恢复。白板保留；房间里的 Agent 会从新会话开始。",
+                      )}
                     </p>
                   </div>
                   <div className="room-archive-actions">
                     <button type="button" onClick={() => setClearConfirmOpen(false)}>
-                      取消
+                      {t("取消")}
                     </button>
                     <button
                       type="button"
                       disabled={roomDialogBusy}
                       onClick={() => void clearRoom(roomDialog.room)}
                     >
-                      确认清空
+                      {t("确认清空")}
                     </button>
                   </div>
                 </div>
@@ -4624,13 +4745,13 @@ export function App({
                     type="button"
                     className="room-archive"
                     disabled={roomDialogBusy}
-                    title="仅本机房主可用"
+                    title={t("仅本机房主可用")}
                     onClick={() => {
                       setArchiveConfirmOpen(false);
                       setClearConfirmOpen(true);
                     }}
                   >
-                    清空房间
+                    {t("清空房间")}
                   </button>
                 )}
                 {roomDialog.mode === "manage" &&
@@ -4641,24 +4762,24 @@ export function App({
                       disabled={roomDialogBusy}
                       onClick={() => void setRoomArchived(roomDialog.room, false)}
                     >
-                      恢复房间
+                      {t("恢复房间")}
                     </button>
                   ) : (
                     <button
                       type="button"
                       className="room-archive"
                       disabled={roomDialogBusy || roomDialog.room.id === "general"}
-                      title={roomDialog.room.id === "general" ? "默认房间不能归档" : undefined}
+                      title={roomDialog.room.id === "general" ? t("默认房间不能归档") : undefined}
                       onClick={() => {
                         setClearConfirmOpen(false);
                         setArchiveConfirmOpen(true);
                       }}
                     >
-                      归档房间
+                      {t("归档房间")}
                     </button>
                   ))}
                 <button type="submit" disabled={roomDialogBusy}>
-                  {roomDialog.mode === "create" ? "创建房间" : "保存"}
+                  {roomDialog.mode === "create" ? t("创建房间") : t("保存")}
                 </button>
               </footer>
             </form>

@@ -5,20 +5,21 @@ import type {
   ImDeliveryLevel,
   ImLoginView,
 } from "@ai-hive/protocol";
+import { localized, t } from "./i18n";
 
 async function call<T>(url: string, token: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
   if (init.body !== undefined) headers["Content-Type"] = "application/json";
   const response = await fetch(url, { ...init, headers });
   const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? `请求失败 (${response.status})`);
+  if (!response.ok) throw new Error(payload.error ?? t("请求失败 ({0})", { 0: response.status }));
   return payload;
 }
 
-export const IM_CHANNEL_LABELS: Record<ImChannel, string> = {
-  feishu: "飞书",
-  wechat: "个人微信",
-};
+export const IM_CHANNEL_LABELS: Record<ImChannel, string> = localized(() => ({
+  feishu: t("飞书"),
+  wechat: t("个人微信"),
+}));
 
 export function fetchImChannels(base: string, token: string): Promise<ImChannelsInfo> {
   return call(`${base}/api/im/channels`, token);
@@ -84,20 +85,22 @@ export function removeImConnection(base: string, token: string, id: string): Pro
 }
 
 /** 推送档位：名称与一句说明 */
-export const IM_LEVELS: Array<{ level: ImDeliveryLevel; label: string; hint: string }> = [
-  {
-    level: "mine",
-    label: "与我相关",
-    hint: "你的任务的最终结果、问你的问题、提到你的消息、任务失败或等你批准",
-  },
-  { level: "im", label: "IM 任务与提及", hint: "只推从 IM 发起的任务和提到你的消息" },
-  {
-    level: "agents",
-    label: "全部 Agent",
-    hint: "与我相关的马上推，其余 Agent 发言每 3 分钟合并成一条",
-  },
-  { level: "all", label: "全部消息", hint: "房间里所有人和 Agent 的消息逐条推送，不合并" },
-];
+export const IM_LEVELS: Array<{ level: ImDeliveryLevel; label: string; hint: string }> = localized(
+  () => [
+    {
+      level: "mine",
+      label: t("与我相关"),
+      hint: t("你的任务的最终结果、问你的问题、提到你的消息、任务失败或等你批准"),
+    },
+    { level: "im", label: t("IM 任务与提及"), hint: t("只推从 IM 发起的任务和提到你的消息") },
+    {
+      level: "agents",
+      label: t("全部 Agent"),
+      hint: t("与我相关的马上推，其余 Agent 发言每 3 分钟合并成一条"),
+    },
+    { level: "all", label: t("全部消息"), hint: t("房间里所有人和 Agent 的消息逐条推送，不合并") },
+  ],
+);
 
 export function setImDeliveryLevel(
   base: string,

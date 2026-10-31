@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import type { WhiteboardEntry, WhiteboardSlot } from "@ai-hive/protocol";
+import { getLocale, localized, t } from "./i18n";
 
 /** 阻塞最需要人关注，排在最前；里程碑是历史记录，放最后 */
-export const whiteboardSlots: Array<{ slot: WhiteboardSlot; label: string }> = [
-  { slot: "blocked", label: "阻塞" },
-  { slot: "in_progress", label: "进行中" },
-  { slot: "ready", label: "已就绪" },
-  { slot: "milestone", label: "里程碑" },
-];
+export const whiteboardSlots: Array<{ slot: WhiteboardSlot; label: string }> = localized(() => [
+  { slot: "blocked", label: t("阻塞") },
+  { slot: "in_progress", label: t("进行中") },
+  { slot: "ready", label: t("已就绪") },
+  { slot: "milestone", label: t("里程碑") },
+]);
 
 export function upsertWhiteboardEntry(
   current: ReadonlyMap<string, WhiteboardEntry>,
@@ -23,14 +24,14 @@ export function upsertWhiteboardEntry(
 
 export function formatRelativeTime(iso: string, now: number): string {
   const seconds = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
-  if (seconds < 45) return "刚刚";
+  if (seconds < 45) return t("刚刚");
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 60) return t("{0} 分钟前", { 0: minutes });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
+  if (hours < 24) return t("{0} 小时前", { 0: hours });
   const days = Math.round(hours / 24);
-  if (days < 30) return `${days} 天前`;
-  return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" });
+  if (days < 30) return t("{0} 天前", { 0: days });
+  return new Date(iso).toLocaleDateString(getLocale(), { month: "short", day: "numeric" });
 }
 
 function shortCommit(commit: string): string {
@@ -53,10 +54,10 @@ export function WhiteboardPanel({
   if (entries.size === 0) {
     return (
       <div className="whiteboard-empty">
-        <strong>白板还是空的</strong>
+        <strong>{t("白板还是空的")}</strong>
         <p>
-          Agent 会通过 <code>hive_board_update</code>{" "}
-          在这里登记进行中的工作、可交接的成果、阻塞与里程碑，方便所有人对齐进度。
+          {t("Agent 会通过")} <code>hive_board_update</code>{" "}
+          {t("在这里登记进行中的工作、可交接的成果、阻塞与里程碑，方便所有人对齐进度。")}
         </p>
       </div>
     );
@@ -83,14 +84,20 @@ export function WhiteboardPanel({
                   {(entry.repo || entry.branch || entry.commit) && (
                     <p className="whiteboard-ref">
                       {entry.repo && <span title={entry.repo}>{entry.repo}</span>}
-                      {entry.branch && <span title={`分支 ${entry.branch}`}>{entry.branch}</span>}
+                      {entry.branch && (
+                        <span title={t("分支 {0}", { 0: entry.branch })}>{entry.branch}</span>
+                      )}
                       {entry.commit && (
-                        <span title={`提交 ${entry.commit}`}>{shortCommit(entry.commit)}</span>
+                        <span title={t("提交 {0}", { 0: entry.commit })}>
+                          {shortCommit(entry.commit)}
+                        </span>
                       )}
                     </p>
                   )}
                   {entry.unblocks.length > 0 && (
-                    <p className="whiteboard-unblocks">解除阻塞：{entry.unblocks.join("、")}</p>
+                    <p className="whiteboard-unblocks">
+                      {t("解除阻塞：{0}", { 0: entry.unblocks.join(t("、")) })}
+                    </p>
                   )}
                   <p className="whiteboard-meta">
                     <span>{entry.authorName}</span>
@@ -104,8 +111,8 @@ export function WhiteboardPanel({
                   <button
                     type="button"
                     className="whiteboard-remove"
-                    aria-label={`从白板移除：${entry.summary}`}
-                    title="从白板移除"
+                    aria-label={t("从白板移除：{0}", { 0: entry.summary })}
+                    title={t("从白板移除")}
                     onClick={() => onRemove(entry)}
                   >
                     <svg

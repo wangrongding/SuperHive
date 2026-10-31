@@ -4,6 +4,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { copyTextToClipboard } from "./clipboard";
+import { t } from "./i18n";
 
 // @ 前紧贴 ASCII 字母数字时是邮箱，不高亮；中文后直接 @ 与服务端一样算提及
 const mentionPattern = /(?<![A-Za-z0-9_.])(@[\p{L}\p{N}_.-]+)/gu;
@@ -129,10 +130,10 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & ExtraPro
         <button
           type="button"
           className="code-block-copy"
-          aria-label="复制代码"
+          aria-label={t("复制代码")}
           onClick={() => void handleCopy()}
         >
-          {copied ? "已复制 ✓" : "复制"}
+          {copied ? t("已复制 ✓") : t("复制")}
         </button>
       </div>
       <pre {...rest}>{children}</pre>

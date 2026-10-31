@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Attachment, UploadedAttachment } from "@ai-hive/protocol";
+import { t } from "./i18n";
 
 /** 与服务端 LIMITS 一致：单个 20 MiB、一条消息 10 个、合计 50 MiB */
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -32,7 +33,7 @@ export function nameForPastedFile(file: File, index: number): string {
   if (file.name && file.name !== "image.png") return file.name;
   const ext = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
-  return `粘贴图片-${stamp}${index ? `-${index + 1}` : ""}.${ext}`;
+  return t("粘贴图片-{0}{1}.{2}", { 0: stamp, 1: index ? `-${index + 1}` : "", 2: ext });
 }
 
 function uploadError(status: number, body: string): string {
@@ -42,9 +43,9 @@ function uploadError(status: number, body: string): string {
   } catch {
     // 非 JSON 响应按状态码说明
   }
-  if (status === 413) return "文件太大或空间已满";
-  if (status === 401 || status === 403) return "没有上传权限";
-  return `上传失败（${status || "网络错误"}）`;
+  if (status === 413) return t("文件太大或空间已满");
+  if (status === 401 || status === 403) return t("没有上传权限");
+  return t("上传失败（{0}）", { 0: status || t("网络错误") });
 }
 
 /**
@@ -71,7 +72,7 @@ export function useAttachmentQueue(options: {
   const start = useCallback(
     (localId: string, file: File, name: string) => {
       if (!token) {
-        patch(localId, { status: "error", error: "尚未连接 Hive Server" });
+        patch(localId, { status: "error", error: t("尚未连接 Hive Server") });
         return;
       }
       const request = new XMLHttpRequest();
@@ -99,7 +100,7 @@ export function useAttachmentQueue(options: {
       };
       request.onerror = () => {
         requests.current.delete(localId);
-        patch(localId, { status: "error", error: "网络错误，上传失败" });
+        patch(localId, { status: "error", error: t("网络错误，上传失败") });
       };
       const form = new FormData();
       form.append("file", file, name);
@@ -112,21 +113,21 @@ export function useAttachmentQueue(options: {
     (files: File[]): string | undefined => {
       const current = itemsRef.current;
       const room = MAX_ATTACHMENTS_PER_MESSAGE - current.length;
-      if (room <= 0) return `一条消息最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件`;
+      if (room <= 0) return t("一条消息最多 {0} 个附件", { 0: MAX_ATTACHMENTS_PER_MESSAGE });
       let notice: string | undefined;
       const accepted: QueuedAttachment[] = [];
       let total = current.reduce((sum, item) => sum + item.size, 0);
       files.forEach((file, index) => {
         if (accepted.length >= room) {
-          notice = `一条消息最多 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件，多出的没有加入`;
+          notice = t("一条消息最多 {0} 个附件，多出的没有加入", { 0: MAX_ATTACHMENTS_PER_MESSAGE });
           return;
         }
         if (file.size > MAX_ATTACHMENT_BYTES) {
-          notice = `${file.name || "文件"} 超过 20 MB，没有加入`;
+          notice = t("{0} 超过 20 MB，没有加入", { 0: file.name || t("文件") });
           return;
         }
         if (total + file.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
-          notice = "一条消息的附件合计不能超过 50 MB";
+          notice = t("一条消息的附件合计不能超过 50 MB");
           return;
         }
         total += file.size;
@@ -266,7 +267,7 @@ export function ComposerAttachments({
 }) {
   if (items.length === 0) return null;
   return (
-    <ul className="composer-attachments" aria-label="待发送的附件">
+    <ul className="composer-attachments" aria-label={t("待发送的附件")}>
       {items.map((item) => (
         <li
           key={item.localId}
@@ -287,7 +288,7 @@ export function ComposerAttachments({
                 {item.status === "error"
                   ? item.error
                   : item.status === "uploading"
-                    ? `上传中 ${Math.round(item.progress * 100)}%`
+                    ? t("上传中 {0}%", { 0: Math.round(item.progress * 100) })
                     : formatBytes(item.size)}
               </small>
             </span>
@@ -302,18 +303,18 @@ export function ComposerAttachments({
               type="button"
               className="composer-attachment-retry"
               onClick={() => onRetry(item.localId)}
-              aria-label={`重试上传 ${item.name}`}
-              title={`${item.error ?? "上传失败"}，点击重试`}
+              aria-label={t("重试上传 {0}", { 0: item.name })}
+              title={t("{0}，点击重试", { 0: item.error ?? t("上传失败") })}
             >
-              重试
+              {t("重试")}
             </button>
           )}
           <button
             type="button"
             className="composer-attachment-remove"
             onClick={() => onRemove(item.localId)}
-            aria-label={`移除 ${item.name}`}
-            title={item.status === "uploading" ? "取消上传" : "移除"}
+            aria-label={t("移除 {0}", { 0: item.name })}
+            title={item.status === "uploading" ? t("取消上传") : t("移除")}
           >
             ×
           </button>
@@ -336,7 +337,9 @@ export function fetchAttachmentUrl(base: string, token: string, id: string): Pro
   }).then(async (response) => {
     if (!response.ok) {
       throw new Error(
-        response.status === 410 ? "附件已撤回或过期" : `无法读取附件（${response.status}）`,
+        response.status === 410
+          ? t("附件已撤回或过期")
+          : t("无法读取附件（{0}）", { 0: response.status }),
       );
     }
     return URL.createObjectURL(await response.blob());
@@ -387,10 +390,10 @@ function ImageAttachment({
         if (url) onOpen(url);
       }}
       disabled={!url}
-      aria-label={`查看图片 ${attachment.name}`}
+      aria-label={t("查看图片 {0}", { 0: attachment.name })}
       title={error ?? attachment.name}
     >
-      {url ? <img src={url} alt={attachment.name} /> : <span>{error ?? "加载中…"}</span>}
+      {url ? <img src={url} alt={attachment.name} /> : <span>{error ?? t("加载中…")}</span>}
     </button>
   );
 }
@@ -431,8 +434,8 @@ function FileAttachment({
         event.stopPropagation();
         void download();
       }}
-      title={error ?? `下载 ${attachment.name}`}
-      aria-label={`下载 ${attachment.name}`}
+      title={error ?? t("下载 {0}", { 0: attachment.name })}
+      aria-label={t("下载 {0}", { 0: attachment.name })}
     >
       <span className="message-file-icon">
         <FileGlyph kind={attachment.kind} />
@@ -440,7 +443,8 @@ function FileAttachment({
       <span className="message-file-copy">
         <strong>{attachment.name}</strong>
         <small className={error ? "danger" : undefined}>
-          {error ?? (busy ? "下载中…" : `${formatBytes(attachment.size)} · 点击下载`)}
+          {error ??
+            (busy ? t("下载中…") : t("{0} · 点击下载", { 0: formatBytes(attachment.size) }))}
         </small>
       </span>
     </button>
@@ -461,7 +465,7 @@ function Lightbox({ url, name, onClose }: { url: string; name: string; onClose: 
       <button
         type="button"
         className="attachment-lightbox-close"
-        aria-label="关闭"
+        aria-label={t("关闭")}
         onClick={onClose}
       >
         ×

@@ -1,4 +1,5 @@
 import type { ChatMessage } from "@ai-hive/protocol";
+import { t } from "./i18n";
 
 export function formatShareTimestamp(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN", {
@@ -14,9 +15,12 @@ export function formatShareTimestamp(iso: string): string {
 export function buildShareMarkdown(messages: ChatMessage[], roomName: string): string {
   const sorted = [...messages].sort((a, b) => a.seq - b.seq);
   const lines: string[] = [
-    `# AI Hive · #${roomName} 对话分享`,
+    t("# AI Hive · #{0} 对话分享", { 0: roomName }),
     "",
-    `> 共 ${sorted.length} 条消息 · 导出于 ${formatShareTimestamp(new Date().toISOString())}`,
+    t("> 共 {0} 条消息 · 导出于 {1}", {
+      0: sorted.length,
+      1: formatShareTimestamp(new Date().toISOString()),
+    }),
   ];
   for (const message of sorted) {
     const badge = message.senderType === "agent" ? " `AGENT`" : "";

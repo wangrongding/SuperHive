@@ -15,6 +15,7 @@ import {
   revokeInvite,
 } from "./access-api";
 import { copyTextToClipboard } from "./clipboard";
+import { localized, t } from "./i18n";
 
 type DurationChoice = { kind: "preset"; minutes: number | null } | { kind: "custom" };
 
@@ -46,7 +47,7 @@ export function DurationPicker({
 
   return (
     <div className="duration-picker">
-      <div className="duration-segments" role="radiogroup" aria-label="有效期">
+      <div className="duration-segments" role="radiogroup" aria-label={t("有效期")}>
         {DURATION_PRESETS.map((preset) => {
           const on = choice.kind === "preset" && choice.minutes === preset.minutes;
           return (
@@ -69,7 +70,7 @@ export function DurationPicker({
           className={choice.kind === "custom" ? "on" : ""}
           onClick={() => setChoice({ kind: "custom" })}
         >
-          自定义
+          {t("自定义")}
         </button>
       </div>
       {choice.kind === "custom" && (
@@ -77,7 +78,7 @@ export function DurationPicker({
           <div className="duration-stepper">
             <button
               type="button"
-              aria-label="减少"
+              aria-label={t("减少")}
               disabled={amount <= limits.min}
               onClick={() => setAmount((value) => clamp(value - 1))}
             >
@@ -87,7 +88,7 @@ export function DurationPicker({
               type="text"
               inputMode="numeric"
               value={amount}
-              aria-label="自定义时长"
+              aria-label={t("自定义时长")}
               onChange={(event) => {
                 const digits = event.target.value.replace(/\D/g, "");
                 setAmount(digits ? Number(digits) : 0);
@@ -96,14 +97,14 @@ export function DurationPicker({
             />
             <button
               type="button"
-              aria-label="增加"
+              aria-label={t("增加")}
               disabled={amount >= limits.max}
               onClick={() => setAmount((value) => clamp(value + 1))}
             >
               +
             </button>
           </div>
-          <div className="duration-unit" role="radiogroup" aria-label="时长单位">
+          <div className="duration-unit" role="radiogroup" aria-label={t("时长单位")}>
             {(["hours", "days"] as const).map((value) => (
               <button
                 key={value}
@@ -118,14 +119,14 @@ export function DurationPicker({
                   );
                 }}
               >
-                {value === "hours" ? "小时" : "天"}
+                {value === "hours" ? t("小时") : t("天")}
               </button>
             ))}
           </div>
           <span className="duration-preview">
             {customValid
               ? formatDeadline(new Date(Date.now() + customMinutes * 60_000).toISOString())
-              : `请输入 ${limits.min}–${limits.max}`}
+              : t("请输入 {0}–{1}", { 0: limits.min, 1: limits.max })}
           </span>
         </div>
       )}
@@ -139,7 +140,9 @@ function inviteState(invite: Invite, now: number): "revoked" | "expired" | "acti
   return "active";
 }
 
-const inviteStateLabels = { revoked: "已撤销", expired: "已到期", active: "有效" } as const;
+const inviteStateLabels = localized(
+  () => ({ revoked: t("已撤销"), expired: t("已到期"), active: t("有效") }) as const,
+);
 
 function CloseGlyph() {
   return (
@@ -209,7 +212,7 @@ export function InviteDialog({
         2000,
       );
     } catch {
-      setError(`浏览器未允许自动复制，请手动复制：${link}`);
+      setError(t("浏览器未允许自动复制，请手动复制：{0}", { 0: link }));
     }
   }
 
@@ -250,19 +253,19 @@ export function InviteDialog({
               {state === "active" && invite.expiresAt
                 ? ` · ${formatRemaining(invite.expiresAt, now)}`
                 : ""}
-              {` · 已有 ${invite.uses} 人加入`}
-              {invite.allowAgents ? " · 可直接调度 Agent" : ""}
+              {t(" · 已有 {0} 人加入", { 0: invite.uses })}
+              {invite.allowAgents ? t(" · 可直接调度 Agent") : ""}
             </small>
           </div>
           {state !== "revoked" && renewing !== invite.id && (
             <div className="invite-item-actions">
               {link && state === "active" && (
                 <button type="button" className="ghost" onClick={() => void copy(invite.id, link)}>
-                  {copiedId === invite.id ? "已复制" : "复制链接"}
+                  {copiedId === invite.id ? t("已复制") : t("复制链接")}
                 </button>
               )}
               <button type="button" className="ghost" onClick={() => setRenewing(invite.id)}>
-                续期
+                {t("续期")}
               </button>
               <button
                 type="button"
@@ -271,25 +274,27 @@ export function InviteDialog({
                   if (
                     invite.uses === 0 ||
                     window.confirm(
-                      `撤销后，凭这个链接加入的 ${invite.uses} 人会立即被断开。确定撤销？`,
+                      t("撤销后，凭这个链接加入的 {0} 人会立即被断开。确定撤销？", {
+                        0: invite.uses,
+                      }),
                     )
                   ) {
                     void revokeInvite(base, adminToken, invite.id).then(refresh, fail);
                   }
                 }}
               >
-                撤销
+                {t("撤销")}
               </button>
             </div>
           )}
         </div>
         {renewing === invite.id && (
           <div className="invite-renew">
-            <span>从现在起续期，凭这个链接已加入的人一起延长：</span>
+            <span>{t("从现在起续期，凭这个链接已加入的人一起延长：")}</span>
             <DurationPicker onChange={setRenewMinutes} />
             <div className="invite-renew-buttons">
               <button type="button" className="ghost" onClick={() => setRenewing(undefined)}>
-                取消
+                {t("取消")}
               </button>
               <button
                 type="button"
@@ -304,7 +309,7 @@ export function InviteDialog({
                     .catch(fail)
                 }
               >
-                确认续期
+                {t("确认续期")}
               </button>
             </div>
           </div>
@@ -318,7 +323,7 @@ export function InviteDialog({
       <button
         className="room-dialog-scrim"
         type="button"
-        aria-label="关闭邀请弹窗"
+        aria-label={t("关闭邀请弹窗")}
         onClick={onClose}
       />
       <div
@@ -329,12 +334,13 @@ export function InviteDialog({
       >
         <header className="invite-dialog-header">
           <div>
-            <h2 id="invite-dialog-title">邀请成员</h2>
+            <h2 id="invite-dialog-title">{t("邀请成员")}</h2>
             <p>
-              邀请别人加入 <b># {roomId}</b>。链接有效期内谁拿到都能用，到期后所有人一起失效。
+              {t("邀请别人加入")} <b># {roomId}</b>
+              {t("。链接有效期内谁拿到都能用，到期后所有人一起失效。")}
             </p>
           </div>
-          <button type="button" className="invite-close" aria-label="关闭" onClick={onClose}>
+          <button type="button" className="invite-close" aria-label={t("关闭")} onClick={onClose}>
             <CloseGlyph />
           </button>
         </header>
@@ -348,10 +354,10 @@ export function InviteDialog({
             }}
           >
             <div className="invite-field">
-              <span className="invite-label">有效期</span>
+              <span className="invite-label">{t("有效期")}</span>
               <DurationPicker onChange={setMinutes} />
               <small>
-                到期后，凭这个链接进来的人和他们带进来的 Agent 会被断开，已发的消息保留。
+                {t("到期后，凭这个链接进来的人和他们带进来的 Agent 会被断开，已发的消息保留。")}
               </small>
             </div>
 
@@ -363,10 +369,11 @@ export function InviteDialog({
               onClick={() => setAllowAgents((value) => !value)}
             >
               <span>
-                <strong>允许对方直接让房间里的 Agent 干活</strong>
+                <strong>{t("允许对方直接让房间里的 Agent 干活")}</strong>
                 <small>
-                  关闭时，对方 @ 你的 Agent 需要你点「批准」才会执行。你的 Agent
-                  可能有本机完全权限。
+                  {t(
+                    "关闭时，对方 @ 你的 Agent 需要你点「批准」才会执行。你的 Agent 可能有本机完全权限。",
+                  )}
                 </small>
               </span>
               <i className="switch-control" aria-hidden="true">
@@ -384,9 +391,11 @@ export function InviteDialog({
               <div className="invite-created" role="status">
                 <div className="invite-created-head">
                   <strong>
-                    {created.copied ? "已复制邀请链接" : "邀请链接已生成，请手动复制"}
+                    {created.copied ? t("已复制邀请链接") : t("邀请链接已生成，请手动复制")}
                   </strong>
-                  <small>{formatDeadline(created.invite.expiresAt)} · 可以发给多人</small>
+                  <small>
+                    {t("{0} · 可以发给多人", { 0: formatDeadline(created.invite.expiresAt) })}
+                  </small>
                 </div>
                 <div className="invite-link-row">
                   <code>{created.link}</code>
@@ -395,7 +404,7 @@ export function InviteDialog({
                     className="ghost"
                     onClick={() => void copy(created.invite.id, created.link)}
                   >
-                    {copiedId === created.invite.id ? "已复制" : "复制"}
+                    {copiedId === created.invite.id ? t("已复制") : t("复制")}
                   </button>
                 </div>
               </div>
@@ -406,17 +415,17 @@ export function InviteDialog({
               className="invite-submit"
               disabled={busy || minutes === undefined}
             >
-              {busy ? "正在生成…" : created ? "再生成一个链接" : "生成并复制链接"}
+              {busy ? t("正在生成…") : created ? t("再生成一个链接") : t("生成并复制链接")}
             </button>
           </form>
 
-          <section className="invite-list" aria-label="本房间的邀请">
+          <section className="invite-list" aria-label={t("本房间的邀请")}>
             <h3>
-              有效的链接
+              {t("有效的链接")}
               <span>{active.length}</span>
             </h3>
             {active.length === 0 ? (
-              <p className="invite-empty">还没有有效的邀请链接。</p>
+              <p className="invite-empty">{t("还没有有效的邀请链接。")}</p>
             ) : (
               <ul>{active.map(renderInvite)}</ul>
             )}
@@ -428,7 +437,10 @@ export function InviteDialog({
                   aria-expanded={showInactive}
                   onClick={() => setShowInactive((value) => !value)}
                 >
-                  {showInactive ? "收起" : "显示"}已到期 / 已撤销的链接 · {inactive.length}
+                  {t("{0}已到期 / 已撤销的链接 · {1}", {
+                    0: showInactive ? t("收起") : t("显示"),
+                    1: inactive.length,
+                  })}
                 </button>
                 {showInactive && <ul className="inactive">{inactive.map(renderInvite)}</ul>}
               </>
@@ -445,8 +457,8 @@ export function GuestAccessBadge({ participant, now }: { participant: Participan
   const access = participant.access;
   if (!access) return null;
   const ended = access.ended || (access.expiresAt !== null && Date.parse(access.expiresAt) <= now);
-  const label = `${access.sponsorName ? `${access.sponsorName} 带入` : "访客"} · ${
-    ended ? (access.revoked ? "已移除" : "已到期") : formatRemaining(access.expiresAt, now)
+  const label = `${access.sponsorName ? t("{0} 带入", { 0: access.sponsorName }) : t("访客")} · ${
+    ended ? (access.revoked ? t("已移除") : t("已到期")) : formatRemaining(access.expiresAt, now)
   }`;
   return (
     <span
@@ -545,7 +557,7 @@ export function GuestMemberActions({
         ref={triggerRef}
         type="button"
         className={`guest-actions-trigger ${open ? "open" : ""}`}
-        aria-label={`管理访客 ${participant.username}`}
+        aria-label={t("管理访客 {0}", { 0: participant.username })}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={(event) => {
@@ -569,7 +581,7 @@ export function GuestMemberActions({
             ref={popoverRef}
             className="guest-popover"
             role="dialog"
-            aria-label={`管理访客 ${participant.username}`}
+            aria-label={t("管理访客 {0}", { 0: participant.username })}
             style={position}
           >
             <header>
@@ -577,15 +589,17 @@ export function GuestMemberActions({
               <small>
                 {ended
                   ? access.revoked
-                    ? "已被移除，需要重新邀请"
-                    : `已于 ${formatDeadline(access.expiresAt).replace(" 到期", "")} 到期`
+                    ? t("已被移除，需要重新邀请")
+                    : t("已于 {0} 到期", {
+                        0: formatDeadline(access.expiresAt).replace(t(" 到期"), ""),
+                      })
                   : `${formatDeadline(access.expiresAt)} · ${formatRemaining(access.expiresAt, now)}`}
               </small>
             </header>
             {!access.revoked && (
               <section>
                 <span className="guest-popover-label">
-                  {ended ? "续期后可重新进入" : "从现在起续期"}
+                  {ended ? t("续期后可重新进入") : t("从现在起续期")}
                 </span>
                 <DurationPicker onChange={setMinutes} />
                 <button
@@ -596,7 +610,7 @@ export function GuestMemberActions({
                     void run(() => renewGuest(base, adminToken, access.sessionId, minutes ?? null))
                   }
                 >
-                  {busy ? "正在续期…" : "确认续期"}
+                  {busy ? t("正在续期…") : t("确认续期")}
                 </button>
               </section>
             )}
@@ -604,9 +618,9 @@ export function GuestMemberActions({
               <footer>
                 {confirmRemove ? (
                   <>
-                    <span>他和他带入的 Agent 会被立即断开。</span>
+                    <span>{t("他和他带入的 Agent 会被立即断开。")}</span>
                     <button type="button" onClick={() => setConfirmRemove(false)}>
-                      取消
+                      {t("取消")}
                     </button>
                     <button
                       type="button"
@@ -616,12 +630,12 @@ export function GuestMemberActions({
                         void run(() => removeGuest(base, adminToken, access.sessionId))
                       }
                     >
-                      确认移除
+                      {t("确认移除")}
                     </button>
                   </>
                 ) : (
                   <button type="button" className="danger" onClick={() => setConfirmRemove(true)}>
-                    移出房间
+                    {t("移出房间")}
                   </button>
                 )}
               </footer>
@@ -652,7 +666,12 @@ export function GuestAgentDialog({
   const [copied, setCopied] = useState(false);
   return (
     <div className="room-dialog-layer">
-      <button className="room-dialog-scrim" type="button" aria-label="关闭" onClick={onClose} />
+      <button
+        className="room-dialog-scrim"
+        type="button"
+        aria-label={t("关闭")}
+        onClick={onClose}
+      />
       <div
         className="room-dialog invite-dialog"
         role="dialog"
@@ -661,9 +680,9 @@ export function GuestAgentDialog({
       >
         <header className="room-dialog-header">
           <div>
-            <h2 id="guest-agent-title">带入我的 Agent</h2>
+            <h2 id="guest-agent-title">{t("带入我的 Agent")}</h2>
           </div>
-          <button type="button" aria-label="关闭" onClick={onClose}>
+          <button type="button" aria-label={t("关闭")} onClick={onClose}>
             ×
           </button>
         </header>
@@ -684,16 +703,17 @@ export function GuestAgentDialog({
           }}
         >
           <label className="room-field">
-            <span>Agent 名字</span>
+            <span>{t("Agent 名字")}</span>
             <input
               value={name}
               maxLength={32}
-              placeholder="例如 alice-claude"
+              placeholder={t("例如 alice-claude")}
               onChange={(event) => setName(event.target.value)}
             />
             <small>
-              它只能进入这个房间，和你一样{formatDeadline(expiresAt)}
-              ；你到期或被移除时，它也会一起离开。
+              {t("它只能进入这个房间，和你一样{0} ；你到期或被移除时，它也会一起离开。", {
+                0: formatDeadline(expiresAt),
+              })}
             </small>
           </label>
           {error && (
@@ -703,7 +723,7 @@ export function GuestAgentDialog({
           )}
           {command && (
             <div className="invite-created" role="status">
-              <strong>在你自己的电脑上运行（可加 --provider claude 等参数）</strong>
+              <strong>{t("在你自己的电脑上运行（可加 --provider claude 等参数）")}</strong>
               <code>{command}</code>
               <button
                 type="button"
@@ -714,13 +734,13 @@ export function GuestAgentDialog({
                   )
                 }
               >
-                {copied ? "已复制" : "复制命令"}
+                {copied ? t("已复制") : t("复制命令")}
               </button>
             </div>
           )}
           <footer className="room-dialog-footer">
             <button type="submit" disabled={busy || !name.trim() || Boolean(command)}>
-              生成接入命令
+              {t("生成接入命令")}
             </button>
           </footer>
         </form>

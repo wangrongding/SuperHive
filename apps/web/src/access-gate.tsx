@@ -11,6 +11,7 @@ import {
   type GuestSession,
   type InvitePreview,
 } from "./access-api";
+import { localized, t, useLocale } from "./i18n";
 
 export type GuestAccess = GuestSession;
 
@@ -21,12 +22,14 @@ type GateState =
   | { kind: "redeem"; token: string; preview?: InvitePreview; error?: string }
   | { kind: "none"; reason: "no_invite" | "expired" | "revoked" | "unreachable"; detail?: string };
 
-const reasonText: Record<Extract<GateState, { kind: "none" }>["reason"], string> = {
-  no_invite: "这个房间需要邀请才能进入。请向房主要一个邀请链接。",
-  expired: "你的访问期限已到。请联系房主续期，或要一个新的邀请链接。",
-  revoked: "房主已把你移出这个房间。",
-  unreachable: "无法连接 Hive Server，请确认服务已启动并检查网络。",
-};
+const reasonText: Record<Extract<GateState, { kind: "none" }>["reason"], string> = localized(
+  () => ({
+    no_invite: t("这个房间需要邀请才能进入。请向房主要一个邀请链接。"),
+    expired: t("你的访问期限已到。请联系房主续期，或要一个新的邀请链接。"),
+    revoked: t("房主已把你移出这个房间。"),
+    unreachable: t("无法连接 Hive Server，请确认服务已启动并检查网络。"),
+  }),
+);
 
 /** 把邀请参数从地址栏去掉，只留房间，避免刷新或分享时再次用到已用过的链接 */
 function stripInviteFromHash(roomId: string) {
@@ -38,6 +41,7 @@ function stripInviteFromHash(roomId: string) {
  * 已有访客会话的按会话进入；都没有就提示需要邀请。到期或被移除时回到这里。
  */
 export function AccessGate() {
+  useLocale();
   const [base] = useState(serverBase);
   const [state, setState] = useState<GateState>({ kind: "loading" });
 
@@ -139,18 +143,18 @@ function RedeemForm({
   const [busy, setBusy] = useState(false);
   const unusable =
     preview?.state === "expired"
-      ? "这个邀请已经过期，请向房主要一个新邀请。"
+      ? t("这个邀请已经过期，请向房主要一个新邀请。")
       : preview?.state === "revoked"
-        ? "这个邀请已被房主撤销。"
+        ? t("这个邀请已被房主撤销。")
         : undefined;
   return (
     <>
       <div className="login-form-heading">
-        <h2>{preview ? `加入 # ${preview.roomId}` : "加入房间"}</h2>
+        <h2>{preview ? t("加入 # {0}", { 0: preview.roomId }) : t("加入房间")}</h2>
         <p className="login-copy">
           {preview && !unusable
-            ? `这是一个限时邀请，${formatDeadline(preview.expiresAt)}。`
-            : "使用邀请链接加入。"}
+            ? t("这是一个限时邀请，{0}。", { 0: formatDeadline(preview.expiresAt) })
+            : t("使用邀请链接加入。")}
         </p>
       </div>
       {unusable ? (
@@ -167,18 +171,18 @@ function RedeemForm({
             void onSubmit(clean).finally(() => setBusy(false));
           }}
         >
-          <label htmlFor="invite-username">你的用户名</label>
+          <label htmlFor="invite-username">{t("你的用户名")}</label>
           <input
             id="invite-username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             maxLength={32}
-            placeholder="例如 alice…"
+            placeholder={t("例如 alice…")}
             autoComplete="username"
             spellCheck={false}
           />
           <button type="submit" disabled={busy || !username.trim()}>
-            <span>{busy ? "正在加入…" : "加入"}</span>
+            <span>{busy ? t("正在加入…") : t("加入")}</span>
           </button>
           {error && (
             <p className="room-dialog-error" role="alert">
@@ -207,12 +211,12 @@ function NoAccess({
   return (
     <>
       <div className="login-form-heading">
-        <h2>{reason === "unreachable" ? "连接失败" : "需要邀请"}</h2>
+        <h2>{reason === "unreachable" ? t("连接失败") : t("需要邀请")}</h2>
         <p className="login-copy">{reasonText[reason]}</p>
         {detail && <p className="fine-print">{detail}</p>}
       </div>
       <button type="button" className="access-retry" onClick={onRetry}>
-        重新检查
+        {t("重新检查")}
       </button>
       {showOwner ? (
         <form
@@ -221,21 +225,21 @@ function NoAccess({
             if (token.trim()) onOwnerToken(token.trim());
           }}
         >
-          <label htmlFor="owner-token">房主接入令牌</label>
+          <label htmlFor="owner-token">{t("房主接入令牌")}</label>
           <input
             id="owner-token"
             value={token}
             type="password"
             onChange={(event) => setToken(event.target.value)}
-            placeholder="在 Server 所在电脑的页面或启动日志里找到"
+            placeholder={t("在 Server 所在电脑的页面或启动日志里找到")}
           />
           <button type="submit">
-            <span>以房主身份进入</span>
+            <span>{t("以房主身份进入")}</span>
           </button>
         </form>
       ) : (
         <button type="button" className="access-owner-link" onClick={() => setShowOwner(true)}>
-          我是房主，从别的电脑访问
+          {t("我是房主，从别的电脑访问")}
         </button>
       )}
     </>

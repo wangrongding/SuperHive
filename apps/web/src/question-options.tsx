@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { QuestionAnswer, QuestionSpec } from "@ai-hive/protocol";
+import { t } from "./i18n";
 
 /**
  * Agent 提问的选项：单选点一下即提交，多选勾选后统一提交；最后一行固定是「其它」自由输入。
@@ -44,10 +45,10 @@ export function QuestionOptions({
     <div
       className={`question-options ${editable ? "" : "locked"}`}
       role="group"
-      aria-label={spec.multiple ? "多选题" : "单选题"}
+      aria-label={spec.multiple ? t("多选题") : t("单选题")}
       onClick={(event) => event.stopPropagation()}
     >
-      <span className="question-options-mode">{spec.multiple ? "可多选" : "单选"}</span>
+      <span className="question-options-mode">{spec.multiple ? t("可多选") : t("单选")}</span>
       {spec.options.map((option) => {
         const picked = answer ? chosen.has(option.key) : checked.has(option.key);
         return spec.multiple ? (
@@ -77,7 +78,7 @@ export function QuestionOptions({
       })}
       {answer?.other ? (
         <div className="question-option picked other">
-          <b>其它</b>
+          <b>{t("其它")}</b>
           <span>{answer.other}</span>
         </div>
       ) : (
@@ -90,7 +91,7 @@ export function QuestionOptions({
                   checked={otherOpen}
                   onChange={() => setOtherOpen((open) => !open)}
                 />
-                <b>其它</b>
+                <b>{t("其它")}</b>
               </label>
             ) : (
               <button
@@ -99,7 +100,7 @@ export function QuestionOptions({
                 aria-expanded={otherOpen}
                 onClick={() => setOtherOpen((open) => !open)}
               >
-                <b>其它</b>
+                <b>{t("其它")}</b>
               </button>
             )}
             {otherOpen ? (
@@ -107,8 +108,8 @@ export function QuestionOptions({
                 type="text"
                 className="question-other-input"
                 value={other}
-                placeholder="输入选项之外的回答…"
-                aria-label="其它回答"
+                placeholder={t("输入选项之外的回答…")}
+                aria-label={t("其它回答")}
                 autoFocus
                 onChange={(event) => setOther(event.target.value)}
                 onKeyDown={(event) => {
@@ -119,7 +120,7 @@ export function QuestionOptions({
                 }}
               />
             ) : (
-              <span className="question-other-hint">都不合适？点这里自己写</span>
+              <span className="question-other-hint">{t("都不合适？点这里自己写")}</span>
             )}
             {!spec.multiple && otherOpen && (
               <button
@@ -128,7 +129,7 @@ export function QuestionOptions({
                 disabled={!otherText}
                 onClick={() => onSubmit([], otherText)}
               >
-                提交
+                {t("提交")}
               </button>
             )}
           </div>
@@ -141,12 +142,12 @@ export function QuestionOptions({
           disabled={checked.size === 0 && !(otherOpen && otherText)}
           onClick={submitMultiple}
         >
-          提交回答
+          {t("提交回答")}
         </button>
       )}
-      {pending && <span className="question-options-note">正在提交…</span>}
+      {pending && <span className="question-options-note">{t("正在提交…")}</span>}
       {!waiting && !answer && !pending && (
-        <span className="question-options-note">已通过文字回答或已停止等待</span>
+        <span className="question-options-note">{t("已通过文字回答或已停止等待")}</span>
       )}
     </div>
   );

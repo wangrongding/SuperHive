@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { t } from "./i18n";
 
 /**
  * 与 protocol 的 LIMITS.maxMessageLength 保持一致（由 collapsible-message.test.ts 校验）。
@@ -68,7 +69,7 @@ export function CollapsibleMessage({
             toggle();
           }}
         >
-          {expanded ? "收起" : `展开全文 · 共 ${content.length.toLocaleString()} 字`}
+          {expanded ? t("收起") : t("展开全文 · 共 {0} 字", { 0: content.length.toLocaleString() })}
         </button>
       )}
     </div>

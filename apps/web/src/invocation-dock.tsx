@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Invocation } from "@ai-hive/protocol";
 import { InvocationChips } from "./invocations";
+import { t } from "./i18n";
 
 const ACTIVE: Invocation["status"][] = ["queued", "running", "waiting_human"];
 /**
@@ -44,10 +45,10 @@ export function InvocationDock({
   const running = invocations.filter((invocation) => invocation.status === "running").length;
   const waiting = invocations.filter((invocation) => invocation.status === "waiting_human").length;
   const summary = [
-    running ? `${running} 个执行中` : undefined,
-    waiting ? `${waiting} 个等你回答` : undefined,
+    running ? t("{0} 个执行中", { 0: running }) : undefined,
+    waiting ? t("{0} 个等你回答", { 0: waiting }) : undefined,
     invocations.length - running - waiting
-      ? `${invocations.length - running - waiting} 个其他`
+      ? t("{0} 个其他", { 0: invocations.length - running - waiting })
       : undefined,
   ]
     .filter(Boolean)
@@ -59,17 +60,20 @@ export function InvocationDock({
     });
   };
   return (
-    <section className={`invocation-dock${collapsed ? " collapsed" : ""}`} aria-label="Agent 状态">
+    <section
+      className={`invocation-dock${collapsed ? " collapsed" : ""}`}
+      aria-label={t("Agent 状态")}
+    >
       <button
         type="button"
         className="invocation-dock-head"
         aria-expanded={!collapsed}
         onClick={toggle}
       >
-        <span className="invocation-dock-title">Agent 状态</span>
+        <span className="invocation-dock-title">{t("Agent 状态")}</span>
         <span className="invocation-dock-summary">{summary}</span>
         <span className="invocation-dock-toggle" aria-hidden="true">
-          {collapsed ? "展开" : "收起"}
+          {collapsed ? t("展开") : t("收起")}
         </span>
       </button>
       {!collapsed && <InvocationChips invocations={invocations} {...chipProps} />}

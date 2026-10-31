@@ -1,4 +1,5 @@
 import type { AccessResponse, Invite } from "@ai-hive/protocol";
+import { localized, t } from "./i18n";
 
 /** 访客会话令牌：兑换邀请后保存在本机，之后刷新、重连都靠它 */
 export const GUEST_TOKEN_KEY = "ai-hive.guest-token";
@@ -14,26 +15,26 @@ export function parseInviteHash(hash: string): { roomId?: string; token?: string
 }
 
 /** 邀请时长选项（分钟）；null 为永久 */
-export const DURATION_PRESETS: Array<{ label: string; minutes: number | null }> = [
-  { label: "1 小时", minutes: 60 },
-  { label: "12 小时", minutes: 12 * 60 },
-  { label: "24 小时", minutes: 24 * 60 },
-  { label: "永久", minutes: null },
-];
+export const DURATION_PRESETS: Array<{ label: string; minutes: number | null }> = localized(() => [
+  { label: t("1 小时"), minutes: 60 },
+  { label: t("12 小时"), minutes: 12 * 60 },
+  { label: t("24 小时"), minutes: 24 * 60 },
+  { label: t("永久"), minutes: null },
+]);
 
 /** 剩余时间的简短描述；null 为永久 */
 export function formatRemaining(expiresAt: string | null, now: number): string {
-  if (expiresAt === null) return "永久";
+  if (expiresAt === null) return t("永久");
   const ms = Date.parse(expiresAt) - now;
-  if (ms <= 0) return "已到期";
+  if (ms <= 0) return t("已到期");
   const minutes = Math.ceil(ms / 60_000);
-  if (minutes < 60) return `剩 ${minutes} 分钟`;
+  if (minutes < 60) return t("剩 {0} 分钟", { 0: minutes });
   const hours = Math.floor(minutes / 60);
   if (hours < 48) {
     const rest = minutes % 60;
-    return rest ? `剩 ${hours} 小时 ${rest} 分` : `剩 ${hours} 小时`;
+    return rest ? t("剩 {0} 小时 {1} 分", { 0: hours, 1: rest }) : t("剩 {0} 小时", { 0: hours });
   }
-  return `剩 ${Math.floor(hours / 24)} 天`;
+  return t("剩 {0} 天", { 0: Math.floor(hours / 24) });
 }
 
 /** 不到 1 小时就提醒续期 */
@@ -42,13 +43,15 @@ export function expiresSoon(expiresAt: string | null, now: number): boolean {
 }
 
 export function formatDeadline(expiresAt: string | null): string {
-  if (expiresAt === null) return "永久有效";
-  return `${new Date(expiresAt).toLocaleString("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })} 到期`;
+  if (expiresAt === null) return t("永久有效");
+  return t("{0} 到期", {
+    0: new Date(expiresAt).toLocaleString("zh-CN", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  });
 }
 
 async function call<T>(
@@ -61,7 +64,7 @@ async function call<T>(
   if (rest.body !== undefined) headers["Content-Type"] = "application/json";
   const response = await fetch(url, { ...rest, headers });
   const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? `请求失败 (${response.status})`);
+  if (!response.ok) throw new Error(payload.error ?? t("请求失败 ({0})", { 0: response.status }));
   return payload;
 }
 
