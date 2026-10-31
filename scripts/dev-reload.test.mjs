@@ -32,7 +32,8 @@ async function until(predicate, timeout = 5_000) {
 }
 function directory(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-self-reload-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Windows 上目录还被刚结束的子进程占着时删除会 EBUSY，稍等重试
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
   return root;
 }
 function put(root, file, contents) {
@@ -368,6 +369,13 @@ test(
     t.after(() => processHandle.stop());
     const status = () => JSON.parse(fs.readFileSync(statusPath, "utf8"));
     await until(() => status().state === "failed");
+    // 状态文件先于 stderr 写完（Windows 上管道输出明显更慢）：等这次失败的输出停下来再开始数
+    let settled = errors.length;
+    for (;;) {
+      await delay(300);
+      if (errors.length === settled) break;
+      settled = errors.length;
+    }
     const length = errors.length;
     await delay(650);
     assert.equal(errors.length, length);
@@ -379,8 +387,11 @@ test(
     const p='.ai-hive-dev/status.json';const old=JSON.parse(fs.readFileSync(p,'utf8'));
     fs.writeFileSync(p,JSON.stringify({...old,generation:old.generation+1,state:'ready'}));setInterval(()=>{},1000);`,
     );
-    await until(() => status().state === "ready");
+    // 重新拉起 supervisor 要冷启动 node，Windows 上比 macOS 慢得多
+    await until(() => status().state === "ready", 20_000);
     assert.equal(status().generation, 42);
+    // 先结束启动器再删临时目录：Windows 上进程的工作目录不能删除
+    await processHandle.stop();
   },
 );
 

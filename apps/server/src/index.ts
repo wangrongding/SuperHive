@@ -107,7 +107,10 @@ let closing = false;
 function shutdown() {
   if (closing) return;
   closing = true;
-  void app.close().finally(() => process.exit(0));
+  const prepare = (app as unknown as { prepareClose?: () => Promise<void> }).prepareClose;
+  void (prepare ? prepare().catch(() => undefined) : Promise.resolve())
+    .then(() => app.close())
+    .finally(() => process.exit(0));
 }
 if (shutdownToken) {
   const expected = Buffer.from(shutdownToken);

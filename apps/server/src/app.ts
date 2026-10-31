@@ -171,6 +171,16 @@ const roomsQuerySchema = z.object({
     .transform((value) => value === "true"),
 });
 
+/** 有没有新鲜的交接标记（不删除），关闭前判断要不要先让本机 Agent 下线 */
+function handoverPending(file: string | undefined): boolean {
+  if (!file) return false;
+  try {
+    return Date.now() - statSync(file).mtimeMs < 2 * 60_000;
+  } catch {
+    return false;
+  }
+}
+
 /** 交接标记只在写入后 2 分钟内有效，用后即删，避免过期的标记让真正的关闭也留下进程 */
 function consumeHandover(file: string | undefined): boolean {
   if (!file) return false;
@@ -317,6 +327,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             if (!key.endsWith(suffix)) continue;
             for (const connection of set) {
               if (connection.participant?.type !== "agent") continue;
+              if (connection.socket.readyState !== connection.socket.OPEN) continue;
               send(connection.socket, { type: "agent.shutdown" });
               sent = true;
             }
@@ -2876,6 +2887,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const accessTimer = setInterval(sweepExpiredAccess, options.accessSweepMs ?? 10_000);
   // 测试里直接触发清理
   app.decorate("attachmentStore", attachments);
+  /**
+   * 关闭前先让本机 Agent 正常下线：要趁 WebSocket 还连着（Windows 上靠它通知 Agent 退出），
+   * app.close() 时连接已经被关掉了。换代交接时不下线，由 onClose 交给下一个 Server。
+   */
+  app.decorate("prepareClose", async () => {
+    if (localAgents && !handoverPending(options.handoverFile)) await localAgents.shutdown();
+  });
   const attachmentTimer = setInterval(
     () => {
       try {
