@@ -928,7 +928,7 @@ describe("IM 推送档位", () => {
       (event) => event.type === "agent.mentioned" && event.message.id === trigger.id,
     );
     expect(redelivered).toBeDefined();
-    // 已经重试过：再点会被拒绝，提示原因
+    // 已经重试过：重复点击或飞书重投同一回调都不再执行，返回已处理的卡片
     expect(
       fake.events!.onAction!({
         externalId,
@@ -936,7 +936,28 @@ describe("IM 推送档位", () => {
         operatorId: "owner-open-id",
         value: { hive: "1", do: "retry" },
       }),
-    ).toMatchObject({ toast: { type: "error" } });
+    ).toMatchObject({
+      toast: { type: "info", text: "这条任务已经处理过了" },
+      rich: { resolved: { text: "已重试" } },
+    });
+    // 「继续」也一样：不会因重复回调再追加轮数
+    expect(
+      fake.events!.onAction!({
+        externalId,
+        chatId: notice.chatId,
+        operatorId: "owner-open-id",
+        value: { hive: "1", do: "continue" },
+      }),
+    ).toMatchObject({ toast: { type: "info" } });
+    // 只有房主本人能点
+    expect(
+      fake.events!.onAction!({
+        externalId,
+        chatId: notice.chatId,
+        operatorId: "someone-else",
+        value: { hive: "1", do: "retry" },
+      }),
+    ).toMatchObject({ toast: { type: "error", text: "只有房主本人可以操作" } });
   });
 
   it("命令：/who 看谁在忙，/level 切换推送档位，/cards 开关卡片按钮", async () => {

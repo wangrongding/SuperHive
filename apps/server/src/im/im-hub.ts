@@ -1152,6 +1152,11 @@ export class ImHub {
     if (!delivery?.rich || check?.kind !== "invocation") {
       return { toast: { type: "error", text: "找不到这条任务" } };
     }
+    // 已处理过（重复点击、飞书超时重投同一回调，或已在网页上处理）：不再执行，
+    // 尤其「继续」每执行一次都会再追加轮数
+    if (delivery.rich.resolved) {
+      return { toast: { type: "info", text: "这条任务已经处理过了" }, rich: delivery.rich };
+    }
     const label =
       op === "dismiss"
         ? "已忽略"
