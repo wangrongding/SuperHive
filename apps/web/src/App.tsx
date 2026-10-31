@@ -3263,11 +3263,10 @@ export function App({
                                   disabled={!canJump}
                                   title={
                                     canJump
-                                      ? t("{0}：{1}，点击跳到原消息", {
+                                      ? t("{0}，点击跳到它正在处理的消息", {
                                           0: row.participant.username,
-                                          1: row.label,
                                         })
-                                      : `${row.participant.username}：${row.label}`
+                                      : row.participant.username
                                   }
                                   onClick={() => target && jumpToMessage(target)}
                                 >
@@ -3279,12 +3278,13 @@ export function App({
                                     />
                                   </span>
                                   <strong>{row.participant.username}</strong>
-                                  <span className="typing-agent-state">{row.label}</span>
                                 </button>
                               </li>
                             );
                           })}
                         </ul>
+                        {/* 详细进展看气泡下的状态，这里只说谁在干活 */}
+                        <span>{t("正在处理")}</span>
                       </div>
                     );
                   })()}

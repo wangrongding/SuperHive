@@ -857,5 +857,6 @@
   "! 保持在线未生效": "! Stay online failed",
   "{0}：{1}，点击跳到原消息": "{0}: {1} — click to jump to the original message",
   "执行中": "Running",
-  "停止中": "Stopping"
+  "停止中": "Stopping",
+  "{0}，点击跳到它正在处理的消息": "{0} — click to jump to the message it's working on"
 }

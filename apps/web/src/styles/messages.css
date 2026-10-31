@@ -988,18 +988,7 @@ label.question-option:hover {
   font-weight: var(--weight-medium);
 }
 
-.typing-agent-state {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* 在等你回答的：蓝色描边提醒一下，具体看气泡 */
 .typing-agent.waiting {
-  border-color: var(--accent-soft);
-  background: var(--accent-soft);
-}
-
-.typing-agent.waiting .typing-agent-state {
-  color: var(--accent);
+  border-color: var(--accent);
 }
