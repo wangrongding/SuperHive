@@ -1094,6 +1094,44 @@ describe("IM 推送档位", () => {
     expect(back.text).toContain("对话对象：rd-omp");
   });
 
+  it("/help 是一张说明卡片，带常用操作按钮；/who、/level 也是卡片，档位点一下就切换", async () => {
+    const { fake, api, id } = await setup({ richCards: true });
+    fake.emit({ text: "/help" });
+    const help = await until(() =>
+      fake.sent.find((item) => item.rich?.title === "AI Hive 使用说明"),
+    );
+    expect(help.rich!.sections!.map((section) => section.title)).toEqual([
+      "💬 发消息",
+      "🙋 回答 Agent 的提问",
+      "⌨️ 命令",
+      "📌 机器人菜单（可选）",
+    ]);
+    expect(help.rich!.actions!.map((action) => action.label)).toEqual([
+      "选对话对象",
+      "切换房间",
+      "谁在忙",
+      "推送档位",
+    ]);
+    const click = (externalId: string, value: Record<string, string>) =>
+      fake.events!.onAction!({
+        externalId,
+        chatId: help.chatId,
+        operatorId: "owner-open-id",
+        value: { hive: "1", ...value },
+      });
+    click(fake.sentIds.get(help)!, { do: "who" });
+    const who = await until(() => fake.sent.find((item) => item.rich?.title === "谁在忙"));
+    expect(who.rich!.body).toContain("**helper**");
+    click(fake.sentIds.get(help)!, { do: "level" });
+    const level = await until(() => fake.sent.find((item) => item.rich?.title === "推送档位"));
+    expect(level.rich!.tag).toBe("当前：与我相关");
+    expect(click(fake.sentIds.get(level)!, { do: "level", level: "agents" })).toMatchObject({
+      rich: { tag: "当前：全部 Agent 消息" },
+    });
+    const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections;
+    expect(connection).toMatchObject({ id, level: "agents" });
+  });
+
   it("暂停后不推，恢复后不补发暂停期间的消息", async () => {
     const { fake, helper, setLevel, id, api } = await setup();
     await setLevel("all");

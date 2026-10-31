@@ -777,6 +777,16 @@ export class ImHub {
       this.reply(connection, message.chatId, reply, message.externalId);
     switch (command?.toLowerCase()) {
       case "/help":
+        if (this.richCapable(connection)) {
+          this.enqueueCard(
+            connection,
+            message.chatId,
+            "help",
+            message.externalId,
+            this.helpCard(connection),
+          );
+          return;
+        }
         return say(HELP);
       case "/status":
         return say(
@@ -859,6 +869,16 @@ export class ImHub {
         const agents = this.deps
           .participants(connection.roomId)
           .filter((participant) => participant.type === "agent");
+        if (this.richCapable(connection)) {
+          this.enqueueCard(
+            connection,
+            message.chatId,
+            "who",
+            message.externalId,
+            this.whoCard(connection),
+          );
+          return;
+        }
         if (!agents.length) return say("这个房间里还没有 Agent。");
         const icon = { online: "🟢 空闲", busy: "🔄 忙碌", offline: "⚪ 离线" } as const;
         return say(
@@ -870,6 +890,16 @@ export class ImHub {
       }
       case "/level": {
         const target = args[0]?.toLowerCase() as ImDeliveryLevel | undefined;
+        if (!target && this.richCapable(connection)) {
+          this.enqueueCard(
+            connection,
+            message.chatId,
+            "level",
+            message.externalId,
+            this.levelCard(connection),
+          );
+          return;
+        }
         if (!target) {
           return say(
             [
@@ -1392,6 +1422,138 @@ export class ImHub {
     }`;
   }
 
+  /** 能发卡片（不要求按钮回调）：飞书都行，微信只能发文字 */
+  private richCapable(connection: StoredConnection): boolean {
+    return Boolean(this.deps.drivers[connection.channel]?.richTextLength);
+  }
+
+  /** 常用操作按钮（需要卡片回调） */
+  private quickActions(connection: StoredConnection): Pick<ImRich, "actions"> {
+    if (!this.cardsEnabled(connection)) return {};
+    return {
+      actions: [
+        { label: "选对话对象", value: { do: "to" }, style: "primary" },
+        { label: "切换房间", value: { do: "room" }, style: "default" },
+        { label: "谁在忙", value: { do: "who" }, style: "default" },
+        { label: "推送档位", value: { do: "level" }, style: "default" },
+      ],
+    };
+  }
+
+  private helpCard(connection: StoredConnection): ImRich {
+    const target = this.targetOf(connection);
+    const buttons = this.cardsEnabled(connection);
+    return {
+      title: "AI Hive 使用说明",
+      subtitle: `当前：${this.roomName(connection.roomId)} → ${target ?? "未指定对话对象"}`,
+      tone: "reply",
+      tag: buttons ? "卡片按钮已开" : "文字模式",
+      sections: [
+        {
+          title: "💬 发消息",
+          body: [
+            "- 直接发文字、图片、文件，以你的身份进入当前房间",
+            `- ${target ? `没写 @ 的消息会发给 **${target}**` : "先选一个**对话对象**，之后不用再写 @"}`,
+            "- 临时找别人：写简写，如 `@codex 看下`；对上多个会让你选",
+            "- **引用回复**某个 Agent 的卡片，就是接着跟它说",
+          ].join("\n"),
+        },
+        {
+          title: "🙋 回答 Agent 的提问",
+          body: buttons
+            ? "- 在提问卡片上直接点选项；多选勾选后点「提交」\n- 也可以引用回复提问卡片打字"
+            : "- 引用回复提问，写选项字母（多选用逗号隔开，如 `A,C`）或直接写答案",
+        },
+        {
+          title: "⌨️ 命令",
+          body: [
+            "- `/to` 选对话对象，`/to codex` 直接指定，`/to off` 取消",
+            "- `/room` 切换房间",
+            "- `/who` 谁在忙",
+            "- `/level` 推送档位",
+            "- `/status` 连接状态",
+            ...(buttons ? [] : ["- `/cards on` 在飞书后台开通卡片回调后打开按钮"]),
+          ].join("\n"),
+        },
+        {
+          title: "📌 机器人菜单（可选）",
+          body: "飞书开发者后台 → 机器人 → 自定义菜单，菜单项选「推送事件」，事件 key 填 `to`、`room`、`who`、`level`、`help`",
+        },
+      ],
+      ...(buttons ? {} : { note: "重新扫码连接飞书后，提问、提醒卡片上会出现可以点的按钮" }),
+      ...this.quickActions(connection),
+      summary: "AI Hive 使用说明",
+    };
+  }
+
+  private whoCard(connection: StoredConnection): ImRich {
+    const agents = this.deps
+      .participants(connection.roomId)
+      .filter((participant) => participant.type === "agent");
+    const target = this.targetOf(connection);
+    const order = { busy: 0, online: 1, offline: 2 } as const;
+    const icon = { online: "🟢", busy: "🔄", offline: "⚪" } as const;
+    const label = { online: "空闲", busy: "忙碌", offline: "离线" } as const;
+    const busy = agents.filter((agent) => agent.status === "busy").length;
+    return {
+      title: "谁在忙",
+      subtitle: this.roomName(connection.roomId),
+      tone: "reply",
+      tag: busy ? `${busy} 个忙碌` : "都空闲",
+      body: agents.length
+        ? [...agents]
+            .sort(
+              (a, b) => order[a.status] - order[b.status] || a.username.localeCompare(b.username),
+            )
+            .map(
+              (agent) =>
+                // 正文会转义尖括号，这里只用 Markdown，不用 <font>
+                `${icon[agent.status]} **${agent.username}**\u3000${label[agent.status]}${
+                  agent.username === target ? " · 当前对话对象" : ""
+                }`,
+            )
+            .join("\n")
+        : "这个房间里还没有 Agent。",
+      ...(this.cardsEnabled(connection)
+        ? { actions: [{ label: "选对话对象", value: { do: "to" }, style: "primary" as const }] }
+        : {}),
+      summary: `谁在忙：${busy} 个忙碌`,
+    };
+  }
+
+  private levelCard(connection: StoredConnection): ImRich {
+    const current = connection.level ?? "mine";
+    const names: Record<ImDeliveryLevel, string> = {
+      mine: "与我相关",
+      im: "仅 IM 发起",
+      agents: "全部 Agent 消息",
+      all: "全部消息",
+    };
+    const levels = Object.keys(names) as ImDeliveryLevel[];
+    return {
+      title: "推送档位",
+      subtitle: this.roomName(connection.roomId),
+      tone: "reply",
+      tag: `当前：${names[current]}`,
+      body: levels
+        .map(
+          (level) =>
+            `${level === current ? "✅" : "▫️"} **${names[level]}**\n${LEVEL_TEXT[level].split("：").slice(1).join("：")}`,
+        )
+        .join("\n"),
+      ...(this.cardsEnabled(connection)
+        ? {
+            actions: levels.map((level) => ({
+              label: names[level],
+              value: { do: "level", level },
+              style: level === current ? ("primary" as const) : ("default" as const),
+            })),
+          }
+        : { note: "切换：/level mine | im | agents | all" }),
+      summary: `推送档位：${names[current]}`,
+    };
+  }
+
   /** 回复、进度卡片底部：当前发给谁，旁边一个「切换」 */
   private footerFor(connection: StoredConnection): Pick<ImRich, "footer"> {
     if (!this.cardsEnabled(connection)) return {};
@@ -1500,6 +1662,26 @@ export class ImHub {
         toast: { type: "success", text: agent ? `之后直接打字就发给 ${agent}` : "已取消指定" },
         rich: this.agentPicker(connection),
       };
+    }
+    if (op === "room" && !action.value.room) {
+      this.enqueueCard(connection, action.chatId, "room", undefined, this.roomPicker(connection));
+      return { toast: { type: "info", text: "已发来房间卡片" } };
+    }
+    if (op === "who") {
+      this.enqueueCard(connection, action.chatId, "who", undefined, this.whoCard(connection));
+      return { toast: { type: "info", text: "已发来成员状态" } };
+    }
+    if (op === "level") {
+      const level = action.value.level as ImDeliveryLevel | undefined;
+      if (!level) {
+        this.enqueueCard(connection, action.chatId, "level", undefined, this.levelCard(connection));
+        return { toast: { type: "info", text: "已发来推送档位" } };
+      }
+      if (!(level in LEVEL_TEXT)) return { toast: { type: "error", text: "没有这个档位" } };
+      this.deps.store.setLevel(connection.id, level);
+      this.deps.onConnectionsChanged(connection.roomId);
+      const current = this.deps.store.getConnection(connection.id) ?? connection;
+      return { toast: { type: "success", text: "已切换推送档位" }, rich: this.levelCard(current) };
     }
     if (op === "room") {
       const failure = this.switchRoom(connection, action.value.room ?? "");
