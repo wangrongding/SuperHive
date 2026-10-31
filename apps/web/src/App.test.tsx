@@ -1608,6 +1608,8 @@ describe("App mention autocomplete", () => {
 
     const mentionsEntry = await screen.findByRole("button", { name: "提及我，1 条未读" });
     expect(await screen.findByRole("button", { name: "Agent 任务，1 个需要处理" })).toBeTruthy();
+    // 房间列表里该房间右侧显示需要处理的任务数
+    expect(screen.getByRole("img", { name: "# frontend：1 个任务需要处理" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Agent 任务，1 个需要处理" }));
     const tasks = screen.getByRole("dialog", { name: "Agent 任务" });

@@ -1899,6 +1899,17 @@ export function App({
     }
     return { attention, inFlight };
   }, [activeInvocations]);
+  /** 每个房间正在跑、需要处理的任务数：房间列表右侧据此显示状态 */
+  const roomTaskCounts = useMemo(() => {
+    const counts = new Map<string, { attention: number; inFlight: number }>();
+    for (const invocation of activeInvocations.values()) {
+      const entry = counts.get(invocation.roomId) ?? { attention: 0, inFlight: 0 };
+      if (needsAttention(invocation)) entry.attention += 1;
+      else if (isInFlight(invocation)) entry.inFlight += 1;
+      counts.set(invocation.roomId, entry);
+    }
+    return counts;
+  }, [activeInvocations]);
 
   function openActivity(view: ActivityView, trigger?: HTMLElement | null) {
     activityTriggerRef.current = trigger ?? null;
@@ -2532,6 +2543,42 @@ export function App({
                   <span className="room-item-meta">
                     {room.archivedAt ? t("已归档") : t("{0} 在线", { 0: room.onlineCount })}
                   </span>
+                  {(() => {
+                    const tasks = roomTaskCounts.get(room.id);
+                    if (!tasks || room.archivedAt) return null;
+                    if (tasks.attention > 0) {
+                      return (
+                        <span
+                          className="room-task attention"
+                          role="img"
+                          title={t("{0} 个任务需要处理", { 0: tasks.attention })}
+                          aria-label={t("# {0}：{1} 个任务需要处理", {
+                            0: room.name,
+                            1: tasks.attention,
+                          })}
+                        >
+                          {tasks.attention}
+                        </span>
+                      );
+                    }
+                    if (tasks.inFlight > 0) {
+                      return (
+                        <span
+                          className="room-task running"
+                          role="img"
+                          title={t("{0} 个任务进行中", { 0: tasks.inFlight })}
+                          aria-label={t("# {0}：{1} 个任务进行中", {
+                            0: room.name,
+                            1: tasks.inFlight,
+                          })}
+                        >
+                          <span className="room-task-spinner" aria-hidden="true" />
+                          {tasks.inFlight > 1 && tasks.inFlight}
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                   {room.id !== currentRoomId &&
                     !room.archivedAt &&
                     room.latestSeq > (readSeqs[room.id] ?? 0) && (

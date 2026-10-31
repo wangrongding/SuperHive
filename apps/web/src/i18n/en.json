@@ -793,5 +793,9 @@
   "设置（MCP 等）": "Settings (MCP, etc.)",
   "本机 MCP：已关闭 {0} 个": "Local MCP: {0} turned off",
   "本机 MCP：全部加载（可选择）": "Local MCP: all loaded (choose)",
-  "没能读取 MCP 列表。": "Couldn't read the MCP list."
+  "没能读取 MCP 列表。": "Couldn't read the MCP list.",
+  "{0} 个任务需要处理": "{0} tasks need attention",
+  "# {0}：{1} 个任务需要处理": "# {0}: {1} tasks need attention",
+  "{0} 个任务进行中": "{0} tasks in progress",
+  "# {0}：{1} 个任务进行中": "# {0}: {1} tasks in progress"
 }

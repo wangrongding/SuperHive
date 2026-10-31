@@ -238,6 +238,47 @@
   background: var(--accent);
 }
 
+/* 房间里有任务在跑：转圈；有失败、等人回答等需要处理的：橙色计数 */
+.room-task {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  transition: opacity var(--duration-fast);
+}
+
+.room-task-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+.room-task.attention {
+  min-width: 16px;
+  height: 16px;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  padding: 0 4px;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .room-task-spinner {
+    animation: none;
+    border-right-color: currentColor;
+    opacity: 0.7;
+  }
+}
+
 .room-item-manage {
   position: absolute;
   top: 50%;
@@ -263,7 +304,9 @@
 .room-item:hover .room-item-meta,
 .room-item:focus-within .room-item-meta,
 .room-item:hover .room-unread,
-.room-item:focus-within .room-unread {
+.room-item:focus-within .room-unread,
+.room-item:hover .room-task,
+.room-item:focus-within .room-task {
   opacity: 0;
 }
 
