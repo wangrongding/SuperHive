@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { PromptContextSnapshot } from "./prompt-context.js";
 
 export type AgentState = {
   serverUrl: string;
@@ -22,8 +23,14 @@ export type AgentState = {
   /** 距上次发送完整上下文（成员、白板、规则提示）以来的轮数与时间，用于提示节流 */
   briefTurns?: number;
   lastFullPromptAt?: string;
-  /** 上次放进 Prompt 的白板摘要指纹；白板没变就不重复发送 */
+  /** Legacy fingerprint, ignored after migrating to rendered semantic snapshots. */
   whiteboardDigest?: string;
+  /** Last successfully sent context, bound to the provider thread (not the Bridge process). */
+  promptContext?: {
+    threadId: string;
+    whiteboard?: PromptContextSnapshot;
+    members?: PromptContextSnapshot;
+  };
   /** 会话里最近一次注入的规则指纹；规则变了（升级、改角色）就立即重新注入 */
   instructionsDigest?: string;
   /** 当前 Provider 会话所属话题的起点（话题分隔消息的 seq）；遇到更新的分隔就换新会话 */

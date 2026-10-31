@@ -5,7 +5,6 @@ import {
   type Invocation,
   type InvocationReport,
   type RoomSummary,
-  type WhiteboardEntry,
 } from "./hive-protocol.js";
 import {
   AgentExecutionUncertainError,
@@ -19,6 +18,8 @@ import {
   buildDeveloperInstructions,
   buildMentionPrompt,
   buildSteerPrompt,
+  snapshotMembers,
+  snapshotWhiteboard,
 } from "./prompt-builder.js";
 import {
   RoomClient,
@@ -34,6 +35,15 @@ import {
   parseAttachmentDirective,
 } from "./attachment-publisher.js";
 import type { AttachmentPaths } from "./prompt-builder.js";
+import { diffPromptContext, type PromptContextSnapshot } from "./prompt-context.js";
+
+type PreparedPrompt = {
+  text: string;
+  full: boolean;
+  threadId?: string;
+  whiteboardSnapshot?: PromptContextSnapshot;
+  membersSnapshot?: PromptContextSnapshot;
+};
 
 export function shouldProcessMention(input: {
   message: ChatMessage;
@@ -909,28 +919,45 @@ export class AgentBridge {
   private async buildPrompt(
     context: ChatMessage[],
     triggers: ChatMessage[],
-  ): Promise<{ text: string; full: boolean; whiteboardDigest?: string }> {
+  ): Promise<PreparedPrompt> {
     const lastFull = this.state.lastFullPromptAt ? Date.parse(this.state.lastFullPromptAt) : 0;
     const full =
       !this.state.threadId ||
       this.state.instructionsDigest !== this.instructionsDigest() ||
       (this.state.briefTurns ?? 0) >= this.tuning.fullPromptEveryTurns ||
       Date.now() - lastFull >= this.tuning.fullPromptEveryMs;
-    let whiteboard: WhiteboardEntry[] | undefined;
-    let whiteboardDigest: string | undefined;
-    try {
-      const entries = await this.room.fetchWhiteboard();
-      whiteboardDigest = createHash("sha256").update(JSON.stringify(entries)).digest("hex");
-      if (entries.length > 0 && (full || whiteboardDigest !== this.state.whiteboardDigest)) {
-        whiteboard = entries;
-      }
-    } catch (error) {
-      this.log(`[hive] ${error instanceof Error ? error.message : String(error)}`);
-    }
-    let members;
-    if (full) {
-      members = await this.room.fetchParticipants().catch(() => undefined);
-    }
+    const previous =
+      this.state.threadId && this.state.promptContext?.threadId === this.state.threadId
+        ? this.state.promptContext
+        : undefined;
+    let whiteboardSnapshot: PromptContextSnapshot | undefined;
+    let membersSnapshot: PromptContextSnapshot | undefined;
+    // Refresh both cheaply from the room; only semantic differences enter the model prompt.
+    // A failed fetch is unknown, not an empty list, and must not overwrite its last good baseline.
+    await Promise.all([
+      this.room
+        .fetchWhiteboard()
+        .then((entries) => {
+          whiteboardSnapshot = snapshotWhiteboard(entries);
+        })
+        .catch((error: unknown) => {
+          this.log(`[hive] ${error instanceof Error ? error.message : String(error)}`);
+        }),
+      this.room
+        .fetchParticipants()
+        .then((members) => {
+          membersSnapshot = snapshotMembers(members, this.options.username);
+        })
+        .catch((error: unknown) => {
+          this.log(`[hive] ${error instanceof Error ? error.message : String(error)}`);
+        }),
+    ]);
+    const whiteboardUpdate = whiteboardSnapshot
+      ? diffPromptContext(whiteboardSnapshot, previous?.whiteboard, full)
+      : undefined;
+    const membersUpdate = membersSnapshot
+      ? diffPromptContext(membersSnapshot, previous?.members, full)
+      : undefined;
     const attachmentPaths = await this.attachmentPaths([...context, ...triggers]);
     // Claude --resume 与 Codex 线程都沿用会话创建时的系统规则：规则更新后在这一轮把完整新规则补发一次
     const rulesUpdated =
@@ -942,8 +969,8 @@ export class AgentBridge {
       triggers,
       mode: full ? "full" : "brief",
       agentName: this.options.username,
-      ...(members ? { members } : {}),
-      ...(whiteboard ? { whiteboard } : {}),
+      ...(membersUpdate ? { membersUpdate } : {}),
+      ...(whiteboardUpdate ? { whiteboardUpdate } : {}),
       attachmentPaths,
     });
     return {
@@ -951,7 +978,9 @@ export class AgentBridge {
         ? `你的工作规则已更新，以下为完整的新规则，与之前的规则冲突时以这里为准：\n<updated_rules>\n${this.instructions}\n</updated_rules>\n\n${prompt}`
         : prompt,
       full,
-      ...(whiteboardDigest ? { whiteboardDigest } : {}),
+      ...(this.state.threadId ? { threadId: this.state.threadId } : {}),
+      ...(whiteboardSnapshot ? { whiteboardSnapshot } : {}),
+      ...(membersSnapshot ? { membersSnapshot } : {}),
     };
   }
 
@@ -977,7 +1006,7 @@ export class AgentBridge {
     return createHash("sha256").update(this.instructions).digest("hex").slice(0, 16);
   }
 
-  private notePromptSent(prompt: { full: boolean; whiteboardDigest?: string }): void {
+  private notePromptSent(prompt: PreparedPrompt): void {
     if (prompt.full) {
       this.state.briefTurns = 0;
       this.state.lastFullPromptAt = new Date().toISOString();
@@ -985,6 +1014,17 @@ export class AgentBridge {
     } else {
       this.state.briefTurns = (this.state.briefTurns ?? 0) + 1;
     }
-    if (prompt.whiteboardDigest) this.state.whiteboardDigest = prompt.whiteboardDigest;
+    delete this.state.whiteboardDigest;
+    const threadId = this.state.threadId;
+    if (prompt.threadId !== threadId || this.state.promptContext?.threadId !== threadId) {
+      delete this.state.promptContext;
+    }
+    // Some runtimes recover a missing thread themselves. A delta sent to that replacement
+    // cannot establish a full baseline; send fresh snapshots on the next wake instead.
+    if (!threadId || (!prompt.full && prompt.threadId !== threadId)) return;
+    const context = this.state.promptContext ?? { threadId };
+    if (prompt.whiteboardSnapshot) context.whiteboard = prompt.whiteboardSnapshot;
+    if (prompt.membersSnapshot) context.members = prompt.membersSnapshot;
+    this.state.promptContext = context;
   }
 }

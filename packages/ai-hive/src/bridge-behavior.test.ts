@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentBridge, pickReplyParent } from "./bridge.js";
-import type { ChatMessage, Invocation, InvocationReport, Participant } from "./hive-protocol.js";
+import type {
+  ChatMessage,
+  Invocation,
+  InvocationReport,
+  Participant,
+  WhiteboardEntry,
+} from "./hive-protocol.js";
 import {
   AgentCancelledError,
   AgentExecutionUncertainError,
@@ -52,6 +58,8 @@ class FakeRoom {
   messages: ChatMessage[] = [];
   reports: Array<Omit<InvocationReport, "type">> = [];
   sent: Array<{ content: string; clientMessageId: string; parentMessageId: string }> = [];
+  whiteboard: WhiteboardEntry[] = [];
+  participants: Participant[] = [self];
   whiteboardCalls = 0;
   participantCalls = 0;
   /** 模拟 Server 重启：接下来这么多次补拉/发送都连不上 */
@@ -76,11 +84,11 @@ class FakeRoom {
   }
   async fetchWhiteboard() {
     this.whiteboardCalls += 1;
-    return [];
+    return this.whiteboard;
   }
   async fetchParticipants() {
     this.participantCalls += 1;
-    return [self];
+    return this.participants;
   }
   report(report: Omit<InvocationReport, "type">) {
     this.reports.push(report);
@@ -190,6 +198,31 @@ describe("AgentBridge", () => {
       ...(invocations ? { invocations } : {}),
     };
     await room.handlers.onSnapshot(snapshot);
+  }
+
+  async function completePromptTurn(threadId = "thread-1"): Promise<AgentReplyInput> {
+    const index = responder.calls.length;
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === index + 1);
+    const input = responder.calls[index]!;
+    responder.finish("完成", threadId);
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    return input;
+  }
+
+  function seedPromptContext() {
+    room.whiteboard = ["a", "b"].map((key) => ({
+      id: `board-${key}`,
+      key,
+      slot: "ready",
+      summary: `summary-${key}`,
+      unblocks: [],
+      authorName: "author",
+      updatedAt: "2026-10-31T00:00:00Z",
+    }));
+    room.participants = [self, { ...self, id: "other", username: "reviewer", persona: "review" }];
   }
 
   const baseState = (): AgentState => ({
@@ -572,7 +605,192 @@ describe("AgentBridge", () => {
     expect(responder.calls.map((call) => call.refreshInstructions)).toEqual([true, false, false]);
     expect(responder.calls[0]!.prompt).toContain("<room_members>");
     expect(responder.calls[1]!.prompt).not.toContain("<room_members>");
-    expect(room.participantCalls).toBe(1);
+    // Fetch cheaply on each wake so member changes are detected; only changes enter prompts.
+    expect(room.participantCalls).toBe(3);
+  });
+
+  it("does not resend unchanged whiteboard/members after timestamp changes or reordering", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    const first = await completePromptTurn();
+    expect(first.prompt).toContain("summary-a");
+    expect(first.prompt).toContain("reviewer");
+    room.whiteboard = room.whiteboard
+      .reverse()
+      .map((entry) => ({ ...entry, updatedAt: "2026-10-31T01:00:00Z" }));
+    room.participants = room.participants
+      .reverse()
+      .map((member) => ({ ...member, lastSeenAt: "2026-10-31T01:00:00Z" }));
+    const next = await completePromptTurn();
+    expect(next.refreshInstructions).toBe(false);
+    expect(next.prompt).not.toContain("<room_whiteboard>");
+    expect(next.prompt).not.toContain("<room_members>");
+    expect((await store.load())?.promptContext?.whiteboard?.entries).toHaveLength(2);
+  });
+
+  it("sends only semantic deltas for whiteboard slot/content changes and member status changes", async () => {
+    seedPromptContext();
+    room.participants.push({ ...self, id: "stable", username: "unchanged-member" });
+    await startBridge(baseState());
+    await completePromptTurn();
+    room.whiteboard[0] = { ...room.whiteboard[0]!, slot: "blocked", summary: "needs-input" };
+    room.participants[1] = { ...room.participants[1]!, status: "busy" };
+    const next = await completePromptTurn();
+    expect(next.prompt).toContain("增量：");
+    expect(next.prompt).toContain("阻塞：");
+    expect(next.prompt).toContain("[a] needs-input");
+    expect(next.prompt).not.toContain("summary-b");
+    expect(next.prompt).toContain("reviewer（agent，busy）");
+    expect(next.prompt).not.toContain("unchanged-member");
+    const stable = await completePromptTurn();
+    expect(stable.prompt).not.toContain("<room_whiteboard>");
+    expect(stable.prompt).not.toContain("<room_members>");
+  });
+
+  it("sends removals when lists clear, then stays quiet", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    room.whiteboard = [];
+    room.participants = [self];
+    const cleared = await completePromptTurn();
+    expect(cleared.prompt).toContain("从摘要移除");
+    expect(cleared.prompt).toContain("- [a]");
+    expect(cleared.prompt).toContain("- [b]");
+    expect(cleared.prompt).toContain("移出成员列表：\n- reviewer");
+    const next = await completePromptTurn();
+    expect(next.prompt).not.toContain("<room_whiteboard>");
+    expect(next.prompt).not.toContain("<room_members>");
+  });
+
+  it("preserves context snapshots across Bridge restart and forces complete periodic refreshes", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    await bridge.stop();
+    await startBridge(await store.load());
+    const resumed = await completePromptTurn();
+    expect(resumed.prompt).not.toContain("<room_whiteboard>");
+    expect(resumed.prompt).not.toContain("<room_members>");
+    const state = (await store.load())!;
+    await bridge.stop();
+    await startBridge({ ...state, briefTurns: 8 });
+    const periodic = await completePromptTurn();
+    expect(periodic.refreshInstructions).toBe(true);
+    expect(periodic.prompt).toContain("完整快照");
+    expect(periodic.prompt).toContain("summary-a");
+    expect(periodic.prompt).toContain("summary-b");
+    expect(periodic.prompt).toContain("reviewer");
+  });
+
+  it("resends full unchanged context after the time-based refresh interval", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    const state = (await store.load())!;
+    await bridge.stop();
+    await startBridge({ ...state, lastFullPromptAt: "2000-01-01T00:00:00Z" });
+    const periodic = await completePromptTurn();
+    expect(periodic.refreshInstructions).toBe(true);
+    expect(periodic.prompt).toContain("完整快照");
+    expect(periodic.prompt).toContain("summary-b");
+    expect(periodic.prompt).toContain("reviewer");
+  });
+
+  it("never reuses the old topic baseline when the new topic's first fetch fails", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    room.messages.push(chat({ kind: "topic", content: "new topic", mentions: [] }));
+    vi.spyOn(room, "fetchWhiteboard").mockRejectedValueOnce(new Error("offline"));
+    const first = await completePromptTurn("thread-new-topic");
+    expect(first.threadId).toBeUndefined();
+    expect(first.refreshInstructions).toBe(true);
+    expect(first.prompt).toContain("reviewer");
+    expect((await store.load())?.promptContext?.whiteboard).toBeUndefined();
+    const next = await completePromptTurn("thread-new-topic");
+    expect(next.prompt).toContain("完整快照");
+    expect(next.prompt).toContain("summary-a");
+    expect(next.prompt).not.toContain("<room_members>");
+  });
+
+  it("migrates legacy fingerprints to one full context snapshot without resetting the conversation", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    const state = (await store.load())!;
+    delete state.promptContext;
+    state.whiteboardDigest = "legacy-digest";
+    await bridge.stop();
+    await startBridge(state);
+    const migrated = await completePromptTurn();
+    expect(migrated.threadId).toBe("thread-1");
+    expect(migrated.refreshInstructions).toBe(false);
+    expect(migrated.prompt).toContain("完整快照");
+    expect(migrated.prompt).toContain("summary-b");
+    expect((await store.load())?.whiteboardDigest).toBeUndefined();
+    expect((await completePromptTurn()).prompt).not.toContain("<room_whiteboard>");
+  });
+
+  it("does not treat failed fetches as removals or lose changes observed after recovery", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    const previous = (await store.load())!.promptContext;
+    room.whiteboard[0] = { ...room.whiteboard[0]!, summary: "after-outage" };
+    room.participants[1] = { ...room.participants[1]!, status: "offline" };
+    vi.spyOn(room, "fetchWhiteboard").mockRejectedValueOnce(new Error("offline"));
+    vi.spyOn(room, "fetchParticipants").mockRejectedValueOnce(new Error("offline"));
+    const failed = await completePromptTurn();
+    expect(failed.prompt).not.toContain("<room_whiteboard>");
+    expect(failed.prompt).not.toContain("<room_members>");
+    expect((await store.load())!.promptContext).toEqual(previous);
+    const recovered = await completePromptTurn();
+    expect(recovered.prompt).toContain("[a] after-outage");
+    expect(recovered.prompt).not.toContain("summary-b");
+    expect(recovered.prompt).toContain("reviewer（agent，offline）");
+  });
+
+  it("supplies missing baseline after the first full fetch failed", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    vi.spyOn(room, "fetchWhiteboard").mockRejectedValueOnce(new Error("offline"));
+    const first = await completePromptTurn();
+    expect(first.prompt).not.toContain("<room_whiteboard>");
+    const recovered = await completePromptTurn();
+    expect(recovered.refreshInstructions).toBe(false);
+    expect(recovered.prompt).toContain("完整快照");
+    expect(recovered.prompt).toContain("summary-a");
+    expect(recovered.prompt).toContain("summary-b");
+    expect(recovered.prompt).not.toContain("<room_members>");
+  });
+
+  it("does not checkpoint an unacknowledged prompt when the provider fails", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    const previous = (await store.load())!.promptContext;
+    room.whiteboard[0] = { ...room.whiteboard[0]!, summary: "unacknowledged" };
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 2);
+    responder.fail(new AgentNonRetryableError("failed before completion"));
+    await waitUntil(() => room.statuses(mention.id).includes("failed"));
+    expect((await store.load())!.promptContext).toEqual(previous);
+    expect((await completePromptTurn()).prompt).toContain("[a] unacknowledged");
+  });
+
+  it("refreshes full context after a runtime silently replaced its missing thread", async () => {
+    seedPromptContext();
+    await startBridge(baseState());
+    await completePromptTurn();
+    await completePromptTurn("thread-replacement");
+    expect((await store.load())!.promptContext).toBeUndefined();
+    const next = await completePromptTurn("thread-replacement");
+    expect(next.prompt).toContain("完整快照");
+    expect(next.prompt).toContain("summary-b");
+    expect(next.prompt).toContain("reviewer");
   });
 
   it("re-injects the rules right away when they changed since the session last saw them", async () => {
@@ -597,6 +815,7 @@ describe("AgentBridge", () => {
   });
 
   it("drops the provider session and old context when someone starts a new topic", async () => {
+    seedPromptContext();
     await startBridge({ ...baseState(), threadId: "thread-old" });
     room.messages.push(chat({ content: "旧话题里讨论的方案 A", mentions: [] }));
     const topic = chat({ kind: "topic", content: "Alice 开启了新话题", mentions: [] });
@@ -612,6 +831,8 @@ describe("AgentBridge", () => {
     expect(first.threadId).toBeUndefined();
     expect(first.refreshInstructions).toBe(true);
     expect(first.prompt).toContain("方案 B");
+    expect(first.prompt).toContain("summary-a");
+    expect(first.prompt).toContain("reviewer");
     expect(first.prompt).not.toContain("方案 A");
     responder.finish("好的", "thread-new");
     await waitUntil(() => room.statuses(mention.id).includes("completed"));
