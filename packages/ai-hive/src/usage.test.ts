@@ -101,19 +101,19 @@ describe("ClaudeStream usage", () => {
     ];
     stream.push(lines.map((line) => JSON.stringify(line)).join("\n"));
     stream.finish();
+    // modelUsage / total_cost_usd 是 --resume 会话的累计值，不能当本轮合计
+    expect(stream.sessionCostUsd()).toBe(0.2);
     expect(stream.usage()).toEqual({
       model: "claude-opus-5-5",
-      // modelUsage 含内部辅助调用，作为整轮合计
-      inputTokens: 16252,
+      inputTokens: 16152,
       cacheWriteTokens: 20597,
       cacheReadTokens: 36246,
-      outputTokens: 112,
+      outputTokens: 102,
       requests: 2,
       firstRequest: { inputTokens: 16149, cacheWriteTokens: 20097, cacheReadTokens: 0 },
       peakContextTokens: 36749,
       peakCacheWriteTokens: 20097,
       contextWindow: 1_000_000,
-      reportedCostUsd: 0.2,
     });
   });
 });

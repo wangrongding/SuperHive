@@ -31,6 +31,7 @@ export class ClaudeStream {
   private readonly tools = new Map<string, RuntimeEvent["tool"]>();
   private readonly accounting = new UsageAccumulator();
   private currentMessageId: string | undefined;
+  private sessionCost: number | undefined;
   constructor(private readonly emit: (event: RuntimeEvent) => void) {}
 
   push(chunk: string): void {
@@ -69,39 +70,29 @@ export class ClaudeStream {
     if (typeof id === "string" && id && buckets) this.accounting.request(id, buckets);
   }
 
+  /**
+   * result 里的 modelUsage 与 total_cost_usd 是整个会话（含 --resume 之前各轮）的累计值，
+   * 不能当成本轮用量：本轮 token 以流里逐条请求为准，累计费用交给 Bridge 按会话求差。
+   */
   private accountResult(event: ObjectValue): void {
-    this.accounting.setReportedCost(event.total_cost_usd);
-    const models = object(event.modelUsage);
-    const entries = models
-      ? Object.entries(models)
-          .map(([name, value]) => [name, object(value)] as const)
-          .filter((entry): entry is readonly [string, ObjectValue] => Boolean(entry[1]))
-      : [];
-    if (entries.length) {
-      // modelUsage 含 Claude Code 内部的辅助调用，按模型求和作为整轮合计
-      const sum = (key: string) =>
-        entries.reduce((total, [, value]) => total + (integer(value[key], 0, 1e12) ?? 0), 0);
-      this.accounting.setTotals({
-        inputTokens: sum("inputTokens"),
-        cacheWriteTokens: sum("cacheCreationInputTokens"),
-        cacheReadTokens: sum("cacheReadInputTokens"),
-        outputTokens: sum("outputTokens"),
-      });
-      const primary = entries
-        .slice()
-        .sort(
-          (a, b) =>
-            (typeof b[1].costUSD === "number" ? b[1].costUSD : 0) -
-            (typeof a[1].costUSD === "number" ? a[1].costUSD : 0),
-        )[0]!;
-      this.accounting.setModel(
-        typeof primary[1].canonicalModel === "string" ? primary[1].canonicalModel : primary[0],
-      );
-      this.accounting.setContextWindow(primary[1].contextWindow);
-      return;
+    if (typeof event.total_cost_usd === "number" && Number.isFinite(event.total_cost_usd)) {
+      this.sessionCost = event.total_cost_usd;
     }
-    const buckets = anthropicBuckets(event.usage);
-    if (buckets) this.accounting.setTotals(buckets);
+    const models = object(event.modelUsage);
+    for (const [name, value] of Object.entries(models ?? {})) {
+      const model = object(value);
+      if (!model) continue;
+      this.accounting.setModel(
+        typeof model.canonicalModel === "string" ? model.canonicalModel : name,
+      );
+      this.accounting.setContextWindow(model.contextWindow);
+      break;
+    }
+  }
+
+  /** Claude Code 自报的会话累计费用（美元） */
+  sessionCostUsd(): number | undefined {
+    return this.sessionCost;
   }
 
   private recovered(): void {

@@ -138,8 +138,18 @@ class ControlledResponder implements AgentResponder {
     this.steered.push(prompt);
     return this.steerResult;
   }
-  finish(text = "完成", threadId = "thread-1", usage?: AgentReply["usage"]) {
-    this.resolvers.shift()?.resolve({ text, threadId, ...(usage ? { usage } : {}) });
+  finish(
+    text = "完成",
+    threadId = "thread-1",
+    usage?: AgentReply["usage"],
+    sessionCostUsd?: number,
+  ) {
+    this.resolvers.shift()?.resolve({
+      text,
+      threadId,
+      ...(usage ? { usage } : {}),
+      ...(sessionCostUsd !== undefined ? { sessionCostUsd } : {}),
+    });
   }
   fail(message: string | Error = "boom") {
     this.resolvers.shift()?.reject(message instanceof Error ? message : new Error(message));
@@ -451,21 +461,23 @@ describe("AgentBridge", () => {
     room.handlers.onMention(first, first.seq, false);
     room.handlers.onMention(second, second.seq, false);
     await waitUntil(() => responder.calls.length === 1);
-    responder.finish("好", "thread-1", usage);
+    responder.finish("好", "thread-1", usage, 2.2);
     await waitUntil(() => room.statuses(second.id).includes("completed"));
     const withUsage = room.reports.filter((report) => report.usage);
     expect(withUsage).toHaveLength(1);
     expect(withUsage[0]).toMatchObject({ messageId: first.id, status: "completed" });
-    expect(withUsage[0]!.usage).toEqual({ ...usage, session: "new" });
+    expect(withUsage[0]!.usage).toEqual({ ...usage, reportedCostUsd: 2.2, session: "new" });
 
     const third = chat({ content: "@agent-a 再来" });
     room.messages.push(third);
     room.handlers.onMention(third, third.seq, false);
     await waitUntil(() => responder.calls.length === 2);
-    responder.finish("好", "thread-1", usage);
+    // 自报费用是会话累计值，本轮只记差额
+    responder.finish("好", "thread-1", usage, 2.4);
     await waitUntil(() => room.statuses(third.id).includes("completed"));
     const resumed = room.reports.find((report) => report.messageId === third.id && report.usage);
     expect(resumed?.usage?.session).toBe("resumed");
+    expect(resumed?.usage?.reportedCostUsd).toBeCloseTo(0.2);
     expect(resumed?.usage?.idleMs).toBeGreaterThanOrEqual(0);
   });
 

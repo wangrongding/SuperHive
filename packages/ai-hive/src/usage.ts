@@ -15,8 +15,6 @@ export class UsageAccumulator {
   private order: string[] = [];
   private model: string | undefined;
   private contextWindow: number | undefined;
-  private reportedCostUsd: number | undefined;
-  private totals: UsageBuckets | undefined;
 
   request(id: string, usage: Partial<UsageBuckets>): void {
     if (!this.requests.has(id)) {
@@ -52,22 +50,6 @@ export class UsageAccumulator {
     if (value) this.contextWindow = value;
   }
 
-  setReportedCost(usd: unknown): void {
-    if (typeof usd === "number" && Number.isFinite(usd) && usd >= 0 && usd <= 1_000_000) {
-      this.reportedCostUsd = usd;
-    }
-  }
-
-  /** Runtime 给出的整轮合计（可能包含逐条请求里没有的内部调用），优先于逐条求和 */
-  setTotals(usage: Partial<UsageBuckets>): void {
-    this.totals = {
-      inputTokens: count(usage.inputTokens),
-      cacheWriteTokens: count(usage.cacheWriteTokens),
-      cacheReadTokens: count(usage.cacheReadTokens),
-      outputTokens: count(usage.outputTokens),
-    };
-  }
-
   finish(): AgentUsage | undefined {
     const requests = this.order.map((id) => this.requests.get(id)!);
     const summed = requests.reduce<UsageBuckets>(
@@ -79,7 +61,7 @@ export class UsageAccumulator {
       }),
       { inputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, outputTokens: 0 },
     );
-    const totals = this.totals ?? summed;
+    const totals = summed;
     const total =
       totals.inputTokens + totals.cacheWriteTokens + totals.cacheReadTokens + totals.outputTokens;
     if (total === 0) return undefined;
@@ -92,7 +74,7 @@ export class UsageAccumulator {
       cacheWriteTokens: Math.min(totals.cacheWriteTokens, MAX_TOKENS),
       cacheReadTokens: Math.min(totals.cacheReadTokens, MAX_TOKENS),
       outputTokens: Math.min(totals.outputTokens, MAX_TOKENS),
-      requests: requests.length || 1,
+      requests: requests.length,
       ...(first
         ? {
             firstRequest: {
@@ -102,18 +84,9 @@ export class UsageAccumulator {
             },
           }
         : {}),
-      peakContextTokens: Math.min(
-        requests.length ? Math.max(...requests.map(context)) : context(totals),
-        MAX_TOKENS,
-      ),
-      peakCacheWriteTokens: Math.min(
-        requests.length
-          ? Math.max(...requests.map((item) => item.cacheWriteTokens))
-          : totals.cacheWriteTokens,
-        MAX_TOKENS,
-      ),
+      peakContextTokens: Math.max(...requests.map(context)),
+      peakCacheWriteTokens: Math.max(...requests.map((item) => item.cacheWriteTokens)),
       ...(this.contextWindow ? { contextWindow: this.contextWindow } : {}),
-      ...(this.reportedCostUsd !== undefined ? { reportedCostUsd: this.reportedCostUsd } : {}),
     };
   }
 }

@@ -712,9 +712,30 @@ export class AgentBridge {
       active.accepting = false;
       const turnEndedAt = Date.now();
       // 续接会话时距上一轮结束的空闲时长：超过提示缓存��效期的整段重写就能归因为「缓存过期」
+      // 自报费用是会话累计值：同一会话减去上一轮的累计，换了会话（或累计值变小）就从头算
+      let turnCostUsd: number | undefined;
+      if (reply.sessionCostUsd !== undefined && reply.threadId) {
+        const previous =
+          this.state.sessionCost?.threadId === reply.threadId
+            ? this.state.sessionCost.usd
+            : sessionAtStart === "new"
+              ? 0
+              : undefined;
+        // 续接的会话没有上一轮的累计（例如刚升级）：本轮费用未知，只记下基线
+        if (previous !== undefined) {
+          turnCostUsd =
+            reply.sessionCostUsd >= previous
+              ? reply.sessionCostUsd - previous
+              : reply.sessionCostUsd;
+        }
+        this.state.sessionCost = { threadId: reply.threadId, usd: reply.sessionCostUsd };
+      }
       const usage = reply.usage
         ? {
             ...reply.usage,
+            ...(turnCostUsd !== undefined
+              ? { reportedCostUsd: Math.round(turnCostUsd * 1e6) / 1e6 }
+              : {}),
             session: sessionAtStart,
             ...(sessionAtStart === "resumed" && Number.isFinite(lastTurnEndedAt)
               ? { idleMs: Math.max(0, turnEndedAt - lastTurnEndedAt) }

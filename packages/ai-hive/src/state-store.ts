@@ -39,6 +39,8 @@ export type AgentState = {
   workspace?: string;
   /** 上一轮模型调用结束的时间；用量统计据此判断提示缓存是否可能已经过期 */
   lastTurnEndedAt?: string;
+  /** Runtime 自报的会话累计费用，按会话记录，用来算出每一轮的费用 */
+  sessionCost?: { threadId: string; usd: number };
 };
 
 /**

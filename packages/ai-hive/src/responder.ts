@@ -26,6 +26,8 @@ export type AgentReply = {
   threadId?: string;
   /** 本轮 Runtime 返回的真实用量；不支持的 Provider 不填 */
   usage?: AgentUsage;
+  /** Runtime 自报的会话累计费用（Claude Code 的 total_cost_usd）；Bridge 求差得到本轮费用 */
+  sessionCostUsd?: number;
 };
 
 export interface AgentResponder {
