@@ -183,3 +183,53 @@ describe("isMentioned 跳过代码", () => {
     expect(isMentioned("x@agent-a.com", "agent-a")).toBe(false);
   });
 });
+
+describe("long message continuation hints", () => {
+  it.each([3999, 4000, 4001, 100_000])(
+    "keeps a bounded preview and warns only when %i units exceed the limit",
+    (length) => {
+      const message = chat({ content: "x".repeat(length) });
+      const prompt = buildMentionPrompt({ messages: [], triggers: [message], mode: "brief" });
+      expect(prompt.includes("正文预览已截断")).toBe(length > 4000);
+      if (length > 4000) {
+        expect(prompt).toContain(`原文 ${length} 字符`);
+        expect(prompt).toContain(`"messageId":"${message.id}","offset":4000,"maxChars":4000`);
+        expect(prompt).toContain("答复前须补读完");
+        expect(prompt.length).toBeLessThan(5000);
+      }
+    },
+  );
+
+  it("computes continuation against the original text before removing unsafe characters", () => {
+    const message = chat({ content: "\u202e".repeat(20) + "x".repeat(3990) + "关键要求" });
+    const prompt = buildMentionPrompt({ messages: [], triggers: [message] });
+    expect(prompt).not.toContain("\u202e");
+    expect(prompt).toContain("原文 4014 字符");
+    expect(prompt).toContain('"offset":4000');
+    expect(message.content.slice(4000)).toBe("x".repeat(10) + "关键要求");
+  });
+
+  it("provides per-message continuation for merged triggers without forcing unrelated history reads", () => {
+    const first = chat({ content: "a".repeat(4001) });
+    const second = chat({ id: "00000000-0000-4000-8000-000000000022", content: "b".repeat(4001) });
+    const history = chat({ id: "00000000-0000-4000-8000-000000000033", content: "c".repeat(4001) });
+    const prompt = buildMentionPrompt({
+      messages: [history, first, second],
+      triggers: [first, second],
+    });
+    for (const message of [first, second, history])
+      expect(prompt).toContain(`"messageId":"${message.id}"`);
+    expect(prompt.match(/答复前须补读完/g)).toHaveLength(2);
+    expect(prompt).toContain("需要依据这条消息作答时，请补读后文");
+  });
+
+  it("never reveals a recalled trigger's previous body", () => {
+    const message = chat({
+      content: "revoked-secret".repeat(500),
+      deletedAt: new Date().toISOString(),
+    });
+    const prompt = buildMentionPrompt({ messages: [], triggers: [message] });
+    expect(prompt).not.toContain("revoked-secret");
+    expect(prompt).not.toContain("正文预览已截断");
+  });
+});

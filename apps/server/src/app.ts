@@ -44,6 +44,7 @@ import {
   type CreateMessageInput,
 } from "./database.js";
 import { createHiveMcpServer, type AttachmentReadResult, type InboxDigest } from "./hive-mcp.js";
+import { readMessageContent } from "./message-content.js";
 import {
   LocalAgentSupervisor,
   resolveWorkspace,
@@ -1239,15 +1240,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     inboxCursors.set(agent.id, included.at(-1)!.seq);
     const name = agent.username.toLocaleLowerCase();
     return {
-      messages: included.map((message) => ({
-        seq: message.seq,
-        id: message.id,
-        sender: message.senderName,
-        senderType: message.senderType,
-        content:
-          message.content.length > 500 ? `${message.content.slice(0, 500)}…` : message.content,
-        mentionsYou: message.mentions.some((mention) => mention.toLocaleLowerCase() === name),
-      })),
+      messages: included.map((message) => {
+        const page = readMessageContent(message, 0, 500);
+        return {
+          seq: message.seq,
+          id: message.id,
+          sender: message.senderName,
+          senderType: message.senderType,
+          content: page.content + (page.nextOffset !== null ? "…" : ""),
+          ...(page.nextOffset !== null
+            ? { totalLength: page.totalLength, nextOffset: page.nextOffset }
+            : {}),
+          mentionsYou: message.mentions.some((mention) => mention.toLocaleLowerCase() === name),
+        };
+      }),
       remaining: fresh.length - included.length,
     };
   }
@@ -2066,6 +2072,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           .filter((message) => !message.deletedAt),
         latestSeq: database.latestSeq(participant.roomId),
       }),
+      readMessage: (id) => {
+        const message = database.getMessage(id);
+        if (
+          !message ||
+          message.roomId !== participant.roomId ||
+          message.deletedAt ||
+          message.seq < database.currentTopicSeq(participant.roomId)
+        ) {
+          throw new HiveError(
+            "MESSAGE_NOT_FOUND",
+            "当前房间/话题中没有这条可读取消息（可能已撤回）。",
+          );
+        }
+        return message;
+      },
       listMembers: () => participantsOf(participant.roomId),
       sendMessage: (input) => {
         if (input.parentMessageId) return createAndDispatchMessage(participant, input).message;
