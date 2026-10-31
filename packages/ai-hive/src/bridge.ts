@@ -745,12 +745,21 @@ export class AgentBridge {
         this.room.fetchMessages(context.latestSeq),
       );
       // 经 hive_invoke 发出的委派、hive_ask_human 提的问题只是中间动作，不能当成这一轮的回复，否则最终答复会被吞掉
-      const sentWithHiveTool = messagesAfterReply.messages.find(
+      const toolMessages = messagesAfterReply.messages.filter(
         (message) =>
           message.senderId === this.ownParticipantId &&
           message.kind !== "delegation" &&
           message.kind !== "question",
       );
+      // 这一轮用 hive_message_send 发过消息，最终回复仍要照常代发：工具发的往往只是中途的进度（「收到，开始做」），
+      // 只有最终输出为 NO_REPLY、和已发的内容相同，或只是一句「已发送」时，才把工具发的那条当作这一轮的回复
+      const sentWithHiveTool =
+        toolMessages.length > 0 &&
+        (resolved.silent ||
+          repeatsToolMessage(content, toolMessages) ||
+          isSendAcknowledgement(content))
+          ? toolMessages.at(-1)
+          : undefined;
       let replyMessageId: string | undefined = sentWithHiveTool?.id;
       if (live.length === 0) {
         this.log("[hive] 本轮的触发消息都已被撤回或停止，不再发送回复");
@@ -789,7 +798,7 @@ export class AgentBridge {
         );
         replyMessageId = sent.id;
       } else {
-        this.log("[hive] 已通过 hive_message_send 发送，不再重复代发。");
+        this.log("[hive] 最终回复已用 hive_message_send 发出，不再重复代发。");
         if (directive.paths.length) {
           this.log(
             "[hive] 回复里声明的附件只随 Bridge 代发的回复发出，这次已用工具发送，附件未发出",
@@ -1157,4 +1166,30 @@ export class AgentBridge {
     if (prompt.membersSnapshot) context.members = prompt.membersSnapshot;
     this.state.promptContext = context;
   }
+}
+
+function normalizeReply(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** 最终输出和本轮用工具发过的某条消息是同一段话（或几乎整段包含） */
+export function repeatsToolMessage(content: string, sent: ChatMessage[]): boolean {
+  const final = normalizeReply(content);
+  if (!final) return false;
+  return sent.some((message) => {
+    const posted = normalizeReply(message.content);
+    if (!posted) return false;
+    if (posted === final) return true;
+    const [shorter, longer] = posted.length < final.length ? [posted, final] : [final, posted];
+    return longer.includes(shorter) && shorter.length >= longer.length * 0.9;
+  });
+}
+
+/** 发完之后只说一句「已发送」：不是新的回复内容 */
+export function isSendAcknowledgement(content: string): boolean {
+  const text = normalizeReply(content);
+  return (
+    text.length <= 40 &&
+    /(已|已经)(通过|用|经)?.{0,20}(发送|发出|回复|发到|发在)|^sent\b|hive_message_send/i.test(text)
+  );
 }

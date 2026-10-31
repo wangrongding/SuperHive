@@ -1119,6 +1119,89 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
     await mcpA.client.close();
   });
 
+  it("keeps a bridge-run invocation running when the agent sends an interim message with the trigger as parent", async () => {
+    const { app, port, join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agentA } = await join("agent-a", "agent");
+    const mcpA = mcpClient(port, "agent-a");
+    await mcpA.connect();
+    const invocationOf = async (messageId: string) =>
+      (
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/rooms/general/invocations",
+            headers: { authorization: "Bearer test-token" },
+          })
+        ).json() as { invocations: Invocation[] }
+      ).invocations.find((invocation) => invocation.messageId === messageId)!;
+
+    alice.send({ type: "message.send", clientMessageId: "long", content: "@agent-a 做个大任务" });
+    const mention = await agentA.next((event) => event.type === "agent.mentioned");
+    const trigger = mention.type === "agent.mentioned" ? mention.message : undefined;
+    agentA.send({ type: "invocation.report", messageId: trigger!.id, status: "running" });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+    );
+    // Agent 按规则带上触发消息 ID 先报一句进度：不能把这一轮当成结束
+    await mcpA.client.callTool({
+      name: "hive_message_send",
+      arguments: { content: "收到，开始做", parentMessageId: trigger!.id },
+    });
+    const interim = await alice.next(
+      (event) => event.type === "message.created" && event.message.content === "收到，开始做",
+    );
+    expect(await invocationOf(trigger!.id)).toMatchObject({
+      status: "running",
+      progress: expect.stringContaining("进行中的消息"),
+    });
+    expect((await invocationOf(trigger!.id)).replyMessageId).toBeUndefined();
+    // 之后的进度照常更新，轮末 Bridge 代发最终回复并报完成
+    agentA.send({
+      type: "invocation.report",
+      messageId: trigger!.id,
+      status: "running",
+      progress: "执行命令：pnpm test",
+    });
+    agentA.send({
+      type: "message.send",
+      clientMessageId: "agent-reply-x",
+      content: "做完了，结果如下",
+      parentMessageId: trigger!.id,
+    });
+    const final = await alice.next(
+      (event) => event.type === "message.created" && event.message.content === "做完了，结果如下",
+    );
+    const done = await invocationOf(trigger!.id);
+    expect(done).toMatchObject({
+      status: "completed",
+      replyMessageId: final.type === "message.created" ? final.message.id : "",
+    });
+    expect(done.replyMessageId).not.toBe(
+      interim.type === "message.created" ? interim.message.id : "",
+    );
+    await mcpA.client.close();
+  });
+
+  it("still treats an MCP reply as the result when no bridge is running the invocation", async () => {
+    const { port, join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agentA } = await join("agent-a", "agent");
+    const mcpA = mcpClient(port, "agent-a");
+    await mcpA.connect();
+    alice.send({ type: "message.send", clientMessageId: "plain", content: "@agent-a 你好" });
+    const mention = await agentA.next((event) => event.type === "agent.mentioned");
+    const trigger = mention.type === "agent.mentioned" ? mention.message : undefined;
+    await mcpA.client.callTool({
+      name: "hive_message_send",
+      arguments: { content: "你好呀", parentMessageId: trigger!.id },
+    });
+    await alice.next(
+      (event) => event.type === "invocation.updated" && event.invocation.status === "completed",
+    );
+    await mcpA.client.close();
+  });
+
   it("blocks long agent-to-agent chains until a human extends the budget", async () => {
     const { port, join } = await startRoom();
     const { peer: alice } = await join("Alice", "human");

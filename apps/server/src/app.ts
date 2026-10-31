@@ -739,7 +739,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   function completeFromReply(
     agent: Participant,
     reply: ChatMessage,
-    options: { inferredParent?: boolean } = {},
+    options: { inferredParent?: boolean; fromTool?: boolean } = {},
   ): boolean {
     if (!reply.parentMessageId) return true;
     const invocation = database.getInvocationFor(reply.parentMessageId, agent.id);
@@ -750,6 +750,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     // 提过问的调用等人回答才算结束；这一轮的回复只记下来，不把它推进到完成
     if (invocation.status === "waiting_human") {
       emitInvocation(database.updateInvocation(invocation.id, { replyMessageId: reply.id }));
+      return true;
+    }
+    // 有 Bridge 在执行这一轮（报过执行中、在发心跳）：Agent 用工具中途发的消息只是进度，不结束这一轮；
+    // 结束与最终回复以 Bridge 轮末上报为准。没有 Bridge 的 Agent（手动接入）仍以这条回复作为结束
+    if (options.fromTool && invocation.status === "running" && invocation.runtime) {
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          progress: `已发出进行中的消息 #${reply.seq}，仍在执行`,
+        }),
+      );
       return true;
     }
     const stopping = invocation.status === "cancelling";
@@ -772,7 +782,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   function createAndDispatchMessage(
     participant: Participant,
     input: CreateMessageInput,
-    options: { inferredParent?: boolean; delegateTo?: string; receipt?: boolean } = {},
+    options: {
+      inferredParent?: boolean;
+      delegateTo?: string;
+      receipt?: boolean;
+      /** Agent 经 hive_message_send 发出（不是 Bridge 代发的最终回复） */
+      fromTool?: boolean;
+    } = {},
   ) {
     const result = database.createMessage(participant, input);
     if (!result.created) return result;
@@ -2217,7 +2233,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       },
       listMembers: () => participantsOf(participant.roomId),
       sendMessage: (input) => {
-        if (input.parentMessageId) return createAndDispatchMessage(participant, input).message;
+        if (input.parentMessageId) {
+          return createAndDispatchMessage(participant, input, { fromTool: true }).message;
+        }
         const parent = inferExecutingParent(participant);
         return createAndDispatchMessage(
           participant,

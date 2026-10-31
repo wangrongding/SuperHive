@@ -355,6 +355,45 @@ describe("AgentBridge", () => {
     ]);
   });
 
+  it("posts the final answer after an interim hive_message_send, but not a repeat or an acknowledgement", async () => {
+    const run = async (final: string, sentContent: string) => {
+      const calls = responder.calls.length;
+      const mention = chat({ content: `@agent-a ${final}` });
+      room.messages.push(mention);
+      room.handlers.onMention(mention, mention.seq, false);
+      await waitUntil(() => responder.calls.length === calls + 1);
+      const interim = chat({
+        senderId: SELF,
+        senderName: "agent-a",
+        senderType: "agent",
+        content: sentContent,
+        mentions: [],
+        parentMessageId: mention.id,
+      });
+      room.messages.push(interim);
+      responder.finish(final);
+      await waitUntil(() => room.statuses(mention.id).includes("completed"));
+      const completed = room.reports.find(
+        (report) => report.messageId === mention.id && report.status === "completed",
+      );
+      return { interim, completed };
+    };
+    await startBridge(baseState());
+    // 中途报了一句进度，最终的完整结论照常代发，并作为这一轮的回复
+    const first = await run("全部修完，测试通过", "收到，开始做");
+    expect(room.sent.at(-1)).toMatchObject({ content: "全部修完，测试通过" });
+    expect(first.completed?.replyMessageId).toBe(room.messages.at(-1)!.id);
+    // 最终输出和工具发过的一样：不重复发
+    const sentBefore = room.sent.length;
+    const second = await run("结论：已修复", "结论：已修复");
+    expect(room.sent).toHaveLength(sentBefore);
+    expect(second.completed?.replyMessageId).toBe(second.interim.id);
+    // 只说一句已发送：不重复发
+    const third = await run("已通过 hive_message_send 发送", "这是完整的答复");
+    expect(room.sent).toHaveLength(sentBefore);
+    expect(third.completed?.replyMessageId).toBe(third.interim.id);
+  });
+
   it("processes a server-dispatched answer that does not @ the agent", async () => {
     await startBridge(baseState());
     // 人回复了 Agent 的提问：正文没有 @，但服务端已为它派发
