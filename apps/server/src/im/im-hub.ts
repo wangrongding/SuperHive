@@ -818,7 +818,11 @@ export class ImHub {
             this.setTarget(connection, undefined);
             return say("已取消指定对话对象。");
           }
-          const hits = matchAgents(arg.replace(/^@/, ""), this.agentNames(connection.roomId), true);
+          const hits = matchAgents(
+            arg.replace(/^@/, ""),
+            this.agentNames(connection.roomId),
+            "loose",
+          );
           if (hits.length !== 1) {
             return say(
               hits.length

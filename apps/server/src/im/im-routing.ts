@@ -1,7 +1,8 @@
 /**
  * 飞书里没法 @ 房间的 Agent（它们不在飞书通讯录里），这里把消息里的简写解析成 Agent 全名：
  * 「@codex 看下」「codex 看下」→「@rd-codex 看下」。按匹配强度分层，取最强的一层：
- * 全名相同 > 去掉公共前缀后相同 > 去掉前缀后开头相同 > 包含（只用于带 @ 的写法）。
+ * 全名相同 > 去掉公共前缀后相同 > 去掉前缀后开头相同 > 包含。后两层只用于带 @ 的写法：
+ * 不带 @ 的开头一个词必须和名字完全对上，否则「code review」「open 一下」会被误当成 rd-codex、rd-opencode。
  * 一层里多个候选就交给人点选，不猜。
  */
 
@@ -24,7 +25,7 @@ export function commonPrefix(names: string[]): string {
   return cut >= 0 ? prefix.slice(0, cut + 1) : "";
 }
 
-export function matchAgents(token: string, agents: string[], loose: boolean): string[] {
+export function matchAgents(token: string, agents: string[], mode: "exact" | "loose"): string[] {
   const query = token.toLowerCase();
   if (!query) return [];
   const prefix = commonPrefix(agents);
@@ -35,8 +36,12 @@ export function matchAgents(token: string, agents: string[], loose: boolean): st
   const tiers: Array<(name: string) => boolean> = [
     (name) => name.toLowerCase() === query,
     (name) => short(name) === query,
-    (name) => short(name).startsWith(query) || name.toLowerCase().startsWith(query),
-    ...(loose && query.length >= 2 ? [(name: string) => name.toLowerCase().includes(query)] : []),
+    ...(mode === "loose"
+      ? [
+          (name: string) => short(name).startsWith(query) || name.toLowerCase().startsWith(query),
+          ...(query.length >= 2 ? [(name: string) => name.toLowerCase().includes(query)] : []),
+        ]
+      : []),
   ];
   for (const tier of tiers) {
     const hits = agents.filter(tier);
@@ -55,7 +60,7 @@ export function resolveAliases(text: string, agents: string[]): AliasResult {
   let ambiguous: AliasResult | undefined;
   const content = text.replace(MENTION, (whole, token: string) => {
     if (ambiguous || exact.has(token.toLowerCase())) return whole;
-    const hits = matchAgents(token, agents, true);
+    const hits = matchAgents(token, agents, "loose");
     if (hits.length === 1) {
       changed = true;
       return `@${hits[0]}`;
@@ -65,11 +70,11 @@ export function resolveAliases(text: string, agents: string[]): AliasResult {
   });
   if (ambiguous) return ambiguous;
   if (changed) return { kind: "resolved", content };
-  // 不带 @ 的开头一个词：只认较强的匹配，避免把普通英文单词误当成 Agent
+  // 不带 @ 的开头一个词：只认完全对上的名字，避免把普通英文单词误当成 Agent
   if (/@[\p{L}\p{N}_.-]/u.test(text)) return { kind: "none" };
   const word = LEADING_WORD.exec(text)?.[1];
   if (!word) return { kind: "none" };
-  const hits = matchAgents(word, agents, false);
+  const hits = matchAgents(word, agents, "exact");
   if (hits.length === 1) {
     return { kind: "resolved", content: `@${hits[0]}${text.slice(word.length)}` };
   }

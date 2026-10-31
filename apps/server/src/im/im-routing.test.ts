@@ -37,6 +37,13 @@ describe("Agent 简写", () => {
     expect(resolveAliases("test 一下这个", agents)).toEqual({ kind: "none" });
     expect(resolveAliases("今天天气不错", agents)).toEqual({ kind: "none" });
     expect(resolveAliases("hello world", agents)).toEqual({ kind: "none" });
+    // 不带 @ 的开头英文词只认完整名字：普通词不能因为是名字的开头就被派给 Agent
+    const more = [...agents, "rd-opencode"];
+    expect(resolveAliases("code review 一下这个 PR", more)).toEqual({ kind: "none" });
+    expect(resolveAliases("open 一下日志", more)).toEqual({ kind: "none" });
+    expect(resolveAliases("cl 看下", more)).toEqual({ kind: "none" });
+    // 带 @ 时仍可用开头简写
+    expect(resolveAliases("@open 看下", more)).toMatchObject({ content: "@rd-opencode 看下" });
   });
 
   it("选好之后替换原来的简写", () => {

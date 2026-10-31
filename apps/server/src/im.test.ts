@@ -1006,8 +1006,8 @@ describe("IM 推送档位", () => {
     expect((toCodex as { message: ChatMessage }).message.content).toBe(
       "@rd-codex 看下构建为什么慢",
     );
-    // 简写临时找别人
-    fake.emit({ text: "help 你也看看" });
+    // 开头写名字临时找别人（不带 @ 时要写完整的名字或去掉前缀后的名字）
+    fake.emit({ text: "helper 你也看看" });
     const toHelper = await helper.next((event) => event.type === "agent.mentioned");
     expect((toHelper as { message: ChatMessage }).message.content).toBe("@helper 你也看看");
     // 回复 helper 的卡片：发给 helper，而不是当前对象
