@@ -943,6 +943,13 @@ export function App({
       mentionContext ? filterMentionParticipants(participants, mentionContext.query, username) : [],
     [mentionContext, participants, username],
   );
+  const activeMentionId = mentionSuggestions[activeMentionIndex]?.id;
+  useEffect(() => {
+    if (!activeMentionId) return;
+    document
+      .getElementById(`mention-option-${activeMentionId}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeMentionId]);
   const selectedAgentCommand = useMemo(() => {
     if (!meta) return t("加载中…");
     return agentCommandFor(meta, agentProvider, username, agentAccess);
@@ -3183,7 +3190,10 @@ export function App({
                         id={`mention-option-${participant.id}`}
                         className={`mention-option ${index === activeMentionIndex ? "active" : ""}`}
                         key={participant.id}
-                        onMouseEnter={() => setActiveMentionIndex(index)}
+                        onMouseMove={(event) => {
+                          // 键盘翻动使列表滚到静止的鼠标下时，浏览器也会补发鼠标事件，不能让它抢走选中项
+                          if (event.movementX || event.movementY) setActiveMentionIndex(index);
+                        }}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => chooseMention(participant)}
                       >

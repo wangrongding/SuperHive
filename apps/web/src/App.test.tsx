@@ -302,6 +302,43 @@ describe("App mention autocomplete", () => {
     expect(document.querySelector(".connection")?.classList.contains("online")).toBe(true);
   });
 
+  it("keeps the mention option chosen with the keyboard in view", async () => {
+    localStorage.setItem("ai-hive.username", "Alice");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const others = ["Bob", "Carol", "Dave"].map((name, index) =>
+      participant(`00000000-0000-4000-8000-00000000001${index}`, name, "human"),
+    );
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, ...others],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    const composer = screen.getByLabelText<HTMLTextAreaElement>("消息");
+    fireEvent.change(composer, { target: { value: "@", selectionStart: 1 } });
+    const scrolled = vi.mocked(Element.prototype.scrollIntoView);
+    scrolled.mockClear();
+
+    fireEvent.keyDown(composer, { key: "ArrowUp" });
+    const last = screen.getAllByRole("option").at(-1)!;
+    expect(last.getAttribute("aria-selected")).toBe("true");
+    expect(scrolled.mock.contexts.at(-1)).toBe(last);
+    expect(scrolled.mock.calls.at(-1)).toEqual([{ block: "nearest" }]);
+
+    // 列表滚动后浏览器补发的鼠标事件（鼠标没动）不改变选中项
+    const first = screen.getAllByRole("option")[0]!;
+    fireEvent.mouseEnter(first);
+    fireEvent.mouseMove(first);
+    expect(last.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("recalls own sent messages with the arrow keys without touching a draft in progress", async () => {
     localStorage.setItem("ai-hive.username", "Alice");
     render(<App />);
