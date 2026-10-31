@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeStream } from "./claude-stream.js";
-import { UsageAccumulator, codexBuckets } from "./usage.js";
+import { UsageAccumulator, anthropicBuckets, codexBuckets } from "./usage.js";
 
 const claudeUsage = (input: number, write: number, read: number, output: number) => ({
   input_tokens: input,
@@ -11,7 +11,8 @@ const claudeUsage = (input: number, write: number, read: number, output: number)
 
 describe("UsageAccumulator", () => {
   it("dedupes repeated reports of one request and keeps the first request separately", () => {
-    const usage = new UsageAccumulator();
+    let now = Date.parse("2026-10-31T10:00:00.000Z");
+    const usage = new UsageAccumulator(() => (now += 1000));
     usage.request("a", { inputTokens: 10, cacheWriteTokens: 400_000, cacheReadTokens: 0 });
     usage.request("a", { inputTokens: 10, cacheWriteTokens: 400_000, outputTokens: 50 });
     usage.request("b", { inputTokens: 5, cacheReadTokens: 400_010, outputTokens: 20 });
@@ -24,14 +25,39 @@ describe("UsageAccumulator", () => {
       firstRequest: { inputTokens: 10, cacheWriteTokens: 400_000, cacheReadTokens: 0 },
       peakContextTokens: 400_015,
       peakCacheWriteTokens: 400_000,
+      firstRequestAt: "2026-10-31T10:00:01.000Z",
+      lastRequestAt: "2026-10-31T10:00:03.000Z",
     });
   });
 
-  it("returns nothing when no tokens were reported and ignores synthetic models", () => {
+  it("knows the cache lifetime only when the runtime reports 5m/1h writes", () => {
+    const usage = new UsageAccumulator();
+    usage.request("a", {
+      ...anthropicBuckets({
+        input_tokens: 1,
+        cache_creation_input_tokens: 500,
+        cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 500 },
+      }),
+    });
+    expect(usage.finish().cacheWrite1hTokens).toBe(500);
+    const codex = new UsageAccumulator();
+    codex.request("a", codexBuckets({ inputTokens: 10, cachedInputTokens: 0, outputTokens: 1 })!);
+    expect(codex.finish().cacheWrite1hTokens).toBeUndefined();
+  });
+
+  it("reports a real zero when no model request happened and ignores synthetic models", () => {
     const usage = new UsageAccumulator();
     usage.setModel("<synthetic>");
     usage.request("x", { inputTokens: 0 });
-    expect(usage.finish()).toBeUndefined();
+    expect(usage.finish()).toEqual({
+      inputTokens: 0,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      outputTokens: 0,
+      requests: 0,
+      peakContextTokens: 0,
+      peakCacheWriteTokens: 0,
+    });
   });
 
   it("splits Codex inputTokens, which include cached input, into exclusive buckets", () => {
@@ -114,6 +140,8 @@ describe("ClaudeStream usage", () => {
       peakContextTokens: 36749,
       peakCacheWriteTokens: 20097,
       contextWindow: 1_000_000,
+      firstRequestAt: expect.any(String),
+      lastRequestAt: expect.any(String),
     });
   });
 });

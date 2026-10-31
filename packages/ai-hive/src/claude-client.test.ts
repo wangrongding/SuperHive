@@ -131,7 +131,11 @@ describe("ClaudeCodeResponder", () => {
     await expect(
       responder.reply({ instructions: "rules", prompt: "context", onRuntimeEvent }),
     ).resolves.toEqual({ text: "done", threadId: "resumed" });
-    expect(onRuntimeEvent).toHaveBeenCalledWith({ kind: "capabilities", observability: "partial" });
+    expect(onRuntimeEvent).toHaveBeenCalledWith({
+      kind: "capabilities",
+      observability: "partial",
+      usage: true,
+    });
     expect(onRuntimeEvent).toHaveBeenCalledWith({ kind: "recovered" });
     expect(JSON.stringify(onRuntimeEvent.mock.calls)).not.toContain("SECRET");
   });

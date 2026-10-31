@@ -1813,8 +1813,10 @@ export function App({
   );
 
   const loadUsage = useCallback(
-    (roomId: string, days: number) =>
-      authorizedJson<UsageSummary>(`/api/rooms/${encodeURIComponent(roomId)}/usage?days=${days}`),
+    (roomId: string, days: number, alertTokens: number) =>
+      authorizedJson<UsageSummary>(
+        `/api/rooms/${encodeURIComponent(roomId)}/usage?days=${days}&alert=${Math.round(alertTokens)}`,
+      ),
     [authorizedJson],
   );
 
@@ -3914,6 +3916,18 @@ export function App({
           onDismiss={dismissInvocations}
           usageRoomId={currentRoomId}
           loadUsage={loadUsage}
+          onStartTopic={() => {
+            if (
+              window.confirm(
+                t(
+                  "开启新话题后，房间里的 Agent 都会丢弃之前的会话、从新会话开始；历史消息保留。继续吗？",
+                ),
+              )
+            ) {
+              startNewTopic();
+              closeActivity();
+            }
+          }}
           onClose={closeActivity}
         />
       )}

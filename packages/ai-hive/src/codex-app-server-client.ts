@@ -1,4 +1,5 @@
 import { UsageAccumulator, codexBuckets } from "./usage.js";
+import type { AgentUsage } from "./hive-protocol.js";
 import { codexStartupFailure } from "./codex-errors.js";
 import { isMissingCodexThread } from "./codex-client.js";
 import { createRequire } from "node:module";
@@ -159,6 +160,7 @@ type ActiveTurn = {
   reject: (error: Error) => void;
   settled: boolean;
   usage: UsageAccumulator;
+  onUsage?: ((usage: AgentUsage) => void) | undefined;
 };
 
 function truncate(text: string, max: number): string {
@@ -270,7 +272,9 @@ export class CodexAppServerResponder implements AgentResponder {
         resolve,
         reject,
         usage: new UsageAccumulator(),
+        onUsage: input.onUsage,
       };
+      input.onRuntimeEvent?.({ kind: "capabilities", usage: true });
       turn.usage.setModel(this.threadModels.get(threadId) ?? this.options.model);
       this.active = turn;
 
@@ -379,6 +383,12 @@ export class CodexAppServerResponder implements AgentResponder {
     if (turn.graceTimer) clearTimeout(turn.graceTimer);
     if (this.active === turn) this.active = undefined;
     if (outcome instanceof AgentExecutionUncertainError) this.executionUncertain = true;
+    // 成功、失败、停止都交出已观测到的用量
+    try {
+      turn.onUsage?.(turn.usage.finish());
+    } catch {
+      // 用量回调异常不影响回合
+    }
     if (outcome instanceof Error) turn.reject(outcome);
     else turn.resolve(outcome);
   }
@@ -712,7 +722,11 @@ export class CodexAppServerResponder implements AgentResponder {
       return;
     }
     const usage = turn.usage.finish();
-    this.finishTurn(turn, { text, threadId: turn.threadId, ...(usage ? { usage } : {}) });
+    this.finishTurn(turn, {
+      text,
+      threadId: turn.threadId,
+      ...(usage.requests > 0 ? { usage } : {}),
+    });
   }
 
   private handleExit(session: Session, exit: AppServerExit) {

@@ -666,3 +666,87 @@ button.agent-runtime-row:hover {
   color: var(--text);
   font: inherit;
 }
+
+.usage-table td.usage-over {
+  color: var(--warning);
+  font-weight: var(--weight-semibold);
+}
+
+.usage-alerts p {
+  margin: 2px 0 4px;
+}
+
+.usage-likely {
+  color: var(--text-tertiary);
+}
+
+.usage-note {
+  margin: 0 12px 8px;
+  color: var(--text-tertiary);
+}
+
+.usage-action {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.usage-action:hover {
+  background: var(--bg-hover);
+}
+
+.usage-pricing h4 {
+  margin: 8px 0 2px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.usage-settings-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+}
+
+.usage-table td.usage-over {
+  color: var(--warning);
+  font-weight: var(--weight-semibold);
+}
+
+.usage-alerts p {
+  margin: 2px 0 4px;
+}
+
+.usage-likely {
+  color: var(--text-tertiary);
+}
+
+.usage-note {
+  margin: 0 12px 8px;
+  color: var(--text-tertiary);
+}
+
+.usage-action {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.usage-action:hover {
+  background: var(--bg-hover);
+}
+
+.usage-pricing h4 {
+  margin: 8px 0 2px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.usage-settings-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+}

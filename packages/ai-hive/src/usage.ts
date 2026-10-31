@@ -1,6 +1,10 @@
 import type { AgentUsage, UsageBuckets } from "./hive-protocol.js";
 
 const MAX_TOKENS = 1_000_000_000_000;
+
+/** 单次请求：四个桶，外加 1 小时缓存写入与本机观测到的时间 */
+type RequestUsage = UsageBuckets & { cacheWrite1hTokens: number; firstAt: number; lastAt: number };
+export type UsageInput = Partial<UsageBuckets> & { cacheWrite1hTokens?: number };
 const count = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.min(Math.floor(value), MAX_TOKENS)
@@ -11,28 +15,47 @@ const count = (value: unknown): number =>
  * 不含任何正文；同一请求会多次上报（流式开始、结束、完整消息），按请求 ID 取各桶最大值。
  */
 export class UsageAccumulator {
-  private readonly requests = new Map<string, UsageBuckets>();
+  private readonly requests = new Map<string, RequestUsage>();
   private order: string[] = [];
   private model: string | undefined;
   private contextWindow: number | undefined;
+  /** Runtime 是否区分了 5 分钟 / 1 小时缓存写入 */
+  private ttlKnown = false;
 
-  request(id: string, usage: Partial<UsageBuckets>): void {
+  constructor(private readonly now: () => number = Date.now) {}
+
+  request(id: string, usage: UsageInput): void {
+    const at = this.now();
     if (!this.requests.has(id)) {
       if (this.requests.size >= 10_000) return;
+      // 全零的「请求」不是真实调用（例如 Claude Code 本地合成的错误提示）
+      if (
+        !count(usage.inputTokens) &&
+        !count(usage.cacheWriteTokens) &&
+        !count(usage.cacheReadTokens) &&
+        !count(usage.outputTokens)
+      )
+        return;
       this.order.push(id);
       this.requests.set(id, {
         inputTokens: 0,
         cacheWriteTokens: 0,
         cacheReadTokens: 0,
         outputTokens: 0,
+        cacheWrite1hTokens: 0,
+        firstAt: at,
+        lastAt: at,
       });
     }
     const current = this.requests.get(id)!;
+    current.lastAt = at;
+    if (usage.cacheWrite1hTokens !== undefined) this.ttlKnown = true;
     for (const key of [
       "inputTokens",
       "cacheWriteTokens",
       "cacheReadTokens",
       "outputTokens",
+      "cacheWrite1hTokens",
     ] as const) {
       current[key] = Math.max(current[key], count(usage[key]));
     }
@@ -50,7 +73,11 @@ export class UsageAccumulator {
     if (value) this.contextWindow = value;
   }
 
-  finish(): AgentUsage | undefined {
+  /**
+   * 本轮用量。一次模型请求都没有观测到时返回全零（requests=0），与「没有采集」区分开；
+   * Runtime 中途失败时也可以调用，拿到失败前已经发生的部分。
+   */
+  finish(): AgentUsage {
     const requests = this.order.map((id) => this.requests.get(id)!);
     const summed = requests.reduce<UsageBuckets>(
       (sum, item) => ({
@@ -62,9 +89,6 @@ export class UsageAccumulator {
       { inputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, outputTokens: 0 },
     );
     const totals = summed;
-    const total =
-      totals.inputTokens + totals.cacheWriteTokens + totals.cacheReadTokens + totals.outputTokens;
-    if (total === 0) return undefined;
     const context = (item: UsageBuckets) =>
       item.inputTokens + item.cacheWriteTokens + item.cacheReadTokens;
     const first = requests[0];
@@ -84,18 +108,38 @@ export class UsageAccumulator {
             },
           }
         : {}),
-      peakContextTokens: Math.max(...requests.map(context)),
-      peakCacheWriteTokens: Math.max(...requests.map((item) => item.cacheWriteTokens)),
+      peakContextTokens: Math.max(0, ...requests.map(context)),
+      peakCacheWriteTokens: Math.max(0, ...requests.map((item) => item.cacheWriteTokens)),
+      ...(this.ttlKnown
+        ? {
+            cacheWrite1hTokens: Math.min(
+              requests.reduce((sum, item) => sum + item.cacheWrite1hTokens, 0),
+              MAX_TOKENS,
+            ),
+          }
+        : {}),
+      ...(first
+        ? {
+            firstRequestAt: new Date(
+              Math.min(...requests.map((item) => item.firstAt)),
+            ).toISOString(),
+            lastRequestAt: new Date(Math.max(...requests.map((item) => item.lastAt))).toISOString(),
+          }
+        : {}),
       ...(this.contextWindow ? { contextWindow: this.contextWindow } : {}),
     };
   }
 }
 
-/** Anthropic 风格 usage：input_tokens 已不含缓存部分 */
-export function anthropicBuckets(value: unknown): Partial<UsageBuckets> | undefined {
+/** Anthropic 风格 usage：input_tokens 已不含缓存部分；cache_creation 里区分 5 分钟与 1 小时写入 */
+export function anthropicBuckets(value: unknown): UsageInput | undefined {
   if (!value || typeof value !== "object") return undefined;
   const usage = value as Record<string, unknown>;
+  const creation = usage.cache_creation as Record<string, unknown> | null | undefined;
   return {
+    ...(creation && typeof creation === "object"
+      ? { cacheWrite1hTokens: count(creation.ephemeral_1h_input_tokens) }
+      : {}),
     inputTokens: count(usage.input_tokens),
     cacheWriteTokens: count(usage.cache_creation_input_tokens),
     cacheReadTokens: count(usage.cache_read_input_tokens),

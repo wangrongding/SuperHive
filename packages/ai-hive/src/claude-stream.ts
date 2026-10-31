@@ -58,8 +58,8 @@ export class ClaudeStream {
     return this.result;
   }
 
-  /** 本轮真实用量（token 数与模型名），没有任何用量时为 undefined */
-  usage(): AgentUsage | undefined {
+  /** 本轮真实用量（token 数与模型名）；一次请求都没有时为全零 */
+  usage(): AgentUsage {
     return this.accounting.finish();
   }
 

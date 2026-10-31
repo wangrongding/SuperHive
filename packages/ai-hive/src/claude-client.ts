@@ -116,7 +116,12 @@ export class ClaudeCodeResponder implements AgentResponder {
     if (input.threadId) args.push("--resume", input.threadId);
 
     const stream = new ClaudeStream((event) => input.onRuntimeEvent?.(event));
-    input.onRuntimeEvent?.({ kind: "capabilities", observability: "partial" });
+    input.onRuntimeEvent?.({ kind: "capabilities", observability: "partial", usage: true });
+    // 失败、中断时也交出已经发生的用量：钱已经花了
+    const reportUsage = () => {
+      stream.finish();
+      input.onUsage?.(stream.usage());
+    };
     input.onRuntimeEvent?.({ kind: "activity", phase: "starting" });
     let result;
     try {
@@ -127,6 +132,7 @@ export class ClaudeCodeResponder implements AgentResponder {
         ...(input.signal ? { signal: input.signal } : {}),
       });
     } catch (error) {
+      reportUsage();
       if (error instanceof AgentCancelledError) {
         throw new AgentExecutionUncertainError(
           "已请求终止 Claude 主进程，但工具子进程是否停止尚未确认。",
@@ -142,6 +148,7 @@ export class ClaudeCodeResponder implements AgentResponder {
     // Injectable legacy runners can return a complete result rather than streaming it.
     if (result.stdout) stream.push(result.stdout);
     const payload = stream.finish();
+    reportUsage();
     if (!payload)
       throw new AgentExecutionUncertainError(
         "Claude Code 返回了无法解析的最终结果，执行结果未知。",
@@ -154,7 +161,8 @@ export class ClaudeCodeResponder implements AgentResponder {
     return {
       text: payload.result,
       ...(payload.session_id ? { threadId: payload.session_id } : {}),
-      ...(usage ? { usage } : {}),
+      // 一次请求都没有时不放进回复（onUsage 已交出全零用量）
+      ...(usage.requests > 0 ? { usage } : {}),
       ...(sessionCostUsd !== undefined ? { sessionCostUsd } : {}),
     };
   }

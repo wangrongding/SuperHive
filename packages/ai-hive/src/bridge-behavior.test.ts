@@ -454,6 +454,9 @@ describe("AgentBridge", () => {
       requests: 1,
       peakContextTokens: 400_010,
       peakCacheWriteTokens: 400_000,
+      cacheWrite1hTokens: 0,
+      firstRequestAt: "2026-10-31T10:00:00.000Z",
+      lastRequestAt: "2026-10-31T10:06:00.000Z",
     };
     const first = chat();
     const second = chat({ senderName: "Bob", content: "@agent-a 还有这个" });
@@ -466,19 +469,64 @@ describe("AgentBridge", () => {
     const withUsage = room.reports.filter((report) => report.usage);
     expect(withUsage).toHaveLength(1);
     expect(withUsage[0]).toMatchObject({ messageId: first.id, status: "completed" });
-    expect(withUsage[0]!.usage).toEqual({ ...usage, reportedCostUsd: 2.2, session: "new" });
+    expect(withUsage[0]!.usage).toEqual({
+      ...usage,
+      reportedCostUsd: 2.2,
+      session: "new",
+      outcome: "completed",
+    });
 
     const third = chat({ content: "@agent-a 再来" });
     room.messages.push(third);
     room.handlers.onMention(third, third.seq, false);
     await waitUntil(() => responder.calls.length === 2);
-    // 自报费用是会话累计值，本轮只记差额
-    responder.finish("好", "thread-1", usage, 2.4);
+    // 自报费用是会话累计值，本轮只记差额；间隔按上轮最后一次请求到本轮第一次请求算，
+    // 不把上一轮执行的 6 分钟算成空闲
+    responder.finish(
+      "好",
+      "thread-1",
+      {
+        ...usage,
+        firstRequestAt: "2026-10-31T10:06:10.000Z",
+        lastRequestAt: "2026-10-31T10:07:00.000Z",
+      },
+      2.4,
+    );
     await waitUntil(() => room.statuses(third.id).includes("completed"));
     const resumed = room.reports.find((report) => report.messageId === third.id && report.usage);
-    expect(resumed?.usage?.session).toBe("resumed");
+    expect(resumed?.usage).toMatchObject({
+      session: "resumed",
+      idleMs: 10_000,
+      idleBasis: "request",
+      // 上一轮观测到的是 5 分钟写入
+      previousCacheTtlMs: 300_000,
+    });
     expect(resumed?.usage?.reportedCostUsd).toBeCloseTo(0.2);
-    expect(resumed?.usage?.idleMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("still records usage observed before a turn failed, once", async () => {
+    await startBridge(baseState());
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    responder.calls[0]!.onUsage?.({
+      inputTokens: 5,
+      cacheWriteTokens: 1000,
+      cacheReadTokens: 0,
+      outputTokens: 3,
+      requests: 1,
+      peakContextTokens: 1005,
+      peakCacheWriteTokens: 1000,
+    });
+    responder.fail(new AgentExecutionUncertainError("lost"));
+    await waitUntil(() => room.statuses(mention.id).includes("uncertain"));
+    const withUsage = room.reports.filter((report) => report.usage);
+    expect(withUsage).toHaveLength(1);
+    expect(withUsage[0]).toMatchObject({
+      status: "uncertain",
+      usage: { cacheWriteTokens: 1000, outcome: "uncertain", session: "new" },
+    });
   });
 
   it("steers late mentions into the running turn and falls back to queueing", async () => {

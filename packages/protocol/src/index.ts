@@ -246,6 +246,8 @@ export const runtimeEventSchema = z
   .object({
     kind: z.enum(["capabilities", "activity", "provider_error", "recovered"]),
     observability: z.enum(["partial", "full", "heartbeat"]).optional(),
+    /** capabilities 事件：这个 Runtime 是否会上报每轮用量，用来区分「没采集」和「不支持」 */
+    usage: z.boolean().optional(),
     phase: z.enum(["starting", "working", "thinking", "tool_running", "tool_completed"]).optional(),
     tool: z.enum(["read", "write", "search", "command", "collaboration", "other"]).optional(),
     code: z.number().int().min(100).max(599).optional(),
@@ -256,6 +258,8 @@ export const runtimeEventSchema = z
 export const runtimeTimelineEntrySchema = runtimeEventSchema.extend({ at: z.string().datetime() });
 export const runtimeObservationSchema = z.object({
   observability: z.enum(["partial", "full", "heartbeat"]),
+  /** Runtime 声明会上报用量；未声明时为 undefined（旧版 Bridge 或不支持的 Runtime） */
+  usage: z.boolean().optional(),
   lastHeartbeatAt: z.string().datetime(),
   lastRuntimeEventAt: z.string().datetime().optional(),
   lastProgressAt: z.string().datetime().optional(),
@@ -298,22 +302,61 @@ export const agentUsageSchema = usageBucketsSchema.extend({
   contextWindow: tokenCount.optional(),
   /** Runtime 自己按官方价目估的费用（Claude Code 的 total_cost_usd），仅供参考 */
   reportedCostUsd: z.number().min(0).max(1_000_000).optional(),
-  /** Bridge 补充：这一轮开始时是新会话还是续接旧会话，以及距上一轮结束空闲了多久 */
+  /** 其中按 1 小时有效期写入的缓存（其余按 5 分钟）；Runtime 不区分时不填 */
+  cacheWrite1hTokens: tokenCount.optional(),
+  /** 本轮第一次、最后一次模型请求的时间（Bridge 本机观测） */
+  firstRequestAt: z.string().datetime().optional(),
+  lastRequestAt: z.string().datetime().optional(),
+  /** Bridge 补充：这一轮开始时是新会话还是续接旧会话 */
   session: z.enum(["new", "resumed"]).optional(),
+  /**
+   * 续接会话时距上一次模型请求的间隔。request=上轮最后一次请求到本轮第一次请求（最接近缓存视角）；
+   * turn=上轮结束到本轮开始（拿不到请求时间时的退路，会把排队、准备时间算进来）。
+   */
   idleMs: z.number().int().min(0).max(31_536_000_000).optional(),
+  idleBasis: z.enum(["request", "turn"]).optional(),
+  /** 上一轮写入的缓存按什么有效期写的（观测到 1 小时写入就是 1 小时）；未知时不填 */
+  previousCacheTtlMs: z.number().int().min(0).max(86_400_000).optional(),
+  /** 这一轮怎么结束的；失败、停止、结果未知时用量照样记账 */
+  outcome: z.enum(["completed", "failed", "cancelled", "uncertain"]).optional(),
 });
 export type UsageBuckets = z.infer<typeof usageBucketsSchema>;
 export type AgentUsage = z.infer<typeof agentUsageSchema>;
 
-/** 提示缓存默认有效期（Anthropic 为 5 分钟）；续接会话空闲超过它，整段重写多半是缓存过期 */
-export const PROMPT_CACHE_TTL_MS = 5 * 60_000;
+/**
+ * 没观测到上一轮缓存写入类型时假定的缓存有效期（Anthropic 默认 5 分钟），网页可改。
+ * 只用于推测原因，不是事实：网关的实际有效期、路由都可能不同。
+ */
+export const DEFAULT_PROMPT_CACHE_TTL_MS = 5 * 60_000;
 /** 单次缓存写入超过这个值就在面板上标出来 */
 export const DEFAULT_CACHE_WRITE_ALERT_TOKENS = 200_000;
-export type CacheWriteReason = "new_session" | "cache_expired" | "unknown";
-/** 大额缓存写入的可能原因：新会话开局、空闲超过缓存有效期，其余（会话压��、上游换路由等）记为原因不明 */
-export function cacheWriteReason(usage: Pick<AgentUsage, "session" | "idleMs">): CacheWriteReason {
+/** 会话大小超过这个值就建议开新话题（不会自动执行） */
+export const DEFAULT_SESSION_SIZE_ALERT_TOKENS = 300_000;
+/**
+ * 大额缓存写入的「可能原因」——是推测，不是结论：
+ * new_session=新会话本来就要整段写入（这一条是事实）；
+ * idle_beyond_ttl=距上次请求超过了缓存有效期，可能已过期；
+ * unknown=间隔在有效期内却仍整段写入，可能是会话压缩、上游换了路由或网关没命中。
+ */
+export type CacheWriteReason = "new_session" | "idle_beyond_ttl" | "unknown";
+export function cacheTtlFor(
+  usage: Pick<AgentUsage, "previousCacheTtlMs">,
+  fallbackMs: number,
+): {
+  ttlMs: number;
+  observed: boolean;
+} {
+  return usage.previousCacheTtlMs
+    ? { ttlMs: usage.previousCacheTtlMs, observed: true }
+    : { ttlMs: fallbackMs, observed: false };
+}
+export function cacheWriteReason(
+  usage: Pick<AgentUsage, "session" | "idleMs" | "previousCacheTtlMs">,
+  fallbackTtlMs = DEFAULT_PROMPT_CACHE_TTL_MS,
+): CacheWriteReason {
   if (usage.session === "new") return "new_session";
-  if (usage.idleMs !== undefined && usage.idleMs >= PROMPT_CACHE_TTL_MS) return "cache_expired";
+  const { ttlMs } = cacheTtlFor(usage, fallbackTtlMs);
+  if (usage.idleMs !== undefined && usage.idleMs >= ttlMs) return "idle_beyond_ttl";
   return "unknown";
 }
 export function usageInputTokens(usage: UsageBuckets): number {

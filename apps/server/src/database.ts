@@ -553,9 +553,10 @@ export class HiveDatabase {
         UNIQUE(room_id, key)
       );
 
-      -- 用量账本：每个 Agent 回合一行。清空房间不删除，费用统计不会因开新话题而丢失
+      -- 用量账本：每个 Agent 回合一行（同一调用重试会有多行）。清空房间不删除，费用统计不会因开新话题而丢失
       CREATE TABLE IF NOT EXISTS agent_usage (
-        invocation_id TEXT PRIMARY KEY,
+        turn_key TEXT PRIMARY KEY,
+        invocation_id TEXT NOT NULL,
         room_id TEXT NOT NULL,
         message_id TEXT NOT NULL,
         agent_id TEXT NOT NULL,
@@ -602,6 +603,29 @@ export class HiveDatabase {
         ALTER TABLE invocations ADD COLUMN resolved_at TEXT;
         ALTER TABLE invocations ADD COLUMN resolved_by TEXT;
         ALTER TABLE invocations ADD COLUMN resolution_note TEXT;
+      `);
+    }
+    const usageColumns = this.db.pragma("table_info(agent_usage)") as Array<{ name: string }>;
+    if (!usageColumns.some((column) => column.name === "turn_key")) {
+      // 早期账本按调用 ID 唯一，重试会覆盖上一次的用量：改为按回合记账
+      this.db.exec(`
+        ALTER TABLE agent_usage RENAME TO agent_usage_v1;
+        CREATE TABLE agent_usage (
+          turn_key TEXT PRIMARY KEY,
+          invocation_id TEXT NOT NULL,
+          room_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          agent_name TEXT NOT NULL,
+          model TEXT,
+          usage TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO agent_usage SELECT invocation_id, invocation_id, room_id, message_id, agent_id,
+          agent_name, model, usage, created_at FROM agent_usage_v1;
+        DROP TABLE agent_usage_v1;
+        DROP INDEX IF EXISTS agent_usage_room;
+        CREATE INDEX agent_usage_room ON agent_usage(room_id, created_at);
       `);
     }
     if (!invocationColumns.some((column) => column.name === "usage")) {
@@ -1295,7 +1319,7 @@ export class HiveDatabase {
   }
 
   /**
-   * 记下一个回合的真实用量：写入账本（同一调用重试后再次上报会覆盖）并挂到调用上。
+   * 记下一个回合的真实用量：写入账本并挂到调用上（调用上只保留最近一轮）。
    * 用量与调用状态无关——迟到、已停止的回合同样花了钱，一律记账。
    */
   recordUsage(
@@ -1307,12 +1331,13 @@ export class HiveDatabase {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO agent_usage(invocation_id, room_id, message_id, agent_id, agent_name, model, usage, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(invocation_id) DO UPDATE SET model = excluded.model, usage = excluded.usage,
-             created_at = excluded.created_at`,
+          `INSERT INTO agent_usage(turn_key, invocation_id, room_id, message_id, agent_id, agent_name, model, usage, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(turn_key) DO UPDATE SET model = excluded.model, usage = excluded.usage`,
         )
         .run(
+          // 同一回合重复上报（断线重发）只记一次；重试是新的回合，第一次请求时间不同
+          `${invocation.id}:${usage.firstRequestAt ?? ""}`,
           invocation.id,
           invocation.roomId,
           invocation.messageId,

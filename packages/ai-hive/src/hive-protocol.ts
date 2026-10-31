@@ -108,6 +108,7 @@ export type WhiteboardEntry = {
 export type RuntimeEvent = {
   kind: "capabilities" | "activity" | "provider_error" | "recovered";
   observability?: "partial" | "full" | "heartbeat";
+  usage?: boolean;
   phase?: "starting" | "working" | "thinking" | "tool_running" | "tool_completed";
   tool?: "read" | "write" | "search" | "command" | "collaboration" | "other";
   code?: number;
@@ -130,8 +131,14 @@ export type AgentUsage = UsageBuckets & {
   peakCacheWriteTokens: number;
   contextWindow?: number;
   reportedCostUsd?: number;
+  cacheWrite1hTokens?: number;
+  firstRequestAt?: string;
+  lastRequestAt?: string;
   session?: "new" | "resumed";
   idleMs?: number;
+  idleBasis?: "request" | "turn";
+  previousCacheTtlMs?: number;
+  outcome?: "completed" | "failed" | "cancelled" | "uncertain";
 };
 
 export type InvocationReport = {

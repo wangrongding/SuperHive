@@ -27,6 +27,16 @@ describe("runtime observation", () => {
     expect(runtime.lastError?.recoveredAt).toBe(at(30));
     expect(runtime.lastProgressAt).toBe(at(30));
   });
+  it("records a usage capability without changing the observability level", () => {
+    const now = "2026-10-31T10:00:00.000Z";
+    const full = observeRuntime(undefined, { kind: "capabilities", observability: "full" }, now);
+    const withUsage = observeRuntime(full, { kind: "capabilities", usage: true }, now);
+    expect(withUsage).toMatchObject({ observability: "full", usage: true });
+    expect(
+      observeRuntime(undefined, { kind: "capabilities", usage: true }, now).observability,
+    ).toBe("heartbeat");
+  });
+
   it("bounds the timeline, merges repeated activity but keeps distinct tool categories", () => {
     let runtime = observeRuntime(undefined, undefined, at(0));
     for (let i = 0; i < 20; i++)

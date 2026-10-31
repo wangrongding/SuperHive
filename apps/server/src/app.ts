@@ -2274,7 +2274,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
   );
 
-  app.get<{ Params: { roomId: string }; Querystring: { days?: string } }>(
+  app.get<{ Params: { roomId: string }; Querystring: { days?: string; alert?: string } }>(
     "/api/rooms/:roomId/usage",
     async (request, reply) => {
       const params = roomParamsSchema.safeParse(request.params);
@@ -2282,7 +2282,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (!guard(request, reply, params.data.roomId)) return reply;
       const days = Math.min(90, Math.max(1, Number.parseInt(request.query.days ?? "7", 10) || 7));
       const since = new Date((options.now?.() ?? Date.now()) - days * 86_400_000).toISOString();
-      return database.usageSummary(params.data.roomId, since, DEFAULT_CACHE_WRITE_ALERT_TOKENS);
+      // 大额写入的阈值由网页设置传入，缺省用默认值
+      const alert = Number.parseInt(request.query.alert ?? "", 10);
+      return database.usageSummary(
+        params.data.roomId,
+        since,
+        Number.isFinite(alert) && alert > 0
+          ? Math.min(alert, 1e12)
+          : DEFAULT_CACHE_WRITE_ALERT_TOKENS,
+      );
     },
   );
 

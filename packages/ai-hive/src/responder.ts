@@ -15,6 +15,11 @@ export type AgentReplyInput = {
   /** Sanitized structured events; heartbeat is emitted separately by Bridge. */
   onRuntimeEvent?: (event: RuntimeEvent) => void;
   /**
+   * 本轮结束时（成功、失败、停止都会）交出已观测到的用量，Bridge 据此在失败路径上也能记账。
+   * 不支持用量的 Provider 不调用。
+   */
+  onUsage?: (usage: AgentUsage) => void;
+  /**
    * 是否需要重新注入完整规则。只能把规则拼进用户消息的 Provider（Copilot、OpenClaw、ACP）
    * 据此避免每轮都把同一份长规则写进会话历史；新会话总是需要。
    */

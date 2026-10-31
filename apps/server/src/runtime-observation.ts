@@ -14,7 +14,11 @@ export function observeRuntime(
   };
   if (!event) return next;
   if (event.kind === "capabilities") {
-    next.observability = event.observability ?? "partial";
+    // 只声明用量能力的事件不改动已有的可观测程度
+    if (event.observability || event.usage === undefined) {
+      next.observability = event.observability ?? "partial";
+    }
+    if (event.usage !== undefined) next.usage = event.usage;
   } else {
     next.lastRuntimeEventAt = now;
     if (event.kind === "activity") {

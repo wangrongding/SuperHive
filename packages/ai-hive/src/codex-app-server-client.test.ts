@@ -225,6 +225,8 @@ describe("CodexAppServerResponder", () => {
       peakContextTokens: 51_000,
       peakCacheWriteTokens: 0,
       contextWindow: 400_000,
+      firstRequestAt: expect.any(String),
+      lastRequestAt: expect.any(String),
     });
     await responder.close();
   });

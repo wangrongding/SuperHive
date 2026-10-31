@@ -866,6 +866,17 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       expect.objectContaining({ model: "claude-opus-5-5", turns: 1, day: expect.any(String) }),
     ]);
     expect(summary.recent).toHaveLength(1);
+
+    // 大额写入阈值由网页设置传入
+    const relaxed = await app.inject({
+      method: "GET",
+      url: "/api/rooms/general/usage?days=1&alert=500000",
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(relaxed.json()).toMatchObject({
+      cacheWriteAlertTokens: 500_000,
+      totals: { largeCacheWrites: 0 },
+    });
   });
 
   it("queues mentions for offline agents and lets humans cancel and retry", async () => {

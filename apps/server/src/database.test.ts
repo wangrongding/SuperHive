@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIMITS, type Participant } from "@ai-hive/protocol";
+import Database from "better-sqlite3";
 import { HiveDatabase, HiveError } from "./database.js";
 
 describe("HiveDatabase", () => {
@@ -226,6 +227,73 @@ describe("HiveDatabase", () => {
     ]);
     expect(summary.recent[0]?.invocationId).toBe(b.id);
     expect(db.usageSummary("general", "2026-11-01T00:00:00.000Z", 200_000).totals.turns).toBe(0);
+  });
+
+  it("keeps each retry of an invocation as its own ledger row and migrates the old ledger", () => {
+    const message = db.createMessage(human, {
+      content: "@agent-a r",
+      clientMessageId: "r-1",
+    }).message;
+    const invocation = db.createInvocation({ message, agent: agentA, status: "queued" }).invocation;
+    const turn = (firstRequestAt: string) => ({
+      inputTokens: 1,
+      cacheWriteTokens: 100,
+      cacheReadTokens: 0,
+      outputTokens: 1,
+      requests: 1,
+      peakContextTokens: 101,
+      peakCacheWriteTokens: 100,
+      firstRequestAt,
+      outcome: "failed" as const,
+    });
+    db.recordUsage(invocation, turn("2026-10-31T10:00:00.000Z"), "2026-10-31T10:00:01.000Z");
+    // 同一回合断线重发：只记一次
+    db.recordUsage(invocation, turn("2026-10-31T10:00:00.000Z"), "2026-10-31T10:00:02.000Z");
+    db.recordUsage(invocation, turn("2026-10-31T10:01:00.000Z"), "2026-10-31T10:01:01.000Z");
+    expect(db.usageSummary("general", "2026-10-01T00:00:00.000Z", 200_000).totals.turns).toBe(2);
+  });
+
+  it("migrates a ledger keyed by invocation to per-turn rows", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "hive-usage-migrate-"));
+    const file = path.join(directory, "hive.sqlite");
+    const first = new HiveDatabase(file);
+    const alice = first.upsertParticipant({ roomId: "general", username: "Alice", type: "human" });
+    const agent = first.upsertParticipant({ roomId: "general", username: "a", type: "agent" });
+    const message = first.createMessage(alice, { content: "@a x", clientMessageId: "m" }).message;
+    const invocation = first.createInvocation({ message, agent, status: "queued" }).invocation;
+    first.close();
+    // 模拟旧版账本：以调用 ID 为主键
+    const raw = new Database(file);
+    raw.exec(`DROP TABLE agent_usage;
+      CREATE TABLE agent_usage (invocation_id TEXT PRIMARY KEY, room_id TEXT NOT NULL,
+        message_id TEXT NOT NULL, agent_id TEXT NOT NULL, agent_name TEXT NOT NULL, model TEXT,
+        usage TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE INDEX agent_usage_room ON agent_usage(room_id, created_at);`);
+    raw.prepare("INSERT INTO agent_usage VALUES (?, 'general', ?, ?, 'a', NULL, ?, ?)").run(
+      invocation.id,
+      message.id,
+      agent.id,
+      JSON.stringify({
+        inputTokens: 1,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 2,
+        outputTokens: 3,
+        requests: 1,
+        peakContextTokens: 3,
+        peakCacheWriteTokens: 0,
+      }),
+      "2026-10-31T09:00:00.000Z",
+    );
+    raw.close();
+    const reopened = new HiveDatabase(file);
+    try {
+      expect(
+        reopened.usageSummary("general", "2026-10-01T00:00:00.000Z", 200_000).totals,
+      ).toMatchObject({ turns: 1, cacheReadTokens: 2 });
+    } finally {
+      reopened.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("limits each agent's replies per minute", () => {

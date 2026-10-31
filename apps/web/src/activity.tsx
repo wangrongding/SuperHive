@@ -336,6 +336,7 @@ export function ActivityPanel({
   onDismiss,
   usageRoomId,
   loadUsage,
+  onStartTopic,
   onClose,
 }: {
   view: ActivityView;
@@ -354,7 +355,8 @@ export function ActivityPanel({
   onDismiss?: (invocations: Invocation[]) => void;
   /** 当前房间：任务面板底部显示它的用量统计 */
   usageRoomId?: string;
-  loadUsage?: (roomId: string, days: number) => Promise<UsageSummary>;
+  loadUsage?: (roomId: string, days: number, alertTokens: number) => Promise<UsageSummary>;
+  onStartTopic?: () => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -666,7 +668,13 @@ export function ActivityPanel({
             ))}
 
           {view === "tasks" && usageRoomId && loadUsage && (
-            <UsageSection roomId={usageRoomId} load={loadUsage} refreshKey={usageRefreshKey} />
+            <UsageSection
+              roomId={usageRoomId}
+              load={loadUsage}
+              refreshKey={usageRefreshKey}
+              participants={participants}
+              {...(onStartTopic ? { onStartTopic } : {})}
+            />
           )}
         </div>
       </div>

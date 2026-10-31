@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   isMentioned,
+  type AgentUsage,
   type ChatMessage,
   type Invocation,
   type InvocationReport,
@@ -11,6 +12,7 @@ import {
   AgentNonRetryableError,
   isCancelled,
   type AgentAccessMode,
+  type AgentReply,
   type AgentResponder,
 } from "./responder.js";
 import { resolveReplyText } from "./silent-reply.js";
@@ -120,6 +122,14 @@ type ActiveBatch = {
   cancelled: Set<string>;
   /** Provider 回合仍在进行、可以吸收 steer；回合结束后新消息改为排队 */
   accepting: boolean;
+  /** 本轮用量：Provider 交出的原始观测、补全后的结果，以及是否已经随某次上报发出 */
+  turn?: {
+    startedAt: number;
+    session: "new" | "resumed";
+    observed?: AgentUsage;
+    usage?: AgentUsage;
+    reported?: boolean;
+  };
 };
 
 const MAX_ATTEMPTS = 3;
@@ -643,11 +653,15 @@ export class AgentBridge {
       this.log(
         `[hive] 正在处理 ${messages.map((message) => `#${message.seq}`).join("、")}（来自 ${[...new Set(messages.map((message) => message.senderName))].join("、")}）`,
       );
-      const sessionAtStart: "new" | "resumed" = this.state.threadId ? "resumed" : "new";
-      const lastTurnEndedAt = this.state.lastTurnEndedAt
-        ? Date.parse(this.state.lastTurnEndedAt)
-        : NaN;
+      const turn: NonNullable<ActiveBatch["turn"]> = {
+        startedAt: Date.now(),
+        session: this.state.threadId ? "resumed" : "new",
+      };
+      active.turn = turn;
       const reply = await this.responder.reply({
+        onUsage: (usage) => {
+          turn.observed = usage;
+        },
         instructions: this.instructions,
         prompt: prompt.text,
         refreshInstructions: prompt.full,
@@ -710,39 +724,8 @@ export class AgentBridge {
         ...(this.state.threadId ? { threadId: this.state.threadId } : {}),
       });
       active.accepting = false;
-      const turnEndedAt = Date.now();
-      // 续接会话时距上一轮结束的空闲时长：超过提示缓存��效期的整段重写就能归因为「缓存过期」
-      // 自报费用是会话累计值：同一会话减去上一轮的累计，换了会话（或累计值变小）就从头算
-      let turnCostUsd: number | undefined;
-      if (reply.sessionCostUsd !== undefined && reply.threadId) {
-        const previous =
-          this.state.sessionCost?.threadId === reply.threadId
-            ? this.state.sessionCost.usd
-            : sessionAtStart === "new"
-              ? 0
-              : undefined;
-        // 续接的会话没有上一轮的累计（例如刚升级）：本轮费用未知，只记下基线
-        if (previous !== undefined) {
-          turnCostUsd =
-            reply.sessionCostUsd >= previous
-              ? reply.sessionCostUsd - previous
-              : reply.sessionCostUsd;
-        }
-        this.state.sessionCost = { threadId: reply.threadId, usd: reply.sessionCostUsd };
-      }
-      const usage = reply.usage
-        ? {
-            ...reply.usage,
-            ...(turnCostUsd !== undefined
-              ? { reportedCostUsd: Math.round(turnCostUsd * 1e6) / 1e6 }
-              : {}),
-            session: sessionAtStart,
-            ...(sessionAtStart === "resumed" && Number.isFinite(lastTurnEndedAt)
-              ? { idleMs: Math.max(0, turnEndedAt - lastTurnEndedAt) }
-              : {}),
-          }
-        : undefined;
-      this.state.lastTurnEndedAt = new Date(turnEndedAt).toISOString();
+      if (reply.usage) turn.observed = reply.usage;
+      const usage = this.settleUsage(active, "completed", reply);
       if (reply.threadId) this.state.threadId = reply.threadId;
       this.notePromptSent(prompt);
 
@@ -831,7 +814,7 @@ export class AgentBridge {
           status: "cancelled",
           detail: "本轮已结束，已停止的触发消息未发送回复",
           // 触发消息全停了也照样花了钱：用量记到第一条上
-          ...(usage && live.length === 0 && index === 0 ? { usage } : {}),
+          ...(usage && live.length === 0 && index === 0 ? this.usageReport(active) : {}),
         });
       }
       // 一轮合并处理多条消息时，用量只随第一条上报，避免按消息重复计费
@@ -841,7 +824,7 @@ export class AgentBridge {
           messageId: usageCarrier.id,
           status: "completed",
           ...(replyMessageId ? { replyMessageId } : { detail: "无需回复" }),
-          ...(usage ? { usage } : {}),
+          ...this.usageReport(active),
         });
       }
       this.reportAll(others, {
@@ -879,13 +862,107 @@ export class AgentBridge {
     }
   }
 
+  /**
+   * 补全本轮用量（只做一次）：会话是新是旧、距上次模型请求的间隔、上一轮缓存的有效期、会话费用差额，
+   * 并推进下一轮要用的基线。失败、停止、结果未知的回合同样记账。
+   */
+  private settleUsage(
+    active: ActiveBatch,
+    outcome: NonNullable<AgentUsage["outcome"]>,
+    reply?: AgentReply,
+  ): AgentUsage | undefined {
+    const turn = active.turn;
+    if (!turn?.observed) return undefined;
+    // 已补全过（例如成功后发送回复时才出错）：只更新结局，基线不再推进
+    if (turn.usage) {
+      if (!turn.reported) turn.usage = { ...turn.usage, outcome };
+      return turn.usage;
+    }
+    const raw = turn.observed;
+    const now = Date.now();
+    // 自报费用是会话累计值：同一会话减去上一轮的累计，换了会话（或累计值变小）就从头算
+    let turnCostUsd: number | undefined;
+    if (reply?.sessionCostUsd !== undefined && reply.threadId) {
+      const previous =
+        this.state.sessionCost?.threadId === reply.threadId
+          ? this.state.sessionCost.usd
+          : turn.session === "new"
+            ? 0
+            : undefined;
+      // 续接的会话没有上一轮的累计（例如刚升级）：本轮费用未知，只记下基线
+      if (previous !== undefined) {
+        turnCostUsd =
+          reply.sessionCostUsd >= previous ? reply.sessionCostUsd - previous : reply.sessionCostUsd;
+      }
+      this.state.sessionCost = { threadId: reply.threadId, usd: reply.sessionCostUsd };
+    }
+    // 间隔优先按模型请求算（上轮最后一次请求 → 本轮第一次请求），拿不到再按回合算（上轮结束 → 本轮开始）
+    let idle: Pick<AgentUsage, "idleMs" | "idleBasis"> = {};
+    if (turn.session === "resumed") {
+      const lastRequest = Date.parse(this.state.lastRequestAt ?? "");
+      const firstRequest = Date.parse(raw.firstRequestAt ?? "");
+      const lastTurnEnded = Date.parse(this.state.lastTurnEndedAt ?? "");
+      if (Number.isFinite(lastRequest) && Number.isFinite(firstRequest)) {
+        idle = { idleMs: Math.max(0, firstRequest - lastRequest), idleBasis: "request" };
+      } else if (Number.isFinite(lastTurnEnded)) {
+        idle = { idleMs: Math.max(0, turn.startedAt - lastTurnEnded), idleBasis: "turn" };
+      }
+    }
+    const usage: AgentUsage = {
+      ...raw,
+      ...(turnCostUsd !== undefined
+        ? { reportedCostUsd: Math.round(turnCostUsd * 1e6) / 1e6 }
+        : {}),
+      session: turn.session,
+      ...idle,
+      ...(turn.session === "resumed" && this.state.lastCacheTtlMs
+        ? { previousCacheTtlMs: this.state.lastCacheTtlMs }
+        : {}),
+      outcome,
+    };
+    this.state.lastTurnEndedAt = new Date(now).toISOString();
+    if (raw.lastRequestAt) this.state.lastRequestAt = raw.lastRequestAt;
+    // 只有 Runtime 区分了 5 分钟 / 1 小时写入，才记下缓存有效期；不区分的（如 Codex）保持未知
+    if (raw.cacheWriteTokens > 0) {
+      if (raw.cacheWrite1hTokens !== undefined) {
+        this.state.lastCacheTtlMs = raw.cacheWrite1hTokens > 0 ? 3_600_000 : 300_000;
+      } else delete this.state.lastCacheTtlMs;
+    }
+    turn.usage = usage;
+    return usage;
+  }
+
+  /** 随一次上报带上本轮用量；同一轮只带一次，避免按消息重复计费 */
+  private usageReport(active: ActiveBatch): { usage?: AgentUsage } {
+    const usage = active.turn?.usage;
+    if (!usage || active.turn?.reported) return {};
+    active.turn!.reported = true;
+    return { usage };
+  }
+
   private async handleBatchError(active: ActiveBatch, error: unknown): Promise<void> {
     delete this.state.inflight;
+    const outcome: NonNullable<AgentUsage["outcome"]> =
+      error instanceof AgentExecutionUncertainError
+        ? "uncertain"
+        : isCancelled(error, active.controller.signal)
+          ? "cancelled"
+          : "failed";
+    this.settleUsage(active, outcome);
+    // 用量随第一条消息的上报发出
+    const withUsage = (
+      messages: ChatMessage[],
+      report: Omit<InvocationReport, "type" | "messageId">,
+    ) => {
+      for (const message of messages) {
+        this.room.report({ messageId: message.id, ...report, ...this.usageReport(active) });
+      }
+    };
     if (error instanceof AgentExecutionUncertainError) {
       // The provider may have completed side effects before its result stream was lost.
       for (const message of active.messages) this.rememberProcessed(message.id);
       await this.store.save(this.state);
-      this.reportAll(active.messages, {
+      withUsage(active.messages, {
         status: "uncertain",
         detail: "执行结果未知，已禁止自动重放；请先核对已执行操作与相关进程，再决定是否手动重试。",
       });
@@ -894,7 +971,7 @@ export class AgentBridge {
     if (error instanceof AgentNonRetryableError) {
       for (const message of active.messages) this.rememberProcessed(message.id);
       await this.store.save(this.state);
-      this.reportAll(active.messages, { status: "failed", detail: error.message.slice(0, 500) });
+      withUsage(active.messages, { status: "failed", detail: error.message.slice(0, 500) });
       this.log(`[hive] Codex 调用不可自动重试：${error.message}`);
       return;
     }
@@ -902,7 +979,7 @@ export class AgentBridge {
       this.log("[hive] 当前回合已停止");
       for (const message of active.messages) this.rememberProcessed(message.id);
       await this.store.save(this.state);
-      this.reportAll(active.messages, {
+      withUsage(active.messages, {
         status: "cancelled",
         ...(this.stopped ? { detail: "Agent 已下线，本轮被中断；可在界面中重试" } : {}),
       });
@@ -929,11 +1006,12 @@ export class AgentBridge {
         messageId: message.id,
         status: "failed",
         detail: `连续失败 ${MAX_ATTEMPTS} 次：${reason}`.slice(0, 500),
+        ...this.usageReport(active),
       });
     }
     if (retryable.length === 0) return;
     const attempt = Math.max(...retryable.map((message) => this.attempts.get(message.id) ?? 1));
-    this.reportAll(retryable, {
+    withUsage(retryable, {
       status: "running",
       progress: `第 ${attempt} 次尝试失败，稍后自动重试`,
     });
