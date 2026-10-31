@@ -33,6 +33,7 @@ import {
   type MentionContext,
 } from "./mention-autocomplete";
 import { createClientMessageId } from "./client-id";
+import { composerHistory, stepComposerHistory } from "./composer-history";
 import {
   InvocationChips,
   groupInvocationsByMessage,
@@ -904,6 +905,7 @@ export function App({
   const nearBottomRef = useRef(true);
   const messageCountRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const browsingHistoryRef = useRef<string | undefined>(undefined);
   const highlightRef = useRef<HTMLDivElement>(null);
   const membersCloseRef = useRef<HTMLButtonElement>(null);
   const roomsCloseRef = useRef<HTMLButtonElement>(null);
@@ -1040,6 +1042,7 @@ export function App({
     const contextKey = `${username}:${currentRoomId}`;
     if (draftContextRef.current !== contextKey) {
       draftContextRef.current = contextKey;
+      browsingHistoryRef.current = undefined;
       setDraft(
         username && autoSaveDraft
           ? (localStorage.getItem(draftStorageKey(username, currentRoomId)) ?? "")
@@ -1054,7 +1057,8 @@ export function App({
       return;
     }
     const key = draftStorageKey(username, currentRoomId);
-    if (draft) localStorage.setItem(key, draft);
+    // 方向键翻到的旧消息没改过就不算草稿，刷新后不该留在输入框里
+    if (draft && draft !== browsingHistoryRef.current) localStorage.setItem(key, draft);
     else localStorage.removeItem(key);
   }, [autoSaveDraft, currentRoomId, draft, username]);
 
@@ -2015,6 +2019,15 @@ export function App({
     const nextContext = findMentionContext(value, cursor ?? value.length);
     setMentionContext(nextContext);
     setActiveMentionIndex(0);
+  }
+
+  function showHistoryEntry(text: string) {
+    browsingHistoryRef.current = text || undefined;
+    setDraft(text);
+    setMentionContext(undefined);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.setSelectionRange(text.length, text.length);
+    });
   }
 
   function chooseMention(participant: Participant) {
@@ -3308,7 +3321,11 @@ export function App({
                     );
                   }}
                   onSelect={(event) => {
-                    if (!composingRef.current) {
+                    // 翻到的旧消息以 @某人 结尾时不弹成员列表，否则方向键会被列表接走
+                    if (
+                      !composingRef.current &&
+                      event.currentTarget.value !== browsingHistoryRef.current
+                    ) {
                       updateMentionContext(
                         event.currentTarget.value,
                         event.currentTarget.selectionStart,
@@ -3372,6 +3389,32 @@ export function App({
                     if (sendShortcut === "enter" && event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       sendMessage();
+                      return;
+                    }
+                    if (event.key === "Escape" && draft && draft === browsingHistoryRef.current) {
+                      event.preventDefault();
+                      showHistoryEntry("");
+                      return;
+                    }
+                    if (
+                      (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+                      !event.shiftKey &&
+                      !event.altKey &&
+                      !event.metaKey &&
+                      !event.ctrlKey
+                    ) {
+                      const next = stepComposerHistory({
+                        history: composerHistory(messages, username),
+                        draft,
+                        browsing: browsingHistoryRef.current,
+                        direction: event.key === "ArrowUp" ? "older" : "newer",
+                        selectionStart: event.currentTarget.selectionStart,
+                        selectionEnd: event.currentTarget.selectionEnd,
+                      });
+                      if (next !== undefined) {
+                        event.preventDefault();
+                        showHistoryEntry(next);
+                      }
                     }
                   }}
                   placeholder={t("发送消息，输入 @ 选择成员…")}

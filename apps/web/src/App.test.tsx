@@ -302,6 +302,57 @@ describe("App mention autocomplete", () => {
     expect(document.querySelector(".connection")?.classList.contains("online")).toBe(true);
   });
 
+  it("recalls own sent messages with the arrow keys without touching a draft in progress", async () => {
+    localStorage.setItem("ai-hive.username", "Alice");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const sent = (seq: number, senderName: string, content: string): ChatMessage => ({
+      id: `00000000-0000-4000-8000-0000000001${String(seq).padStart(2, "0")}`,
+      roomId: "general",
+      seq,
+      senderId: self.id,
+      senderName,
+      senderType: "human",
+      content,
+      mentions: [],
+      traceId: "00000000-0000-4000-8000-000000000200",
+      hopCount: 0,
+      createdAt: "2026-10-31T00:00:00.000Z",
+    });
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [
+          sent(1, "Alice", "第一条"),
+          sent(2, "Bob", "别人的"),
+          sent(3, "Alice", "第二条 @Bob"),
+        ],
+        latestSeq: 3,
+      }),
+    );
+    const composer = screen.getByLabelText<HTMLTextAreaElement>("消息");
+
+    fireEvent.keyDown(composer, { key: "ArrowUp" });
+    expect(composer.value).toBe("第二条 @Bob");
+    fireEvent.select(composer);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(localStorage.getItem("ai-hive.draft.alice.general")).toBeNull();
+    fireEvent.keyDown(composer, { key: "ArrowUp" });
+    expect(composer.value).toBe("第一条");
+    fireEvent.keyDown(composer, { key: "ArrowDown" });
+    fireEvent.keyDown(composer, { key: "ArrowDown" });
+    expect(composer.value).toBe("");
+
+    fireEvent.change(composer, { target: { value: "写到一半" } });
+    fireEvent.keyDown(composer, { key: "ArrowUp" });
+    expect(composer.value).toBe("写到一半");
+  });
+
   it("opens on @, excludes self, filters members, and supports arrows, Enter, and Tab", async () => {
     const user = userEvent.setup();
     render(<App />);
