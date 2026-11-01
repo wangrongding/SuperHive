@@ -77,6 +77,8 @@ export type ImHubDeps = {
   isWaiting(questionId: string): boolean;
   /** 网页地址，用于截断长消息时附上全文链接 */
   webUrl(roomId: string): string | undefined;
+  /** 卡片按钮上的网页地址：带房主登录票，在没登录过的设备上点开也能直接进 */
+  loginUrl?(connectionId: string, roomId: string): string | undefined;
   onConnectionsChanged(roomId: string): void;
   log(message: string, detail?: unknown): void;
   now?: () => number;
@@ -102,6 +104,7 @@ const HELP = [
   "· /room 切换房间（点卡片或回编号），/room 房间ID 直接切",
   "· /who 看房间里的 Agent 谁在忙",
   "· /level 查看推送档位，/level mine|im|agents|all 切换",
+  "· /web 获取在手机或其他电脑上打开网页的登录链接",
   "· /status 查看连接状态",
   "· /cards on 在飞书后台开通卡片回调后打开卡片按钮（重新扫码会自动开通）",
   "· 机器人菜单：飞书开发者后台 → 机器人 → 自定义菜单，菜单项选「推送事件」，事件 key 填 to、room、who、level、help",
@@ -865,6 +868,23 @@ export class ImHub {
           ].join("\n"),
         );
       }
+      case "/web": {
+        const url = this.cardUrl(connection, connection.roomId);
+        if (!url) return say("这个服务没有配置网页地址。");
+        if (this.richCapable(connection)) {
+          this.enqueueCard(connection, message.chatId, "web", message.externalId, {
+            title: "在网页上打开 Hive",
+            subtitle: this.roomName(connection.roomId),
+            tone: "reply",
+            body: "点下面的按钮，在这台设备上以房主身份进入，不用填令牌。",
+            note: "链接 7 天内有效，只发给你本人；不要转发给别人。手机要和运行 Hive 的电脑在同一个网络里才能打开。",
+            link: { label: "在网页打开", url },
+            summary: "在网页上打开 Hive",
+          });
+          return;
+        }
+        return say(`在网页上打开（7 天内有效，不要转发）：${url}`);
+      }
       case "/who": {
         const agents = this.deps
           .participants(connection.roomId)
@@ -1033,7 +1053,7 @@ export class ImHub {
     });
     const finished = steps.every((step) => step.state === "done" || step.state === "failed");
     const failed = steps.some((step) => step.state === "failed");
-    const url = this.deps.webUrl(message.roomId);
+    const url = this.cardUrl(connection, message.roomId);
     return {
       title: `已派给 ${tasks.map((task) => task.agentName).join("、")}`,
       subtitle: `${this.roomName(message.roomId)} · #${message.seq}`,
@@ -1422,6 +1442,11 @@ export class ImHub {
     }`;
   }
 
+  /** 卡片按钮的网页地址：带登录票（扫码人本人的私聊里才会收到这些卡片） */
+  private cardUrl(connection: StoredConnection, roomId: string): string | undefined {
+    return this.deps.loginUrl?.(connection.id, roomId) ?? this.deps.webUrl(roomId);
+  }
+
   /** 能发卡片（不要求按钮回调）：飞书都行，微信只能发文字 */
   private richCapable(connection: StoredConnection): boolean {
     return Boolean(this.deps.drivers[connection.channel]?.richTextLength);
@@ -1471,6 +1496,7 @@ export class ImHub {
             "- `/room` 切换房间",
             "- `/who` 谁在忙",
             "- `/level` 推送档位",
+            "- `/web` 在手机或其他电脑上打开网页（自动登录）",
             "- `/status` 连接状态",
             ...(buttons ? [] : ["- `/cards on` 在飞书后台开通卡片回调后打开按钮"]),
           ].join("\n"),
@@ -1966,7 +1992,7 @@ export class ImHub {
       const origin = trigger ? this.originOf(trigger, connection.id) : undefined;
       const driver = this.deps.drivers[connection.channel];
       const rich = driver?.richTextLength
-        ? this.richNotice(invocation, trigger, this.cardsEnabled(connection))
+        ? this.richNotice(connection, invocation, trigger, this.cardsEnabled(connection))
         : undefined;
       this.deps.store.enqueue({
         connectionId: connection.id,
@@ -2009,6 +2035,7 @@ export class ImHub {
 
   /** 调用状态提醒的卡片：失败、结果未知、被拦下、等批准 */
   private richNotice(
+    connection: StoredConnection,
     invocation: Invocation,
     trigger: ChatMessage | undefined,
     interactive: boolean,
@@ -2016,7 +2043,7 @@ export class ImHub {
     const ref = trigger ? `#${trigger.seq}` : "这条任务";
     const detail = invocation.detail ? invocation.detail.replace(/\s+/g, " ").trim() : "";
     const agent = invocation.agentName;
-    const url = this.deps.webUrl(invocation.roomId);
+    const url = this.cardUrl(connection, invocation.roomId);
     const subtitle = `${this.roomName(invocation.roomId)}${trigger ? ` · #${trigger.seq}` : ""}`;
     const quote = trigger ? `> ${plain(oneLine(trigger.content, 120))}` : "";
     const act = (
@@ -2081,7 +2108,7 @@ export class ImHub {
   /** 房间消息的卡片：Agent 回复、@ 房主、提问（选项单独列出） */
   private richMessage(connection: StoredConnection, message: ChatMessage, limit: number): ImRich {
     const sender = message.senderName;
-    const url = this.deps.webUrl(message.roomId);
+    const url = this.cardUrl(connection, message.roomId);
     let body = plain(message.content);
     let options: ImRich["options"];
     let note: string | undefined;

@@ -9,7 +9,9 @@ import {
   type KeepAwakeState,
   type LocalSessionResponse,
 } from "@ai-hive/protocol";
+import QRCode from "qrcode";
 import { HiveError } from "./database.js";
+import type { OwnerDevice } from "./owner-devices.js";
 import { checkLocalRequest } from "./local-access.js";
 import { listDirectories } from "./local-directories.js";
 import type { LocalAgentSupervisor } from "./local-agents.js";
@@ -38,6 +40,14 @@ const ERROR_STATUS: Record<string, number> = {
 
 export type LocalRoomActions = {
   clearRoom: (roomId: string, username: string) => { messages: number; invocations: number };
+  /** 房主在其他设备上的登录：只能在 Server 所在电脑上管理 */
+  ownerDevices?: {
+    list(): OwnerDevice[];
+    revoke(id: string): boolean;
+    pair(): { ticket: string; expiresAt: string };
+    webBase(): string | undefined;
+    joinToken(): string;
+  };
   /** 熄屏后保持在线：控制的是这台电脑，只给本机房主 */
   keepAwake?: {
     state(): KeepAwakeState | undefined;
@@ -86,6 +96,46 @@ export function registerLocalAgentRoutes(
     }
     throw error;
   }
+
+  app.get("/api/local/owner-devices", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    if (!rooms.ownerDevices) return reply.code(404).send({ error: "未启用。" });
+    return { devices: rooms.ownerDevices.list() };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/local/owner-devices/:id", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    if (!rooms.ownerDevices?.revoke(request.params.id)) {
+      return reply.code(404).send({ error: "没有这台设备，或已经退出。" });
+    }
+    return { ok: true };
+  });
+
+  /** 在其他设备上登录：一次性链接和二维码，5 分钟内有效 */
+  app.post<{ Body: { origin?: string } }>(
+    "/api/local/owner-devices/pair",
+    async (request, reply) => {
+      if (deny(request, reply)) return reply;
+      const owner = rooms.ownerDevices;
+      if (!owner) return reply.code(404).send({ error: "未启用。" });
+      const { ticket, expiresAt } = owner.pair();
+      // 页面自己的地址（开发时是 Vite 端口）优先；页面开在 localhost 上时换成服务公布的地址
+      const origin = typeof request.body?.origin === "string" ? request.body.origin : "";
+      const base =
+        origin && !/^https?:\/\/(localhost|127\.|\[::1\])/i.test(origin)
+          ? origin.replace(/\/$/, "")
+          : (owner.webBase() ?? origin.replace(/\/$/, ""));
+      const url = `${base}/?login=${ticket}`;
+      return { url, expiresAt, qrDataUrl: await QRCode.toDataURL(url, { margin: 1, width: 240 }) };
+    },
+  );
+
+  /** 显示总令牌：只给本机房主，用于手动在其他设备上填入或接入远程 Agent */
+  app.get("/api/local/owner-token", async (request, reply) => {
+    if (deny(request, reply)) return reply;
+    if (!rooms.ownerDevices) return reply.code(404).send({ error: "未启用。" });
+    return { token: rooms.ownerDevices.joinToken() };
+  });
 
   app.get("/api/local/keep-awake", async (request, reply) => {
     if (deny(request, reply)) return reply;

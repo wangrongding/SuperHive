@@ -22,6 +22,13 @@ for (const entries of Object.values(networkInterfaces())) {
 const detectedHost = host === "0.0.0.0" || host === "::" ? (lanAddresses[0] ?? "localhost") : host;
 const detectedUrl = `http://${detectedHost.includes(":") ? `[${detectedHost}]` : detectedHost}:${port}`;
 const publicUrl = (process.env.HIVE_PUBLIC_URL ?? detectedUrl).replace(/\/$/, "");
+// 网页地址：开发时网页由 Vite 提供（另一个端口），飞书卡片等外链要指向它而不是 Server
+const webUrl = (
+  process.env.HIVE_WEB_URL ??
+  (process.env.HIVE_DEV_WEB_PORT
+    ? publicUrl.replace(/:\d+$/, `:${process.env.HIVE_DEV_WEB_PORT}`)
+    : publicUrl)
+).replace(/\/$/, "");
 // 开发模式（tsx 直接运行 src/）默认生成仓库本地命令；构建产物（dist/）默认生成已发布的 npx 命令。
 const isDevRuntime = import.meta.dirname.endsWith(`${path.sep}src`);
 const agentCommandPrefix =
@@ -81,6 +88,7 @@ const app = await buildApp({
   imDrivers,
   imKeyPath: path.join(path.dirname(databasePath), "im-secret.key"),
   publicUrl,
+  webUrl,
   agentCommandPrefix,
   ...(staticDir ? { staticDir } : {}),
   ...(instanceId ? { instanceId } : {}),

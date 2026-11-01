@@ -54,6 +54,7 @@ import {
   useLocalAgents,
   DirectoryPicker,
   type LocalAgentsState,
+  type OwnerDevice,
 } from "./local-agents";
 import { createFrameClock, easeInOutCubic, easeOutQuint } from "./easing";
 import { ShadowContent } from "./shadow-content";
@@ -744,6 +745,126 @@ function KeepAwakeSettingsGroup({ local }: { local: LocalAgentsState }) {
           "合上笔记本盖子、手动睡眠仍会睡眠（接着电源和外接显示器时合盖除外）；Hive 重启升级的几秒里不保证。",
         )}
       </p>
+      {error && <p className="settings-note error">{error}</p>}
+    </div>
+  );
+}
+
+/** 在其他设备上登录：二维码 / 一次性链接、已登录设备、复制总令牌 */
+function OwnerDevicesGroup({ local }: { local: LocalAgentsState }) {
+  const [devices, setDevices] = useState<OwnerDevice[]>();
+  const [pair, setPair] = useState<{ url: string; expiresAt: string; qrDataUrl: string }>();
+  const [error, setError] = useState<string>();
+  const [copied, setCopied] = useState<string>();
+  const enabled = local.enabled;
+  const { ownerDevices } = local;
+  const refresh = useCallback(() => {
+    ownerDevices().then(setDevices, () => setDevices(undefined));
+  }, [ownerDevices]);
+  useEffect(() => {
+    if (enabled) refresh();
+  }, [enabled, refresh]);
+  // 二维码用过（多了一台设备）或到期就收起
+  useEffect(() => {
+    if (!pair) return;
+    const timer = window.setInterval(() => {
+      if (Date.parse(pair.expiresAt) <= Date.now()) setPair(undefined);
+      refresh();
+    }, 3_000);
+    return () => window.clearInterval(timer);
+  }, [pair, refresh]);
+  if (!enabled) return null;
+  const fail = (reason: unknown) =>
+    setError(reason instanceof Error ? reason.message : String(reason));
+  const copy = (text: string, label: string) => {
+    void copyTextToClipboard(text).then(() => {
+      setCopied(label);
+      window.setTimeout(() => setCopied(undefined), 1_500);
+    }, fail);
+  };
+  return (
+    <div className="settings-group">
+      <div className="settings-section-heading">
+        <div>
+          <h4>{t("在其他设备上登录")}</h4>
+          <p>
+            {t(
+              "手机或另一台电脑扫码（或打开链接）后，直接以房主身份进入，不用填令牌。每台设备单独登录，可以随时退出。飞书卡片上的「在网页查看」也会自动登录。",
+            )}
+          </p>
+        </div>
+      </div>
+      {pair ? (
+        <div className="owner-pair">
+          <img src={pair.qrDataUrl} alt={t("登录二维码")} width={160} height={160} />
+          <div>
+            <p>
+              {t(
+                "用手机相机或飞书扫码，5 分钟内有效，只能用一次。设备要和这台电脑在同一个网络里。",
+              )}
+            </p>
+            <code className="owner-pair-url">{pair.url}</code>
+            <div className="owner-pair-actions">
+              <button type="button" onClick={() => copy(pair.url, "link")}>
+                {copied === "link" ? t("已复制") : t("复制链接")}
+              </button>
+              <button type="button" onClick={() => setPair(undefined)}>
+                {t("收起")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="settings-action"
+          onClick={() => {
+            setError(undefined);
+            local.pairOwnerDevice().then(setPair, fail);
+          }}
+        >
+          {t("显示登录二维码")}
+        </button>
+      )}
+      <h4 className="owner-devices-heading">{t("已登录的设备")}</h4>
+      {devices?.length ? (
+        <ul className="owner-devices">
+          {devices.map((device) => (
+            <li key={device.id}>
+              <span>
+                <strong>{device.name}</strong>
+                <small>
+                  {t("{0}登录 · 最近活跃 {1}", {
+                    0: device.source === "im" ? t("经飞书卡片") : t("扫码"),
+                    1: new Date(device.lastSeenAt).toLocaleString(),
+                  })}
+                </small>
+              </span>
+              <button
+                type="button"
+                onClick={() => local.revokeOwnerDevice(device.id).then(refresh, fail)}
+              >
+                {t("退出登录")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="settings-note">{t("还没有其他设备登录。")}</p>
+      )}
+      <details className="owner-token-details">
+        <summary>{t("房主接入令牌（高级）")}</summary>
+        <p className="settings-note">
+          {t("这是房主的总钥匙，有完整权限，只在接入远程 Agent 或扫码不方便时使用，不要发给别人。")}
+        </p>
+        <button
+          type="button"
+          className="settings-action"
+          onClick={() => local.ownerToken().then((token) => copy(token, "token"), fail)}
+        >
+          {copied === "token" ? t("已复制") : t("复制令牌")}
+        </button>
+      </details>
       {error && <p className="settings-note error">{error}</p>}
     </div>
   );
@@ -4731,6 +4852,7 @@ export function App({
                       <p>{t("运行 Hive Server 的这台电脑的设置，对所有房间生效。")}</p>
                     </div>
                     <KeepAwakeSettingsGroup local={local} />
+                    <OwnerDevicesGroup local={local} />
                   </section>
                 )}
                 {settingsTab === "appearance" && (

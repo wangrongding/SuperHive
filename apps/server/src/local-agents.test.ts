@@ -103,18 +103,20 @@ describe("local agent routes", () => {
     closeApp = undefined;
   });
 
-  async function setup(extra: Partial<LocalAgentSupervisorOptions> = {}) {
+  async function setup(extra: Partial<LocalAgentSupervisorOptions> & { publicUrl?: string } = {}) {
     const spawner = fakeSpawner();
+    const { publicUrl, ...agentOptions } = extra;
     const app = await buildApp({
       databasePath: ":memory:",
       token: "join-token",
       staticDir: "/definitely-not-present",
+      ...(publicUrl ? { publicUrl } : {}),
       localAgents: {
         cli,
         serverUrl: "http://127.0.0.1:8787",
         spawn: spawner.spawn,
         probe,
-        ...extra,
+        ...agentOptions,
       },
     });
     closeApp = () => app.close();
@@ -125,6 +127,80 @@ describe("local agent routes", () => {
     const owner = { "x-hive-owner": session.ownerToken ?? "" };
     return { app, spawner, session, owner };
   }
+
+  it("logs the owner in on another device with a one-time QR ticket, without handing out the join token", async () => {
+    const { app, owner } = await setup({ publicUrl: "http://10.0.0.8:8787" });
+    const remote = { remoteAddress: "10.0.0.20" };
+    // 页面开在 localhost 上：二维码里换成服务公布的地址
+    const pair = (
+      await app.inject({
+        method: "POST",
+        url: "/api/local/owner-devices/pair",
+        headers: owner,
+        payload: { origin: "http://localhost:5188" },
+      })
+    ).json() as { url: string; qrDataUrl: string };
+    expect(pair.qrDataUrl).toMatch(/^data:image\/png;base64,/);
+    const ticket = new URL(pair.url).searchParams.get("login")!;
+    expect(ticket).toMatch(/^hop_/);
+    // 别的电脑上没登录：不是房主
+    expect((await app.inject({ method: "GET", url: "/api/access", ...remote })).json()).toEqual({
+      role: "none",
+      reason: "no_invite",
+    });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/owner-login",
+      payload: { ticket, deviceName: "iPhone · Safari" },
+      ...remote,
+    });
+    const { token } = login.json() as { token: string };
+    expect(token).toMatch(/^hod_/);
+    // 票只能用一次
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/owner-login",
+          payload: { ticket, deviceName: "again" },
+          ...remote,
+        })
+      ).statusCode,
+    ).toBe(401);
+    const auth = { authorization: `Bearer ${token}` };
+    // 是房主，但拿到的是自己的设备令牌，不是总令牌
+    expect(
+      (await app.inject({ method: "GET", url: "/api/access", headers: auth, ...remote })).json(),
+    ).toEqual({ role: "owner", joinToken: token });
+    const meta = (
+      await app.inject({ method: "GET", url: "/api/meta", headers: auth, ...remote })
+    ).json() as Record<string, unknown>;
+    expect(meta.joinToken).toBe(token);
+    expect(JSON.stringify(meta)).not.toContain("join-token");
+    expect(
+      (await app.inject({ method: "GET", url: "/api/rooms", headers: auth, ...remote })).statusCode,
+    ).toBe(200);
+    // 本机列出设备、退出登录后令牌失效
+    const devices = (
+      await app.inject({ method: "GET", url: "/api/local/owner-devices", headers: owner })
+    ).json() as { devices: Array<{ id: string; name: string }> };
+    expect(devices.devices.map((device) => device.name)).toEqual(["iPhone · Safari"]);
+    await app.inject({
+      method: "DELETE",
+      url: `/api/local/owner-devices/${devices.devices[0]!.id}`,
+      headers: owner,
+    });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/rooms", headers: auth, ...remote })).statusCode,
+    ).toBe(401);
+    // 总令牌只给本机房主
+    expect(
+      (await app.inject({ method: "GET", url: "/api/local/owner-token", headers: owner })).json(),
+    ).toEqual({ token: "join-token" });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/local/owner-token", ...remote })).statusCode,
+    ).toBe(403);
+  });
 
   it("hands the owner token only to requests from this machine", async () => {
     const { app, session } = await setup();

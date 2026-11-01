@@ -1,5 +1,5 @@
 import { observeRuntime } from "./runtime-observation.js";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { open, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -54,6 +54,7 @@ import {
 } from "./local-agents.js";
 import { registerLocalAgentRoutes } from "./local-routes.js";
 import { KeepAwake } from "./keep-awake.js";
+import { OwnerDevices, isOwnerDeviceToken } from "./owner-devices.js";
 import { checkLocalRequest } from "./local-access.js";
 import {
   AccessStore,
@@ -72,7 +73,9 @@ import type { ImChannelDriver } from "./im/types.js";
  * admin：持有共享 join token 的房主与其 Agent（房主页面只在 Server 所在电脑上拿到它）；
  * guest：凭限时邀请进入的访客或访客带入的 Agent，只能访问一个房间，到期或被移除即失效。
  */
-type Principal = { kind: "admin" } | { kind: "guest"; resolved: ResolvedSession };
+/** admin：总令牌、本机，或房主在其他设备上的登录（deviceId） */
+type Principal =
+  { kind: "admin"; deviceId?: string } | { kind: "guest"; resolved: ResolvedSession };
 
 type Connection = {
   socket: WebSocket;
@@ -85,6 +88,8 @@ export type BuildAppOptions = {
   databasePath?: string;
   token?: string;
   publicUrl?: string;
+  /** 网页地址（开发时是 Vite 的端口）；飞书卡片上的「在网页查看」用它，缺省同 publicUrl */
+  webUrl?: string;
   agentCommandPrefix?: string;
   instanceId?: string;
   logger?: boolean;
@@ -202,6 +207,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const joinToken = database.getOrCreateToken(options.token ?? process.env.HIVE_TOKEN);
   const access = new AccessStore(database.connection());
   const imStore = new ImStore(database.connection(), SecretBox.open(options.imKeyPath));
+  const ownerDevices = new OwnerDevices(database.connection(), {
+    secret: (() => {
+      const stored = database.getSetting("ownerLoginSecret");
+      if (stored) return Buffer.from(stored, "base64");
+      const created = randomBytes(32);
+      database.setSetting("ownerLoginSecret", created.toString("base64"));
+      return created;
+    })(),
+    ...(options.now ? { now: options.now } : {}),
+  });
   const clock = () => options.now?.() ?? Date.now();
   const databasePath = options.databasePath ?? "./data/hive.sqlite";
   const attachments = new AttachmentStore(database.connection(), {
@@ -359,6 +374,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
   registerLocalAgentRoutes(app, localAgents, {
     clearRoom,
+    ownerDevices: {
+      list: () => ownerDevices.list(),
+      revoke: revokeOwnerDevice,
+      pair: () => ownerDevices.createPairTicket(),
+      webBase: () => (options.webUrl ?? options.publicUrl)?.replace(/\/$/, ""),
+      joinToken: () => joinToken,
+    },
     keepAwake: {
       state: () => keepAwake?.state(),
       update: (patch) => keepAwake?.update(patch),
@@ -370,6 +392,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   function principalForToken(token: string | undefined): Principal | undefined {
     if (!token) return undefined;
     if (token === joinToken) return { kind: "admin" };
+    if (isOwnerDeviceToken(token)) {
+      const deviceId = ownerDevices.resolve(token);
+      return deviceId ? { kind: "admin", deviceId } : undefined;
+    }
     if (!isGuestToken(token)) return undefined;
     const resolved = access.resolveToken(token, clock());
     return resolved?.state === "active" ? { kind: "guest", resolved } : undefined;
@@ -1528,8 +1554,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       };
     },
     isWaiting: (questionId) => Boolean(waitingForQuestion(questionId)),
-    webUrl: (roomId) =>
-      options.publicUrl ? `${options.publicUrl.replace(/\/$/, "")}/#${roomId}` : undefined,
+    webUrl: (roomId) => {
+      const base = (options.webUrl ?? options.publicUrl)?.replace(/\/$/, "");
+      return base ? `${base}/#${roomId}` : undefined;
+    },
+    // 卡片按钮：带 7 天有效的登录票，手机上点开直接以房主身份进入
+    loginUrl: (connectionId, roomId) => {
+      const base = (options.webUrl ?? options.publicUrl)?.replace(/\/$/, "");
+      return base
+        ? `${base}/?login=${ownerDevices.createImTicket(connectionId)}#${roomId}`
+        : undefined;
+    },
     onConnectionsChanged: () => scheduleKeepAwake(),
     log: (message, detail) => app.log.warn({ detail }, message),
     ...(options.now ? { now: options.now } : {}),
@@ -1711,8 +1746,53 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       headers: { authorization?: string | undefined };
     },
   ): boolean {
-    return checkLocalRequest(request).local || bearerToken(request) === joinToken;
+    const token = bearerToken(request);
+    return (
+      checkLocalRequest(request).local ||
+      token === joinToken ||
+      Boolean(isOwnerDeviceToken(token) && ownerDevices.resolve(token))
+    );
   }
+
+  /** 房主在其他设备上登录时，交给这台设备的是它自己的设备令牌，不是总令牌 */
+  function ownerTokenFor(request: { headers: { authorization?: string | undefined } }): string {
+    const token = bearerToken(request);
+    return isOwnerDeviceToken(token) && ownerDevices.resolve(token) ? token : joinToken;
+  }
+
+  /** 退出某台设备：断开它已有的连接 */
+  function revokeOwnerDevice(id: string): boolean {
+    if (!ownerDevices.revoke(id)) return false;
+    for (const connection of [...connections]) {
+      if (connection.principal?.kind !== "admin" || connection.principal.deviceId !== id) continue;
+      send(connection.socket, {
+        type: "error",
+        code: "SESSION_REVOKED",
+        message: "这台设备已被房主退出登录。",
+      });
+      connection.socket.close(4401, "revoked");
+      disconnect(connection);
+    }
+    return true;
+  }
+
+  /** 用登录票换设备会话（二维码、飞书卡片按钮） */
+  app.post("/api/owner-login", async (request, reply) => {
+    const body = request.body as { ticket?: unknown; deviceName?: unknown } | undefined;
+    const ticket = typeof body?.ticket === "string" ? body.ticket : "";
+    const deviceName = typeof body?.deviceName === "string" ? body.deviceName : "";
+    const result = ownerDevices.redeem(ticket, deviceName, (connectionId) => {
+      const connection = imStore.getConnection(connectionId);
+      return Boolean(connection && connection.status !== "paused");
+    });
+    if (!result) {
+      return reply.code(401).send({
+        error: "登录链接无效、已过期或已经用过。请重新扫码，或在飞书里发 /web 获取新的链接。",
+        code: "OWNER_LOGIN_INVALID",
+      });
+    }
+    return { token: result.token, device: result.device };
+  });
 
   app.get("/api/meta", async (request) => {
     const httpUrl = requestPublicUrl(request, options.publicUrl);
@@ -1725,10 +1805,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       wsUrl,
       mcpUrl: `${httpUrl}/mcp`,
       ...(isOwnerRequest(request)
-        ? {
-            joinToken,
-            agentCommand: `${agentCommandPrefix} join --server ${httpUrl} --name my-agent --token ${joinToken}`,
-          }
+        ? (() => {
+            const token = ownerTokenFor(request);
+            return {
+              joinToken: token,
+              // 其他设备上的登录只拿到自己的设备令牌；接入 Agent 的命令要在 Server 所在电脑上复制
+              ...(token === joinToken
+                ? {
+                    agentCommand: `${agentCommandPrefix} join --server ${httpUrl} --name my-agent --token ${joinToken}`,
+                  }
+                : { ownerDevice: true }),
+            };
+          })()
         : {}),
     };
   });
@@ -1738,7 +1826,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const token = bearerToken(request);
     // 带着访客凭证来的按访客对待，即使是在 Server 所在电脑上打开
     if (!(token && isGuestToken(token)) && isOwnerRequest(request)) {
-      return { role: "owner", joinToken };
+      return { role: "owner", joinToken: ownerTokenFor(request) };
     }
     const resolved = token && isGuestToken(token) ? access.resolveToken(token, clock()) : undefined;
     if (!resolved) return { role: "none", reason: "no_invite" };

@@ -45,6 +45,19 @@ export type LocalAgentsState = {
   /** 熄屏后保持在线：这台电脑的设置与实际状态（不是本机房主时为 undefined） */
   keepAwake: KeepAwakeState | undefined;
   updateKeepAwake(patch: Partial<KeepAwakeSettings>): Promise<void>;
+  /** 房主在其他设备上的登录 */
+  ownerDevices(): Promise<OwnerDevice[]>;
+  revokeOwnerDevice(id: string): Promise<void>;
+  pairOwnerDevice(): Promise<{ url: string; expiresAt: string; qrDataUrl: string }>;
+  ownerToken(): Promise<string>;
+};
+
+export type OwnerDevice = {
+  id: string;
+  name: string;
+  source: "pair" | "im";
+  createdAt: string;
+  lastSeenAt: string;
 };
 
 /** 保持在线状态的刷新间隔（侧栏小月亮用） */
@@ -234,11 +247,37 @@ export function useLocalAgents(base: string, active: boolean): LocalAgentsState 
     [request],
   );
 
+  const ownerDevices = useCallback(async () => {
+    const response = await request("/api/local/owner-devices");
+    return ((await response.json()) as { devices: OwnerDevice[] }).devices;
+  }, [request]);
+  const revokeOwnerDevice = useCallback(
+    async (id: string) => {
+      await request(`/api/local/owner-devices/${id}`, { method: "DELETE" });
+    },
+    [request],
+  );
+  const pairOwnerDevice = useCallback(async () => {
+    const response = await request("/api/local/owner-devices/pair", {
+      method: "POST",
+      body: JSON.stringify({ origin: window.location.origin }),
+    });
+    return (await response.json()) as { url: string; expiresAt: string; qrDataUrl: string };
+  }, [request]);
+  const ownerToken = useCallback(async () => {
+    const response = await request("/api/local/owner-token");
+    return ((await response.json()) as { token: string }).token;
+  }, [request]);
+
   return {
     enabled,
     reason: session && !session.enabled ? session.reason : undefined,
     keepAwake,
     updateKeepAwake,
+    ownerDevices,
+    revokeOwnerDevice,
+    pairOwnerDevice,
+    ownerToken,
     providers,
     agents,
     create,

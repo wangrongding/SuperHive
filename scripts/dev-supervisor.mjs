@@ -477,6 +477,8 @@ export async function main() {
           env: {
             ...process.env,
             HIVE_INSTANCE_ID: instanceId,
+            // 飞书卡片上的网页链接要指向 Vite 的端口
+            HIVE_DEV_WEB_PORT: String(webPort),
             HIVE_HANDOVER_FILE: handoverPath,
             HIVE_SHUTDOWN_TOKEN: shutdownToken,
           },

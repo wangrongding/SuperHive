@@ -36,6 +36,55 @@ function stripInviteFromHash(roomId: string) {
   window.history.replaceState(window.history.state, "", `#${roomId}`);
 }
 
+/** 登录参数用过就从地址栏去掉：刷新、截图、分享时不再带着它 */
+function stripLoginFromUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("login");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+/** 设备列表里显示的名字：系统 + 浏览器，够分辨就行 */
+export function deviceName(userAgent = navigator.userAgent): string {
+  const os = /iPhone/.test(userAgent)
+    ? "iPhone"
+    : /iPad/.test(userAgent)
+      ? "iPad"
+      : /Android/.test(userAgent)
+        ? "Android"
+        : /Windows/.test(userAgent)
+          ? "Windows"
+          : /Mac OS X|Macintosh/.test(userAgent)
+            ? "Mac"
+            : /Linux/.test(userAgent)
+              ? "Linux"
+              : t("其他设备");
+  const app = /Lark|Feishu/i.test(userAgent)
+    ? t("飞书")
+    : /MicroMessenger/.test(userAgent)
+      ? t("微信")
+      : /Edg\//.test(userAgent)
+        ? "Edge"
+        : /Chrome\//.test(userAgent)
+          ? "Chrome"
+          : /Firefox\//.test(userAgent)
+            ? "Firefox"
+            : /Safari\//.test(userAgent)
+              ? "Safari"
+              : t("浏览器");
+  return `${os} · ${app}`;
+}
+
+async function ownerLogin(base: string, ticket: string, name: string): Promise<string> {
+  const response = await fetch(`${base}/api/owner-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticket, deviceName: name }),
+  });
+  const body = (await response.json().catch(() => ({}))) as { token?: string; error?: string };
+  if (!response.ok || !body.token) throw new Error(body.error ?? t("登录链接无效或已过期。"));
+  return body.token;
+}
+
 /**
  * 访问入口：本机房主直接进入；带邀请链接的先兑换成访客会话；
  * 已有访客会话的按会话进入；都没有就提示需要邀请。到期或被移除时回到这里。
@@ -49,10 +98,30 @@ export function AccessGate() {
 
   const evaluate = useCallback(async () => {
     const invite = parseInviteHash(window.location.hash);
+    const login = new URLSearchParams(window.location.search).get("login") ?? undefined;
     const guestToken = localStorage.getItem(GUEST_TOKEN_KEY) ?? undefined;
-    const ownerToken = localStorage.getItem(OWNER_TOKEN_KEY) ?? undefined;
+    let ownerToken = localStorage.getItem(OWNER_TOKEN_KEY) ?? undefined;
     try {
-      const access = await fetchAccess(base, guestToken ?? ownerToken);
+      let access = await fetchAccess(base, guestToken ?? ownerToken);
+      // 登录链接（二维码、飞书卡片按钮）：这台设备还不是房主时，换一个房主设备会话
+      if (login) {
+        stripLoginFromUrl();
+        if (access.role !== "owner") {
+          try {
+            ownerToken = await ownerLogin(base, login, deviceName());
+            localStorage.removeItem(GUEST_TOKEN_KEY);
+            localStorage.setItem(OWNER_TOKEN_KEY, ownerToken);
+            access = await fetchAccess(base, ownerToken);
+          } catch (reason) {
+            setState({
+              kind: "none",
+              reason: "no_invite",
+              detail: reason instanceof Error ? reason.message : String(reason),
+            });
+            return;
+          }
+        }
+      }
       if (access.role === "owner") {
         if (invite.token && invite.roomId) stripInviteFromHash(invite.roomId);
         setState({ kind: "owner", ...(ownerToken ? { ownerToken } : {}) });

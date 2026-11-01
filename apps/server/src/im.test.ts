@@ -694,12 +694,13 @@ describe("IM 推送档位", () => {
     close = undefined;
   });
 
-  async function setup(options: { richCards?: boolean } = {}) {
+  async function setup(options: { richCards?: boolean; webUrl?: string } = {}) {
     const fake = new FakeChannel();
     fake.richCards = Boolean(options.richCards);
     const clock = { offset: 0 };
     const app = await buildApp({
       databasePath: ":memory:",
+      ...(options.webUrl ? { webUrl: options.webUrl } : {}),
       token: "test-token",
       staticDir: "/definitely-not-present",
       now: () => Date.now() + clock.offset,
@@ -765,7 +766,7 @@ describe("IM 推送档位", () => {
     };
     const setLevel = async (level: string) =>
       (await api("POST", `/api/im/connections/${id}/level`, { level })).body;
-    return { api, fake, clock, rd, helper, assign, setLevel, id, join };
+    return { api, fake, clock, rd, helper, assign, setLevel, id, join, app };
   }
 
   it("默认「与我相关」：网页派的活，Agent 没提到房主，最终结果也推到房主私聊", async () => {
@@ -1130,6 +1131,49 @@ describe("IM 推送档位", () => {
     });
     const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections;
     expect(connection).toMatchObject({ id, level: "agents" });
+  });
+
+  it("卡片上的「在网页查看」带房主登录票，在别的设备上点开直接以房主身份进入；/web 也能拿到", async () => {
+    const { fake, helper, assign, app } = await setup({
+      richCards: true,
+      webUrl: "http://10.0.0.8:5188",
+    });
+    const trigger = await assign("@helper 看下", "web-link");
+    helper.send({
+      type: "message.send",
+      clientMessageId: "r",
+      content: "看完了",
+      parentMessageId: trigger.id,
+    });
+    const card = await until(() => fake.sent.find((item) => item.rich?.body === "看完了"));
+    const link = new URL(card.rich!.link!.url);
+    expect(`${link.origin}${link.pathname}`).toBe("http://10.0.0.8:5188/");
+    expect(link.hash).toBe("#general");
+    const ticket = link.searchParams.get("login")!;
+    expect(ticket).toMatch(/^hoi_/);
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/owner-login",
+      payload: { ticket, deviceName: "iPhone · 飞书" },
+      remoteAddress: "10.0.0.30",
+    });
+    const { token } = login.json() as { token: string };
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/access",
+          headers: { authorization: `Bearer ${token}` },
+          remoteAddress: "10.0.0.30",
+        })
+      ).json(),
+    ).toEqual({ role: "owner", joinToken: token });
+
+    fake.emit({ text: "/web" });
+    const web = await until(() =>
+      fake.sent.find((item) => item.rich?.title === "在网页上打开 Hive"),
+    );
+    expect(web.rich!.link!.url).toContain("login=hoi_");
   });
 
   it("暂停后不推，恢复后不补发暂停期间的消息", async () => {
