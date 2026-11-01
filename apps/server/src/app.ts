@@ -1558,7 +1558,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       const base = (options.webUrl ?? options.publicUrl)?.replace(/\/$/, "");
       return base ? `${base}/#${roomId}` : undefined;
     },
-    // 卡片按钮：带 7 天有效的登录票，手机上点开直接以房主身份进入
+    // 卡片按钮：带 24 小时有效的登录票，手机上点开直接以房主身份进入
     loginUrl: (connectionId, roomId) => {
       const base = (options.webUrl ?? options.publicUrl)?.replace(/\/$/, "");
       return base

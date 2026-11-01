@@ -877,13 +877,13 @@ export class ImHub {
             subtitle: this.roomName(connection.roomId),
             tone: "reply",
             body: "点下面的按钮，在这台设备上以房主身份进入，不用填令牌。",
-            note: "链接 7 天内有效，只发给你本人；不要转发给别人。手机要和运行 Hive 的电脑在同一个网络里才能打开。",
+            note: "链接 24 小时内有效，过期后再发 /web 获取，只发给你本人；不要转发给别人。手机要和运行 Hive 的电脑在同一个网络里才能打开。",
             link: { label: "在网页打开", url },
             summary: "在网页上打开 Hive",
           });
           return;
         }
-        return say(`在网页上打开（7 天内有效，不要转发）：${url}`);
+        return say(`在网页上打开（24 小时内有效，不要转发）：${url}`);
       }
       case "/who": {
         const agents = this.deps

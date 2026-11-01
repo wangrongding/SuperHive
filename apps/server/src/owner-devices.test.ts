@@ -32,7 +32,7 @@ describe("房主在其他设备上登录", () => {
     expect(devices.list()).toHaveLength(0);
   });
 
-  it("飞书票 7 天内可重复使用，绑定连接；篡改、过期、连接已断开都无效", () => {
+  it("飞书票 24 小时内可重复使用，绑定连接；篡改、过期、连接已断开都无效", () => {
     const { devices, advance } = setup();
     const ticket = devices.createImTicket("conn-1");
     const valid = (id: string) => id === "conn-1";

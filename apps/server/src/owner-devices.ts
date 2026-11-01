@@ -6,7 +6,7 @@ import type Database from "better-sqlite3";
  * 可以列出、单独退出，不需要把总令牌（join token）交出去。
  * 登录票两种：
  * - 配对票（本机网页上的二维码 / 链接）：5 分钟有效、只能用一次，存在库里；
- * - 飞书票（卡片上的「在网页查看」）：7 天有效、可重复使用，用服务端密钥签名，不入库，
+ * - 飞书票（卡片上的「在网页查看」）：24 小时有效（过期后在飞书里发 /web 取新的）、可重复使用，用服务端密钥签名，不入库，
  *   绑定发出它的 IM 连接，连接断开后失效。
  */
 
@@ -14,7 +14,7 @@ export const OWNER_DEVICE_PREFIX = "hod_";
 const PAIR_PREFIX = "hop_";
 const IM_PREFIX = "hoi_";
 export const PAIR_TICKET_TTL_MS = 5 * 60_000;
-export const IM_TICKET_TTL_MS = 7 * 24 * 60 * 60_000;
+export const IM_TICKET_TTL_MS = 24 * 60 * 60_000;
 /** 最近活跃时间最多每分钟写一次库 */
 const TOUCH_INTERVAL_MS = 60_000;
 
