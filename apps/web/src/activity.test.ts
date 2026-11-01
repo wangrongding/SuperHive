@@ -1,4 +1,4 @@
-import type { Invocation, Participant } from "@ai-hive/protocol";
+import type { Invocation, Participant } from "@superhive/protocol";
 import { describe, expect, it } from "vitest";
 import { agentRuntimeRows, needsAttention, orderByDelegation, plainPreview } from "./activity";
 

@@ -8,7 +8,7 @@ import {
   type KeepAwakeSettings,
   type KeepAwakeState,
   type LocalSessionResponse,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import QRCode from "qrcode";
 import { HiveError } from "./database.js";
 import type { OwnerDevice } from "./owner-devices.js";

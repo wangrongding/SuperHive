@@ -1,19 +1,19 @@
 {
-  "name": "ai-hive-workspace",
+  "name": "superhive-workspace",
   "version": "0.1.0",
   "private": true,
   "description": "A self-hosted shared workspace for humans, Codex, Claude Code, Copilot, OpenClaw, and extensible agents.",
   "type": "module",
   "scripts": {
-    "pretest": "pnpm --filter @ai-hive/protocol build",
+    "pretest": "pnpm --filter @superhive/protocol build",
     "dev": "node scripts/dev.mjs",
     "build": "pnpm -r --workspace-concurrency=1 build",
     "test": "pnpm test:dev && pnpm -r --if-present test",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "start": "pnpm --filter @ai-hive/server start",
-    "agent": "pnpm --filter ai-hive dev",
-    "agent:echo": "pnpm --filter ai-hive echo",
+    "start": "pnpm --filter @superhive/server start",
+    "agent": "pnpm --filter superhive dev",
+    "agent:echo": "pnpm --filter superhive echo",
     "test:dev": "node --test scripts/dev-supervisor.test.mjs scripts/dev-reload.test.mjs",
     "test:dev:smoke": "node scripts/dev-supervisor.smoke.mjs"
   },
@@ -35,7 +35,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.31.0",
-    "ai-hive": "workspace:*",
+    "superhive": "workspace:*",
     "concurrently": "^9.2.0",
     "eslint": "^9.31.0",
     "globals": "^16.3.0",

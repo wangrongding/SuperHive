@@ -1,5 +1,5 @@
 {
-  "name": "@ai-hive/web",
+  "name": "@superhive/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-hive/protocol": "workspace:*",
+    "@superhive/protocol": "workspace:*",
     "@vitejs/plugin-react": "latest",
     "html-to-image": "^1.11.13",
     "react": "latest",

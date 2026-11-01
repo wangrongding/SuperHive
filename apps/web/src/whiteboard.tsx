@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { WhiteboardEntry, WhiteboardSlot } from "@ai-hive/protocol";
+import type { WhiteboardEntry, WhiteboardSlot } from "@superhive/protocol";
 import { getLocale, localized, t } from "./i18n";
 
 /** 阻塞最需要人关注，排在最前；里程碑是历史记录，放最后 */

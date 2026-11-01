@@ -104,7 +104,7 @@ export type WhiteboardEntry = {
   updatedAt: string;
 };
 
-/** Keep in sync with runtimeEventSchema in @ai-hive/protocol; contains no arbitrary runtime text. */
+/** Keep in sync with runtimeEventSchema in @superhive/protocol; contains no arbitrary runtime text. */
 export type RuntimeEvent = {
   kind: "capabilities" | "activity" | "provider_error" | "recovered";
   observability?: "partial" | "full" | "heartbeat";
@@ -116,7 +116,7 @@ export type RuntimeEvent = {
   retryInMs?: number;
 };
 
-/** Keep in sync with agentUsageSchema in @ai-hive/protocol；四个输入桶互斥 */
+/** Keep in sync with agentUsageSchema in @superhive/protocol；四个输入桶互斥 */
 export type UsageBuckets = {
   inputTokens: number;
   cacheWriteTokens: number;
@@ -174,7 +174,7 @@ export type ServerEvent =
   | { type: "rooms.changed"; room: RoomSummary }
   | { type: "error"; code: string; message: string };
 
-/* 与 @ai-hive/protocol 的 maskMarkdownCode / parseMentions 保持一致 */
+/* 与 @superhive/protocol 的 maskMarkdownCode / parseMentions 保持一致 */
 /**
  * 把 Markdown 代码（``` / ~~~ 代码块、行内 `code`）替换成等长空白：代码里写的 @名字 是示例，不算提及。
  * 等长替换保留其余文字的位置。未闭合的反引号按普通文字处理（与 CommonMark 一致）；未闭合的代码块延续到结尾。
@@ -199,7 +199,7 @@ export function isMentioned(content: string, username: string): boolean {
 }
 
 /**
- * 与 @ai-hive/protocol 中的同名函数保持一致：去掉控制符、bidi 覆盖/隔离符和行/段分隔符，
+ * 与 @superhive/protocol 中的同名函数保持一致：去掉控制符、bidi 覆盖/隔离符和行/段分隔符，
  * 保留换行、制表和 emoji 需要的零宽连接符。
  */
 export function stripUnsafeCharacters(value: string): string {

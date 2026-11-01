@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 构建后自检：dist 产物里引用的外部包必须都声明在本包 dependencies 中。
 // build:server 用 --packages=external 打包，apps/server 新增运行依赖而漏改这里时，
-// npx ai-hive 安装后会在启动时抛 MODULE_NOT_FOUND；此脚本把问题拦在构建阶段。
+// npx superhive 安装后会在启动时抛 MODULE_NOT_FOUND；此脚本把问题拦在构建阶段。
 import { builtinModules } from "node:module";
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";

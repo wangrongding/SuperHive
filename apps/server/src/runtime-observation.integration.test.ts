@@ -1,7 +1,7 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import type { ServerEvent } from "@ai-hive/protocol";
+import type { ServerEvent } from "@superhive/protocol";
 import { buildApp } from "./app.js";
 
 const sockets: WebSocket[] = [];

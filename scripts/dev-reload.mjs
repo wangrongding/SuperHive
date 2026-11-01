@@ -15,7 +15,7 @@ const IGNORED = new Set([
   "coverage",
   "data",
   "logs",
-  ".ai-hive-dev",
+  ".superhive-dev",
 ]);
 
 function collect(repoRoot, directory, accept) {

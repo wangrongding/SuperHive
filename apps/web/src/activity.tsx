@@ -5,7 +5,7 @@ import type {
   Participant,
   RoomSummary,
   UsageSummary,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { delegationSummary, invocationStatusLabel } from "./invocations";
 import { formatRelativeTime } from "./whiteboard";
 import { localized, t } from "./i18n";

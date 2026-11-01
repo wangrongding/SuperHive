@@ -1,4 +1,4 @@
-import type { Invocation, Participant } from "@ai-hive/protocol";
+import type { Invocation, Participant } from "@superhive/protocol";
 import { localized, t } from "./i18n";
 
 export type ActivityState = "waiting" | "running" | "cancelling" | "queued" | "thinking";

@@ -1,7 +1,7 @@
 dist
 coverage
 node_modules
-packages/ai-hive/web
+packages/superhive/web
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

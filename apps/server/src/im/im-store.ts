@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ImChannel, ImConnection, ImDeliveryLevel } from "@ai-hive/protocol";
+import type { ImChannel, ImConnection, ImDeliveryLevel } from "@superhive/protocol";
 import type { SecretBox } from "./secret-box.js";
 import type { ImRich } from "./types.js";
 

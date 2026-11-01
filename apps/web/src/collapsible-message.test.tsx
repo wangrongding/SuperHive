@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { LIMITS } from "@ai-hive/protocol";
+import { LIMITS } from "@superhive/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsibleMessage, MAX_MESSAGE_LENGTH, isLongMessage } from "./collapsible-message";
 

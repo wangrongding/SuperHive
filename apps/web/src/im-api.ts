@@ -4,7 +4,7 @@ import type {
   ImConnection,
   ImDeliveryLevel,
   ImLoginView,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { localized, t } from "./i18n";
 
 async function call<T>(url: string, token: string, init: RequestInit = {}): Promise<T> {

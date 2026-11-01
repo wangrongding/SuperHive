@@ -78,7 +78,7 @@ describe("连接 IM 弹窗", () => {
               roomId: "build",
               channel: "feishu",
               ownerName: "rd",
-              label: "AI Hive 助手",
+              label: "SuperHive 助手",
               status: "connected",
               level: "mine",
               delivery: { pending: 0, filtered: 3 },
@@ -97,7 +97,7 @@ describe("连接 IM 弹窗", () => {
         onClose={() => undefined}
       />,
     );
-    await waitFor(() => expect(screen.getByText("飞书 · AI Hive 助手")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("飞书 · SuperHive 助手")).toBeTruthy());
     expect(screen.queryByRole("radio", { name: "个人微信" })).toBeNull();
     expect(screen.getByRole("radio", { name: "与我相关" }).getAttribute("aria-checked")).toBe(
       "true",
@@ -117,7 +117,7 @@ describe("连接 IM 弹窗", () => {
               roomId: "build",
               channel: "feishu",
               ownerName: "rd",
-              label: "AI Hive 助手",
+              label: "SuperHive 助手",
               status: "connected",
               level: "mine",
               delivery: { pending: 0, filtered: 0 },

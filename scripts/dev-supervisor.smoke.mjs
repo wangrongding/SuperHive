@@ -27,13 +27,13 @@ function dependencies(pkg) {
   const destination = path.join(root, pkg, "node_modules");
   fs.mkdirSync(destination, { recursive: true });
   for (const name of fs.readdirSync(source)) {
-    if (name === "@ai-hive") continue;
+    if (name === "@superhive") continue;
     fs.symlinkSync(path.join(source, name), path.join(destination, name));
   }
-  fs.mkdirSync(path.join(destination, "@ai-hive"), { recursive: true });
+  fs.mkdirSync(path.join(destination, "@superhive"), { recursive: true });
   fs.symlinkSync(
     path.join(root, "packages/protocol"),
-    path.join(destination, "@ai-hive/protocol"),
+    path.join(destination, "@superhive/protocol"),
     "dir",
   );
 }
@@ -52,7 +52,7 @@ async function waitStatus(state, generation) {
     if (child.finished) throw new Error("isolated dev process exited unexpectedly");
     try {
       const status = JSON.parse(
-        fs.readFileSync(path.join(root, ".ai-hive-dev/status.json"), "utf8"),
+        fs.readFileSync(path.join(root, ".superhive-dev/status.json"), "utf8"),
       );
       if (status.state === state && status.generation === generation) return status;
       if (status.state === "failed" && status.generation >= generation && state !== "failed")
@@ -78,7 +78,7 @@ try {
   ])
     copy(file);
   fs.symlinkSync(path.join(checkout, "node_modules"), path.join(root, "node_modules"), "dir");
-  for (const pkg of ["packages/protocol", "packages/ai-hive", "apps/server", "apps/web"]) {
+  for (const pkg of ["packages/protocol", "packages/superhive", "apps/server", "apps/web"]) {
     for (const file of ["package.json", "tsconfig.json", "src"]) copy(`${pkg}/${file}`);
     dependencies(pkg);
   }
@@ -93,7 +93,7 @@ try {
   // Only the install subcommand is simulated: this smoke copy shares dependency
   // symlinks with the checkout, so a real install here could mutate the live app.
   const realPnpm = execFileSync("which", ["pnpm"], { encoding: "utf8" }).trim();
-  const bin = path.join(root, ".ai-hive-dev/test-bin");
+  const bin = path.join(root, ".superhive-dev/test-bin");
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(
     path.join(bin, "pnpm"),
@@ -101,7 +101,7 @@ try {
 import fs from 'node:fs'; import cp from 'node:child_process';
 const args=process.argv.slice(2);
 if(args[0]==='install'){
-  const counter='.ai-hive-dev/install-count';let count=0;try{count=Number(fs.readFileSync(counter,'utf8'))}catch{}
+  const counter='.superhive-dev/install-count';let count=0;try{count=Number(fs.readFileSync(counter,'utf8'))}catch{}
   fs.writeFileSync(counter,String(count+1));
   if(JSON.parse(fs.readFileSync('package.json','utf8')).hiveSmokeFailInstall){console.error('isolated mocked install failure');process.exit(1);}
   fs.appendFileSync('pnpm-lock.yaml','\\n# simulated install lock output '+(count+1)+'\\n');
@@ -143,7 +143,7 @@ if(args[0]==='install'){
   for (const [index, file] of [
     "apps/server/src/index.ts",
     "packages/protocol/src/index.ts",
-    "packages/ai-hive/src/bridge.ts",
+    "packages/superhive/src/bridge.ts",
   ].entries()) {
     fs.appendFileSync(path.join(root, file), "\n// isolated live-update smoke\n");
     await waitStatus("ready", index + 2);
@@ -181,7 +181,7 @@ if(args[0]==='install'){
   let generation = 8;
   const installCount = () => {
     try {
-      return Number(fs.readFileSync(path.join(root, ".ai-hive-dev/install-count"), "utf8"));
+      return Number(fs.readFileSync(path.join(root, ".superhive-dev/install-count"), "utf8"));
     } catch {
       return 0;
     }
@@ -256,7 +256,7 @@ if(args[0]==='install'){
   await waitStatus("failed", generation);
   assert.equal((await json(healthUrl)).instanceId, identity);
   fs.appendFileSync(
-    path.join(root, "packages/ai-hive/src/bridge.ts"),
+    path.join(root, "packages/superhive/src/bridge.ts"),
     "\n// source edit while supervisor import is broken\n",
   );
   const linkFailureSource = await waitStatus("failed", ++generation);

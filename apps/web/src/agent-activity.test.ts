@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Invocation, Participant } from "@ai-hive/protocol";
+import type { Invocation, Participant } from "@superhive/protocol";
 import { agentActivity } from "./agent-activity";
 
 const agent = (

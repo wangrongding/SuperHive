@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { QuestionAnswer, QuestionSpec } from "@ai-hive/protocol";
+import type { QuestionAnswer, QuestionSpec } from "@superhive/protocol";
 import { t } from "./i18n";
 
 /**

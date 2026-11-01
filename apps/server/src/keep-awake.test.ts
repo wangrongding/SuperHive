@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { KeepAwakeSettings } from "@ai-hive/protocol";
+import type { KeepAwakeSettings } from "@superhive/protocol";
 import { KeepAwake, type KeepAwakeDemand } from "./keep-awake.js";
 
 class FakeChild extends EventEmitter {

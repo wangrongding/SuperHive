@@ -180,7 +180,7 @@ export function AccessGate() {
                 try {
                   const session = await redeemInvite(base, state.token, username);
                   localStorage.setItem(GUEST_TOKEN_KEY, session.token);
-                  localStorage.setItem("ai-hive.username", session.username);
+                  localStorage.setItem("superhive.username", session.username);
                   stripInviteFromHash(session.roomId);
                   setState({ kind: "guest", guest: session });
                 } catch (reason) {
@@ -218,7 +218,7 @@ function RedeemForm({
   error: string | undefined;
   onSubmit: (username: string) => Promise<void>;
 }) {
-  const [username, setUsername] = useState(localStorage.getItem("ai-hive.username") ?? "");
+  const [username, setUsername] = useState(localStorage.getItem("superhive.username") ?? "");
   const [busy, setBusy] = useState(false);
   const unusable =
     preview?.state === "expired"

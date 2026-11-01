@@ -11,7 +11,7 @@ export type Params = Record<string, string | number | null | undefined>;
 export type Locale = "zh-CN" | "en";
 export type LocalePreference = "system" | Locale;
 
-export const LOCALE_STORAGE_KEY = "ai-hive.locale";
+export const LOCALE_STORAGE_KEY = "superhive.locale";
 export const LOCALE_OPTIONS: Array<{ value: LocalePreference; label: string }> = [
   { value: "system", label: "跟随系统" },
   { value: "zh-CN", label: "简体中文" },

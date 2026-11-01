@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@ai-hive/protocol";
+import type { ChatMessage } from "@superhive/protocol";
 
 export const MESSAGE_PREVIEW_CHARS = 4000;
 export const MESSAGE_READ_MAX_CHARS = 8000;

@@ -56,7 +56,7 @@ function fixture(t, overrides = {}) {
   const statuses = [];
   const servers = [];
   const supervisor = new DevSupervisor({
-    statusPath: path.join(root, ".ai-hive-dev/status.json"),
+    statusPath: path.join(root, ".superhive-dev/status.json"),
     debounceMs: 20,
     build: async () => ({}),
     startServer: async () => {
@@ -80,22 +80,22 @@ test("source allowlist excludes Vite-only changes and generated/runtime data", (
   for (const file of [
     "apps/server/src/app.ts",
     "packages/protocol/src/index.ts",
-    "packages/ai-hive/src/bridge.ts",
+    "packages/superhive/src/bridge.ts",
     "tsconfig.base.json",
     "apps/server/tsconfig.json",
-    "packages\\ai-hive\\src\\bridge.ts",
+    "packages\\superhive\\src\\bridge.ts",
   ])
     assert.equal(isWatchedFile(file), true, file);
   for (const file of [
     "apps/web/src/App.tsx",
-    ".ai-hive-dev/status.json",
+    ".superhive-dev/status.json",
     "apps/server/data/hive.sqlite",
     "packages/protocol/dist/index.js",
-    "packages/protocol/.ai-hive-dev/build/index.d.ts",
-    "packages/ai-hive/src/node_modules/x.js",
+    "packages/protocol/.superhive-dev/build/index.d.ts",
+    "packages/superhive/src/node_modules/x.js",
     "apps/server/src/logs/x.json",
     "README.md",
-    "packages/ai-hive/package.json",
+    "packages/superhive/package.json",
   ])
     assert.equal(isWatchedFile(file), false, file);
 });
@@ -351,7 +351,7 @@ test(
     for (const dir of SOURCE_ROOTS) fs.mkdirSync(path.join(root, dir), { recursive: true });
     const files = {
       server: "apps/server/src/app.json",
-      bridge: "packages/ai-hive/src/bridge.json",
+      bridge: "packages/superhive/src/bridge.json",
       protocol: "packages/protocol/src/index.json",
     };
     for (const file of Object.values(files)) fs.writeFileSync(path.join(root, file), "0");
@@ -362,7 +362,7 @@ test(
     let launches = 0;
     const statuses = [];
     const supervisor = new DevSupervisor({
-      statusPath: path.join(root, ".ai-hive-dev/status.json"),
+      statusPath: path.join(root, ".superhive-dev/status.json"),
       debounceMs: 25,
       build: async () => {
         try {
@@ -429,10 +429,10 @@ test(
 
 test("a code update leaves a handover marker so local Agents survive; a real stop removes it", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-dev-handover-"));
-  const handoverPath = path.join(root, ".ai-hive-dev/agent-handover");
+  const handoverPath = path.join(root, ".superhive-dev/agent-handover");
   const seenAtStop = [];
   const supervisor = new DevSupervisor({
-    statusPath: path.join(root, ".ai-hive-dev/status.json"),
+    statusPath: path.join(root, ".superhive-dev/status.json"),
     handoverPath,
     debounceMs: 20,
     build: async () => ({}),

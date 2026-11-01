@@ -1,3 +1,4 @@
+import "./storage-migration";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AccessGate } from "./access-gate";

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Invite, Participant } from "@ai-hive/protocol";
+import type { Invite, Participant } from "@superhive/protocol";
 import {
   DURATION_PRESETS,
   createGuestAgent,

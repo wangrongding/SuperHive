@@ -1,4 +1,4 @@
-import type { Participant } from "@ai-hive/protocol";
+import type { Participant } from "@superhive/protocol";
 
 export type MentionContext = {
   start: number;
@@ -71,7 +71,7 @@ export function applyMention(
 // 与消息正文的高亮规则一致：@ 前不能紧贴 ASCII 字母数字（邮箱），中文后可以直接 @
 const mentionTokenPattern = /(?<![A-Za-z0-9_.])@[\p{L}\p{N}_.-]+/gu;
 
-/* 与 @ai-hive/protocol 的 maskMarkdownCode 一致（网页只导入协议类型，避免把 zod 打进页面包）：
+/* 与 @superhive/protocol 的 maskMarkdownCode 一致（网页只导入协议类型，避免把 zod 打进页面包）：
    代码里写的 @名字 是示例，服务端不会派发，输入框也不高亮 */
 /**
  * 把 Markdown 代码（``` / ~~~ 代码块、行内 `code`）替换成等长空白：代码里写的 @名字 是示例，不算提及。

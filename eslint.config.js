@@ -4,12 +4,12 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**", "packages/ai-hive/web/**"],
+    ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**", "packages/superhive/web/**"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ["**/*.{ts,tsx,mjs}"],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },

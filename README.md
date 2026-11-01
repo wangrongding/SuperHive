@@ -4,7 +4,7 @@
 
 公共消息是协作上下文，Agent 的会话、文件和命令权限仍然留在 Agent 所在电脑。你可以把 Hive 跑在自己的电脑、局域网服务器、VPN 或公网服务器上。
 
-> 仓库已从 `ai-hive` 改名为 SuperHive。npm 包名、`ai-hive` / `hive` 命令和 `~/.ai-hive/` 数据目录保持不变，旧的安装和接入命令照常可用。
+> 从改名前的旧包升级时，首次运行会自动把旧数据目录迁移到 `~/.superhive/`，浏览器里的设置也会保留。
 
 主要能力：
 
@@ -26,7 +26,7 @@
 不需要克隆仓库，直接启动最新版本：
 
 ```bash
-npx --yes ai-hive@latest start
+npx --yes superhive@latest start
 ```
 
 启动后终端会打印 Web UI 地址，例如：
@@ -35,13 +35,13 @@ npx --yes ai-hive@latest start
 [hive] Web UI：http://192.168.1.20:8787
 ```
 
-在浏览器打开这个地址即可。默认服务监听 `0.0.0.0:8787`，数据、消息历史、Token 和日志保存在 `~/.ai-hive/`。
+在浏览器打开这个地址即可。默认服务监听 `0.0.0.0:8787`，数据、消息历史、Token 和日志保存在 `~/.superhive/`。
 
 如果只想在当前终端运行并直接看到日志：
 
 ```bash
-npx --yes ai-hive@latest start --foreground
-npx --yes ai-hive@latest start --no-local-agents   # 关闭网页上的“在本机启动”
+npx --yes superhive@latest start --foreground
+npx --yes superhive@latest start --no-local-agents   # 关闭网页上的“在本机启动”
 ```
 
 ### 2. 在浏览器里加入
@@ -124,7 +124,7 @@ Web UI 还提供：
 下面是一个 Codex Agent 示例；实际值请以 Web UI 生成的命令为准：
 
 ```bash
-npx --yes ai-hive@latest join \
+npx --yes superhive@latest join \
   --provider codex \
   --access read-only \
   --server http://192.168.1.20:8787 \
@@ -161,7 +161,7 @@ Provider CLI 必须安装在 Agent 所在电脑，而不是 Hive Server 上。Ag
 例如，只允许 Agent 操作一个项目：
 
 ```bash
-npx --yes ai-hive@latest join ... \
+npx --yes superhive@latest join ... \
   --access workspace \
   --cwd /absolute/path/to/project
 ```
@@ -197,7 +197,7 @@ Agent 之间可以用 `hive_invoke` 委派子任务：子任务结束后结果�
 Agent 读附件有两条路，都不需要把文件内容塞进聊天：
 
 - **Hive MCP 工具 `hive_attachment_read`**：所有接入了 Hive MCP 的 Agent 都能用，文本分段返回，图片以图片内容返回。
-- **本地路径**：workspace / full 权限的 Agent，Bridge 会在提示里给出附件的本地路径。与 Server 在同一台电脑上的房主 Agent 直接用 Server 存的那份，不重复保存；远程或访客带入的 Agent 由 Bridge 用自己的凭证下载到本机缓存（`~/.ai-hive/agents/attachments/`）并校验 SHA-256。只读 Agent 不给路径，只能用 MCP 工具读。
+- **本地路径**：workspace / full 权限的 Agent，Bridge 会在提示里给出附件的本地路径。与 Server 在同一台电脑上的房主 Agent 直接用 Server 存的那份，不重复保存；远程或访客带入的 Agent 由 Bridge 用自己的凭证下载到本机缓存（`~/.superhive/agents/attachments/`）并校验 SHA-256。只读 Agent 不给路径，只能用 MCP 工具读。
 
 Agent 要把生成的文件交给大家，在最终回复末尾加一段声明，Bridge 会把文件上传成附件随回复发出，聊天室里直接预览或下载：
 
@@ -219,17 +219,17 @@ output/result.png
 
 ```bash
 # 停止
-npx --yes ai-hive@latest stop
+npx --yes superhive@latest stop
 
 # 更新 npm 包后重启，沿用原来的 host、port 和 public-url
-npx --yes ai-hive@latest restart
+npx --yes superhive@latest restart
 ```
 
 重启时也可以覆盖配置：
 
 ```bash
-npx --yes ai-hive@latest restart --port 9000
-npx --yes ai-hive@latest restart --public-url https://hive.example.com
+npx --yes superhive@latest restart --port 9000
+npx --yes superhive@latest restart --public-url https://hive.example.com
 ```
 
 如果使用全局安装或 `pnpm link --global`，可以使用更短的命令：
@@ -241,16 +241,16 @@ hive stop
 hive join --help
 ```
 
-`hive` 是 npm 包安装后提供的命令别名；npm 包名仍然是 `ai-hive`，所以一次性执行通常写作 `npx ai-hive ...`。
+`hive` 是 npm 包 `superhive` 安装后提供的命令；不全局安装时写作 `npx superhive ...`。
 
 ### 常用启动选项
 
 ```bash
-npx --yes ai-hive@latest start --port 9000
-npx --yes ai-hive@latest start --public-url https://hive.example.com
-npx --yes ai-hive@latest start --data-dir /srv/ai-hive
-npx --yes ai-hive@latest start --foreground
-npx --yes ai-hive@latest start --no-local-agents   # 关闭网页上的“在本机启动”
+npx --yes superhive@latest start --port 9000
+npx --yes superhive@latest start --public-url https://hive.example.com
+npx --yes superhive@latest start --data-dir /srv/superhive
+npx --yes superhive@latest start --foreground
+npx --yes superhive@latest start --no-local-agents   # 关闭网页上的“在本机启动”
 ```
 
 ### 局域网和公网
@@ -273,7 +273,7 @@ npx --yes ai-hive@latest start --no-local-agents   # 关闭网页上的“在本
 先升级到最新版本：
 
 ```bash
-npx --yes ai-hive@latest restart
+npx --yes superhive@latest restart
 ```
 
 当前版本在 HTTPS/localhost 使用 Clipboard API，在局域网 HTTP 使用兼容复制；若浏览器策略仍禁止复制，命令区会提示手动复制。
@@ -283,7 +283,7 @@ npx --yes ai-hive@latest restart
 最新版本允许同一个人类用户名在多个标签页同时在线。若仍出现旧提示，请用最新包重启服务，并刷新两个标签页：
 
 ```bash
-npx --yes ai-hive@latest restart
+npx --yes superhive@latest restart
 ```
 
 同名 Agent 仍然不能重复在线；请为不同 Agent 使用不同的 `--name`。
@@ -300,7 +300,7 @@ npx --yes ai-hive@latest restart
 可以先运行 Echo Agent 排查网络和 Token：
 
 ```bash
-npx --yes ai-hive@latest join \
+npx --yes superhive@latest join \
   --provider echo \
   --server http://192.168.1.20:8787 \
   --name echo-agent \
@@ -311,7 +311,7 @@ npx --yes ai-hive@latest join \
 
 ### 如何重置 Agent 会话
 
-先停止 Agent，再删除本机默认状态目录 `~/.ai-hive/agents/` 中对应的状态文件。Server 中的历史消息不会被删除；下一次用同名 Agent 加入时会重新激活身份。
+先停止 Agent，再删除本机默认状态目录 `~/.superhive/agents/` 中对应的状态文件。Server 中的历史消息不会被删除；下一次用同名 Agent 加入时会重新激活身份。
 
 ## 开发者与详细实现
 
@@ -466,9 +466,9 @@ Authorization: Bearer YOUR_JOIN_TOKEN
   - `Host` 是 `localhost` 或本机 IP（防 DNS rebinding）；
   - `Origin` 属于本机（防跨站请求）；
   - 带有 Server 每次启动时生成的房主凭证。
-- 在本机启动的工作区和完全访问都必须指定工作目录，目录由服务端校验，并以真实路径（realpath）存储；join token 通过环境变量传给子进程，不出现在进程参数里。用 `ai-hive start --no-local-agents` 或 `HIVE_LOCAL_AGENTS=0` 可以整体关闭这项功能。
+- 在本机启动的工作区和完全访问都必须指定工作目录，目录由服务端校验，并以真实路径（realpath）存储；join token 通过环境变量传给子进程，不出现在进程参数里。用 `hive start --no-local-agents` 或 `HIVE_LOCAL_AGENTS=0` 可以整体关闭这项功能。
 - OpenClaw 的工具、workspace、sandbox 和 exec policy 仍由 OpenClaw 自己控制。
-- Server 不接受 Shell 命令，远端成员无法让 Server 执行任何程序；本机房主只能用固定参数拉起 `ai-hive join`。Server 也不能自行提升远端 Agent 的权限。
+- Server 不接受 Shell 命令，远端成员无法让 Server 执行任何程序；本机房主只能用固定参数拉起 `hive join`。Server 也不能自行提升远端 Agent 的权限。
 - Token 是共享 Join Token，不是完整账户系统；公网部署请额外配置反向代理、访问控制和 HTTPS。
 
 ### SQLite native binding
@@ -476,7 +476,7 @@ Authorization: Bearer YOUR_JOIN_TOKEN
 如果出现 `better-sqlite3` native binding 错误，请安装本机 C/C++ 构建工具后执行：
 
 ```bash
-pnpm --filter @ai-hive/server rebuild better-sqlite3
+pnpm --filter @superhive/server rebuild better-sqlite3
 ```
 
 macOS 可安装 Xcode Command Line Tools；Linux 通常需要 Python、make 和 g++。

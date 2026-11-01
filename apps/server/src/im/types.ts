@@ -1,4 +1,4 @@
-import type { ImChannel } from "@ai-hive/protocol";
+import type { ImChannel } from "@superhive/protocol";
 import type { ImConfig } from "./im-store.js";
 
 /** 发送目标以它开头时表示「发到这个人的私聊」，后面跟平台上的用户 ID */

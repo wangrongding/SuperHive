@@ -10,17 +10,16 @@ const pkg = _require("../package.json") as { name: string; version: string };
 const { version } = pkg;
 
 const usage = `
-AI Hive（命令别名：hive）
+SuperHive（命令：hive；未全局安装时用 npx superhive 代替 hive）
 
 用法：
-  ai-hive start [选项]   启动自己的 Hive Server 和 Web UI
-  ai-hive stop [选项]    停止由 ai-hive start 启动的 Server
-  ai-hive restart [选项] 重启 Server，并沿用原有启动配置
-  ai-hive join [选项]    将本机 Agent 加入 Hive（默认加入所有未归档房间）
-  ai-hive mcp list [选项] 列出 Agent 会加载的本机 MCP 及其开局 token 估算
+  hive start [选项]   启动自己的 Hive Server 和 Web UI
+  hive stop [选项]    停止由 hive start 启动的 Server
+  hive restart [选项] 重启 Server，并沿用原有启动配置
+  hive join [选项]    将本机 Agent 加入 Hive（默认加入所有未归档房间）
+  hive mcp list [选项] 列出 Agent 会加载的本机 MCP 及其开局 token 估算
 
-运行 ai-hive <命令> --help 查看详细选项。
-上述 ai-hive 均可替换为 hive。
+运行 hive <命令> --help 查看详细选项。
 `;
 
 // 后台子进程每天最多查一次 npm registry 并缓存，有新版本时在下一次运行打印提示（NO_UPDATE_NOTIFIER=1 可关闭）
@@ -31,10 +30,10 @@ updateNotifier({
 }).notify({
   isGlobal: true,
   message:
-    "AI Hive 有新版本 {currentVersion} → {latestVersion}\n" +
-    "在启动服务的电脑运行 npx --yes ai-hive@latest restart 更新",
+    "SuperHive 有新版本 {currentVersion} → {latestVersion}\n" +
+    "在启动服务的电脑运行 npx --yes superhive@latest restart 更新",
   boxenOptions: {
-    title: "有新版本的 AI Hive 可用",
+    title: "有新版本的 SuperHive 可用",
     padding: 1,
     margin: 1,
     align: "center",

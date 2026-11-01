@@ -32,11 +32,11 @@ const webUrl = (
 // 开发模式（tsx 直接运行 src/）默认生成仓库本地命令；构建产物（dist/）默认生成已发布的 npx 命令。
 const isDevRuntime = import.meta.dirname.endsWith(`${path.sep}src`);
 const agentCommandPrefix =
-  process.env.HIVE_AGENT_COMMAND ?? (isDevRuntime ? "pnpm agent" : "npx --yes ai-hive@latest");
+  process.env.HIVE_AGENT_COMMAND ?? (isDevRuntime ? "pnpm agent" : "npx --yes superhive@latest");
 mkdirSync(path.dirname(databasePath), { recursive: true });
 
 /**
- * 本机 Agent 用同一份 ai-hive CLI 拉起：开发时走 tsx 运行仓库源码，打包后用同包内的 dist/cli.js，
+ * 本机 Agent 用同一份 superhive CLI 拉起：开发时走 tsx 运行仓库源码，打包后用同包内的 dist/cli.js，
  * 都不经过 npx，不依赖网络。HIVE_LOCAL_AGENTS=0 可整体关闭。
  */
 // 开发模式下 pnpm 的 cwd 是 apps/server；本机 Agent 的默认工作目录应该是仓库根目录
@@ -51,7 +51,7 @@ function localAgentCli(): AgentCli | undefined {
       args: [
         "--import",
         import.meta.resolve("tsx"),
-        path.resolve(import.meta.dirname, "../../../packages/ai-hive/src/cli.ts"),
+        path.resolve(import.meta.dirname, "../../../packages/superhive/src/cli.ts"),
       ],
     };
   }
@@ -106,7 +106,7 @@ const app = await buildApp({
   logger: true,
 });
 /**
- * 让启动本 Server 的程序（ai-hive stop、dev supervisor）请它正常退出：Windows 上没有 SIGTERM，
+ * 让启动本 Server 的程序（hive stop、dev supervisor）请它正常退出：Windows 上没有 SIGTERM，
  * 结束进程就是强制结束，Agent 下线、IM 断开、交接文件这些收尾都不会执行。
  * 只接受本机回环请求，并且要带上启动时经环境变量传入的口令。
  */
@@ -147,7 +147,7 @@ const addresses = new Set([
   `http://localhost:${port}`,
 ]);
 
-app.log.info("AI Hive is ready");
+app.log.info("SuperHive is ready");
 app.log.info(`Share URL: ${publicUrl}`);
 for (const address of addresses) app.log.info(`Web: ${address}`);
 app.log.info(

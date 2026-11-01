@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { InvocationDetails } from "./invocation-details";
-import type { ChatMessage, Invocation, Participant } from "@ai-hive/protocol";
+import type { ChatMessage, Invocation, Participant } from "@superhive/protocol";
 import { localized, t } from "./i18n";
 
 /** 人点一次「继续」为当前 Agent 对话追加的轮数，同时放宽连续轮数、转交深度和单链条数 */

@@ -7,7 +7,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { ChatMessage, ServerEvent, UploadedAttachment } from "@ai-hive/protocol";
+import type { ChatMessage, ServerEvent, UploadedAttachment } from "@superhive/protocol";
 import { buildApp, type BuildAppOptions } from "./app.js";
 import { Peer } from "./test-peer.js";
 

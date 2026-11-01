@@ -18,18 +18,18 @@ import type {
   LocalAgentProvider,
   LocalAgentStatus,
   LocalProviderInfo,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { HiveError, type HiveDatabase, type LocalAgentConfig } from "./database.js";
 import { expandHome } from "./local-directories.js";
 import { commandFor } from "./windows-command.js";
 
 /**
- * 本机 Agent 管家：在 Hive Server 所在电脑上，按房主在网页上的选择拉起 `ai-hive join` 子进程。
+ * 本机 Agent 管家：在 Hive Server 所在电脑上，按房主在网页上的选择拉起 `hive join` 子进程。
  * 只负责进程生命周期（启动、崩溃重启、停止、退出清理），Agent 的行为仍完全由 CLI 决定。
  * 鉴权与"是否本机请求"的判断在路由层（local-access.ts），这里假定调用方已通过校验。
  */
 
-/** ai-hive CLI 的启动方式：打包后是 node + dist/cli.js，开发时是 node + tsx + src/cli.ts */
+/** superhive CLI 的启动方式：打包后是 node + dist/cli.js，开发时是 node + tsx + src/cli.ts */
 export type AgentCli = { command: string; args: string[] };
 
 export type ChildHandle = {
@@ -77,7 +77,7 @@ export type LocalAgentSupervisorOptions = {
   logDir?: string;
   /** Agent 设置文件目录（网页上勾选的 MCP 等）；Agent 每一轮读取，改动不必重启 */
   settingsDir?: string;
-  /** 列出 Agent 会加载的本机 MCP（测试注入）；默认运行 `ai-hive mcp list` */
+  /** 列出 Agent 会加载的本机 MCP（测试注入）；默认运行 `hive mcp list` */
   listMcp?: McpLister;
   probe?: ProviderProbe;
   now?: () => number;
@@ -254,7 +254,7 @@ function isAlive(pid: number): boolean {
 }
 
 /**
- * 按 pid 接管：进程还在，并且命令行确实是这个名字的 `ai-hive join`（防止 pid 被别的进程复用），
+ * 按 pid 接管：进程还在，并且命令行确实是这个名字的 `hive join`（防止 pid 被别的进程复用），
  * 之后靠轮询发现它退出、靠信号结束它，输出从日志文件末尾接着读。
  */
 export const defaultAdoptAgent: AdoptAgent = (pid, options) => {
@@ -557,7 +557,7 @@ export class LocalAgentSupervisor {
     if (this.options.isNameInUse(name)) {
       throw new HiveError("LOCAL_AGENT_NAME_TAKEN", `名称 ${name} 已被在线成员使用，请换一个。`);
     }
-    // 与 `ai-hive join` 一致：可写的档位必须明确工作目录，避免授权到错误目录
+    // 与 `hive join` 一致：可写的档位必须明确工作目录，避免授权到错误目录
     const cwd = request.access === "read-only" ? null : resolveWorkspace(request.cwd);
     const config = this.options.database.createLocalAgent({
       provider: request.provider,

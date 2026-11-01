@@ -46,7 +46,7 @@ export async function measureMcpServer(
   timeoutMs = 20_000,
 ): Promise<McpMeasurement> {
   const config = expand(server.config, process.env) as Record<string, unknown>;
-  const client = new Client({ name: "ai-hive-mcp-measure", version: "0.1.0" });
+  const client = new Client({ name: "superhive-mcp-measure", version: "0.1.0" });
   let transport: Transport;
   if (server.transport === "stdio") {
     if (typeof config.command !== "string") return { ok: false, error: "缺少 command" };

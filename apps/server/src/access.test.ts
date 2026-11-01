@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { Invocation, Participant, ServerEvent } from "@ai-hive/protocol";
+import type { Invocation, Participant, ServerEvent } from "@superhive/protocol";
 import { buildApp } from "./app.js";
 import { Peer } from "./test-peer.js";
 

@@ -38,6 +38,6 @@ describe("Hive MCP provider configuration", () => {
       headers: { "X-Hive-Agent-Name": "小明-codex" },
     });
     expect(codexHiveMcpOverrides(connection).join(" ")).toContain("mcp_servers.hive.http_headers");
-    expect(openClawHiveMcpName(connection)).toMatch(/^ai-hive-[a-f0-9]{12}$/);
+    expect(openClawHiveMcpName(connection)).toMatch(/^superhive-[a-f0-9]{12}$/);
   });
 });

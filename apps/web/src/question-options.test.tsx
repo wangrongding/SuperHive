@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { QuestionSpec } from "@ai-hive/protocol";
+import type { QuestionSpec } from "@superhive/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QuestionOptions } from "./question-options";
 

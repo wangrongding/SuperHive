@@ -96,7 +96,7 @@ function guardQrLogin(bot: WeChatBot, signal: AbortSignal): void {
 }
 
 function newBot(kv: ImKeyValue): WeChatBot {
-  return new WeChatBot({ storage: storageOf(kv), logLevel: "silent", botAgent: "AIHive/0.1" });
+  return new WeChatBot({ storage: storageOf(kv), logLevel: "silent", botAgent: "SuperHive/0.1" });
 }
 
 function messageId(message: IncomingMessage): string | undefined {

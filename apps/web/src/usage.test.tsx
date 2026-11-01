@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentUsage, UsageSummary } from "@ai-hive/protocol";
+import type { AgentUsage, UsageSummary } from "@superhive/protocol";
 import {
   InvocationUsage,
   UsageSection,

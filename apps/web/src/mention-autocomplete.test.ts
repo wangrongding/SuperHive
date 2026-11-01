@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Participant } from "@ai-hive/protocol";
+import type { Participant } from "@superhive/protocol";
 import {
   applyMention,
   draftMentions,

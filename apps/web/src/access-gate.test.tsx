@@ -67,7 +67,9 @@ describe("AccessGate", () => {
       }),
     );
     render(<AccessGate />);
-    await vi.waitFor(() => expect(localStorage.getItem("ai-hive.owner-token")).toBe("hod_device"));
+    await vi.waitFor(() =>
+      expect(localStorage.getItem("superhive.owner-token")).toBe("hod_device"),
+    );
     expect(window.location.search).toBe("");
     expect(window.location.hash).toBe("#build");
     expect(calls.filter((url) => url.endsWith("/api/owner-login"))).toHaveLength(1);
@@ -92,7 +94,7 @@ describe("AccessGate", () => {
     );
     render(<AccessGate />);
     await screen.findByText("登录链接无效、已过期或已经用过。");
-    expect(localStorage.getItem("ai-hive.owner-token")).toBeNull();
+    expect(localStorage.getItem("superhive.owner-token")).toBeNull();
   });
 
   it("names the device by system and app", () => {

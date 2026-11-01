@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessage } from "@ai-hive/protocol";
+import type { ChatMessage } from "@superhive/protocol";
 import { MESSAGE_READ_MAX_CHARS, previewMessage, readMessageContent } from "./message-content.js";
 
 function message(content: string): ChatMessage {

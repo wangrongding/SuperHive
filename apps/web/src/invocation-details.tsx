@@ -1,7 +1,7 @@
 import { InvocationUsage } from "./usage";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Invocation, RuntimeEvent } from "@ai-hive/protocol";
+import type { Invocation, RuntimeEvent } from "@superhive/protocol";
 import "./styles/invocation-details.css";
 import { getLocale, localized, t } from "./i18n";
 

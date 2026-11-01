@@ -483,7 +483,7 @@ export class CodexAppServerResponder implements AgentResponder {
           session,
           "initialize",
           {
-            clientInfo: { name: "ai-hive", title: "AI Hive", version: this.clientVersion },
+            clientInfo: { name: "superhive", title: "SuperHive", version: this.clientVersion },
             capabilities: null,
           },
           true,
@@ -588,7 +588,7 @@ export class CodexAppServerResponder implements AgentResponder {
       case "execCommandApproval":
       case "applyPatchApproval":
         this.respond(session, id, {
-          decision: { denied: { rejection: "AI Hive 代理以非交互方式运行，不接受审批请求。" } },
+          decision: { denied: { rejection: "SuperHive 代理以非交互方式运行，不接受审批请求。" } },
         });
         return;
       case "mcpServer/elicitation/request":
@@ -600,7 +600,7 @@ export class CodexAppServerResponder implements AgentResponder {
           JSON.stringify({
             jsonrpc: "2.0",
             id,
-            error: { code: -32601, message: `AI Hive 不支持的请求：${method}` },
+            error: { code: -32601, message: `SuperHive 不支持的请求：${method}` },
           }),
         );
     }

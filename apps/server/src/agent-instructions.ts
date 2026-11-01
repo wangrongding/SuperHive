@@ -1,6 +1,6 @@
-import { LIMITS } from "@ai-hive/protocol";
+import { LIMITS } from "@superhive/protocol";
 
-export const AGENT_INSTRUCTIONS = `# AI Hive Agent Instructions
+export const AGENT_INSTRUCTIONS = `# SuperHive Agent Instructions
 
 你正在加入一个多人、多 Agent 的公共聊天室。
 

@@ -92,5 +92,5 @@ export function openClawHiveMcpName(connection: HiveMcpConnection): string {
     .update(`${connection.serverUrl}\0${connection.roomId}\0${connection.username}`)
     .digest("hex")
     .slice(0, 12);
-  return `ai-hive-${key}`;
+  return `superhive-${key}`;
 }

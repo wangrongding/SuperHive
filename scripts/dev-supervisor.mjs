@@ -32,10 +32,12 @@ export {
   writeStatus,
 } from "./dev-process.mjs";
 
-export const SOURCE_ROOTS = ["apps/server/src", "packages/protocol/src", "packages/ai-hive/src"];
+export const SOURCE_ROOTS = ["apps/server/src", "packages/protocol/src", "packages/superhive/src"];
 const CONFIG_FILES = [
   "tsconfig.base.json",
-  ...["apps/server", "packages/protocol", "packages/ai-hive"].map((dir) => `${dir}/tsconfig.json`),
+  ...["apps/server", "packages/protocol", "packages/superhive"].map(
+    (dir) => `${dir}/tsconfig.json`,
+  ),
 ];
 const IGNORED = new Set([
   "node_modules",
@@ -44,7 +46,7 @@ const IGNORED = new Set([
   "coverage",
   "data",
   "logs",
-  ".ai-hive-dev",
+  ".superhive-dev",
 ]);
 
 export function isWatchedFile(file) {
@@ -237,13 +239,13 @@ export class DevSupervisor extends EventEmitter {
 /** Build into staging; failed type checks must not publish half-built protocol output. */
 export async function buildWorkspace(
   repoRoot,
-  { signal, stateDir = path.join(repoRoot, ".ai-hive-dev") },
+  { signal, stateDir = path.join(repoRoot, ".superhive-dev") },
 ) {
   fs.mkdirSync(stateDir, { recursive: true });
   const staging = fs.mkdtempSync(path.join(stateDir, "build-"));
   // Keep generated declarations under their package so imports (e.g. zod) resolve
   // through that package's node_modules, not the workspace root's dependencies.
-  const protocolStagingRoot = path.join(repoRoot, "packages/protocol/.ai-hive-dev");
+  const protocolStagingRoot = path.join(repoRoot, "packages/protocol/.superhive-dev");
   fs.mkdirSync(protocolStagingRoot, { recursive: true });
   const protocolOutput = fs.mkdtempSync(path.join(protocolStagingRoot, "build-"));
   const require = createRequire(path.join(repoRoot, "package.json"));
@@ -268,7 +270,7 @@ export async function buildWorkspace(
       "编译 protocol",
       { cwd: repoRoot, signal },
     );
-    for (const pkg of ["apps/server", "packages/ai-hive"]) {
+    for (const pkg of ["apps/server", "packages/superhive"]) {
       const config = path.join(staging, `${path.basename(pkg)}.json`);
       fs.writeFileSync(
         config,
@@ -277,7 +279,7 @@ export async function buildWorkspace(
           compilerOptions: {
             noEmit: true,
             baseUrl: repoRoot,
-            paths: { "@ai-hive/protocol": [path.join(protocolOutput, "index.d.ts")] },
+            paths: { "@superhive/protocol": [path.join(protocolOutput, "index.d.ts")] },
             typeRoots: [
               path.join(repoRoot, pkg, "node_modules/@types"),
               path.join(repoRoot, "node_modules/@types"),
@@ -441,7 +443,7 @@ async function assertPortAvailable(port, host) {
 
 export async function main() {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const stateDir = path.join(repoRoot, ".ai-hive-dev");
+  const stateDir = path.join(repoRoot, ".superhive-dev");
   const statusPath = path.join(stateDir, "status.json");
   const host = process.env.HIVE_HOST ?? "0.0.0.0";
   const port = Number(process.env.HIVE_PORT ?? 8787);
@@ -599,7 +601,7 @@ export async function main() {
       pnpm,
       [
         "--filter",
-        "@ai-hive/web",
+        "@superhive/web",
         "exec",
         "vite",
         "--host",

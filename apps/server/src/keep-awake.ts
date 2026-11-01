@@ -3,7 +3,7 @@ import {
   keepAwakeSettingsSchema,
   type KeepAwakeSettings,
   type KeepAwakeState,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 
 export const DEFAULT_KEEP_AWAKE: KeepAwakeSettings = {
   whenIm: true,

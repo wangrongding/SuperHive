@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { commandFor } from "./windows-command.js";
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { superhiveHome } from "./home-dir.js";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { AgentBridge } from "./bridge.js";
@@ -30,12 +30,12 @@ import {
 import { StateStore, agentWorkspaceDir } from "./state-store.js";
 
 const usage = `
-AI Hive Agent
+SuperHive Agent
 
-提示：全局安装或 link 后，ai-hive 可简写为 hive。
+提示：未全局安装时用 npx superhive 代替 hive。
 
 用法：
-  ai-hive join --server URL --name NAME --token TOKEN [选项]
+  hive join --server URL --name NAME --token TOKEN [选项]
 
 选项：
   --room ID         只加入指定房间；省略时加入服务器上所有未归档房间，
@@ -46,7 +46,7 @@ AI Hive Agent
   --allow-root PATH 允许跟随房间工作区切换到的目录（可重复）；默认只有 --cwd 及其上一级
   --cwd PATH        Agent 工作目录（workspace/full 必填；只读默认使用状态目录下
                     该 Agent 专属的空目录）
-  --state-dir PATH  Agent 状态目录（默认 ~/.ai-hive/agents）
+  --state-dir PATH  Agent 状态目录（默认 ~/.superhive/agents）
   --codex PATH      Codex CLI 命令（默认 codex）
   --codex-transport MODE
                     auto、app-server 或 mcp（auto 使用 app-server，不自动降级；
@@ -220,9 +220,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     throw new Error(`--access ${access} 必须同时显式指定 --cwd，避免授权到错误目录。`);
   }
 
-  const stateDir = path.resolve(
-    parsed.values["state-dir"] ?? path.join(homedir(), ".ai-hive", "agents"),
-  );
+  const stateDir = path.resolve(parsed.values["state-dir"] ?? path.join(superhiveHome(), "agents"));
   const cwd = parsed.values.cwd
     ? path.resolve(parsed.values.cwd)
     : agentWorkspaceDir(stateDir, { serverUrl, username, provider });

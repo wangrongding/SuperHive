@@ -14,7 +14,7 @@ import {
 
 const usage = `
 用法：
-  ai-hive mcp list --provider claude|codex [--cwd PATH] [--agent-settings FILE] [--measure] [--json]
+  hive mcp list --provider claude|codex [--cwd PATH] [--agent-settings FILE] [--measure] [--json]
 
 列出该 Agent CLI 在这台电脑上会加载的 MCP，以及按 Agent 设置文件是否启用。
 --measure 会逐个连上 MCP 读取工具列表，估算它在每个会话开局占用的 token（仅 Claude Code）。

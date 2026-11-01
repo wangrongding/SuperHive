@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { Invite } from "@ai-hive/protocol";
+import type { Invite } from "@superhive/protocol";
 import { HiveError } from "./database.js";
 
 /**

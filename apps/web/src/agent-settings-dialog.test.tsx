@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LocalAgent, LocalAgentMcpResponse } from "@ai-hive/protocol";
+import type { LocalAgent, LocalAgentMcpResponse } from "@superhive/protocol";
 import { AgentSettingsDialog, formatTokens } from "./agent-settings-dialog";
 
 const agent = {

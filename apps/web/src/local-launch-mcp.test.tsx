@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LocalAgent } from "@ai-hive/protocol";
+import type { LocalAgent } from "@superhive/protocol";
 import { LocalLaunch, type LocalAgentsState } from "./local-agents";
 
 describe("LocalLaunch MCP selection", () => {

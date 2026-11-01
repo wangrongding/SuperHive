@@ -6,7 +6,7 @@ import {
   type UsageRecord,
   type UsageSummary,
   type UsageTotals,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import {
@@ -32,7 +32,7 @@ import {
   type RoomSummary,
   type WhiteboardEntry,
   type WhiteboardSlot,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 
 type ParticipantRow = {
   id: string;

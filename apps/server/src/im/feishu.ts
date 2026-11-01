@@ -227,7 +227,7 @@ class FeishuTransport implements ImTransport {
       appSecret: this.appSecret,
       domain: sdkDomain(this.config.domain),
       loggerLevel: lark.LoggerLevel.error,
-      source: "ai-hive",
+      source: "superhive",
       onReady: () => events.onStatus("connected"),
       onReconnected: () => events.onStatus("connected"),
       onError: (error) => events.onStatus("error", error.message),
@@ -419,10 +419,10 @@ export const feishuDriver: ImChannelDriver = {
   async login(callbacks: ImLoginCallbacks): Promise<ImLoginResult> {
     let domain = "feishu";
     const result = await lark.registerApp({
-      source: "ai-hive",
+      source: "superhive",
       signal: callbacks.signal,
       addons: ADDONS,
-      appPreset: { name: "AI Hive 助手", desc: "把飞书消息转进 AI Hive 房间" },
+      appPreset: { name: "SuperHive 助手", desc: "把飞书消息转进 SuperHive 房间" },
       onQRCodeReady: (info) => callbacks.onQr(info.url, info.expireIn),
       onStatusChange: (info) => {
         if (info.status === "domain_switched") domain = "lark";

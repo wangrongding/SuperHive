@@ -109,7 +109,7 @@ test("control snapshot includes imports, all package manifests, lock and workspa
     "scripts/dev-reload.test.mjs",
     "scripts/dev-supervisor.smoke.mjs",
     "packages/demo/node_modules/x/package.json",
-    ".ai-hive-dev/status.json",
+    ".superhive-dev/status.json",
   ])
     put(root, file, "ignored");
   const after = reloadSnapshot(root);
@@ -326,9 +326,9 @@ test(
     const root = launcherFixture(
       t,
       `import fs from 'node:fs';
-    fs.mkdirSync('.ai-hive-dev',{recursive:true});
-    let count=0;try{count=Number(fs.readFileSync('.ai-hive-dev/count','utf8'))}catch{}
-    fs.writeFileSync('.ai-hive-dev/count',String(++count));
+    fs.mkdirSync('.superhive-dev',{recursive:true});
+    let count=0;try{count=Number(fs.readFileSync('.superhive-dev/count','utf8'))}catch{}
+    fs.writeFileSync('.superhive-dev/count',String(++count));
     if(count<3)process.exit(75);else setInterval(()=>{},1000);`,
     );
     const processHandle = startProcess(process.execPath, [path.join(root, "scripts/dev.mjs")], {
@@ -338,7 +338,7 @@ test(
     t.after(() => processHandle.stop());
     const count = () => {
       try {
-        return Number(fs.readFileSync(path.join(root, ".ai-hive-dev/count"), "utf8"));
+        return Number(fs.readFileSync(path.join(root, ".superhive-dev/count"), "utf8"));
       } catch {
         return 0;
       }
@@ -356,7 +356,7 @@ test(
   { timeout: 10_000 },
   async (t) => {
     const root = launcherFixture(t, "const = broken syntax;");
-    const statusPath = path.join(root, ".ai-hive-dev/status.json");
+    const statusPath = path.join(root, ".superhive-dev/status.json");
     writeStatus(statusPath, { generation: 41, state: "restarting", updatedAt: "now" });
     const processHandle = startProcess(process.execPath, [path.join(root, "scripts/dev.mjs")], {
       cwd: root,
@@ -384,7 +384,7 @@ test(
       root,
       "scripts/dev-supervisor.mjs",
       `import fs from 'node:fs';
-    const p='.ai-hive-dev/status.json';const old=JSON.parse(fs.readFileSync(p,'utf8'));
+    const p='.superhive-dev/status.json';const old=JSON.parse(fs.readFileSync(p,'utf8'));
     fs.writeFileSync(p,JSON.stringify({...old,generation:old.generation+1,state:'ready'}));setInterval(()=>{},1000);`,
     );
     // 重新拉起 supervisor 要冷启动 node，Windows 上比 macOS 慢得多
@@ -430,7 +430,7 @@ test("self-reload waits for an in-flight source check and does not publish it", 
   let building = false;
   let published = false;
   const source = new DevSupervisor({
-    statusPath: path.join(root, ".ai-hive-dev/status.json"),
+    statusPath: path.join(root, ".superhive-dev/status.json"),
     debounceMs: 1,
     build: async () => {
       building = true;
@@ -513,7 +513,7 @@ for (const failure of ["install", "checkScripts"]) {
     let builds = 0;
     let starts = 0;
     const source = new DevSupervisor({
-      statusPath: path.join(root, ".ai-hive-dev/status.json"),
+      statusPath: path.join(root, ".superhive-dev/status.json"),
       debounceMs: 1,
       build: async () => {
         builds += 1;
@@ -556,7 +556,7 @@ test("source edits queued during a failed install resume immediately afterwards"
   const gate = deferred();
   let builds = 0;
   const source = new DevSupervisor({
-    statusPath: path.join(root, ".ai-hive-dev/status.json"),
+    statusPath: path.join(root, ".superhive-dev/status.json"),
     debounceMs: 10_000,
     build: async () => {
       builds += 1;
@@ -576,7 +576,7 @@ test("source edits queued during a failed install resume immediately afterwards"
   });
   f.reloader.changed(["package.json"]);
   await until(() => f.reloader.installing);
-  source.changed(["packages/ai-hive/src/bridge.ts"]);
+  source.changed(["packages/superhive/src/bridge.ts"]);
   assert.equal(builds, 0);
   gate.resolve();
   await until(() => builds === 1);

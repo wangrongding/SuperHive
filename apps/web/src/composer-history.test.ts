@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessage } from "@ai-hive/protocol";
+import type { ChatMessage } from "@superhive/protocol";
 import { composerHistory, stepComposerHistory, type HistoryStep } from "./composer-history";
 
 function message(content: string, overrides: Partial<ChatMessage> = {}): ChatMessage {

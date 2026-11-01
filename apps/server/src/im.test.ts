@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { ChatMessage, ServerEvent } from "@ai-hive/protocol";
+import type { ChatMessage, ServerEvent } from "@superhive/protocol";
 import WebSocket from "ws";
 import { buildApp } from "./app.js";
 import { parseChoice } from "./im/im-hub.js";
@@ -1099,7 +1099,7 @@ describe("IM 推送档位", () => {
     const { fake, api, id } = await setup({ richCards: true });
     fake.emit({ text: "/help" });
     const help = await until(() =>
-      fake.sent.find((item) => item.rich?.title === "AI Hive 使用说明"),
+      fake.sent.find((item) => item.rich?.title === "SuperHive 使用说明"),
     );
     expect(help.rich!.sections!.map((section) => section.title)).toEqual([
       "💬 发消息",

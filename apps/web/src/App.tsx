@@ -26,7 +26,7 @@ import type {
   ServerEvent,
   WhiteboardEntry,
   UsageSummary,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import {
   applyMention,
   draftMentions,
@@ -119,20 +119,20 @@ import {
   useLocale,
 } from "./i18n";
 
-const storedUsernameKey = "ai-hive.username";
-const storedRoomKey = "ai-hive.room";
-const storedSendShortcutKey = "ai-hive.send-shortcut";
-const storedAutoSaveDraftKey = "ai-hive.auto-save-draft";
-const storedTimeFormatKey = "ai-hive.time-format";
-const storedMessageNotificationsKey = "ai-hive.notify-messages";
-const storedNotificationPromptDismissedKey = "ai-hive.notify-prompt-dismissed";
-const storedNotificationSoundKey = "ai-hive.notification-sound";
-const storedPresenceNotificationsKey = "ai-hive.notify-agent-presence";
-const storedThemeKey = "ai-hive.theme";
-const storedDensityKey = "ai-hive.density";
-const storedMessageSizeKey = "ai-hive.message-size";
-const storedMembersCollapsedKey = "ai-hive.members-collapsed";
-const storedReduceMotionKey = "ai-hive.reduce-motion";
+const storedUsernameKey = "superhive.username";
+const storedRoomKey = "superhive.room";
+const storedSendShortcutKey = "superhive.send-shortcut";
+const storedAutoSaveDraftKey = "superhive.auto-save-draft";
+const storedTimeFormatKey = "superhive.time-format";
+const storedMessageNotificationsKey = "superhive.notify-messages";
+const storedNotificationPromptDismissedKey = "superhive.notify-prompt-dismissed";
+const storedNotificationSoundKey = "superhive.notification-sound";
+const storedPresenceNotificationsKey = "superhive.notify-agent-presence";
+const storedThemeKey = "superhive.theme";
+const storedDensityKey = "superhive.density";
+const storedMessageSizeKey = "superhive.message-size";
+const storedMembersCollapsedKey = "superhive.members-collapsed";
+const storedReduceMotionKey = "superhive.reduce-motion";
 type SelectableAgentProvider = "codex" | "claude" | "copilot" | "openclaw" | "opencode" | "omp";
 type AgentAccessMode = "read-only" | "workspace" | "full";
 type AgentSetupStep = 1 | 2 | 3;
@@ -254,11 +254,11 @@ function storedMessageNotificationMode(): MessageNotificationMode {
 }
 
 function draftStorageKey(username: string, roomId: string): string {
-  return `ai-hive.draft.${username.toLocaleLowerCase()}.${roomId}`;
+  return `superhive.draft.${username.toLocaleLowerCase()}.${roomId}`;
 }
 
 function readSeqStorageKey(roomId: string): string {
-  return `ai-hive.read-seq.${roomId}`;
+  return `superhive.read-seq.${roomId}`;
 }
 
 const roomIdPattern = /^[A-Za-z0-9_-]{1,64}$/;
@@ -286,7 +286,7 @@ function browserNotificationPermission(): BrowserNotificationPermission {
 function showBrowserNotification(title: string, body: string): void {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try {
-    new Notification(title, { body, tag: "ai-hive" });
+    new Notification(title, { body, tag: "superhive" });
   } catch {
     // Notification support can be restricted by browser or embedding context.
   }
@@ -878,7 +878,7 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
         <section className="login-intro">
           <div className="login-brand">
             <HiveLogo />
-            <strong>AI Hive</strong>
+            <strong>SuperHive</strong>
           </div>
           <div className="login-thesis">
             <h1>
@@ -897,7 +897,7 @@ function LoginDialog({ onJoin }: { onJoin: (username: string) => void }) {
 
         <section className="login-form-panel">
           <div className="login-form-heading">
-            <h2>{t("进入 AI Hive")}</h2>
+            <h2>{t("进入 SuperHive")}</h2>
             <p className="login-copy">{t("选择一个在当前房间中可识别的名字。")}</p>
           </div>
           <form
@@ -1863,7 +1863,7 @@ export function App({
             if (shouldNotify && document.visibilityState !== "visible") {
               showBrowserNotification(
                 mentioned
-                  ? t("{0} 在 AI Hive 提到了你", { 0: event.message.senderName })
+                  ? t("{0} 在 SuperHive 提到了你", { 0: event.message.senderName })
                   : `${event.message.senderName} · # ${event.message.roomId}`,
                 event.message.content.slice(0, 180) ||
                   (event.message.attachments?.length
@@ -2637,7 +2637,7 @@ export function App({
           <div className="sidebar-header">
             <div className="brand">
               <HiveLogo compact />
-              <strong>AI Hive</strong>
+              <strong>SuperHive</strong>
             </div>
             <div
               className={`connection ${connectionState}`}
@@ -3460,7 +3460,7 @@ export function App({
               <div ref={shareCardRef} className="share-card">
                 <header className="share-card-header">
                   <strong># {currentRoomName}</strong>
-                  <span>{t("AI HIVE · 对话分享")}</span>
+                  <span>{t("SUPERHIVE · 对话分享")}</span>
                 </header>
                 {selectedMessages.map((message) => (
                   <div
@@ -3502,7 +3502,7 @@ export function App({
                   <span>
                     {t("导出于 {0}", { 0: formatShareTimestamp(new Date().toISOString()) })}
                   </span>
-                  <span>AI Hive</span>
+                  <span>SuperHive</span>
                 </footer>
               </div>
             </div>
@@ -4482,7 +4482,7 @@ export function App({
                       {meta?.agentCommand && !meta.agentCommand.startsWith("npx") && (
                         <p className="command-dev-note">
                           {t(
-                            "开发模式命令：请在 ai-hive 仓库根目录的终端运行，使用的是当前仓库代码， 而非已发布的 npm 包。",
+                            "开发模式命令：请在 superhive 仓库根目录的终端运行，使用的是当前仓库代码， 而非已发布的 npm 包。",
                           )}
                         </p>
                       )}

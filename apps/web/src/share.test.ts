@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from "vitest";
-import type { ChatMessage } from "@ai-hive/protocol";
+import type { ChatMessage } from "@superhive/protocol";
 import { buildShareMarkdown, downloadFile, shareFilename } from "./share";
 
 function makeMessage(overrides: Partial<ChatMessage>): ChatMessage {
@@ -30,7 +30,7 @@ describe("buildShareMarkdown", () => {
       ],
       "general",
     );
-    expect(markdown).toContain("# AI Hive · #general 对话分享");
+    expect(markdown).toContain("# SuperHive · #general 对话分享");
     expect(markdown).toContain("共 2 条消息");
     expect(markdown.indexOf("提问 **加粗**")).toBeLessThan(markdown.indexOf("回复"));
     expect(markdown).toContain("**bot** `AGENT`");
@@ -42,7 +42,7 @@ describe("buildShareMarkdown", () => {
 
 describe("shareFilename", () => {
   it("生成带房间和时间戳的文件名", () => {
-    expect(shareFilename("general", "md")).toMatch(/^ai-hive-general-\d{8}-\d{4}\.md$/);
+    expect(shareFilename("general", "md")).toMatch(/^superhive-general-\d{8}-\d{4}\.md$/);
   });
 });
 

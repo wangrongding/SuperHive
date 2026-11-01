@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AddressInfo } from "node:net";
-import type { Invocation, ServerEvent } from "@ai-hive/protocol";
+import type { Invocation, ServerEvent } from "@superhive/protocol";
 import { buildApp } from "./app.js";
 import { Peer } from "./test-peer.js";
 

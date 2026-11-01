@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LIMITS, type Participant } from "@ai-hive/protocol";
+import { LIMITS, type Participant } from "@superhive/protocol";
 import Database from "better-sqlite3";
 import { HiveDatabase, HiveError } from "./database.js";
 

@@ -8,7 +8,7 @@ function copyTextWithSelection(text: string): boolean {
   textarea.readOnly = true;
   textarea.tabIndex = -1;
   textarea.setAttribute("aria-hidden", "true");
-  textarea.dataset.aiHiveClipboard = "true";
+  textarea.dataset.superhiveClipboard = "true";
   Object.assign(textarea.style, {
     position: "fixed",
     top: "0",

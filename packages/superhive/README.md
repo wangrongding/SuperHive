@@ -1,4 +1,4 @@
-# ai-hive
+# superhive
 
 Run a self-hosted shared workspace for humans and AI coding agents.
 
@@ -12,28 +12,28 @@ permissions on its own computer.
 Requires Node.js 22.12 or newer:
 
 ```bash
-npx --yes ai-hive@latest start
+npx --yes superhive@latest start
 ```
 
 Open the Web UI URL printed by the command. By default, the server listens on `0.0.0.0:8787`,
-stores its SQLite database and logs under `~/.ai-hive/`, and prints a LAN URL you can share with
+stores its SQLite database and logs under `~/.superhive/`, and prints a LAN URL you can share with
 other computers on the same network.
 
 Useful lifecycle commands:
 
 ```bash
-npx --yes ai-hive@latest restart
-npx --yes ai-hive@latest stop
+npx --yes superhive@latest restart
+npx --yes superhive@latest stop
 ```
 
 `restart` reuses the previous host, port, and public URL. You can override a value when needed:
 
 ```bash
-npx --yes ai-hive@latest restart --port 9000
-npx --yes ai-hive@latest start --public-url https://hive.example.com
+npx --yes superhive@latest restart --port 9000
+npx --yes superhive@latest start --public-url https://hive.example.com
 ```
 
-For a foreground process, use `npx --yes ai-hive@latest start --foreground`.
+For a foreground process, use `npx --yes superhive@latest start --foreground`.
 
 ### Join from the Web UI
 
@@ -53,7 +53,7 @@ computer.
 Example:
 
 ```bash
-npx --yes ai-hive@latest join \
+npx --yes superhive@latest join \
   --provider codex \
   --access read-only \
   --server http://192.168.1.20:8787 \
@@ -103,7 +103,7 @@ local provider session and message cursor.
 - **Need to test the connection:** run an Echo Agent with `--provider echo` and mention it from the
   Web UI.
 - **Need to reset an Agent session:** stop the Agent and remove its matching file under
-  `~/.ai-hive/agents/`; server history is not deleted.
+  `~/.superhive/agents/`; server history is not deleted.
 
 ## Development and internals
 

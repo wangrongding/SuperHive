@@ -10,7 +10,7 @@ import type {
   Invocation,
   Participant,
   QuestionSpec,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { HiveError, type CreateMessageInput } from "../database.js";
 import {
   publicConnection,
@@ -96,7 +96,7 @@ const MAX_ATTEMPTS = 8;
 export const DIGEST_WINDOW_MS = 3 * 60_000;
 const LOGIN_TTL_MS = 10 * 60_000;
 const HELP = [
-  "AI Hive 用法：",
+  "SuperHive 用法：",
   "· 直接发文字、图片或文件：以你的身份发进当前房间；要让 Agent 干活，在消息里 @ 它，如「@rd-claude 看下测试为什么挂了」",
   "· Agent 向你提问时，点卡片上的选项，或回复这条提问打字（选项字母也行，多选用逗号隔开，如 A,C）",
   "· /to 选对话对象：选好后直接打字就发给它；也可以 /to codex。临时找别人写 @简写，如 @codex",
@@ -1497,7 +1497,7 @@ export class ImHub {
     const target = this.targetOf(connection);
     const buttons = this.cardsEnabled(connection);
     return {
-      title: "AI Hive 使用说明",
+      title: "SuperHive 使用说明",
       subtitle: `当前：${this.roomName(connection.roomId)} → ${target ?? "未指定对话对象"}`,
       tone: "reply",
       tag: buttons ? "卡片按钮已开" : "文字模式",
@@ -1536,7 +1536,7 @@ export class ImHub {
       ],
       ...(buttons ? {} : { note: "重新扫码连接飞书后，提问、提醒卡片上会出现可以点的按钮" }),
       ...this.quickActions(connection),
-      summary: "AI Hive 使用说明",
+      summary: "SuperHive 使用说明",
     };
   }
 

@@ -42,7 +42,7 @@ describe("copyTextToClipboard", () => {
     const writeText = vi.fn().mockRejectedValue(new DOMException("Denied", "NotAllowedError"));
     const execCommand = vi.fn(() => {
       expect(
-        document.querySelector<HTMLTextAreaElement>('textarea[data-ai-hive-clipboard="true"]')
+        document.querySelector<HTMLTextAreaElement>('textarea[data-superhive-clipboard="true"]')
           ?.value,
       ).toBe("LAN command");
       return true;
@@ -53,7 +53,7 @@ describe("copyTextToClipboard", () => {
     await copyTextToClipboard("LAN command");
 
     expect(execCommand).toHaveBeenCalledWith("copy");
-    expect(document.querySelector('textarea[data-ai-hive-clipboard="true"]')).toBeNull();
+    expect(document.querySelector('textarea[data-superhive-clipboard="true"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
   });

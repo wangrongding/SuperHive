@@ -454,7 +454,7 @@ export class AcpResponder implements AgentResponder {
               fs: { readTextFile: false, writeTextFile: false },
               terminal: false,
             },
-            clientInfo: { name: "ai-hive", title: "AI Hive", version: this.clientVersion },
+            clientInfo: { name: "superhive", title: "SuperHive", version: this.clientVersion },
           },
           true,
         );
@@ -465,7 +465,7 @@ export class AcpResponder implements AgentResponder {
       }
       if (result?.protocolVersion !== ACP_PROTOCOL_VERSION) {
         const error = new Error(
-          `${this.options.label} 的 ACP 协议版本为 ${String(result?.protocolVersion)}，AI Hive 仅支持版本 ${ACP_PROTOCOL_VERSION}。`,
+          `${this.options.label} 的 ACP 协议版本为 ${String(result?.protocolVersion)}，SuperHive 仅支持版本 ${ACP_PROTOCOL_VERSION}。`,
         );
         this.teardown(agent, error);
         transport.kill();
@@ -553,7 +553,7 @@ export class AcpResponder implements AgentResponder {
   private handleAgentRequest(agent: AgentProcess, id: unknown, method: string, params: any) {
     if (method !== "session/request_permission") {
       // 未声明 fs / terminal 能力，其余客户端方法一律不支持
-      this.respondError(agent, id, -32601, `AI Hive 不支持的请求：${method}`);
+      this.respondError(agent, id, -32601, `SuperHive 不支持的请求：${method}`);
       return;
     }
     const sessionId = typeof params?.sessionId === "string" ? params.sessionId : "";

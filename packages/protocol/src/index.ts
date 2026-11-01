@@ -755,7 +755,7 @@ export const imConnectionSchema = z.object({
   channel: imChannelSchema,
   /** 消息以这个房间成员的身份发进房间（扫码的房主本人） */
   ownerName: z.string(),
-  /** 机器人或账号的显示名，如「AI Hive 助手」 */
+  /** 机器人或账号的显示名，如「SuperHive 助手」 */
   label: z.string(),
   status: imConnectionStatusSchema,
   detail: z.string().optional(),

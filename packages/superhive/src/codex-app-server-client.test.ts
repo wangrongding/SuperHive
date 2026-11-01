@@ -365,7 +365,7 @@ describe("CodexAppServerResponder", () => {
     expect(server.args.some((arg) => arg.startsWith("mcp_servers.hive.url="))).toBe(true);
     expect(server.methods()).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     expect(server.sent[0]!.params).toEqual({
-      clientInfo: { name: "ai-hive", title: "AI Hive", version: "9.9.9" },
+      clientInfo: { name: "superhive", title: "SuperHive", version: "9.9.9" },
       capabilities: null,
     });
     expect(server.sent[2]!.params).toEqual({

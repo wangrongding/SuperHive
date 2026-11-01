@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { superhiveHome } from "./home-dir.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -37,12 +37,12 @@ type ServiceState = {
 
 const startUsage = `
 用法：
-  ai-hive start [选项]
+  hive start [选项]
 
 选项：
   --host ADDRESS     监听地址（默认 0.0.0.0）
   --port PORT        监听端口（默认 8787）
-  --data-dir PATH    数据、PID 和日志目录（默认 ~/.ai-hive）
+  --data-dir PATH    数据、PID 和日志目录（默认 ~/.superhive）
   --public-url URL   对外访问地址；反向代理或多网卡时使用
   --token TOKEN      固定 Join Token；默认首次启动时自动生成
   --no-local-agents  关闭网页上的"在本机启动 Agent"
@@ -51,12 +51,12 @@ const startUsage = `
 
 const stopUsage = `
 用法：
-  ai-hive stop [--data-dir PATH]
+  hive stop [--data-dir PATH]
 `;
 
 const restartUsage = `
 用法：
-  ai-hive restart [选项]
+  hive restart [选项]
 
 说明：
   默认沿用上次启动时的 host、port 和 public-url；显式传入的选项会覆盖原配置。
@@ -64,7 +64,7 @@ const restartUsage = `
 选项：
   --host ADDRESS     监听地址
   --port PORT        监听端口
-  --data-dir PATH    数据、PID 和日志目录（默认 ~/.ai-hive）
+  --data-dir PATH    数据、PID 和日志目录（默认 ~/.superhive）
   --public-url URL   对外访问地址
   --token TOKEN      更新固定 Join Token
   --no-local-agents  关闭网页上的"在本机启动 Agent"
@@ -78,7 +78,7 @@ function pathsFor(dataDir?: string): {
   databasePath: string;
   logPath: string;
 } {
-  const resolved = path.resolve(dataDir ?? path.join(homedir(), ".ai-hive"));
+  const resolved = path.resolve(dataDir ?? superhiveHome());
   return {
     dataDir: resolved,
     statePath: path.join(resolved, "server.json"),
@@ -182,9 +182,11 @@ function printStarted(state: ServiceState, alreadyRunning = false): void {
   const defaultDataDir = pathsFor().dataDir;
   const dataDirArgument =
     state.dataDir === defaultDataDir ? "" : ` --data-dir ${shellQuote(state.dataDir)}`;
-  const restartCommand = `npx ai-hive restart${dataDirArgument}`;
+  const restartCommand = `npx superhive restart${dataDirArgument}`;
   const stopCommand =
-    state.dataDir === defaultDataDir ? "npx ai-hive stop" : `npx ai-hive stop${dataDirArgument}`;
+    state.dataDir === defaultDataDir
+      ? "npx superhive stop"
+      : `npx superhive stop${dataDirArgument}`;
   console.log(`[hive] ${alreadyRunning ? "服务已经在运行" : "服务已启动"}（PID ${state.pid}）`);
   console.log(`[hive] Web UI：${state.publicUrl}`);
   console.log(`[hive] 日志：${state.logPath}`);

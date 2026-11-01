@@ -17,7 +17,7 @@ const ignored = new Set([
   "coverage",
   "data",
   "logs",
-  ".ai-hive-dev",
+  ".superhive-dev",
 ]);
 let stopping = false;
 let child;
@@ -55,7 +55,7 @@ function revision() {
 }
 
 function recordFailure() {
-  const statusPath = path.join(root, ".ai-hive-dev/status.json");
+  const statusPath = path.join(root, ".superhive-dev/status.json");
   let generation = 0;
   try {
     const previous = JSON.parse(fs.readFileSync(statusPath, "utf8")).generation;

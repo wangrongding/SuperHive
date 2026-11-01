@@ -1,4 +1,4 @@
-import type { ChatMessage, Invocation } from "@ai-hive/protocol";
+import type { ChatMessage, Invocation } from "@superhive/protocol";
 import { describe, expect, it } from "vitest";
 import {
   canCancelInvocation,

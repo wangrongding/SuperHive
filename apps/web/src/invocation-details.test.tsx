@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Invocation } from "@ai-hive/protocol";
+import type { Invocation } from "@superhive/protocol";
 import { InvocationChips, canRetryInvocation } from "./invocations";
 import { runtimeEventLabel } from "./invocation-details";
 

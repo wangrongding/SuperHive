@@ -6,7 +6,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { LIMITS, type Invocation, type ServerEvent } from "@ai-hive/protocol";
+import { LIMITS, type Invocation, type ServerEvent } from "@superhive/protocol";
 import WebSocket from "ws";
 import { buildApp } from "./app.js";
 import { HiveDatabase } from "./database.js";
@@ -99,7 +99,7 @@ describe("Hive WebSocket protocol", () => {
       wsUrl: "wss://hive.example.com/ws",
       mcpUrl: "https://hive.example.com/mcp",
       agentCommand: expect.stringMatching(
-        /^npx --yes ai-hive@latest join --server https:\/\/hive\.example\.com/,
+        /^npx --yes superhive@latest join --server https:\/\/hive\.example\.com/,
       ),
     });
   });
@@ -452,7 +452,7 @@ describe("Hive WebSocket protocol", () => {
       token: "test-token",
       staticDir: "/definitely-not-present",
       localAgents: {
-        cli: { command: "/usr/bin/node", args: ["/opt/ai-hive/dist/cli.js"] },
+        cli: { command: "/usr/bin/node", args: ["/opt/superhive/dist/cli.js"] },
         serverUrl: "http://127.0.0.1:8787",
         probe: async () => ({ installed: false, version: null }),
       },

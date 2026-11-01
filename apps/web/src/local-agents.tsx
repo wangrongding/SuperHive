@@ -9,7 +9,7 @@ import type {
   LocalDirectoryListing,
   LocalProviderInfo,
   LocalSessionResponse,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { localized, t } from "./i18n";
 import { McpChecklist } from "./agent-settings-dialog";
 

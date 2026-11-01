@@ -2,7 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 /**
- * 与 packages/ai-hive/src/windows-command.ts 相同（两个包分别发布，各带一份）。
+ * 与 packages/superhive/src/windows-command.ts 相同（两个包分别发布，各带一份）。
  * Windows 上把命令名解析成可以直接 spawn 的程序。
  *
  * npm 全局安装的 CLI（claude、codex、copilot…）在 Windows 上是 .cmd 垫片：Node 不能不经 shell

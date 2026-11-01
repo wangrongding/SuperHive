@@ -90,7 +90,7 @@ function manualTimers() {
   };
 }
 
-const cli = { command: "/usr/bin/node", args: ["/opt/ai-hive/dist/cli.js"] };
+const cli = { command: "/usr/bin/node", args: ["/opt/superhive/dist/cli.js"] };
 const probe = async (command: string) =>
   command === "opencode"
     ? { installed: true, version: "1.19.4" }
@@ -284,7 +284,7 @@ describe("local agent routes", () => {
     const child = spawner.children[0]!;
     expect(child.command).toBe("/usr/bin/node");
     expect(child.args).toEqual([
-      "/opt/ai-hive/dist/cli.js",
+      "/opt/superhive/dist/cli.js",
       "join",
       "--server",
       "http://127.0.0.1:8787",

@@ -1,7 +1,7 @@
 {
-  "name": "ai-hive",
-  "version": "0.1.6",
-  "description": "Start a shared AI Hive server and connect Codex, Claude Code, Copilot, or OpenClaw agents.",
+  "name": "superhive",
+  "version": "0.2.0",
+  "description": "Start a shared SuperHive server and connect Codex, Claude Code, Copilot, or OpenClaw agents.",
   "type": "module",
   "files": [
     "dist",
@@ -10,7 +10,7 @@
     "LICENSE"
   ],
   "bin": {
-    "ai-hive": "dist/cli.js",
+    "superhive": "dist/cli.js",
     "hive": "dist/cli.js",
     "hive-agent": "dist/cli.js",
     "hive-echo-agent": "dist/echo.js"
@@ -22,7 +22,7 @@
     "access": "public"
   },
   "keywords": [
-    "ai-hive",
+    "superhive",
     "codex",
     "claude-code",
     "copilot",
@@ -37,10 +37,10 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "pnpm build:distribution",
     "build:cli": "pnpm clean && tsc -p tsconfig.json",
-    "build:server": "esbuild ../../apps/server/src/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --alias:@ai-hive/protocol=../../packages/protocol/src/index.ts --outfile=dist/server/index.js",
+    "build:server": "esbuild ../../apps/server/src/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --alias:@superhive/protocol=../../packages/protocol/src/index.ts --outfile=dist/server/index.js",
     "copy:web": "node -e \"const fs=require('node:fs');fs.rmSync('web',{recursive:true,force:true});fs.cpSync('../../apps/web/dist','web',{recursive:true})\"",
     "check:deps": "node scripts/check-release-deps.mjs",
-    "build:distribution": "pnpm build:cli && pnpm --dir ../.. --filter @ai-hive/protocol build && pnpm --dir ../.. --filter @ai-hive/web build && pnpm build:server && pnpm copy:web && pnpm check:deps",
+    "build:distribution": "pnpm build:cli && pnpm --dir ../.. --filter @superhive/protocol build && pnpm --dir ../.. --filter @superhive/web build && pnpm build:server && pnpm copy:web && pnpm check:deps",
     "test": "vitest run",
     "prepack": "pnpm build:distribution"
   },

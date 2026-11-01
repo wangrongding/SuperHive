@@ -31,7 +31,7 @@ export class DevError extends Error {}
 
 /**
  * Windows: npm/pnpm 的 .cmd 垫片不能直接 spawn（ENOENT / EINVAL），经 cmd.exe 又会改写参数。
- * 读出垫片真正运行的目标：.exe 直接运行，.js 用 node 运行。与 packages/ai-hive/src/windows-command.ts 同一做法。
+ * 读出垫片真正运行的目标：.exe 直接运行，.js 用 node 运行。与 packages/superhive/src/windows-command.ts 同一做法。
  */
 export function resolveWindowsCommand(command, args, env = process.env) {
   if (process.platform !== "win32") return { command, args };

@@ -1,7 +1,7 @@
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { LocalDirectoryListing } from "@ai-hive/protocol";
+import type { LocalDirectoryListing } from "@superhive/protocol";
 import { HiveError } from "./database.js";
 
 /**

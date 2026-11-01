@@ -10,7 +10,7 @@ import {
   stripUnsafeCharacters,
   type Attachment,
   type AttachmentKind,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { HiveError } from "./database.js";
 
 /**

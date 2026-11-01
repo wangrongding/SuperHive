@@ -15,7 +15,7 @@ async function runCli(...args: string[]): Promise<string> {
 // 每个用例都要冷启动 node + tsx，Windows 上单次要 3–4 秒
 describe("service CLI", { timeout: 60_000 }, () => {
   it("lists restart in the top-level help", async () => {
-    await expect(runCli("--help")).resolves.toContain("ai-hive restart [选项]");
+    await expect(runCli("--help")).resolves.toContain("hive restart [选项]");
   });
 
   it("documents restart configuration reuse and overrides", async () => {

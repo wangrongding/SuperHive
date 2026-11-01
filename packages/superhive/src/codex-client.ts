@@ -220,7 +220,7 @@ export class CodexMcpResponder implements AgentResponder {
       ],
       stderr: "pipe",
     });
-    const client = new Client({ name: "ai-hive-agent", version: "0.1.1" });
+    const client = new Client({ name: "superhive-agent", version: "0.1.1" });
     let stderr = "";
     try {
       const connecting = client.connect(transport);

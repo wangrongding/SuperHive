@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Attachment, UploadedAttachment } from "@ai-hive/protocol";
+import type { Attachment, UploadedAttachment } from "@superhive/protocol";
 import { t } from "./i18n";
 
 /** 与服务端 LIMITS 一致：单个 20 MiB、一条消息 10 个、合计 50 MiB */

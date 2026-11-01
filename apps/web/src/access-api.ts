@@ -1,10 +1,10 @@
-import type { AccessResponse, Invite } from "@ai-hive/protocol";
+import type { AccessResponse, Invite } from "@superhive/protocol";
 import { localized, t } from "./i18n";
 
 /** 访客会话令牌：兑换邀请后保存在本机，之后刷新、重连都靠它 */
-export const GUEST_TOKEN_KEY = "ai-hive.guest-token";
+export const GUEST_TOKEN_KEY = "superhive.guest-token";
 /** 远程房主手动填入的共享接入令牌（本机房主不需要） */
-export const OWNER_TOKEN_KEY = "ai-hive.owner-token";
+export const OWNER_TOKEN_KEY = "superhive.owner-token";
 
 /** 邀请链接形如 `#build?invite=hvi_xxx`；返回房间与邀请令牌 */
 export function parseInviteHash(hash: string): { roomId?: string; token?: string } {

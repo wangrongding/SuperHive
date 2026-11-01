@@ -1,12 +1,12 @@
-# Herdr 与 AI Hive:Agent 协作模型对比与借鉴分析
+# Herdr 与 SuperHive:Agent 协作模型对比与借鉴分析
 
 > 历史文档（2026-10-28）：从 Herdr 借鉴协作模式的原始分析。文中引用的限额（如 hop 4、单链 12 条、连续 8 轮）和部分「未实现」项已过时，现状以代码和 README 为准。
 
 ## 摘要
 
-本文由 AI Hive 项目协作助手基于 Herdr 开源仓库(herdrdev/herdr,Apache 2.0)及其官方文档,与 ai-hive 仓库源码(packages/protocol、packages/ai-hive/src、apps/server)的对照分析整理,面向 AI Hive 的维护者与协作者,日期为 2026 年 10 月 28 日。
+本文由 SuperHive 项目协作助手基于 Herdr 开源仓库(herdrdev/herdr,Apache 2.0)及其官方文档,与 superhive 仓库源码(packages/protocol、packages/superhive/src、apps/server)的对照分析整理,面向 SuperHive 的维护者与协作者,日期为 2026 年 10 月 28 日。
 
-核心论点:Herdr 与 AI Hive 是同一协作问题的两个对偶极——Herdr 是"调用者持有控制流"的命令式编排(orchestration),AI Hive 是"房间持有控制流"的事件驱动对话(conversation)。Herdr 组织 Agent 协作的能力来自四个机制:服务端权威的生命周期状态机、可校验的同步原语、以回执为证的证据纪律、把协作契约做成产品。AI Hive 在调用生命周期、幂等恢复、预算治理与安全分级上已经持平或更强;结构性的差距集中在六处:跨 turn 会合点、blocked 语义化、编排拓扑可视化、产物通道、声明式任务对象、协作契约分发。本文逐项给出这六个模式在 Hive 架构中的具体体现与落地顺序,并指出不应借鉴的部分(进程/PTY 管理、以同步阻塞为默认)。
+核心论点:Herdr 与 SuperHive 是同一协作问题的两个对偶极——Herdr 是"调用者持有控制流"的命令式编排(orchestration),SuperHive 是"房间持有控制流"的事件驱动对话(conversation)。Herdr 组织 Agent 协作的能力来自四个机制:服务端权威的生命周期状态机、可校验的同步原语、以回执为证的证据纪律、把协作契约做成产品。SuperHive 在调用生命周期、幂等恢复、预算治理与安全分级上已经持平或更强;结构性的差距集中在六处:跨 turn 会合点、blocked 语义化、编排拓扑可视化、产物通道、声明式任务对象、协作契约分发。本文逐项给出这六个模式在 Hive 架构中的具体体现与落地顺序,并指出不应借鉴的部分(进程/PTY 管理、以同步阻塞为默认)。
 
 证据边界:分析基于两边的源码与文档文本推断,未对建议方案做实现验证;Herdr 侧结论以其当前 main 分支与 herdr.dev 文档为准,API 细节可能随版本变化。
 
@@ -14,9 +14,9 @@
 
 Herdr 自述为"the runtime your coding agents live on":一个 Rust 编写的终端复用器,把终端组织为 workspace / tab / pane 三级拓扑,识别运行在 pane 中的编码 Agent(Claude Code、Codex、Cursor 等),并通过 CLI 与 Socket API 把"驱动这些 Agent"本身做成一等能力——Agent 可以分裂 pane、互相下发 prompt、并等待对方真正进入 blocked 状态。它不包装、不替换任何 Agent,只持有它们的终端。
 
-AI Hive 是可自部署的多人多 Agent 协作空间:人类在浏览器聊天,Agent 通过各自机器上的 Bridge 以房间成员身份接入;Server 保存公共消息时间线并做 @mention 路由,Agent 的会话、文件与命令权限留在本机。
+SuperHive 是可自部署的多人多 Agent 协作空间:人类在浏览器聊天,Agent 通过各自机器上的 Bridge 以房间成员身份接入;Server 保存公共消息时间线并做 @mention 路由,Agent 的会话、文件与命令权限留在本机。
 
-本文回答三个问题:Herdr 到底靠什么机制组织 Agent 协作与互通;AI Hive 现有架构覆盖了其中多少;剩下的差距以什么形式补齐最符合 Hive 的产品定位。
+本文回答三个问题:Herdr 到底靠什么机制组织 Agent 协作与互通;SuperHive 现有架构覆盖了其中多少;剩下的差距以什么形式补齐最符合 Hive 的产品定位。
 
 ## Herdr 组织 Agent 协作的四个机制
 
@@ -40,7 +40,7 @@ skills/herdr/SKILL.md 是随版本发布、教 Agent 操作 runtime 的技能文
 
 把两个系统放在同一组协作维度下比较,会发现它们几乎在每个轴上都取相反值:
 
-| 维度       | Herdr                                  | AI Hive                                                             |
+| 维度       | Herdr                                  | SuperHive                                                           |
 | ---------- | -------------------------------------- | ------------------------------------------------------------------- |
 | 计算单元   | pane 里的进程,短命、可分裂             | 房间成员,长命、持有持久线程                                         |
 | 控制流     | 调用者持有:A prompt B 并阻塞等结果     | 房间持有:@ 触发独立 invocation,无人在等                             |
@@ -51,9 +51,9 @@ skills/herdr/SKILL.md 是随版本发布、教 Agent 操作 runtime 的技能文
 | 上下文经济 | 各 pane 上下文独立,互不付成本          | 广播介质:每条消息所有成员都付上下文成本                             |
 | 跨机器     | --machine SSH 转发,后补能力            | 架构原生:Bridge 联邦,Server 只转发                                  |
 
-结论:Herdr 解决"一台机器内 Agent 怎么互相使唤",AI Hive 解决"多台机器的人与 Agent 怎么共享意图"。两者不是竞争关系;对 Hive 而言,正确的动作是吸收 Herdr 的机制思想,而不是复制它的产品形态。
+结论:Herdr 解决"一台机器内 Agent 怎么互相使唤",SuperHive 解决"多台机器的人与 Agent 怎么共享意图"。两者不是竞争关系;对 Hive 而言,正确的动作是吸收 Herdr 的机制思想,而不是复制它的产品形态。
 
-## AI Hive 已覆盖的能力(不需要重复发明)
+## SuperHive 已覆盖的能力(不需要重复发明)
 
 | 能力         | Hive 现状                                                                                                                                                             | 与 Herdr 对比                                                                   |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -83,7 +83,7 @@ sequenceDiagram
     Note over S: 再唤醒计入既有 hop 与 trace 预算
 ```
 
-体现:invocation schema 增加 awaitsInvocationId;Server 在目标 invocation 到达终态时,为 A 创建新 invocation,触发源从 message 变为 invocation_continuation。这是 Herdr --wait 的异步版:结构化并发跨 turn 展开,而不是靠进程阻塞。改动面:packages/protocol/src/index.ts(schema)、Server 派发器、packages/ai-hive/src/bridge.ts 的唤醒处理。
+体现:invocation schema 增加 awaitsInvocationId;Server 在目标 invocation 到达终态时,为 A 创建新 invocation,触发源从 message 变为 invocation_continuation。这是 Herdr --wait 的异步版:结构化并发跨 turn 展开,而不是靠进程阻塞。改动面:packages/protocol/src/index.ts(schema)、Server 派发器、packages/superhive/src/bridge.ts 的唤醒处理。
 
 ### 模式二:blocked 的语义化——"谁卡在等一个答案"
 
@@ -132,4 +132,4 @@ Herdr 把"如何与我协作"做成随版本发布的 SKILL.md 与面向 Agent �
 
 - Herdr 仓库:[github.com/herdrdev/herdr](https://github.com/herdrdev/herdr)(README、distribution/agent-detection/、skills/herdr/SKILL.md)
 - Herdr 文档:[Agent skill file](https://herdr.dev/docs/agent-skill/)、[Socket API](https://herdr.dev/docs/socket-api/)
-- AI Hive 源码:packages/protocol/src/index.ts(invocation 与预算 schema、LIMITS)、packages/ai-hive/src/bridge.ts(合批与父回复选择)、apps/server/src/agent-instructions.ts(行为规则)、项目 README
+- SuperHive 源码:packages/protocol/src/index.ts(invocation 与预算 schema、LIMITS)、packages/superhive/src/bridge.ts(合批与父回复选择)、apps/server/src/agent-instructions.ts(行为规则)、项目 README

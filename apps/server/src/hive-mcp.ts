@@ -8,7 +8,7 @@ import {
   type Invocation,
   type Participant,
   type WhiteboardEntry,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { z } from "zod";
 import {
   MESSAGE_PREVIEW_CHARS,
@@ -146,7 +146,7 @@ function toolError(error: unknown) {
 }
 
 export function createHiveMcpServer(context: HiveMcpContext): McpServer {
-  const server = new McpServer({ name: "ai-hive", version: "0.2.0" });
+  const server = new McpServer({ name: "superhive", version: "0.2.0" });
 
   server.registerTool(
     "hive_room_read",

@@ -146,7 +146,7 @@ describe("AcpResponder", () => {
     expect(agent.request("initialize")?.params).toEqual({
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: "ai-hive", title: "AI Hive", version: "9.9.9" },
+      clientInfo: { name: "superhive", title: "SuperHive", version: "9.9.9" },
     });
     expect(agent.request("session/new")?.params).toEqual({
       cwd: "/workspace",
@@ -477,7 +477,7 @@ describe("AcpResponder", () => {
     await responder.reply({ instructions: "rules", prompt: "hi" });
     expect(agents[0]!.responseTo("fs1")?.error).toEqual({
       code: -32601,
-      message: "AI Hive 不支持的请求：fs/read_text_file",
+      message: "SuperHive 不支持的请求：fs/read_text_file",
     });
   });
 

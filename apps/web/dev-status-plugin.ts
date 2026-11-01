@@ -34,7 +34,7 @@ export function watchProtocolOutput(
 }
 
 export function hiveDevStatus(
-  statusFile = path.resolve(import.meta.dirname, "../../.ai-hive-dev/status.json"),
+  statusFile = path.resolve(import.meta.dirname, "../../.superhive-dev/status.json"),
   protocolDist = path.resolve(import.meta.dirname, "../../packages/protocol/dist"),
 ): Plugin {
   return {

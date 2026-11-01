@@ -1,4 +1,4 @@
-import type { ServerEvent } from "@ai-hive/protocol";
+import type { ServerEvent } from "@superhive/protocol";
 import WebSocket from "ws";
 
 /** 测试用的 WebSocket 客户端：缓存收到的事件，按条件等待 */

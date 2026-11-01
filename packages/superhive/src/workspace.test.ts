@@ -7,7 +7,7 @@ import { allowedWorkspaceRoots, resolveRoomWorkspace } from "./workspace.js";
 describe("房间工作区", () => {
   const base = realpathSync(mkdtempSync(path.join(tmpdir(), "ws-")));
   const code = path.join(base, "Coding");
-  const hive = path.join(code, "ai-hive");
+  const hive = path.join(code, "superhive");
   const other = path.join(code, "autoclaw");
   const outside = path.join(base, "secrets");
   for (const dir of [hive, other, outside]) mkdirSync(dir, { recursive: true });

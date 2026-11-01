@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@ai-hive/protocol";
+import type { ChatMessage } from "@superhive/protocol";
 
 /**
  * 输入框方向键可翻到的历史：当前房间已加载的、自己手打的消息，最新的在前，重复内容只留最新一条。

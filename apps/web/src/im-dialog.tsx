@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ImChannel, ImChannelsInfo, ImConnection, ImLoginView } from "@ai-hive/protocol";
+import type { ImChannel, ImChannelsInfo, ImConnection, ImLoginView } from "@superhive/protocol";
 import {
   IM_CHANNEL_LABELS,
   IM_LEVELS,

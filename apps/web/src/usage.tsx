@@ -15,14 +15,14 @@ import {
   type UsageRecord,
   type UsageSummary,
   type UsageTotals,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { formatRelativeTime } from "./whiteboard";
 import { localized, t } from "./i18n";
 
 /** 每百万 token 的美元价格；按模型配置，存在本机浏览器里 */
 export type ModelPrice = { input: number; cacheWrite: number; cacheRead: number; output: number };
 
-export const PRICES_STORAGE_KEY = "ai-hive.usage-prices";
+export const PRICES_STORAGE_KEY = "superhive.usage-prices";
 const listeners = new Set<() => void>();
 let prices: Record<string, ModelPrice> = readPrices();
 
@@ -51,7 +51,7 @@ export type UsageSettings = {
   cacheWriteAlertTokens: number;
   sessionAlertTokens: number;
 };
-export const SETTINGS_STORAGE_KEY = "ai-hive.usage-settings";
+export const SETTINGS_STORAGE_KEY = "superhive.usage-settings";
 export const DEFAULT_USAGE_SETTINGS: UsageSettings = {
   cacheTtlMinutes: DEFAULT_PROMPT_CACHE_TTL_MS / 60_000,
   cacheWriteAlertTokens: DEFAULT_CACHE_WRITE_ALERT_TOKENS,

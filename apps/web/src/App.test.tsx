@@ -9,7 +9,7 @@ import type {
   Invocation,
   Participant,
   ServerEvent,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import { App } from "./App";
 
 type RoomSnapshotEvent = Extract<ServerEvent, { type: "room.snapshot" }>;
@@ -166,14 +166,14 @@ describe("App mention autocomplete", () => {
         const url = String(input);
         if (url.includes("/api/meta")) {
           return jsonResponse({
-            name: "AI Hive",
+            name: "SuperHive",
             roomId: "general",
             httpUrl: "http://10.0.0.8:8787",
             wsUrl: "ws://10.0.0.8:8787/ws",
             mcpUrl: "http://10.0.0.8:8787/mcp",
             joinToken: "test-token",
             agentCommand:
-              "npx --yes ai-hive@latest join --server http://10.0.0.8:8787 --name my-agent --token test-token",
+              "npx --yes superhive@latest join --server http://10.0.0.8:8787 --name my-agent --token test-token",
           });
         }
         if (url.includes("/invites")) {
@@ -286,7 +286,7 @@ describe("App mention autocomplete", () => {
   });
 
   it("connects through the reachable dev server instead of an advertised stale LAN address", async () => {
-    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("superhive.username", "Alice");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
@@ -307,7 +307,7 @@ describe("App mention autocomplete", () => {
   });
 
   it("keeps the mention option chosen with the keyboard in view", async () => {
-    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("superhive.username", "Alice");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
@@ -344,7 +344,7 @@ describe("App mention autocomplete", () => {
   });
 
   it("recalls own sent messages with the arrow keys without touching a draft in progress", async () => {
-    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("superhive.username", "Alice");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
@@ -382,7 +382,7 @@ describe("App mention autocomplete", () => {
     expect(composer.value).toBe("第二条 @Bob");
     fireEvent.select(composer);
     expect(screen.queryByRole("listbox")).toBeNull();
-    expect(localStorage.getItem("ai-hive.draft.alice.general")).toBeNull();
+    expect(localStorage.getItem("superhive.draft.alice.general")).toBeNull();
     fireEvent.keyDown(composer, { key: "ArrowUp" });
     expect(composer.value).toBe("第一条");
     fireEvent.keyDown(composer, { key: "ArrowDown" });
@@ -443,7 +443,7 @@ describe("App mention autocomplete", () => {
     );
     await user.click(within(themeSwitcher).getByRole("radio", { name: "浅色" }));
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(localStorage.getItem("ai-hive.theme")).toBe("light");
+    expect(localStorage.getItem("superhive.theme")).toBe("light");
     await user.keyboard("{Escape}");
 
     const membersPanel = screen.getByLabelText("成员列表");
@@ -516,12 +516,12 @@ describe("App mention autocomplete", () => {
     ).toBe("true");
     fireEvent.change(composer, { target: { value: "保留这份草稿" } });
     await waitFor(() =>
-      expect(localStorage.getItem("ai-hive.draft.alice.general")).toBe("保留这份草稿"),
+      expect(localStorage.getItem("superhive.draft.alice.general")).toBe("保留这份草稿"),
     );
     await user.click(within(settingsDialog).getByRole("radio", { name: /^Enter 发送/ }));
-    expect(localStorage.getItem("ai-hive.send-shortcut")).toBe("enter");
+    expect(localStorage.getItem("superhive.send-shortcut")).toBe("enter");
     await user.click(within(settingsDialog).getByRole("radio", { name: "24 小时" }));
-    expect(localStorage.getItem("ai-hive.time-format")).toBe("24h");
+    expect(localStorage.getItem("superhive.time-format")).toBe("24h");
 
     await user.click(within(settingsDialog).getByRole("tab", { name: /^通知/ }));
     expect(
@@ -531,13 +531,13 @@ describe("App mention autocomplete", () => {
     ).toBe("true");
     expect(within(settingsDialog).queryByRole("button", { name: "立即授权" })).toBeNull();
     await user.click(within(settingsDialog).getByRole("radio", { name: /^关闭通知/ }));
-    expect(localStorage.getItem("ai-hive.notify-messages")).toBe("off");
+    expect(localStorage.getItem("superhive.notify-messages")).toBe("off");
     await user.click(within(settingsDialog).getByRole("radio", { name: /^@ 我时通知/ }));
-    await waitFor(() => expect(localStorage.getItem("ai-hive.notify-messages")).toBe("mentions"));
+    await waitFor(() => expect(localStorage.getItem("superhive.notify-messages")).toBe("mentions"));
     await user.click(within(settingsDialog).getByRole("switch", { name: /^新消息提示音/ }));
-    expect(localStorage.getItem("ai-hive.notification-sound")).toBe("true");
+    expect(localStorage.getItem("superhive.notification-sound")).toBe("true");
     await user.click(within(settingsDialog).getByRole("switch", { name: /^Agent 上下线/ }));
-    expect(localStorage.getItem("ai-hive.notify-agent-presence")).toBe("true");
+    expect(localStorage.getItem("superhive.notify-agent-presence")).toBe("true");
 
     await user.click(within(settingsDialog).getByRole("tab", { name: /^外观/ }));
     await user.click(within(settingsDialog).getByRole("radio", { name: "深色" }));
@@ -600,7 +600,7 @@ describe("App mention autocomplete", () => {
     const reopenedSettings = screen.getByRole("dialog", { name: "偏好设置" });
     await user.click(within(reopenedSettings).getByRole("tab", { name: /^通知/ }));
     await user.click(within(reopenedSettings).getByRole("radio", { name: /^当前房间任意消息/ }));
-    await waitFor(() => expect(localStorage.getItem("ai-hive.notify-messages")).toBe("all"));
+    await waitFor(() => expect(localStorage.getItem("superhive.notify-messages")).toBe("all"));
     await user.keyboard("{Escape}");
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
@@ -650,7 +650,7 @@ describe("App mention autocomplete", () => {
     );
     expect(commandText()).toContain("--provider claude");
     await user.click(screen.getByRole("button", { name: "复制命令" }));
-    expect(await navigator.clipboard.readText()).toContain("npx --yes ai-hive@latest join");
+    expect(await navigator.clipboard.readText()).toContain("npx --yes superhive@latest join");
     expect(await navigator.clipboard.readText()).toContain("--name Alice-claude");
     expect(await navigator.clipboard.readText()).toContain("--access read-only");
     expect(screen.getByRole("button", { name: "已复制到剪贴板" })).toBeTruthy();
@@ -757,10 +757,10 @@ describe("App mention autocomplete", () => {
 
   it("restores the saved username after refresh and only clears it on explicit logout", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "SavedUser");
+    localStorage.setItem("superhive.username", "SavedUser");
     render(<App />);
 
-    expect(screen.queryByText("进入 AI Hive")).toBeNull();
+    expect(screen.queryByText("进入 SuperHive")).toBeNull();
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
     act(() => socket.open());
@@ -776,19 +776,19 @@ describe("App mention autocomplete", () => {
         message: "This username is already online in the room.",
       }),
     );
-    expect(localStorage.getItem("ai-hive.username")).toBe("SavedUser");
+    expect(localStorage.getItem("superhive.username")).toBe("SavedUser");
     expect(screen.getByText(/已被同名 Agent 或其他身份占用/)).toBeTruthy();
     expect(FakeWebSocket.instances).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "用户菜单" }));
     await user.click(screen.getByRole("menuitem", { name: /退出/ }));
-    expect(localStorage.getItem("ai-hive.username")).toBeNull();
-    expect(screen.getByText("进入 AI Hive")).toBeTruthy();
+    expect(localStorage.getItem("superhive.username")).toBeNull();
+    expect(screen.getByText("进入 SuperHive")).toBeTruthy();
   });
 
   it("switches rooms, shows unread dots, and creates rooms from the sidebar", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("superhive.username", "Alice");
     render(<App />);
 
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
@@ -831,7 +831,7 @@ describe("App mention autocomplete", () => {
       type: "participant.join",
       roomId: "frontend",
     });
-    expect(localStorage.getItem("ai-hive.room")).toBe("frontend");
+    expect(localStorage.getItem("superhive.room")).toBe("frontend");
     expect(window.location.hash).toBe("#frontend");
 
     const frontendSelf = { ...self, roomId: "frontend" };
@@ -858,7 +858,7 @@ describe("App mention autocomplete", () => {
         latestSeq: 5,
       }),
     );
-    await waitFor(() => expect(localStorage.getItem("ai-hive.read-seq.frontend")).toBe("5"));
+    await waitFor(() => expect(localStorage.getItem("superhive.read-seq.frontend")).toBe("5"));
     expect(screen.queryByLabelText("# frontend 有未读消息")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "接入 Agent" }));
@@ -899,14 +899,14 @@ describe("App mention autocomplete", () => {
       type: "participant.join",
       roomId: "design",
     });
-    expect(localStorage.getItem("ai-hive.room")).toBe("design");
+    expect(localStorage.getItem("superhive.room")).toBe("design");
     expect(window.location.hash).toBe("#design");
   });
 
   it("lets a user recall their own message and renders tombstones for everyone", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
-    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
@@ -1009,8 +1009,8 @@ describe("App mention autocomplete", () => {
 
   it("collapses earlier topics, starts a new topic, and follows a cleared room", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
-    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
@@ -1086,7 +1086,7 @@ describe("App mention autocomplete", () => {
 
   it("asks returning users to grant notification permission from an in-app prompt", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("superhive.username", "Alice");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
 
@@ -1095,8 +1095,8 @@ describe("App mention autocomplete", () => {
     const prompt = screen.getByRole("status", { name: "开启浏览器通知" });
     await user.click(within(prompt).getByRole("button", { name: "暂不" }));
     expect(screen.queryByRole("status", { name: "开启浏览器通知" })).toBeNull();
-    expect(localStorage.getItem("ai-hive.notify-prompt-dismissed")).toBe("true");
-    expect(localStorage.getItem("ai-hive.notify-messages")).toBeNull();
+    expect(localStorage.getItem("superhive.notify-prompt-dismissed")).toBe("true");
+    expect(localStorage.getItem("superhive.notify-messages")).toBeNull();
 
     // 设置面板仍能补授权
     await user.click(screen.getByRole("button", { name: "用户菜单" }));
@@ -1115,20 +1115,20 @@ describe("App mention autocomplete", () => {
 
   it("falls back to no notifications when the browser denies permission", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("superhive.username", "Alice");
     FakeNotification.nextPermission = "denied";
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
 
     const prompt = screen.getByRole("status", { name: "开启浏览器通知" });
     await user.click(within(prompt).getByRole("button", { name: "开启" }));
-    await waitFor(() => expect(localStorage.getItem("ai-hive.notify-messages")).toBe("off"));
+    await waitFor(() => expect(localStorage.getItem("superhive.notify-messages")).toBe("off"));
     expect(screen.queryByRole("status", { name: "开启浏览器通知" })).toBeNull();
   });
 
   it("opens the room from a shared #roomId link and follows later hash changes", async () => {
-    localStorage.setItem("ai-hive.username", "Alice");
-    localStorage.setItem("ai-hive.room", "general");
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.room", "general");
     window.history.replaceState(null, "", "#frontend");
     render(<App />);
 
@@ -1139,7 +1139,7 @@ describe("App mention autocomplete", () => {
       type: "participant.join",
       roomId: "frontend",
     });
-    expect(localStorage.getItem("ai-hive.room")).toBe("frontend");
+    expect(localStorage.getItem("superhive.room")).toBe("frontend");
 
     act(() => {
       window.location.hash = "#design";
@@ -1151,7 +1151,7 @@ describe("App mention autocomplete", () => {
       type: "participant.join",
       roomId: "design",
     });
-    expect(localStorage.getItem("ai-hive.room")).toBe("design");
+    expect(localStorage.getItem("superhive.room")).toBe("design");
 
     act(() => {
       window.location.hash = "#not a valid room!";
@@ -1162,8 +1162,8 @@ describe("App mention autocomplete", () => {
 
   it("shows per-message invocation chips and sends retry, cancel, and budget actions", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
-    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
@@ -1368,7 +1368,7 @@ describe("App mention autocomplete", () => {
 
   it("launches an agent on this machine with one click when the page is local", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
+    localStorage.setItem("superhive.username", "Alice");
     localApi.enabled = true;
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
@@ -1453,8 +1453,8 @@ describe("App mention autocomplete", () => {
 
   it("shows the room whiteboard grouped by slot and keeps it in sync", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
-    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
     render(<App />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0]!;
@@ -1477,7 +1477,7 @@ describe("App mention autocomplete", () => {
       key: "api",
       slot: "ready" as const,
       summary: "登录 API 已合入，可以接前端",
-      repo: "ai-hive",
+      repo: "superhive",
       branch: "feat/login",
       commit: "0123456789abcdef0123",
       unblocks: ["frontend-login"],
@@ -1562,8 +1562,8 @@ describe("App mention autocomplete", () => {
 
   it("opens search, mentions and agent tasks from the sidebar and jumps across rooms", async () => {
     const user = userEvent.setup();
-    localStorage.setItem("ai-hive.username", "Alice");
-    localStorage.setItem("ai-hive.notify-prompt-dismissed", "true");
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
     const mention: ChatMessage = {
       id: "00000000-0000-4000-8000-000000000101",
       roomId: "frontend",

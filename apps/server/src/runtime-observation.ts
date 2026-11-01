@@ -1,4 +1,4 @@
-import type { RuntimeEvent, RuntimeObservation } from "@ai-hive/protocol";
+import type { RuntimeEvent, RuntimeObservation } from "@superhive/protocol";
 
 /** Server timestamps are authoritative. A heartbeat never clears a provider error. */
 export function observeRuntime(

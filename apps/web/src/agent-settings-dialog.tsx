@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { LocalAgent, LocalAgentMcpResponse, LocalMcpServer } from "@ai-hive/protocol";
+import type { LocalAgent, LocalAgentMcpResponse, LocalMcpServer } from "@superhive/protocol";
 import { localized, t } from "./i18n";
 import type { LocalAgentsState } from "./local-agents";
 

@@ -33,7 +33,7 @@ import {
   type ServerEvent,
   DEFAULT_CACHE_WRITE_ALERT_TOKENS,
   keepAwakeSettingsSchema,
-} from "@ai-hive/protocol";
+} from "@superhive/protocol";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { WebSocket } from "ws";
 import { z } from "zod";
@@ -117,7 +117,7 @@ export type BuildAppOptions = {
   /** 清理过期上传与无引用文件的间隔；测试可调小 */
   attachmentSweepMs?: number;
   /**
-   * 本机 Agent：允许本机房主在网页上一键拉起 `ai-hive join` 子进程。
+   * 本机 Agent：允许本机房主在网页上一键拉起 `hive join` 子进程。
    * 省略即关闭（测试默认关闭），由 index.ts 按运行方式注入 CLI 路径。
    */
   /**
@@ -561,7 +561,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     session: AccessSession,
     token: string,
   ) {
-    const prefix = options.agentCommandPrefix ?? "npx --yes ai-hive@latest";
+    const prefix = options.agentCommandPrefix ?? "npx --yes superhive@latest";
     return `${prefix} join --server ${requestPublicUrl(request, options.publicUrl)} --room ${session.roomId} --name ${session.username} --token ${token}`;
   }
 
@@ -1285,7 +1285,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       emitInvocation(
         database.updateInvocation(invocation.id, {
           status: "timed_out",
-          detail: "Agent 在线但没有确认收到（可能是不支持回报状态的旧版 ai-hive）",
+          detail: "Agent 在线但没有确认收到（可能是不支持回报状态的旧版 superhive）",
         }),
       );
     }
@@ -1797,9 +1797,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.get("/api/meta", async (request) => {
     const httpUrl = requestPublicUrl(request, options.publicUrl);
     const wsUrl = httpUrl.replace(/^http/, "ws") + "/ws";
-    const agentCommandPrefix = options.agentCommandPrefix ?? "npx --yes ai-hive@latest";
+    const agentCommandPrefix = options.agentCommandPrefix ?? "npx --yes superhive@latest";
     return {
-      name: "AI Hive",
+      name: "SuperHive",
       roomId: "general",
       httpUrl,
       wsUrl,
@@ -2615,7 +2615,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.get("/", async (_request, reply) => {
       return reply
         .type("text/html; charset=utf-8")
-        .send("<h1>AI Hive server is running</h1><p>Run <code>pnpm dev</code> for the Web UI.</p>");
+        .send(
+          "<h1>SuperHive server is running</h1><p>Run <code>pnpm dev</code> for the Web UI.</p>",
+        );
     });
   }
 

@@ -1,6 +1,6 @@
 /**
  * 「边玩边迭代」开发模式的运行状态契约。
- * 外层 dev supervisor 把状态原子写入仓库根目录 `.ai-hive-dev/status.json`，
+ * 外层 dev supervisor 把状态原子写入仓库根目录 `.superhive-dev/status.json`，
  * Vite 开发服务器（不随 Hive Server 重启）提供查询接口，页面轮询读取，所以 Server 重启或启动失败时页面仍能看到状态。
  */
 export const DEV_STATUS_PATH = "/__hive-dev/status";

@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@ai-hive/protocol";
+import type { ChatMessage } from "@superhive/protocol";
 import { t } from "./i18n";
 
 export function formatShareTimestamp(iso: string): string {
@@ -15,7 +15,7 @@ export function formatShareTimestamp(iso: string): string {
 export function buildShareMarkdown(messages: ChatMessage[], roomName: string): string {
   const sorted = [...messages].sort((a, b) => a.seq - b.seq);
   const lines: string[] = [
-    t("# AI Hive · #{0} 对话分享", { 0: roomName }),
+    t("# SuperHive · #{0} 对话分享", { 0: roomName }),
     "",
     t("> 共 {0} 条消息 · 导出于 {1}", {
       0: sorted.length,
@@ -40,7 +40,7 @@ export function shareFilename(roomId: string, extension: string): string {
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, "0");
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
-  return `ai-hive-${roomId}-${stamp}.${extension}`;
+  return `superhive-${roomId}-${stamp}.${extension}`;
 }
 
 export function downloadFile(filename: string, content: Blob | string): void {
