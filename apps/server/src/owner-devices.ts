@@ -64,12 +64,21 @@ export class OwnerDevices {
         last_seen_at TEXT NOT NULL,
         revoked_at TEXT
       );
+      -- 退出某台经飞书登录的设备时，记下这个连接的「签发时间下限」，之前发出的票全部作废
+      CREATE TABLE IF NOT EXISTS owner_im_ticket_floor (
+        connection_id TEXT PRIMARY KEY,
+        not_before INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS owner_pair_tickets (
         token_hash TEXT PRIMARY KEY,
         expires_at TEXT NOT NULL,
         used_at TEXT
       );
     `);
+    const columns = db.pragma("table_info(owner_devices)") as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "connection_id")) {
+      db.exec("ALTER TABLE owner_devices ADD COLUMN connection_id TEXT");
+    }
   }
 
   private readonly now: () => number;
@@ -91,8 +100,8 @@ export class OwnerDevices {
 
   /** 飞书卡片按钮上的登录票：签名里带连接 ID 和到期时间 */
   createImTicket(connectionId: string): string {
-    const expires = this.now() + IM_TICKET_TTL_MS;
-    const payload = `${connectionId}.${expires}`;
+    const issued = this.now();
+    const payload = `${connectionId}.${issued}.${issued + IM_TICKET_TTL_MS}`;
     return `${IM_PREFIX}${Buffer.from(payload).toString("base64url")}.${this.sign(payload)}`;
   }
 
@@ -110,6 +119,7 @@ export class OwnerDevices {
     imConnectionValid: (connectionId: string) => boolean,
   ): { token: string; device: OwnerDevice } | undefined {
     let source: OwnerDevice["source"];
+    let connectionId: string | undefined;
     if (ticket.startsWith(PAIR_PREFIX)) {
       const used = this.db
         .prepare(
@@ -125,10 +135,15 @@ export class OwnerDevices {
       const expected = Buffer.from(this.sign(payload));
       const given = Buffer.from(signature);
       if (expected.length !== given.length || !timingSafeEqual(expected, given)) return undefined;
-      const [connectionId, expires] = payload.split(".");
-      if (!connectionId || !(Number(expires) > this.now())) return undefined;
-      if (!imConnectionValid(connectionId)) return undefined;
+      const [connection, issued, expires] = payload.split(".");
+      if (!connection || !(Number(expires) > this.now())) return undefined;
+      const floor = this.db
+        .prepare("SELECT not_before FROM owner_im_ticket_floor WHERE connection_id = ?")
+        .get(connection) as { not_before: number } | undefined;
+      if (floor && !(Number(issued) > floor.not_before)) return undefined;
+      if (!imConnectionValid(connection)) return undefined;
       source = "im";
+      connectionId = connection;
     } else {
       return undefined;
     }
@@ -138,9 +153,9 @@ export class OwnerDevices {
     const name = deviceName.trim().slice(0, 64) || "未命名设备";
     this.db
       .prepare(
-        "INSERT INTO owner_devices(id, token_hash, name, source, created_at, last_seen_at) VALUES(?, ?, ?, ?, ?, ?)",
+        "INSERT INTO owner_devices(id, token_hash, name, source, connection_id, created_at, last_seen_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(id, hash(secret), name, source, now, now);
+      .run(id, hash(secret), name, source, connectionId ?? null, now, now);
     return { token: secret, device: this.get(id)! };
   }
 
@@ -175,12 +190,27 @@ export class OwnerDevices {
     ).map(map);
   }
 
+  /**
+   * 退出一台设备。经飞书登录的，同时作废这个连接此前发出的所有票：
+   * 否则再点一次同一张卡片就又登进来了，「退出」形同虚设。
+   */
   revoke(id: string): boolean {
-    return (
-      this.db
-        .prepare("UPDATE owner_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-        .run(this.iso(), id).changes === 1
-    );
+    const row = this.db
+      .prepare("SELECT connection_id FROM owner_devices WHERE id = ? AND revoked_at IS NULL")
+      .get(id) as { connection_id: string | null } | undefined;
+    if (!row) return false;
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE owner_devices SET revoked_at = ? WHERE id = ?").run(this.iso(), id);
+      if (row.connection_id) {
+        this.db
+          .prepare(
+            `INSERT INTO owner_im_ticket_floor(connection_id, not_before) VALUES(?, ?)
+             ON CONFLICT(connection_id) DO UPDATE SET not_before = excluded.not_before`,
+          )
+          .run(row.connection_id, this.now());
+      }
+    })();
+    return true;
   }
 }
 

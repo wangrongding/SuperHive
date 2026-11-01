@@ -1176,6 +1176,36 @@ describe("IM 推送档位", () => {
     expect(web.rich!.link!.url).toContain("login=hoi_");
   });
 
+  it("群里派的活，回到群里的卡片不带房主登录票；群里发 /web 只提示去私聊", async () => {
+    const { fake, helper } = await setup({ richCards: true, webUrl: "http://10.0.0.8:5188" });
+    fake.emit({ text: "@helper 看下", chatType: "group", chatId: "oc_group" });
+    const mention = await helper.next((event) => event.type === "agent.mentioned");
+    const trigger = (mention as { message: ChatMessage }).message;
+    helper.send({
+      type: "message.send",
+      clientMessageId: "g-reply",
+      content: "群里的回复",
+      parentMessageId: trigger.id,
+    });
+    const card = await until(() => fake.sent.find((item) => item.rich?.body === "群里的回复"));
+    expect(card.chatId).toBe("oc_group");
+    expect(card.rich!.link!.url).toBe("http://10.0.0.8:5188/#general");
+    // 进度卡片也一样
+    const progress = fake.sent.find((item) => item.rich?.steps);
+    expect(progress?.rich?.link?.url ?? "").not.toContain("login=");
+    fake.emit({ text: "/web", chatType: "group", chatId: "oc_group" });
+    const refused = await until(() =>
+      fake.sent.find((item) => item.text.includes("私聊里发 /web")),
+    );
+    expect(refused.rich).toBeUndefined();
+    // 私聊照常带票
+    fake.emit({ text: "/web" });
+    const web = await until(() =>
+      fake.sent.find((item) => item.rich?.title === "在网页上打开 Hive"),
+    );
+    expect(web.rich!.link!.url).toContain("login=hoi_");
+  });
+
   it("暂停后不推，恢复后不补发暂停期间的消息", async () => {
     const { fake, helper, setLevel, id, api } = await setup();
     await setLevel("all");

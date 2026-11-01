@@ -538,6 +538,8 @@ export class ImHub {
       return;
     }
     this.deps.store.touchInbound(connection.id, message.chatId);
+    // 记下会话是私聊还是群：带房主登录票的链接只发到私聊
+    this.deps.store.kvSet(connection.id, `chatType:${message.chatId}`, message.chatType);
     const text = message.text.trim();
     if (text.startsWith("/") && !files.length) {
       this.handleCommand(connection, message, text);
@@ -869,6 +871,9 @@ export class ImHub {
         );
       }
       case "/web": {
+        if (message.chatType !== "p2p") {
+          return say("登录链接只发到私聊：请在和机器人的私聊里发 /web。");
+        }
         const url = this.cardUrl(connection, connection.roomId);
         if (!url) return say("这个服务没有配置网页地址。");
         if (this.richCapable(connection)) {
@@ -1105,9 +1110,11 @@ export class ImHub {
       const transport = this.transports.get(connection.id);
       if (delivery.status !== "sent" || !delivery.externalId || !transport?.updateRich) return;
       this.deps.store.setRich(delivery.id, rich);
-      void transport.updateRich(delivery.externalId, rich).catch((error: unknown) => {
-        this.deps.log("im task card update failed", error);
-      });
+      void transport
+        .updateRich(delivery.externalId, this.forChat(connection, delivery.chatId, rich))
+        .catch((error: unknown) => {
+          this.deps.log("im task card update failed", error);
+        });
     };
     if (tasks.length && tasks.every(settled)) {
       clearTimeout(this.taskTimers.get(key));
@@ -1442,7 +1449,28 @@ export class ImHub {
     }`;
   }
 
-  /** 卡片按钮的网页地址：带登录票（扫码人本人的私聊里才会收到这些卡片） */
+  /** 发给房主本人的会话：私聊推送（user: 目标），或入站时记下的私聊 */
+  private isPrivateChat(connection: StoredConnection, chatId: string): boolean {
+    return (
+      chatId.startsWith(USER_TARGET) ||
+      this.deps.store.kvGet(connection.id, `chatType:${chatId}`) === "p2p"
+    );
+  }
+
+  /** 发到群里的卡片去掉链接里的房主登录票：群里谁点都会以房主身份进入 */
+  private forChat(connection: StoredConnection, chatId: string, rich: ImRich): ImRich {
+    if (!rich.link || this.isPrivateChat(connection, chatId)) return rich;
+    try {
+      const url = new URL(rich.link.url);
+      if (!url.searchParams.has("login")) return rich;
+      url.searchParams.delete("login");
+      return { ...rich, link: { ...rich.link, url: url.toString() } };
+    } catch {
+      return rich;
+    }
+  }
+
+  /** 卡片按钮的网页地址：带登录票；发到群里时由 forChat 去掉 */
   private cardUrl(connection: StoredConnection, roomId: string): string | undefined {
     return this.deps.loginUrl?.(connection.id, roomId) ?? this.deps.webUrl(roomId);
   }
@@ -1609,9 +1637,11 @@ export class ImHub {
         resolved: settledLabel(invocation),
       };
       this.deps.store.setRich(delivery.id, rich);
-      void transport.updateRich(delivery.externalId!, rich).catch((error: unknown) => {
-        this.deps.log("im notice card update failed", error);
-      });
+      void transport
+        .updateRich(delivery.externalId!, this.forChat(connection, delivery.chatId, rich))
+        .catch((error: unknown) => {
+          this.deps.log("im notice card update failed", error);
+        });
     }
   }
 
@@ -1626,7 +1656,11 @@ export class ImHub {
       .linksOf(question.id)
       .find((item) => item.connectionId === connection.id && item.direction === "out");
     if (!link?.externalId) return;
-    const rich = this.answeredQuestion(connection, question, answer);
+    const rich = this.forChat(
+      connection,
+      link.chatId,
+      this.answeredQuestion(connection, question, answer),
+    );
     void transport.updateRich(link.externalId, rich).catch((error: unknown) => {
       this.deps.log("im question card update failed", error);
     });
@@ -1661,6 +1695,20 @@ export class ImHub {
 
   /** 人在卡片上点了按钮：校验是房主本人，再走与网页相同的操作；返回即时提示与更新后的卡片 */
   private handleAction(connectionId: string, action: ImAction): ImActionResult | undefined {
+    const result = this.handleActionInner(connectionId, action);
+    const connection = this.deps.store.getConnection(connectionId);
+    if (!result?.rich || !connection) return result;
+    // 被点的卡片发在哪个会话：按推送记录找（私聊推送的目标是 user:），找不到按回调里的会话
+    const chatId =
+      this.deps.store.deliveryByExternal(connection.id, action.externalId)?.chatId ??
+      this.deps.store
+        .linksOf(this.deps.store.messageForExternal(connection.id, action.externalId) ?? "")
+        .find((link) => link.connectionId === connection.id)?.chatId ??
+      action.chatId;
+    return { ...result, rich: this.forChat(connection, chatId, result.rich) };
+  }
+
+  private handleActionInner(connectionId: string, action: ImAction): ImActionResult | undefined {
     const connection = this.deps.store.getConnection(connectionId);
     if (!connection || connection.status === "paused") {
       return { toast: { type: "warning", text: "这个连接已暂停" } };
@@ -2311,7 +2359,7 @@ export class ImHub {
     if (!live.length) return;
     const text = live.map((item) => item.text).join("\n\n———\n\n");
     const rich = live.every((item) => item.rich)
-      ? combineRich(live.map((item) => item.rich!))
+      ? this.forChat(connection, first.chatId, combineRich(live.map((item) => item.rich!)))
       : undefined;
     try {
       const externalId =
