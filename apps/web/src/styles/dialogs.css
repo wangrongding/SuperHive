@@ -50,7 +50,7 @@
 }
 
 .agent-dialog-header > div:first-child,
-.room-dialog-header > div:nth-child(2) {
+.room-dialog-header > div:first-child {
   min-width: 0;
   flex: 1;
 }
