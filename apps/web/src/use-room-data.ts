@@ -9,6 +9,7 @@ import type {
 import { serverError } from "./server-text";
 import { upsertWhiteboardEntry } from "./whiteboard";
 import { t } from "./i18n";
+import type { LoadingPhase } from "./loading-status";
 
 /**
  * 当前房间的数据：成员、消息、调用、白板、定时、权限申请和调用过程，以及连接用到的游标。
@@ -27,6 +28,7 @@ export function useRoomData({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // 收到房间快照之前为 false：区分"还在加载"和"房间真的是空的"，避免欢迎页闪现
   const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("joining");
   const [invocations, setInvocations] = useState<ReadonlyMap<string, Invocation>>(new Map());
   const [whiteboard, setWhiteboard] = useState<ReadonlyMap<string, WhiteboardEntry>>(new Map());
   const whiteboardEpochRef = useRef(0);
@@ -119,6 +121,8 @@ export function useRoomData({
     setMessages,
     messagesLoaded,
     setMessagesLoaded,
+    loadingPhase,
+    setLoadingPhase,
     invocations,
     setInvocations,
     whiteboard,

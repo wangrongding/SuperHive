@@ -10,6 +10,11 @@
  */
 import { useEffect } from "react";
 import { desktopBridge, type DesktopBridge } from "./desktop-bridge";
+import {
+  stopBootLoadingStatus,
+  updateBootLoadingStatus,
+  type LoadingStatus,
+} from "./loading-status";
 
 export const BOOT_SPLASH_ID = "boot-splash";
 /** 和 index.html 里退场动画的时长一致 */
@@ -44,6 +49,7 @@ export function signalAppReady(
 ): void {
   if (signaled) return;
   signaled = true;
+  stopBootLoadingStatus();
   afterPaint(() => {
     try {
       bridge?.ready?.();
@@ -66,6 +72,12 @@ export function useAppReady(ready: boolean): void {
   useEffect(() => {
     if (ready) signalAppReady();
   }, [ready]);
+}
+
+export function useAppLoadingStatus({ phase, error, retrying }: LoadingStatus): void {
+  useEffect(() => {
+    if (!signaled) updateBootLoadingStatus({ phase, error, retrying });
+  }, [phase, error, retrying]);
 }
 
 /** 兜底：从挂载起过了 ms 还没收起就直接收起 */

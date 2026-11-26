@@ -71,8 +71,12 @@ async function call<T>(
   return localizeServerPayload(payload);
 }
 
-export function fetchAccess(base: string, token?: string): Promise<AccessResponse> {
-  return call(`${base}/api/access`, { token });
+export function fetchAccess(
+  base: string,
+  token?: string,
+  signal?: AbortSignal,
+): Promise<AccessResponse> {
+  return call(`${base}/api/access`, { token, signal });
 }
 
 export type InvitePreview = {

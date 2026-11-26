@@ -102,6 +102,7 @@ export function useRoomConnection({
     setParticipants,
     setMessages,
     setMessagesLoaded,
+    setLoadingPhase,
     setInvocations,
     setWhiteboard,
     whiteboardEpochRef,
@@ -136,10 +137,12 @@ export function useRoomConnection({
     if (!meta || !username || !authToken) return;
     let cancelled = false;
     let reconnectAllowed = true;
+    let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
 
     const connect = () => {
       if (cancelled) return;
       setConnectionState("connecting");
+      setLoadingPhase("joining");
       const socket = new WebSocket(
         resolveWebSocketUrl({
           serverBase: base,
@@ -148,7 +151,10 @@ export function useRoomConnection({
         }),
       );
       socketRef.current = socket;
+      snapshotTimer = setTimeout(() => socket.close(), 10_000);
       socket.addEventListener("open", () => {
+        if (cancelled) return;
+        setLoadingPhase("messages");
         socket.send(
           JSON.stringify({
             type: "participant.join",
@@ -162,6 +168,7 @@ export function useRoomConnection({
       socket.addEventListener("message", (rawEvent) => {
         const event = localizeServerPayload(JSON.parse(String(rawEvent.data)) as ServerEvent);
         if (event.type === "room.snapshot") {
+          clearTimeout(snapshotTimer);
           recalledInvocationsRef.current = new Set(
             (event.invocations ?? []).filter((item) => item.messageRecalled).map((item) => item.id),
           );
@@ -434,6 +441,7 @@ export function useRoomConnection({
         }
       });
       socket.addEventListener("close", () => {
+        clearTimeout(snapshotTimer);
         if (cancelled || !reconnectAllowed) return;
         setConnectionState("offline");
         const wait = Math.min(10_000, 500 * 2 ** retryRef.current++);
@@ -451,6 +459,7 @@ export function useRoomConnection({
 
     return () => {
       cancelled = true;
+      clearTimeout(snapshotTimer);
       window.clearInterval(heartbeat);
       window.clearTimeout(reconnectTimerRef.current);
       socketRef.current?.close();

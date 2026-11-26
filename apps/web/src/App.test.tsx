@@ -481,6 +481,59 @@ describe("App mention autocomplete", () => {
     expect(document.querySelector(".connection")?.classList.contains("online")).toBe(true);
   });
 
+  it("shows actual room loading phases, retries a missing snapshot and removes the loader once messages arrive", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("superhive.username", "Alice");
+      render(<App />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const socket = FakeWebSocket.instances[0]!;
+      const loading = () =>
+        document.querySelector(".message-list")?.shadowRoot?.querySelector(".room-loading");
+      expect(loading()?.querySelector("[data-loading-title]")?.textContent).toBe("准备房间");
+      act(() => socket.open());
+      expect(loading()?.querySelector("[data-loading-title]")?.textContent).toBe("载入房间消息");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+      expect(loading()?.querySelector("[data-loading-hint]")?.textContent).toBe(
+        "已连接，正在等待房间消息；暂时还没有收到消息快照。",
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(socket.readyState).toBe(3);
+      expect(loading()?.querySelector("[data-loading-title]")?.textContent).toBe(
+        "连接中断，正在重试",
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      const recovered = FakeWebSocket.instances[1]!;
+      act(() => {
+        recovered.open();
+        recovered.serverEvent({
+          type: "room.snapshot",
+          self: participant("self", "Alice", "human"),
+          participants: [],
+          messages: [],
+          latestSeq: 0,
+        });
+      });
+      expect(loading()).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(recovered.readyState).toBe(FakeWebSocket.OPEN);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("focuses the composer once when the page opens", async () => {
     localStorage.setItem("superhive.username", "Alice");
     localStorage.setItem("superhive.notify-prompt-dismissed", "true");

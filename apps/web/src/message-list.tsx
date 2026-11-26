@@ -7,6 +7,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type SetStateAction,
 } from "react";
+import { RoomLoading } from "./room-loading";
+import type { LoadingStatus } from "./loading-status";
 import type {
   Attachment,
   ChatMessage,
@@ -72,6 +74,7 @@ export function MessageList({
   actions,
   messages,
   messagesLoaded,
+  loadingStatus,
   currentRoomName,
   currentRoomId,
   currentRoomWorkspace,
@@ -107,6 +110,7 @@ export function MessageList({
   actions: MessageActions;
   messages: ChatMessage[];
   messagesLoaded: boolean;
+  loadingStatus?: LoadingStatus;
   currentRoomName: string;
   currentRoomId: string;
   currentRoomWorkspace: string | undefined;
@@ -221,6 +225,9 @@ export function MessageList({
     >
       <ShadowContent host={shadowHost}>
         <div className="message-shadow-inner">
+          {!messagesLoaded && (
+            <RoomLoading key={currentRoomId} {...(loadingStatus ?? { phase: "messages" })} />
+          )}
           {messagesLoaded && messages.length === 0 && (
             <div className="empty-state">
               <HiveLogo />

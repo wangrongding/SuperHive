@@ -87,7 +87,23 @@ describe("index.html 首屏占位", () => {
     expect(html).toMatch(/<script src="\/boot-theme\.js"><\/script>/);
     // 除了这两个外部脚本，没有别的 <script>
     expect(html.match(/<script\b/g)).toHaveLength(2);
+    expect(html).toContain('src="/src/boot-splash-entry.ts"');
     expect(html).not.toMatch(/<script>[^<]/);
+  });
+
+  it("状态文案可被读取、图形不重复朗读，不动焦点且脚本加载前已有中英文文案和重载入口", () => {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const splash = doc.getElementById(BOOT_SPLASH_ID)!;
+    expect(splash.getAttribute("aria-hidden")).toBeNull();
+    expect(splash.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    expect(splash.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
+    expect(splash.querySelector("[autofocus]")).toBeNull();
+    expect(splash.querySelector('[data-loading-title] [lang="en"]')?.textContent).toBe(
+      "Opening the hive",
+    );
+    expect(splash.querySelector("[data-loading-help] a")).toBeTruthy();
+    expect(html).toContain("bs-help 0s 4s forwards");
+    expect(html).not.toContain("bs-breathe");
   });
 
   it("深浅色、减少动态效果、桌面端隐藏都有", () => {

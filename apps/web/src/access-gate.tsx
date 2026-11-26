@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { serverError } from "./server-text";
 import { App } from "./App";
 import { serverBase } from "./server-base";
@@ -14,7 +14,8 @@ import {
   type InvitePreview,
 } from "./access-api";
 import { localized, t, useLocale } from "./i18n";
-import { useAppReady, useAppReadyFallback } from "./boot-splash";
+import { useAppLoadingStatus, useAppReady, useAppReadyFallback } from "./boot-splash";
+import { desktopBridge } from "./desktop-bridge";
 import { Button } from "./button";
 import { roomJoinLink } from "./join-link";
 import { launchClient } from "./client-launch";
@@ -105,57 +106,82 @@ export function AccessGate() {
   useLocale();
   const [base] = useState(serverBase);
   const [state, setState] = useState<GateState>({ kind: "loading" });
+  const evaluating = useRef(false);
+  const reevaluate = useRef(false);
 
-  const evaluate = useCallback(async () => {
-    const invite = parseInviteHash(window.location.hash);
-    const login = new URLSearchParams(window.location.search).get("login") ?? undefined;
-    const guestToken = localStorage.getItem(GUEST_TOKEN_KEY) ?? undefined;
-    let ownerToken = localStorage.getItem(OWNER_TOKEN_KEY) ?? undefined;
-    try {
-      let access = await fetchAccess(base, guestToken ?? ownerToken);
-      // 登录链接（二维码、飞书卡片按钮）：这台设备还不是房主时，换一个房主设备会话
-      if (login) {
-        stripLoginFromUrl();
-        if (access.role !== "owner") {
-          try {
-            ownerToken = await ownerLogin(base, login, deviceName());
-            localStorage.removeItem(GUEST_TOKEN_KEY);
-            localStorage.setItem(OWNER_TOKEN_KEY, ownerToken);
-            access = await fetchAccess(base, ownerToken);
-          } catch (reason) {
-            setState({
-              kind: "none",
-              reason: "no_invite",
-              detail: reason instanceof Error ? reason.message : String(reason),
-            });
-            return;
+  const evaluate = useCallback(
+    async (force = false): Promise<void> => {
+      if (evaluating.current) {
+        if (force) reevaluate.current = true;
+        return;
+      }
+      evaluating.current = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 8_000);
+      const invite = parseInviteHash(window.location.hash);
+      const login = new URLSearchParams(window.location.search).get("login") ?? undefined;
+      const guestToken = localStorage.getItem(GUEST_TOKEN_KEY) ?? undefined;
+      let ownerToken = localStorage.getItem(OWNER_TOKEN_KEY) ?? undefined;
+      try {
+        let access = await fetchAccess(base, guestToken ?? ownerToken, controller.signal);
+        if (reevaluate.current) return;
+        // 登录链接（二维码、飞书卡片按钮）：这台设备还不是房主时，换一个房主设备会话
+        if (login) {
+          stripLoginFromUrl();
+          if (access.role !== "owner") {
+            try {
+              ownerToken = await ownerLogin(base, login, deviceName());
+              localStorage.removeItem(GUEST_TOKEN_KEY);
+              localStorage.setItem(OWNER_TOKEN_KEY, ownerToken);
+              access = await fetchAccess(base, ownerToken, controller.signal);
+            } catch (reason) {
+              setState({
+                kind: "none",
+                reason: "no_invite",
+                detail: reason instanceof Error ? reason.message : String(reason),
+              });
+              return;
+            }
           }
         }
+        if (access.role === "owner") {
+          if (invite.token && invite.roomId) stripInviteFromHash(invite.roomId);
+          setState({ kind: "owner", ...(ownerToken ? { ownerToken } : {}) });
+          return;
+        }
+        if (access.role === "guest" && guestToken) {
+          if (invite.token) stripInviteFromHash(access.roomId);
+          setState({ kind: "guest", guest: { ...access, token: guestToken } });
+          return;
+        }
+        if (invite.token) {
+          const preview = await previewInvite(base, invite.token).catch(() => undefined);
+          setState({ kind: "redeem", token: invite.token, ...(preview ? { preview } : {}) });
+          return;
+        }
+        setState({ kind: "none", reason: access.role === "none" ? access.reason : "no_invite" });
+      } catch (reason) {
+        if (reevaluate.current) return;
+        setState({
+          kind: "none",
+          reason: "unreachable",
+          detail: controller.signal.aborted
+            ? t("等待 Hive Server 响应超时，请确认服务已启动并检查网络。")
+            : reason instanceof Error
+              ? reason.message
+              : String(reason),
+        });
+      } finally {
+        window.clearTimeout(timeout);
+        evaluating.current = false;
+        if (reevaluate.current) {
+          reevaluate.current = false;
+          void evaluate();
+        }
       }
-      if (access.role === "owner") {
-        if (invite.token && invite.roomId) stripInviteFromHash(invite.roomId);
-        setState({ kind: "owner", ...(ownerToken ? { ownerToken } : {}) });
-        return;
-      }
-      if (access.role === "guest" && guestToken) {
-        if (invite.token) stripInviteFromHash(access.roomId);
-        setState({ kind: "guest", guest: { ...access, token: guestToken } });
-        return;
-      }
-      if (invite.token) {
-        const preview = await previewInvite(base, invite.token).catch(() => undefined);
-        setState({ kind: "redeem", token: invite.token, ...(preview ? { preview } : {}) });
-        return;
-      }
-      setState({ kind: "none", reason: access.role === "none" ? access.reason : "no_invite" });
-    } catch (reason) {
-      setState({
-        kind: "none",
-        reason: "unreachable",
-        detail: reason instanceof Error ? reason.message : String(reason),
-      });
-    }
-  }, [base]);
+    },
+    [base],
+  );
 
   useEffect(() => {
     void evaluate();
@@ -172,7 +198,8 @@ export function AccessGate() {
   const entered = state.kind === "owner" || state.kind === "guest";
   // 登录、邀请、没有权限这些页面本身就是首屏，画出来就收起加载画面；进房间的由 App 在消息到了时收起
   useAppReady(state.kind !== "loading" && !entered);
-  useAppReadyFallback(entered, APP_READY_FALLBACK_MS);
+  useAppReadyFallback(entered && Boolean(desktopBridge()), APP_READY_FALLBACK_MS);
+  useAppLoadingStatus({ phase: "connecting" });
 
   if (state.kind === "loading") return null;
   if (state.kind === "owner") {
@@ -213,9 +240,9 @@ export function AccessGate() {
               onOwnerToken={(token) => {
                 localStorage.removeItem(GUEST_TOKEN_KEY);
                 localStorage.setItem(OWNER_TOKEN_KEY, token);
-                void evaluate();
+                void evaluate(true);
               }}
-              onRetry={() => void evaluate()}
+              onRetry={() => void evaluate(true)}
             />
           )}
         </section>

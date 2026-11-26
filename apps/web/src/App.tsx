@@ -136,7 +136,8 @@ import { MessageList } from "./message-list";
 import { ShareBar, useShareSelection } from "./share-bar";
 import { Composer } from "./composer";
 import { Tooltip } from "./tooltip";
-import { useAppReady } from "./boot-splash";
+import { useAppLoadingStatus, useAppReady } from "./boot-splash";
+import type { LoadingStatus } from "./loading-status";
 import { Button } from "./button";
 
 export function App({
@@ -702,23 +703,37 @@ export function App({
   }, [interfaceDensity, messageSize, reduceMotion, threadWidth]);
 
   useEffect(() => {
-    fetch(
-      `${base}/api/meta`,
-      ownerToken ? { headers: { Authorization: `Bearer ${ownerToken}` } } : undefined,
-    )
+    const controller = new AbortController();
+    let cancelled = false;
+    const timeout = window.setTimeout(() => controller.abort(), 8_000);
+    fetch(`${base}/api/meta`, {
+      signal: controller.signal,
+      ...(ownerToken ? { headers: { Authorization: `Bearer ${ownerToken}` } } : {}),
+    })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Server returned ${response.status}`);
         return (await response.json()) as MetaResponse;
       })
-      .then(setMeta)
+      .then((next) => {
+        if (!cancelled) setMeta(next);
+      })
       .catch((reason: unknown) => {
+        if (cancelled) return;
         setConnectionState("offline");
         setError(
-          t("无法连接 Hive Server。请确认服务已启动并检查网络：{0}", {
-            0: reason instanceof Error ? reason.message : String(reason),
-          }),
+          controller.signal.aborted
+            ? t("等待 Hive Server 响应超时，请确认服务已启动并检查网络。")
+            : t("无法连接 Hive Server。请确认服务已启动并检查网络：{0}", {
+                0: reason instanceof Error ? reason.message : String(reason),
+              }),
         );
-      });
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
   }, [base, ownerToken]);
 
   const scroll = useMessageScroll({ messages, username, timeline });
@@ -1116,6 +1131,7 @@ export function App({
       markRoomRead(currentRoomId);
       setMessages([]);
       setMessagesLoaded(false);
+      setConnectionState("connecting");
       setInvocations(new Map());
       setWhiteboard(new Map());
       whiteboardEpochRef.current += 1;
@@ -1464,6 +1480,16 @@ export function App({
 
   // 首屏：消息快照到了，或者停在填用户名的页面上，就收起启动加载画面
   useAppReady(!username || room.messagesLoaded);
+  const loadingStatus: LoadingStatus = {
+    phase: !meta ? "connecting" : room.loadingPhase,
+    error:
+      error ??
+      (connectionState === "offline"
+        ? t("与 Hive Server 的连接已中断，正在自动重试。")
+        : undefined),
+    retrying: !error && connectionState === "offline",
+  };
+  useAppLoadingStatus(loadingStatus);
 
   if (!username) {
     return (
@@ -2258,6 +2284,7 @@ export function App({
                 actions={actions}
                 messages={messages}
                 messagesLoaded={room.messagesLoaded}
+                loadingStatus={loadingStatus}
                 currentRoomName={currentRoomName}
                 currentRoomId={currentRoomId}
                 currentRoomWorkspace={currentRoomWorkspace}

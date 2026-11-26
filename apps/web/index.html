@@ -15,6 +15,9 @@
         --bs-bg: #ffffff;
         --bs-g1: #0169cc;
         --bs-g2: #b86e00;
+        --loading-text: #0d0d0d;
+        --loading-muted: #5d5d5d;
+        --loading-accent: var(--bs-g1);
         position: fixed;
         inset: 0;
         z-index: 2147483000;
@@ -27,12 +30,16 @@
         --bs-bg: #212121;
         --bs-g1: #48aaff;
         --bs-g2: #ffc46b;
+        --loading-text: #ececec;
+        --loading-muted: #b4b4b4;
       }
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme="light"]) #boot-splash {
           --bs-bg: #212121;
           --bs-g1: #48aaff;
           --bs-g2: #ffc46b;
+          --loading-text: #ececec;
+          --loading-muted: #b4b4b4;
         }
       }
       :root[data-desktop] #boot-splash {
@@ -42,7 +49,6 @@
         width: 88px;
         height: 88px;
         overflow: visible;
-        margin-top: -4vh;
         /* 加载很快时一闪而过不好看：稍等一下再出现 */
         animation: bs-in 0.3s ease 0.15s both;
         transition: transform 0.36s cubic-bezier(0.4, 0, 0.2, 1);
@@ -53,6 +59,86 @@
       }
       #boot-splash.is-leaving svg {
         transform: scale(0.72);
+      }
+      .boot-splash-content {
+        width: min(360px, 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
+        min-height: 248px;
+        transform: translateY(-2vh);
+      }
+      .loading-status {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-align: center;
+        padding: 24px;
+      }
+      .loading-copy {
+        width: 100%;
+        max-width: 360px;
+        min-height: 64px;
+      }
+      .loading-title,
+      .loading-hint,
+      .loading-help {
+        margin: 0;
+        line-height: 1.6;
+      }
+      .loading-title {
+        color: var(--loading-text, var(--text, #0d0d0d));
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .loading-hint {
+        color: var(--loading-muted, var(--text-secondary, #5d5d5d));
+        font-size: 13px;
+        margin-top: 8px;
+        overflow-wrap: anywhere;
+      }
+      .loading-help {
+        font-size: 13px;
+      }
+      .loading-help a {
+        color: var(--loading-accent, var(--accent, #0169cc));
+        text-underline-offset: 3px;
+      }
+      .loading-help a:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: 4px;
+        border-radius: 2px;
+      }
+      :root[lang="en"] #boot-splash [lang="zh-CN"],
+      :root:not([lang="en"]) #boot-splash [lang="en"] {
+        display: none;
+      }
+      #boot-splash:not([data-managed]) .loading-help,
+      #boot-splash:not([data-managed]) [data-loading-fallback] {
+        visibility: hidden;
+        animation: bs-help 0s 4s forwards;
+      }
+      @keyframes bs-help {
+        to {
+          visibility: visible;
+        }
+      }
+      #boot-splash[data-failed="true"] svg,
+      #boot-splash[data-failed="true"] .line,
+      #boot-splash[data-failed="true"] .dot,
+      :root[data-reduce-motion="true"] #boot-splash svg,
+      :root[data-reduce-motion="true"] #boot-splash .line,
+      :root[data-reduce-motion="true"] #boot-splash .dot {
+        animation: none;
+        opacity: 1;
+        stroke-dashoffset: 0;
+        transform: none;
+      }
+      #boot-splash[data-failed="true"] .ring,
+      :root[data-reduce-motion="true"] #boot-splash .ring {
+        display: none;
+      }
+      :root[data-reduce-motion="true"] #boot-splash {
+        transition: none;
       }
       #boot-splash .s1 {
         stop-color: var(--bs-g1);
@@ -119,14 +205,9 @@
           transform: scale(9);
         }
       }
-      @keyframes bs-breathe {
-        from {
-          opacity: 0.55;
-        }
-      }
       @media (prefers-reduced-motion: reduce) {
         #boot-splash svg {
-          animation: bs-breathe 1.6s ease-in-out infinite alternate;
+          animation: none;
         }
         #boot-splash .line,
         #boot-splash .dot {
@@ -137,25 +218,47 @@
         #boot-splash .ring {
           display: none;
         }
+        #boot-splash,
+        #boot-splash svg {
+          transition: none;
+        }
       }
     </style>
   </head>
   <body>
-    <div id="boot-splash" aria-hidden="true">
-      <svg viewBox="0 0 48 48">
-        <defs>
-          <linearGradient id="bs-g" x1="6" y1="6" x2="42" y2="42" gradientUnits="userSpaceOnUse">
-            <stop class="s1" offset="0" />
-            <stop class="s2" offset="1" />
-          </linearGradient>
-        </defs>
-        <path class="ring" d="M24 20.6L26.94 22.3L26.94 25.7L24 27.4L21.06 25.7L21.06 22.3Z" />
-        <path class="line" pathLength="100" d="m24 3 18 10.5v21L24 45 6 34.5v-21L24 3Z" />
-        <path class="line inner" pathLength="100" d="m24 12 10 6v12l-10 6-10-6V18l10-6Z" />
-        <circle class="dot" cx="24" cy="24" r="3" />
-      </svg>
+    <div id="boot-splash" class="loading-status">
+      <div class="boot-splash-content">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+          <defs>
+            <linearGradient id="bs-g" x1="6" y1="6" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+              <stop class="s1" offset="0" />
+              <stop class="s2" offset="1" />
+            </linearGradient>
+          </defs>
+          <path class="ring" d="M24 20.6L26.94 22.3L26.94 25.7L24 27.4L21.06 25.7L21.06 22.3Z" />
+          <path class="line" pathLength="100" d="m24 3 18 10.5v21L24 45 6 34.5v-21L24 3Z" />
+          <path class="line inner" pathLength="100" d="m24 12 10 6v12l-10 6-10-6V18l10-6Z" />
+          <circle class="dot" cx="24" cy="24" r="3" />
+        </svg>
+        <div class="loading-copy" role="status" aria-live="polite" aria-atomic="true">
+          <p class="loading-title" data-loading-title>
+            <span lang="zh-CN">打开蜂巢</span><span lang="en">Opening the hive</span>
+          </p>
+          <p class="loading-hint" data-loading-hint>
+            <span lang="zh-CN">给蜂巢轻轻敲个门…</span
+            ><span lang="en">A little knock on the hive door…</span>
+          </p>
+          <p class="loading-hint" data-loading-fallback>
+            <span lang="zh-CN">网页资源还在载入，请检查网络或重新加载。</span
+            ><span lang="en">Page resources are still loading. Check your network or reload.</span>
+          </p>
+        </div>
+        <p class="loading-help" data-loading-help>
+          <a href=""><span lang="zh-CN">重新加载</span><span lang="en">Reload</span></a>
+        </p>
+      </div>
     </div>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/boot-splash-entry.ts"></script>
   </body>
 </html>

@@ -8,7 +8,23 @@
       saved === "dark" ||
       (saved !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.documentElement.dataset.reduceMotion = String(
+      localStorage.getItem("superhive.reduce-motion") === "true",
+    );
   } catch {
     /* 读不到存储就按系统走，CSS 里有 prefers-color-scheme 兜底 */
+  }
+  try {
+    var locale = localStorage.getItem("superhive.locale");
+    var languages = window.navigator.languages || [window.navigator.language];
+    if (locale !== "en" && locale !== "zh-CN") {
+      locale =
+        languages.find(function (language) {
+          return /^(en|zh)/i.test(language);
+        }) || "zh-CN";
+    }
+    document.documentElement.lang = /^en/i.test(locale) ? "en" : "zh-CN";
+  } catch {
+    document.documentElement.lang = /^en/i.test(window.navigator.language) ? "en" : "zh-CN";
   }
 })();
