@@ -192,6 +192,32 @@ describe("StatusBar", () => {
     expect(local.updateNetworkProxy).toHaveBeenCalledWith({ mode: "none" });
   });
 
+  it("Server 这台电脑上的房主才看到「MCP · 技能」，点开进统一管理", async () => {
+    const runtimeOverview = vi.fn(async () => ({
+      providers: [],
+      mcp: [{ name: "docs", entries: [] }],
+      skills: [
+        { name: "pdf", entries: [] },
+        { name: "lark", entries: [] },
+      ],
+    }));
+    const props = renderBar({ local: fakeLocal({ mode: "local", runtimeOverview }) });
+    const item = await screen.findByRole("button", {
+      name: "管理这台电脑上各 CLI 的全局 MCP 和技能",
+    });
+    expect(item.textContent).toContain("MCP 1 · 技能 2");
+    fireEvent.click(item);
+    expect(props.openSettings).toHaveBeenCalledWith("runtimes");
+    cleanup();
+
+    // 房主的其他设备：没有这一项，也不去读
+    const remote = vi.fn(runtimeOverview);
+    renderBar({ local: fakeLocal({ mode: "device", runtimeOverview: remote }) });
+    await screen.findByRole("button", { name: "本机 Agent 的网络代理" });
+    expect(screen.queryByRole("button", { name: /全局 MCP 和技能/ })).toBeNull();
+    expect(remote).not.toHaveBeenCalled();
+  });
+
   it("访客：没有代理、IM、故障这些房主才有的项", () => {
     renderBar({ isOwner: false });
     expect(screen.queryByRole("button", { name: "本机 Agent 的网络代理" })).toBeNull();

@@ -24,7 +24,7 @@
 - **Hive 自带的 superhive**：`hive skill install` 装的 `SKILL.md` 末尾有托管标记 `id=superhive version=…`，按这个认。只能查看，不能停用、删除、同步，用 `hive skill install / uninstall` 管理。
 - **启停**：只用上表的原生开关，写入前备份原文件、原子替换，和配置面板其它写入一样。认不出的写法（例如 Codex 的 `skills.config` 写成内联数组、opencode 的 `permission` 整个是字符串）只读，不硬改。
 - **删除**：二次确认后把 skill 目录挪进同级的 `.superhive-skill-backups/<目录名>-<时间>-<随机>`，比如 `~/.claude/.superhive-skill-backups/`。软链只挪链接本身。不真删，要恢复就挪回去。共用目录删掉会影响别的运行时，确认时会列出来。
-- **同步**：总览里可以把 skill 整个目录复制到另一个运行时自己的 skills 目录（软链展开成实际文件），也可以把 MCP 连同环境变量的值写进另一个运行时的全局配置（复用 `putMcp`）。目标已有同名的就拒绝，不覆盖。插件、CLI 自带和 superhive 的 skill 不能同步。
+- **统一管理（参照 cc-switch）**：「Agent 运行时」顶上和底部状态栏的「MCP · 技能」进同一张表，一行一个 MCP / skill，每列一个 CLI。勾上写进那个 CLI 的全局配置，取消就停用；CLI 不支持停用时（Claude Code 的 MCP）取消就从它的配置里删掉，只剩最后一份时不让删，免得这一项彻底丢了。还没有的 CLI 勾上时从已有的复制：skill 复制整个目录到目标 CLI 自己的 skills 目录（软链展开成实际文件），MCP 连同环境变量的值写进目标的全局配置（复用 `putMcp`）；目标已有同名的就拒绝，不覆盖。新增 MCP 可以一次写进多个 CLI。插件、CLI 自带和 superhive 的 skill 不能复制。和 cc-switch 不同，**不另存一份主列表**：每次都从各 CLI 的配置文件读，在 Hive 外手改的也能读回来，不会被覆盖。
 - **权限**：接口都在 `/api/local/…` 下，和运行时配置一样只给 Server 所在电脑上的本机房主；访客、房主的其他设备、Agent 的令牌都拒绝。审计日志只记哪个运行时、哪个 skill、做了什么，不记内容。
 
 ## 没做的

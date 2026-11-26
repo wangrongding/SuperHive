@@ -1955,6 +1955,9 @@ export const runtimeOverviewSchema = z.object({
       provider: runtimeCredentialProviderSchema,
       mcpSupported: z.boolean(),
       mcpCanToggle: z.boolean(),
+      /** 不支持 MCP 时的原因 */
+      mcpNote: z.string().optional(),
+      mcpNoteText: serverTextSchema.optional(),
     }),
   ),
   mcp: z.array(
@@ -1978,11 +1981,21 @@ export const runtimeOverviewSchema = z.object({
           id: z.string(),
           enabled: z.boolean(),
           source: runtimeSkillSourceSchema,
+          canToggle: z.boolean(),
           canSync: z.boolean(),
+          /** 不能在这里启停的原因 */
+          note: z.string().optional(),
+          noteText: serverTextSchema.optional(),
         }),
       ),
     }),
   ),
+});
+/** 统一管理里新增一个 MCP，一次写进多个运行时 */
+export const addRuntimeMcpRequestSchema = z.object({
+  name: mcpNameSchema,
+  server: runtimeMcpServerInputSchema,
+  targets: z.array(runtimeCredentialProviderSchema).min(1).max(6),
 });
 export const toggleRuntimeSkillRequestSchema = z.object({ enabled: z.boolean() });
 export const syncRuntimeItemRequestSchema = z.object({

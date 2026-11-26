@@ -97,52 +97,73 @@
   color: var(--danger);
 }
 
-.runtime-overview-status {
-  padding: 2px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  font-size: var(--text-xs);
+.runtime-overview-toggle {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
   cursor: pointer;
 }
 
-.runtime-overview-status.on {
-  border-color: color-mix(in srgb, var(--success) 40%, transparent);
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  color: var(--success);
+.runtime-overview-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
-.runtime-overview-status.off {
-  border-color: var(--border);
+.runtime-overview-toggle input:disabled {
+  cursor: not-allowed;
+}
+
+.runtime-overview-toggle small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.runtime-overview-cell.unsupported,
+.runtime-overview-na {
+  background: var(--bg-subtle);
   color: var(--text-tertiary);
 }
 
-.runtime-overview-status:hover,
-.runtime-overview-status:focus-visible {
-  border-color: var(--accent);
+.runtime-overview-add {
+  margin-left: auto;
 }
 
-.runtime-overview-cell.missing {
-  color: var(--text-tertiary);
+.runtime-skills-filter + .runtime-overview-add {
+  margin-left: 0;
 }
 
-.runtime-overview-actions {
-  text-align: right;
-}
-
-.runtime-overview-sync {
+.runtime-overview-add-form {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
 }
 
-.runtime-overview-sync p {
-  margin: 0;
-}
-
-.runtime-overview-sync label {
+.runtime-overview-targets {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: var(--text-sm);
+}
+
+.runtime-overview-targets legend {
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.runtime-overview-targets label {
+  display: inline-flex;
+  gap: 4px;
   align-items: center;
 }
 

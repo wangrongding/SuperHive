@@ -337,7 +337,7 @@ function FieldsSection({
 
 /* ---------- MCP ---------- */
 
-type McpDraft = {
+export type McpDraft = {
   previousName?: string;
   name: string;
   transport: RuntimeMcpServer["transport"];
@@ -349,7 +349,7 @@ type McpDraft = {
   existingEnv: string[];
 };
 
-const emptyDraft = (): McpDraft => ({
+export const emptyDraft = (): McpDraft => ({
   name: "",
   transport: "stdio",
   command: "",
@@ -530,7 +530,7 @@ function McpSection({ api, provider, label, config, onSaved }: SectionProps) {
   );
 }
 
-function McpForm({
+export function McpForm({
   draft,
   busy,
   onChange,

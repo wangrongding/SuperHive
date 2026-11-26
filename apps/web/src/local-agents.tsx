@@ -300,6 +300,12 @@ export type LocalAgentsState = {
     name: string,
     targets: RuntimeCredentialProvider[],
   ): Promise<RuntimeOverview>;
+  /** 统一管理里新增 MCP，一次写进多个 CLI */
+  addRuntimeMcp(
+    name: string,
+    server: RuntimeMcpServerInput,
+    targets: RuntimeCredentialProvider[],
+  ): Promise<RuntimeOverview>;
 };
 
 export type RuntimeSkillsResult = {
@@ -1184,6 +1190,18 @@ export function useLocalAgents(
     },
     [request],
   );
+  const addRuntimeMcp = useCallback(
+    async (name: string, server: RuntimeMcpServerInput, targets: RuntimeCredentialProvider[]) => {
+      const response = await request("/api/local/runtime-overview/mcp", {
+        method: "POST",
+        body: JSON.stringify({ name, server, targets }),
+      });
+      return localizeServerPayload(
+        ((await response.json()) as { overview: RuntimeOverview }).overview,
+      );
+    },
+    [request],
+  );
   const revokeAllOwnerDevices = useCallback(async () => {
     const response = await request("/api/local/owner-devices/revoke-all", { method: "POST" });
     return ((await response.json()) as { revoked: number }).revoked;
@@ -1322,6 +1340,7 @@ export function useLocalAgents(
     runtimeOverview,
     syncRuntimeSkill,
     syncRuntimeMcp,
+    addRuntimeMcp,
     providers,
     agents,
     removedAgents,

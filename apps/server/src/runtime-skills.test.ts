@@ -363,6 +363,7 @@ describe("routes", () => {
       expect(body.mcp).toEqual([
         { name: "docs", entries: [{ provider: "claude", enabled: true, transport: "stdio" }] },
       ]);
+      expect(body.skills[0].entries[0]).toMatchObject({ canToggle: true, canSync: true });
       expect(body.skills[0]).toMatchObject({
         name: "pdf",
         entries: [{ provider: "claude", enabled: false }],
@@ -378,6 +379,22 @@ describe("routes", () => {
       expect(sync.statusCode).toBe(200);
       expect(sync.body).not.toContain("secret-1");
       expect(sync.json().overview.mcp[0].entries).toHaveLength(2);
+
+      const add = {
+        method: "POST" as const,
+        url: "/api/local/runtime-overview/mcp",
+        payload: {
+          name: "search",
+          server: { transport: "stdio", command: "npx", args: ["search-mcp"] },
+          targets: ["claude", "codex"],
+        },
+      };
+      const added = await app.inject({ ...add, headers: owner });
+      expect(added.statusCode).toBe(200);
+      expect(
+        added.json().overview.mcp.find((row: { name: string }) => row.name === "search").entries,
+      ).toHaveLength(2);
+      expect((await app.inject({ ...add, headers: owner })).statusCode).toBe(409);
 
       const missing = await app.inject({
         method: "DELETE",
@@ -404,6 +421,15 @@ describe("routes", () => {
           method: "POST" as const,
           url: "/api/local/runtime-config/claude/mcp/docs/sync",
           payload: { targets: ["codex"] },
+        },
+        {
+          method: "POST" as const,
+          url: "/api/local/runtime-overview/mcp",
+          payload: {
+            name: "x",
+            server: { transport: "stdio", command: "npx" },
+            targets: ["claude"],
+          },
         },
       ]) {
         const agent = await app.inject({

@@ -116,64 +116,155 @@ const overview: RuntimeOverview = {
   providers: [
     { provider: "claude", mcpSupported: true, mcpCanToggle: false },
     { provider: "codex", mcpSupported: true, mcpCanToggle: true },
-    { provider: "openclaw", mcpSupported: false, mcpCanToggle: false },
+    {
+      provider: "openclaw",
+      mcpSupported: false,
+      mcpCanToggle: false,
+      mcpNote: "OpenClaw 还不支持在配置文件里管理 MCP",
+    },
   ],
-  mcp: [{ name: "docs", entries: [{ provider: "claude", enabled: true, transport: "stdio" }] }],
+  mcp: [
+    { name: "context7", entries: [{ provider: "codex", enabled: true, transport: "stdio" }] },
+    { name: "docs", entries: [{ provider: "claude", enabled: true, transport: "stdio" }] },
+  ],
   skills: [
+    {
+      name: "figma:figma-use",
+      entries: [
+        {
+          provider: "claude",
+          id: "plugin:figma@m/figma-use",
+          enabled: true,
+          source: "plugin",
+          canToggle: false,
+          canSync: false,
+          note: "跟着插件 figma 一起启停",
+        },
+      ],
+    },
     {
       name: "pdf",
       entries: [
-        { provider: "claude", id: "user/pdf", enabled: true, source: "user", canSync: true },
-        { provider: "codex", id: "user/pdf", enabled: false, source: "user", canSync: true },
+        {
+          provider: "claude",
+          id: "user/pdf",
+          enabled: true,
+          source: "user",
+          canToggle: true,
+          canSync: true,
+        },
+        {
+          provider: "codex",
+          id: "user/pdf",
+          enabled: false,
+          source: "user",
+          canToggle: true,
+          canSync: true,
+        },
       ],
     },
   ],
 };
 
+function overviewApi() {
+  return {
+    runtimeOverview: vi.fn(async () => overview),
+    syncRuntimeMcp: vi.fn(async () => overview),
+    syncRuntimeSkill: vi.fn(async () => overview),
+    addRuntimeMcp: vi.fn(async () => overview),
+    toggleRuntimeMcp: vi.fn(() => Promise.resolve(undefined as never)),
+    deleteRuntimeMcp: vi.fn(() => Promise.resolve(undefined as never)),
+    toggleRuntimeSkill: vi.fn(() => Promise.resolve(undefined as never)),
+  };
+}
+
+const cell = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+
 describe("RuntimeOverviewBlock", () => {
-  it("shows where each MCP and skill is installed, jumps to the CLI, and syncs after confirming", async () => {
-    const synced: RuntimeOverview = {
-      ...overview,
-      mcp: [
-        {
-          name: "docs",
-          entries: [
-            { provider: "claude", enabled: true, transport: "stdio" },
-            { provider: "codex", enabled: true, transport: "stdio" },
-          ],
-        },
-      ],
-    };
-    const client = {
-      runtimeOverview: vi.fn(async () => overview),
-      syncRuntimeMcp: vi.fn(async () => synced),
-      syncRuntimeSkill: vi.fn(async () => overview),
-    };
+  it("toggles an MCP per CLI, copies after confirming, greys out what a CLI can't do, and jumps", async () => {
+    const client = overviewApi();
     const onJump = vi.fn();
     render(<RuntimeOverviewBlock api={client} onJump={onJump} />);
     await screen.findByText("docs");
-    // OpenClaw 不支持 MCP：MCP 表里没有这一列
+    expect(screen.getByText(/勾上就写进那个 CLI 的全局配置/).textContent).toContain(
+      "终端里的 CLI 也一起变",
+    );
+
+    // OpenClaw 不支持 MCP：格子标灰并说明原因
     const table = screen.getByRole("table");
-    expect(within(table).queryByText("OpenClaw")).toBeNull();
-    expect(within(table).getByLabelText("Codex 里没有")).toBeTruthy();
+    expect(within(table).getAllByText("不支持")).toHaveLength(2);
+    expect(within(table).getAllByText("OpenClaw 还不支持在配置文件里管理 MCP")).toHaveLength(2);
+    // Claude Code 的 MCP 没有停用开关，又是最后一份：不能取消
+    expect(cell("在 Claude Code 里启用 docs").disabled).toBe(true);
 
-    fireEvent.click(within(table).getByRole("button", { name: /docs：已启用，去 Claude Code/ }));
-    expect(onJump).toHaveBeenCalledWith("claude", "mcp");
+    // Codex 支持停用：直接取消
+    fireEvent.click(cell("在 Codex 里启用 context7"));
+    await waitFor(() =>
+      expect(client.toggleRuntimeMcp).toHaveBeenCalledWith("codex", "context7", false),
+    );
+    expect(client.runtimeOverview).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(screen.getByText("同步到…"));
-    const dialog = screen.getByRole("dialog", { name: "把 docs 同步到其它 CLI" });
+    // 没有的：确认后从已有的那个 CLI 复制过去
+    fireEvent.click(cell("在 Codex 里启用 docs"));
+    expect(client.syncRuntimeMcp).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "确认把 docs 加到 Codex" });
     expect(dialog.textContent).toContain("包括环境变量的值");
-    expect(within(dialog).getByLabelText("Codex")).toHaveProperty("checked", true);
+    expect(dialog.textContent).toContain("会同时影响终端里的 Codex");
     await act(async () => {
       fireEvent.click(dialog.querySelector<HTMLButtonElement>("button:last-child")!);
     });
     expect(client.syncRuntimeMcp).toHaveBeenCalledWith("claude", "docs", ["codex"]);
-    expect(screen.queryByText("同步到…")).toBeNull();
 
-    fireEvent.click(screen.getByRole("tab", { name: "技能（1）" }));
-    const skillsTable = screen.getByRole("table");
-    expect(within(skillsTable).getByText("OpenClaw")).toBeTruthy();
-    fireEvent.click(within(skillsTable).getByRole("button", { name: /pdf：已停用，去 Codex/ }));
-    expect(onJump).toHaveBeenLastCalledWith("codex", "skills");
+    fireEvent.click(screen.getByRole("button", { name: "去 Codex 的配置" }));
+    expect(onJump).toHaveBeenCalledWith("codex", "mcp");
+  });
+
+  it("toggles skills with each CLI's own switch and keeps plugin skills read-only", async () => {
+    const client = overviewApi();
+    const onJump = vi.fn();
+    render(<RuntimeOverviewBlock api={client} onJump={onJump} />);
+    await screen.findByText("docs");
+    fireEvent.click(screen.getByRole("tab", { name: "技能（2）" }));
+    expect(cell("在 Claude Code 里启用 figma:figma-use").disabled).toBe(true);
+    // 插件、Hive 自带的不能复制到别的 CLI
+    expect(cell("在 Codex 里启用 figma:figma-use").disabled).toBe(true);
+    fireEvent.click(cell("在 Codex 里启用 pdf"));
+    await waitFor(() =>
+      expect(client.toggleRuntimeSkill).toHaveBeenCalledWith("codex", "user/pdf", true),
+    );
+    fireEvent.click(cell("在 OpenClaw 里启用 pdf"));
+    await act(async () => {
+      fireEvent.click(
+        screen
+          .getByRole("dialog", { name: "确认把 pdf 加到 OpenClaw" })
+          .querySelector<HTMLButtonElement>("button:last-child")!,
+      );
+    });
+    expect(client.syncRuntimeSkill).toHaveBeenCalledWith("claude", "user/pdf", ["openclaw"]);
+    fireEvent.click(screen.getByRole("button", { name: "去 OpenClaw 的配置" }));
+    expect(onJump).toHaveBeenCalledWith("openclaw", "skills");
+  });
+
+  it("adds a new MCP server to several CLIs at once", async () => {
+    const client = overviewApi();
+    render(<RuntimeOverviewBlock api={client} />);
+    await screen.findByText("docs");
+    fireEvent.click(screen.getByText("添加 MCP"));
+    // 只列支持 MCP 的 CLI，默认全勾
+    expect(screen.queryByRole("checkbox", { name: "OpenClaw" })).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Claude Code" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "search" } });
+    fireEvent.change(screen.getByLabelText("命令"), { target: { value: "npx" } });
+    fireEvent.change(screen.getByLabelText("参数（一行一个）"), {
+      target: { value: "search-mcp" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+    expect(client.addRuntimeMcp).toHaveBeenCalledWith(
+      "search",
+      { transport: "stdio", command: "npx", args: ["search-mcp"], env: {}, enabled: true },
+      ["codex"],
+    );
   });
 });

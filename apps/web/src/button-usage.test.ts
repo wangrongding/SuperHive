@@ -24,8 +24,6 @@ const RAW_BUTTON_CLASSES = new Set([
   "agent-dialog-scrim",
   "app-dialog-scrim",
   // 列表行、卡片、条目：整块可点
-  // 运行时总览表格里的状态格子：点了跳到那个 CLI 的配置
-  "runtime-overview-status",
   "room-item-main",
   "room-item-manage",
   "worktree-switcher-row",

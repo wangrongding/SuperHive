@@ -616,6 +616,13 @@ export class RuntimeConfigStore {
     if (input.transport === "stdio" ? !input.command : !input.url) throw invalid(name);
     const list = [...new Set(targets)].filter((target) => target !== provider);
     if (!list.length) throw invalid("targets");
+    this.addMcp(list, name, input);
+    return list;
+  }
+
+  /** 一次写进多个运行时：先全部检查（支持 MCP、没有同名），再逐个写 */
+  addMcp(targets: RuntimeCredentialProvider[], name: string, input: RuntimeMcpServerInput) {
+    const list = [...new Set(targets)];
     for (const target of list) {
       const mcp = this.readMcp(this.spec(target));
       if (!mcp.supported) {
@@ -635,7 +642,6 @@ export class RuntimeConfigStore {
       }
     }
     for (const target of list) this.putMcp(target, name, input);
-    return list;
   }
 
   /** 新增或修改一个 MCP；改名时先删旧的。没写的字段（例如 headers、timeout）保留原值 */

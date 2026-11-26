@@ -1,10 +1,13 @@
 import {
+  addRuntimeMcpRequestSchema,
   putRuntimeMcpServerRequestSchema,
   runtimeCredentialProviderSchema,
   serverText,
   syncRuntimeItemRequestSchema,
   toggleRuntimeSkillRequestSchema,
   type RuntimeOverview,
+  type ServerText,
+  zhText,
   updateRuntimeConfigFieldsRequestSchema,
   updateRuntimeConfigFileRequestSchema,
   type RuntimeCredentialProvider,
@@ -339,6 +342,25 @@ export function registerRuntimeConfigRoutes(
     },
   );
 
+  /** 统一管理里新增 MCP：一次写进多个运行时，目标里有同名的整体拒绝 */
+  app.post("/api/local/runtime-overview/mcp", async (request, reply) => {
+    if (!authorizeLocal(request, reply)) return reply;
+    if (!store || !skills) {
+      return reply.code(404).send({ ...errorText(serverText("error.feature.disabled")) });
+    }
+    const body = addRuntimeMcpRequestSchema.safeParse(request.body);
+    if (!body.success) return badRequest(reply);
+    try {
+      store.addMcp(body.data.targets, body.data.name, body.data.server);
+      for (const provider of new Set(body.data.targets)) {
+        audit(request, "update", provider, [`mcp:${body.data.name}`]);
+      }
+      return { overview: runtimeOverview(store, skills) };
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
   /** 跨运行时总览：同一个 MCP / skill 在哪些运行时里有、是否启用。只列有配置目录的运行时 */
   app.get("/api/local/runtime-overview", async (request, reply) => {
     if (!authorizeLocal(request, reply)) return reply;
@@ -369,10 +391,12 @@ export function runtimeOverview(
     } catch {
       servers = undefined;
     }
+    const mcpNote = servers?.supported ? undefined : servers?.noteText;
     result.providers.push({
       provider,
       mcpSupported: Boolean(servers?.supported),
       mcpCanToggle: Boolean(servers?.supported && servers.canToggle),
+      ...(mcpNote ? { mcpNote: zhText(mcpNote as ServerText), mcpNoteText: mcpNote } : {}),
     });
     for (const server of servers?.supported ? servers.servers : []) {
       const row = mcp.get(server.name) ?? { name: server.name, entries: [] };
@@ -394,7 +418,11 @@ export function runtimeOverview(
           id: skill.id,
           enabled: skill.enabled,
           source: skill.source,
+          canToggle: skill.canToggle,
           canSync: skill.canSync,
+          ...(skill.note && !skill.canToggle
+            ? { note: skill.note, ...(skill.noteText ? { noteText: skill.noteText } : {}) }
+            : {}),
         });
       }
       skillMap.set(skill.name, row);

@@ -429,6 +429,26 @@ export function StatusBar(props: StatusBarProps) {
   };
 
   const keepAwake = manageLocal && local.keepAwake?.supported ? local.keepAwake : undefined;
+
+  // MCP 与技能：只给 Server 所在电脑上的本机房主（和运行时配置同一权限），设置弹窗关上时重新数一遍
+  const runtimeOwner = manageLocal && local.mode === "local";
+  const [runtimeCounts, setRuntimeCounts] = useState<{ mcp: number; skills: number }>();
+  const { runtimeOverview } = local;
+  useEffect(() => {
+    if (!runtimeOwner || settingsOpen || !runtimeOverview) return;
+    let cancelled = false;
+    runtimeOverview().then(
+      (overview) => {
+        if (!cancelled) {
+          setRuntimeCounts({ mcp: overview.mcp.length, skills: overview.skills.length });
+        }
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeOwner, runtimeOverview, settingsOpen]);
   const [keepAwakeError, setKeepAwakeError] = useState<string>();
 
   return (
@@ -595,6 +615,16 @@ export function StatusBar(props: StatusBarProps) {
                 </PopoverLink>
               </>
             )}
+          />
+        )}
+        {runtimeOwner && runtimeCounts && (
+          <StatusItem
+            className="status-runtimes"
+            align="end"
+            icon={<Icon name="board" size={13} />}
+            label={t("MCP {0} · 技能 {1}", { 0: runtimeCounts.mcp, 1: runtimeCounts.skills })}
+            tooltip={t("管理这台电脑上各 CLI 的全局 MCP 和技能")}
+            onClick={() => openSettings("runtimes")}
           />
         )}
         {keepAwake && (
