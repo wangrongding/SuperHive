@@ -36,6 +36,7 @@ export type ChatMessage = {
   attachments?: Attachment[];
   /** 服务端代发消息的结构化正文（键见 protocol 的 server-text.ts），比如 roomPost.forwarded */
   text?: { key: string; params?: Record<string, unknown> };
+  todoHandoff?: { todoId: string; notes: string };
 };
 
 export type Attachment = {

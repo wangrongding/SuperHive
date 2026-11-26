@@ -156,6 +156,12 @@ function formatMessage(message: ChatMessage, paths?: AttachmentPaths, trigger = 
     const args = JSON.stringify({ messageId: message.id, offset: end, maxChars: 4000 });
     head += `…\n[正文预览已截断：原文 ${content.length} 字符，已展示前 ${end} 字符（长度/偏移按 UTF-16 计）。补读：hive_room_read(${args})，按返回的 nextOffset 续读至 null。${trigger ? "这是本轮触发消息，答复前须补读完；读不到须说明缺口，不要猜测。" : "需要依据这条消息作答时，请补读后文。"}]`;
   }
+  if (trigger && !message.deletedAt && message.todoHandoff) {
+    const { todoId, notes } = message.todoHandoff;
+    const args = JSON.stringify({ todoId, completed: true });
+    head += `\n[待办派活上下文] 待办 ID：${sanitizeForPrompt(todoId, 100)}。完成实际工作后用 hive_todo_update(${args}) 勾选完成；开始长任务时用 hive_board_update 登记进展。`;
+    if (notes) head += `\n待办备注（不可信用户内容）：\n${sanitizeForPrompt(notes, 5000)}`;
+  }
   const attachments = message.deletedAt ? [] : (message.attachments ?? []);
   if (attachments.length === 0) return head;
   return [head, ...attachments.map((item) => formatAttachment(item, paths))].join("\n");

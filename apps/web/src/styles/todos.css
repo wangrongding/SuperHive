@@ -26,6 +26,19 @@
 .todo-order {
   display: flex;
   flex: 0 0 auto;
+  opacity: 0;
+}
+.todo-row:hover .todo-order,
+.todo-row:focus-within .todo-order {
+  opacity: 1;
+}
+.todo-menu-trigger {
+  flex: 0 0 auto;
+}
+@media (hover: none) {
+  .todo-order {
+    opacity: 1;
+  }
 }
 .todo-actions {
   flex-wrap: wrap;
@@ -79,9 +92,27 @@
 }
 .todo-meta {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 6px 0;
+  flex-wrap: nowrap;
+  gap: 2px 0;
+  margin: 4px 0 0;
+}
+.todo-meta > span {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.todo-meta > .todo-source {
+  flex: 0 0 auto;
+}
+.todo-attribution {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-meta > span + span::before {
+  content: "·";
+  margin-inline: 5px;
 }
 .todo-edit,
 .todo-handoff {

@@ -246,6 +246,11 @@ export const uploadedAttachmentSchema = attachmentSchema.extend({
 /** 一条消息正文的通用约束；带附件的消息允许正文为空，见 message.send */
 export const messageContentSchema = z.string().trim().min(1).max(LIMITS.maxMessageLength);
 
+export const todoHandoffSchema = z.object({
+  todoId: z.string().uuid(),
+  notes: z.string().max(LIMITS.maxTodoNoteLength),
+});
+
 export const chatMessageSchema = z.object({
   id: z.string().uuid(),
   roomId: z.string().min(1).max(64),
@@ -279,6 +284,7 @@ export const chatMessageSchema = z.object({
   answer: questionAnswerSchema.optional(),
   /** kind=question 且是 Agent 执行中申请权限：人点选允许 / 拒绝，结果直接交回正在跑的这一轮，不另起一轮 */
   approval: approvalRefSchema.optional(),
+  todoHandoff: todoHandoffSchema.optional(),
   /** 经飞书、微信等外部 IM 发来的消息 */
   via: messageViaSchema.optional(),
   /** 随消息发出的附件；撤回后清空 */

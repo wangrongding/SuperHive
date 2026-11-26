@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { LIMITS, type Todo, type TodoInput, type Participant } from "@superhive/protocol";
 import { Button, IconButton } from "./button";
 import { Icon } from "./app-icons";
 import { t } from "./i18n";
 import type { todoApi } from "./todo-api";
 import { createClientMessageId } from "./client-id";
+import { ContextMenu, type ContextMenuState } from "./context-menu";
+import { ConfirmPopover } from "./confirm-popover";
 
 type TodoActions = ReturnType<typeof todoApi>;
 
@@ -152,6 +154,8 @@ function TodoItem({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<TodoInput>(todo);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menu, setMenu] = useState<ContextMenuState>();
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const [assigning, setAssigning] = useState(false);
   const [agentId, setAgentId] = useState("");
   const [handoffId, setHandoffId] = useState(createClientMessageId);
@@ -172,6 +176,10 @@ function TodoItem({
     }
   }
   const agents = members.filter((member) => member.type === "agent");
+  function closeMenu() {
+    setMenu(undefined);
+    menuButtonRef.current?.focus({ preventScroll: true });
+  }
   return (
     <li className={`progress-item todo-item${todo.completed ? " completed" : ""}`}>
       <div className="progress-row todo-row">
@@ -191,29 +199,80 @@ function TodoItem({
           {canManage && !todo.completed && (canMoveUp || canMoveDown) && renderOrderControls()}
           {canManage && (
             <IconButton
+              ref={menuButtonRef}
               size="sm"
-              label={t("编辑待办")}
+              variant="secondary"
+              className="todo-menu-trigger"
+              label={t("待办操作：{0}", { 0: todo.title })}
+              aria-haspopup="menu"
+              aria-expanded={Boolean(menu)}
               disabled={busy}
-              onClick={() => {
-                setDraft(todo);
-                setEditAgentId(undefined);
-                setEditing(!editing);
+              onClick={(event) => {
+                if (menu) return closeMenu();
+                const rect = event.currentTarget.getBoundingClientRect();
+                setMenu({
+                  x: rect.right,
+                  y: rect.bottom + 4,
+                  align: "end",
+                  title: t("待办操作"),
+                  items: [
+                    ...(!todo.completed
+                      ? [
+                          {
+                            label: t("交给 Agent"),
+                            disabled: !agents.length,
+                            onSelect: () => {
+                              setAssigning(true);
+                              setEditing(false);
+                            },
+                          },
+                        ]
+                      : []),
+                    {
+                      label: t("编辑待办"),
+                      onSelect: () => {
+                        setDraft(todo);
+                        setEditAgentId(undefined);
+                        setEditing(true);
+                        setAssigning(false);
+                      },
+                    },
+                    "separator",
+                    { label: t("删除"), onSelect: () => setConfirmDelete(true) },
+                  ],
+                });
               }}
             >
-              <Icon name="more" size={13} />
+              <Icon name="more" size={16} />
             </IconButton>
           )}
         </div>
-        {todo.notes && !editing && <p className="todo-notes">{todo.notes}</p>}
         <div className="progress-meta todo-meta">
-          <span>{t("由 {0} 添加", { 0: todo.creatorName })}</span>
-          {todo.assigneeName && <span>{t("负责人：{0}", { 0: todo.assigneeName })}</span>}
+          <span
+            aria-label={t("由 {0} 添加", { 0: todo.creatorName })}
+            title={t("由 {0} 添加", { 0: todo.creatorName })}
+          >
+            <span className="todo-attribution">{todo.creatorName}</span>
+          </span>
+          <span title={t("负责人：{0}", { 0: todo.assigneeName ?? t("未指派") })}>
+            <span className="todo-attribution">
+              {t("负责人：{0}", { 0: todo.assigneeName ?? t("未指派") })}
+            </span>
+          </span>
+          {todo.sourceMessageId && (
+            <span className="todo-source">
+              <Button
+                size="sm"
+                variant="link"
+                aria-label={t("查看来源消息 #{0}", { 0: todo.sourceMessageSeq ?? "" })}
+                onClick={() => onLocate(todo)}
+              >
+                {t("来源 #{0}", { 0: todo.sourceMessageSeq ?? "" })}
+              </Button>
+            </span>
+          )}
         </div>
-        {todo.sourceMessageId && (
-          <Button size="sm" variant="link" onClick={() => onLocate(todo)}>
-            {t("查看来源消息 #{0}", { 0: todo.sourceMessageSeq ?? "" })}
-          </Button>
-        )}
+        {todo.notes && !editing && <p className="todo-notes">{todo.notes}</p>}
         {canManage && editing && (
           <form
             className="todo-edit"
@@ -240,6 +299,7 @@ function TodoItem({
             <label>
               {t("待办标题")}
               <input
+                autoFocus
                 value={draft.title}
                 required
                 maxLength={LIMITS.maxTodoTitleLength}
@@ -288,29 +348,6 @@ function TodoItem({
             </div>
           </form>
         )}
-        {canManage && !editing && (
-          <div className="todo-actions">
-            {!todo.completed && (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy || !agents.length}
-                onClick={() => setAssigning(!assigning)}
-              >
-                {t("交给 Agent")}
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              tone="danger"
-              disabled={busy}
-              onClick={() => setConfirmDelete(!confirmDelete)}
-            >
-              {t("删除")}
-            </Button>
-          </div>
-        )}
         {canManage && !todo.completed && assigning && (
           <form
             className="todo-handoff"
@@ -329,6 +366,7 @@ function TodoItem({
             <label>
               {t("选择 Agent")}
               <select
+                autoFocus
                 value={agentId}
                 onChange={(event) => {
                   setAgentId(event.target.value);
@@ -349,29 +387,48 @@ function TodoItem({
             <Button type="submit" size="sm" loading={busy} disabled={!agentId}>
               {t("发送任务")}
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setAssigning(false);
+                menuButtonRef.current?.focus({ preventScroll: true });
+              }}
+            >
+              {t("取消")}
+            </Button>
           </form>
         )}
         {canManage && confirmDelete && (
-          <div className="todo-actions">
-            <span>{t("删除这条待办？")}</span>
-            <Button size="sm" disabled={busy} onClick={() => setConfirmDelete(false)}>
-              {t("取消")}
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              loading={busy}
-              onClick={() => void run(() => actions.remove(todo.id))}
-            >
-              {t("确认删除")}
-            </Button>
-          </div>
+          <ConfirmPopover
+            anchorRef={menuButtonRef}
+            ariaLabel={t("删除这条待办？")}
+            title={t("删除这条待办？")}
+            message={todo.title}
+            confirmLabel={t("确认删除")}
+            cancelLabel={t("取消")}
+            danger
+            busy={busy}
+            onCancel={() => {
+              if (busy) return;
+              setConfirmDelete(false);
+              menuButtonRef.current?.focus({ preventScroll: true });
+            }}
+            onConfirm={() =>
+              void run(
+                () => actions.remove(todo.id),
+                () => setConfirmDelete(false),
+              )
+            }
+          />
         )}
         {error && (
           <p className="todo-error" role="alert">
             {error}
           </p>
         )}
+        {canManage && menu && <ContextMenu menu={menu} onClose={closeMenu} />}
       </div>
     </li>
   );

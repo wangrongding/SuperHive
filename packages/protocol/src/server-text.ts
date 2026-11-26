@@ -25,8 +25,8 @@ type Entry = ServerTextEntry;
 
 export const serverTexts = {
   "todo.handoff": {
-    zh: "请处理待办：{title}\n{notes}\n待办 ID：{id}。完成后用 hive_todo_update 勾选完成；开始做时在白板登记进展。",
-    en: "Please handle this to-do: {title}\n{notes}\nTo-do ID: {id}. Mark it complete with hive_todo_update when done; track work in progress on the whiteboard.",
+    zh: "请处理待办：{title}",
+    en: "Please handle this to-do: {title}",
   },
   "error.todo.notFound": {
     zh: "这个房间里没有所选待办。",

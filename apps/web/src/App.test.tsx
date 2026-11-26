@@ -501,6 +501,7 @@ describe("App mention autocomplete", () => {
   });
 
   it("已批准插件的面板出现在右侧栏，/ 命令交给面板不发消息，撤销后标签页消失", async () => {
+    const user = userEvent.setup();
     pluginsApi.plugins = [
       {
         id: "dice",
@@ -518,6 +519,24 @@ describe("App mention autocomplete", () => {
     const socket = FakeWebSocket.instances[0]!;
     act(() => socket.open());
     const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const now = new Date().toISOString();
+    const todo = {
+      id: "00000000-0000-4000-8000-0000000000b1",
+      roomId: "general",
+      title: "Check progress with plugins",
+      notes: "",
+      creatorId: self.id,
+      creatorName: self.username,
+      creatorType: "human" as const,
+      assigneeId: null,
+      assigneeName: null,
+      sourceMessageId: null,
+      sourceMessageSeq: null,
+      completed: false,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    };
     act(() =>
       socket.serverEvent({
         type: "room.snapshot",
@@ -525,10 +544,32 @@ describe("App mention autocomplete", () => {
         participants: [self],
         messages: [],
         latestSeq: 0,
+        todos: [todo],
       }),
     );
     const tab = await screen.findByRole("tab", { name: "插件" });
     expect(tab.getAttribute("aria-selected")).toBe("false");
+    const sideTabs = screen.getByRole("tablist", { name: "侧栏视图" });
+    expect(
+      within(sideTabs)
+        .getAllByRole("tab")
+        .map((element) => element.id),
+    ).toEqual(["side-tab-members", "side-tab-whiteboard", "side-tab-plugins"]);
+    const progressTab = within(sideTabs).getByRole("tab", { name: /进展/ });
+    await user.click(progressTab);
+    expect(screen.getByText(todo.title)).toBeTruthy();
+    await user.keyboard("{ArrowRight}");
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{ArrowLeft}");
+    expect(progressTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText(todo.title)).toBeTruthy();
+    act(() =>
+      socket.serverEvent({
+        type: "todo.updated",
+        todo: { ...todo, title: "Updated while plugins are enabled" },
+      }),
+    );
+    expect(screen.getByText("Updated while plugins are enabled")).toBeTruthy();
 
     const composer = screen.getByPlaceholderText("发送消息，输入 @ 选择成员…");
     const sentBefore = socket.sent.length;
@@ -551,6 +592,10 @@ describe("App mention autocomplete", () => {
     act(() => socket.serverEvent({ type: "plugins.changed" }));
     await waitFor(() => expect(screen.queryByRole("tab", { name: "插件" })).toBeNull());
     expect(document.querySelector("iframe.plugin-frame")).toBeNull();
+    expect(screen.getByRole("tab", { name: /成员/ }).getAttribute("aria-selected")).toBe("true");
+    await user.click(progressTab);
+    expect(screen.getByText("Updated while plugins are enabled")).toBeTruthy();
+    await user.keyboard("{ArrowRight}");
     expect(screen.getByRole("tab", { name: /成员/ }).getAttribute("aria-selected")).toBe("true");
   });
 

@@ -5,10 +5,10 @@ description: Understand queued, running, waiting, and outcome-unknown tasks, how
 
 ## Keep work to do later
 
-The right-hand **Progress** panel brings together items needing your attention, to-dos, work in progress, work ready for review and milestones. Its badge combines unfinished to-dos and items needing you; hover to see each count. Each room has its own to-do section. Enter a title to add one; items show their creator and support notes, assignees, completion, reopening and deletion. Use the up and down arrows to save their order. Completed items start collapsed.
+The right-hand **Progress** panel brings together items needing your attention, to-dos, work in progress, work ready for review and milestones. Its badge combines unfinished to-dos and items needing you; hover to see each count. Each room has its own to-do section. Enter a title to add one; the row below each title shows its creator, assignee and source link. The **…** menu offers handoff, editing and deletion, with confirmation before deletion. The menu also works with a keyboard or touch. Check an item to complete or reopen it. Use the up and down arrows to save its order. Completed items start collapsed.
 
 - **Save as to-do** on a message uses a text summary as the title and keeps a link to its source. Saving does not dispatch a task.
-- On an incomplete item, choose **Hand to an agent**, select a member and confirm **Send task**. This sends an @ message as you and sets the assignee. Offline agents receive it when they reconnect. Dispatch does not mark the item complete.
+- On an incomplete item, choose **Hand to an agent** in the **…** menu, select a member and confirm **Send task**. This sends a short @ message as you and sets the assignee. The agent receives the to-do ID, notes and completion-tool instructions through message metadata, not the visible chat body. Offline agents receive it when they reconnect. Dispatch does not mark the item complete.
 - Selecting an agent assignee while editing changes the save button to **Save and send to agent**. Confirming also dispatches the task. Editing the title or notes without changing the assignee does not dispatch again.
 - Agents use `hive_todo_list`, `hive_todo_add` and `hive_todo_update`, including `completed: true`. Titles allow 200 characters, notes 5,000 and each room 1,000 items.
 - Owners and people with member credentials can edit. Guests, including guest agents, are read-only by default. Permission to mention agents does not grant to-do editing rights. Creator attribution comes from the room member identity.

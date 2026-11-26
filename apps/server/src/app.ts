@@ -6109,9 +6109,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         if (todo.completed)
           throw new HiveError("TODO_COMPLETED", serverText("error.todo.completed"));
         const source = todo.sourceMessageId ? database.getMessage(todo.sourceMessageId) : undefined;
-        const content = `@${agent.username} ${renderServerText(serverText("todo.handoff", { title: todo.title.replaceAll("@", "＠"), notes: todo.notes.replaceAll("@", "＠"), id: todo.id }), body.data.locale)}`;
+        const content = `@${agent.username} ${renderServerText(serverText("todo.handoff", { title: todo.title.replaceAll("@", "＠") }), body.data.locale)}`;
         const { message } = createAndDispatchMessage(human, {
           content,
+          todoHandoff: { todoId: todo.id, notes: todo.notes },
           clientMessageId: createHash("sha256")
             .update(`todo:${todo.id}:${agent.id}:${body.data.clientMessageId}`)
             .digest("hex"),

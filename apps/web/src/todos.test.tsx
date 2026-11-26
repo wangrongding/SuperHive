@@ -48,6 +48,11 @@ const actions = () => ({
   move: vi.fn().mockResolvedValue(undefined),
 });
 
+function openAction(label: string) {
+  fireEvent.click(screen.getByRole("button", { name: "待办操作：Write tests" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+}
+
 describe("to-do panel", () => {
   it("uses persisted order and keeps keyboard focus when a row moves", async () => {
     const user = userEvent.setup();
@@ -86,7 +91,7 @@ describe("to-do panel", () => {
     api.handoff.mockRejectedValueOnce(new Error("network"));
     const props = { members: [agent], canManage: true, actions: api, onLocate: vi.fn() };
     const { rerender } = render(<TodoPanel {...props} todos={[todo]} />);
-    fireEvent.click(screen.getByLabelText("编辑待办"));
+    openAction("编辑待办");
     fireEvent.change(screen.getByLabelText("负责人"), { target: { value: "agent" } });
     fireEvent.click(screen.getByText("保存并派给 Agent"));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("network"));
@@ -98,7 +103,7 @@ describe("to-do panel", () => {
     await waitFor(() => expect(api.handoff).toHaveBeenCalledTimes(2));
     expect(api.handoff.mock.calls[1]?.[2]).toBe(identity);
     await waitFor(() => expect(screen.queryByText("保存并派给 Agent")).toBeNull());
-    fireEvent.click(screen.getByLabelText("编辑待办"));
+    openAction("编辑待办");
     fireEvent.change(screen.getByLabelText("待办标题", { selector: ".todo-edit input" }), {
       target: { value: "Only rename" },
     });
@@ -132,7 +137,7 @@ describe("to-do panel", () => {
     );
     fireEvent.click(screen.getByRole("checkbox"));
     await waitFor(() => expect(api.update).toHaveBeenCalledWith("a", { completed: true }));
-    fireEvent.click(screen.getByLabelText("编辑待办"));
+    openAction("编辑待办");
     fireEvent.change(screen.getByLabelText("待办标题", { selector: ".todo-edit input" }), {
       target: { value: "Updated" },
     });
@@ -147,7 +152,7 @@ describe("to-do panel", () => {
     );
     await waitFor(() => expect(api.handoff).toHaveBeenCalledWith("a", "agent", expect.any(String)));
     await waitFor(() => expect(screen.queryByText("保存并派给 Agent")).toBeNull());
-    fireEvent.click(screen.getByText("删除"));
+    openAction("删除");
     expect(api.remove).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("确认删除"));
     await waitFor(() => expect(api.remove).toHaveBeenCalledWith("a"));
@@ -168,8 +173,8 @@ describe("to-do panel", () => {
       />,
     );
     expect(container.querySelector("details")?.open).toBe(false);
-    expect(screen.getAllByText("由 owner 添加")).toHaveLength(2);
-    fireEvent.click(screen.getByText("查看来源消息 #12"));
+    expect(screen.getAllByLabelText("由 owner 添加")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "查看来源消息 #12" }));
     expect(locate).toHaveBeenCalledWith(expect.objectContaining({ sourceMessageId: "source" }));
     expect(screen.queryByText("添加")).toBeNull();
     expect(
@@ -183,7 +188,7 @@ describe("to-do panel", () => {
     render(
       <TodoPanel todos={[todo]} members={[agent]} canManage actions={api} onLocate={vi.fn()} />,
     );
-    fireEvent.click(screen.getByText("交给 Agent"));
+    openAction("交给 Agent");
     fireEvent.change(screen.getByLabelText("选择 Agent"), { target: { value: "agent" } });
     fireEvent.click(screen.getByText("发送任务"));
     await screen.findByText("network");
@@ -200,6 +205,40 @@ describe("to-do panel", () => {
     fireEvent.click(screen.getByText("添加"));
     await screen.findByRole("alert");
     expect((screen.getByLabelText("待办标题") as HTMLInputElement).value).toBe("later");
+  });
+
+  it("keeps actions in a reachable menu and restores focus after cancelling deletion", async () => {
+    const user = userEvent.setup();
+    const api = actions();
+    const { container } = render(
+      <TodoPanel
+        todos={[{ ...todo, sourceMessageId: "source", sourceMessageSeq: 12 }]}
+        members={[agent]}
+        canManage
+        actions={api}
+        onLocate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "交给 Agent" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "查看来源消息 #12" }).closest(".todo-meta"),
+    ).toBeTruthy();
+    expect(container.querySelector(".todo-meta")?.textContent).toContain("负责人：未指派");
+    const trigger = screen.getByRole("button", { name: "待办操作：Write tests" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(screen.getByRole("menu"));
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    expect(screen.getByRole("dialog", { name: "删除这条待办？" })).toBeTruthy();
+    expect(api.remove).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(trigger);
+    expect(api.remove).not.toHaveBeenCalled();
   });
 });
 

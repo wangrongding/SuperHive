@@ -26,6 +26,7 @@ import {
   type Todo,
   type TodoInput,
   type TodoUpdate,
+  todoHandoffSchema,
 } from "@superhive/protocol";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
@@ -378,6 +379,7 @@ export type CreateMessageInput = {
   attachments?: NonNullable<ChatMessage["attachments"]>;
   /** 服务端代发的系统消息的结构化正文（网页按语言渲染；content 是中文给 Agent 读） */
   text?: ServerText;
+  todoHandoff?: NonNullable<ChatMessage["todoHandoff"]>;
   /** 与写消息在同一事务里执行（把附件绑定到这条消息）；抛错则整条消息不写入 */
   onInsert?: (messageId: string) => void;
 };
@@ -435,7 +437,10 @@ function mapMessage(row: MessageRow): ChatMessage {
 /** 损坏或不认识的元数据只当作没有：消息正文仍是唯一的语义来源 */
 function parseMessageMeta(
   raw: string | null,
-): Pick<ChatMessage, "question" | "answer" | "approval" | "via" | "attachments" | "text"> {
+): Pick<
+  ChatMessage,
+  "question" | "answer" | "approval" | "via" | "attachments" | "text" | "todoHandoff"
+> {
   if (!raw) return {};
   try {
     const value = JSON.parse(raw) as {
@@ -445,8 +450,10 @@ function parseMessageMeta(
       via?: unknown;
       attachments?: unknown;
       text?: unknown;
+      todoHandoff?: unknown;
     };
     const text = serverTextSchema.safeParse(value.text);
+    const todoHandoff = todoHandoffSchema.safeParse(value.todoHandoff);
     const question = questionSpecSchema.safeParse(value.question);
     const answer = questionAnswerSchema.safeParse(value.answer);
     const approval = approvalRefSchema.safeParse(value.approval);
@@ -459,6 +466,7 @@ function parseMessageMeta(
       ...(via.success ? { via: via.data } : {}),
       ...(attachments.success ? { attachments: attachments.data } : {}),
       ...(text.success ? { text: text.data } : {}),
+      ...(todoHandoff.success ? { todoHandoff: todoHandoff.data } : {}),
     };
   } catch {
     return {};
@@ -1441,8 +1449,15 @@ export class HiveDatabase {
           input.clientMessageId,
           createdAt,
           input.kind ?? null,
-          input.question || input.answer || input.approval || input.via || attachments || input.text
+          input.question ||
+            input.answer ||
+            input.approval ||
+            input.via ||
+            attachments ||
+            input.text ||
+            input.todoHandoff
             ? JSON.stringify({
+                ...(input.todoHandoff ? { todoHandoff: input.todoHandoff } : {}),
                 ...(input.text ? { text: input.text } : {}),
                 ...(input.question ? { question: input.question } : {}),
                 ...(input.approval ? { approval: input.approval } : {}),

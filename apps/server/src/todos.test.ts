@@ -84,10 +84,20 @@ describe("room to-dos", () => {
       expect(db.updateTodo("general", todo.id, { completed: false }).completedAt).toBeNull();
       expect(() => db.getTodo("other", todo.id)).toThrow();
       const second = db.addTodo(human, todoInputSchema.parse({ title: "second" }));
+      const message = db.createMessage(human, {
+        content: "@worker 请处理待办：later",
+        clientMessageId: "handoff",
+        todoHandoff: { todoId: todo.id, notes: "Details for the agent" },
+      }).message;
       expect(db.moveTodo("general", todo.id, "up")).toHaveLength(2);
       db.close();
       db = new HiveDatabase(filename);
       expect(db.listTodos("general").map((item) => item.id)).toEqual([todo.id, second.id]);
+      expect(db.getMessage(message.id)?.todoHandoff).toEqual({
+        todoId: todo.id,
+        notes: "Details for the agent",
+      });
+      expect(db.deleteMessage(human, message.id).todoHandoff).toBeUndefined();
       db.removeTodo("general", todo.id);
       db.removeTodo("general", second.id);
       expect(db.listTodos("general")).toEqual([]);
@@ -116,6 +126,26 @@ describe("room to-dos", () => {
     });
     const reconnected = await join("viewer", "human");
     expect(reconnected.snapshot.todos).toMatchObject([{ id: todo.id, completed: true }]);
+    await join("other-owner", "human", "other");
+    const otherResponse = await app.inject({
+      method: "POST",
+      url: "/api/rooms/other/todos",
+      headers: OWNER,
+      payload: { username: "other-owner", title: "Other room work" },
+    });
+    const otherTodo = otherResponse.json().todo as Todo;
+    reconnected.peer.send({ type: "room.switch", roomId: "other" });
+    expect(
+      await reconnected.peer.next(
+        (event) => event.type === "room.snapshot" && event.self.roomId === "other",
+      ),
+    ).toMatchObject({ todos: [{ id: otherTodo.id, roomId: "other" }] });
+    reconnected.peer.send({ type: "room.switch", roomId: "general" });
+    expect(
+      await reconnected.peer.next(
+        (event) => event.type === "room.snapshot" && event.self.roomId === "general",
+      ),
+    ).toMatchObject({ todos: [{ id: todo.id, roomId: "general", completed: true }] });
     expect(
       (await app.inject({ url: "/api/rooms/general/todos", headers: OWNER })).json().todos,
     ).toHaveLength(1);
@@ -304,7 +334,7 @@ describe("room to-dos", () => {
   });
 
   it("hands off as the human exactly once and neutralizes mentions inside notes", async () => {
-    const { app, add, join } = await start();
+    const { app, add, join, port } = await start();
     const agent = await join("worker", "agent");
     const second = await join("second", "agent");
     const todo = await add({ title: "Review @second", notes: "Ask @second about this" });
@@ -329,18 +359,38 @@ describe("room to-dos", () => {
       senderType: "human",
       mentions: ["worker"],
     });
-    expect(payload.message.content).toContain("Please handle this to-do");
+    expect(payload.message.content).toBe("@worker Please handle this to-do: Review ＠second");
+    expect(payload.message.content).not.toContain(todo.id);
+    expect(payload.message.content).not.toContain("hive_todo_update");
+    expect(payload.message.todoHandoff).toEqual({
+      todoId: todo.id,
+      notes: "Ask @second about this",
+    });
     expect((await handoff()).json().message.id).toBe(payload.message.id);
-    expect(await agent.peer.next((event) => event.type === "agent.mentioned")).toMatchObject({
+    const delivered = await agent.peer.next((event) => event.type === "agent.mentioned");
+    expect(delivered).toMatchObject({
       message: { id: payload.message.id },
     });
+    if (delivered.type !== "agent.mentioned") throw new Error("Not delivered");
+    expect(delivered.message.todoHandoff).toEqual(payload.message.todoHandoff);
     expect(second.peer.events.filter((event) => event.type === "agent.mentioned")).toEqual([]);
-    await app.inject({
-      method: "PATCH",
-      url: `/api/rooms/general/todos/${todo.id}`,
-      headers: OWNER,
-      payload: { completed: true },
-    });
+    const client = new Client({ name: "handoff-completion", version: "1" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: {
+          headers: { ...OWNER, "X-Hive-Room": "general", "X-Hive-Agent-Name": agent.self.username },
+        },
+      }) as unknown as Transport,
+    );
+    try {
+      const completed = await client.callTool({
+        name: "hive_todo_update",
+        arguments: { todoId: delivered.message.todoHandoff?.todoId, completed: true },
+      });
+      expect(completed.structuredContent).toMatchObject({ todo: { id: todo.id, completed: true } });
+    } finally {
+      await client.close();
+    }
     expect((await handoff()).statusCode).toBe(409);
   });
 
