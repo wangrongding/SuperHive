@@ -113,6 +113,31 @@
 }
 
 /* ---------- 第 3 步：在本机启动 ---------- */
+.member-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.member.muted:has(.member-recovery-actions) {
+  opacity: 1;
+}
+
+.member.muted:has(.member-recovery-actions) .avatar {
+  opacity: 0.55;
+}
+
+.member.muted:has(.member-recovery-actions) .member-name-row {
+  color: var(--text-secondary);
+}
+
+.agent-rejoin-note {
+  margin: 0 24px 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .local-launch {
   display: grid;
   gap: 14px;

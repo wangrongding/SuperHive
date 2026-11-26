@@ -285,6 +285,9 @@ export function App({
   const [fullAccessConfirmationOpen, setFullAccessConfirmationOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>();
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
+  const [rejoinAgent, setRejoinAgent] = useState<
+    import("@superhive/protocol").RemovedLocalAgent & { participantId: string }
+  >();
   const [roomDialog, setRoomDialog] = useState<
     { mode: "create" } | { mode: "manage"; room: RoomSummary }
   >();
@@ -500,8 +503,17 @@ export function App({
   const { widths: panelWidths, resize: resizePanel } = usePanelWidths();
   // 接入默认名要避开房间现有成员（含离线）：服务端按房间大小写不敏感查重，撞名直接 409
   const takenAgentNames = useMemo(
-    () => new Set(participants.map((participant) => participant.username.toLocaleLowerCase())),
-    [participants],
+    () =>
+      new Set([
+        ...participants
+          .filter(
+            (participant) =>
+              participant.id !== rejoinAgent?.participantId || participant.status !== "offline",
+          )
+          .map((participant) => participant.username.toLocaleLowerCase()),
+        ...local.agents.map((agent) => agent.name.toLocaleLowerCase()),
+      ]),
+    [participants, local.agents, rejoinAgent],
   );
   const selectedAgentCommand = useMemo(() => {
     if (!meta) return t("加载中…");
@@ -883,6 +895,7 @@ export function App({
   }, []);
 
   const openAgentDialog = useCallback((trigger: HTMLButtonElement) => {
+    setRejoinAgent(undefined);
     agentDialogTriggerRef.current = trigger;
     setAgentStep(1);
     setAgentProviderChosen(false);
@@ -893,6 +906,97 @@ export function App({
     setCopyError(undefined);
     setAgentDialogOpen(true);
   }, []);
+
+  function removedAgentFor(participant: Participant) {
+    if (
+      !isOwner ||
+      local.mode !== "local" ||
+      participant.type !== "agent" ||
+      participant.status !== "offline" ||
+      participant.access ||
+      localAgentFor(participant.username)
+    )
+      return undefined;
+    return local.removedAgents?.find(
+      (agent) => agent.name.toLocaleLowerCase() === participant.username.toLocaleLowerCase(),
+    );
+  }
+
+  function openRejoinAgent(participant: Participant, trigger?: HTMLButtonElement) {
+    const removed = removedAgentFor(participant);
+    if (!removed || !local.canManage) return;
+    if (trigger) agentDialogTriggerRef.current = trigger;
+    setRejoinAgent({ ...removed, name: participant.username, participantId: participant.id });
+    setAgentProvider(removed.provider);
+    setAgentProviderChosen(true);
+    setAgentAccess(removed.cwd ? "workspace" : "read-only");
+    setAgentStep(2);
+    setFullAccessConfirmationOpen(false);
+    setAgentConnected(false);
+    setCommandCopied(false);
+    setCopyError(undefined);
+    setAgentDialogOpen(true);
+  }
+
+  async function hideRemovedMember(participant: Participant) {
+    try {
+      await local.hideMember(participant.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
+  function memberRecoveryActions(participant: Participant) {
+    if (
+      !isOwner ||
+      local.mode !== "local" ||
+      !local.canManage ||
+      participant.type !== "agent" ||
+      participant.status !== "offline" ||
+      participant.access
+    )
+      return null;
+    const agent = localAgentFor(participant.username);
+    const removed = removedAgentFor(participant);
+    return agent ? (
+      <span className="member-recovery-actions">
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={t("启动 {0}", { 0: participant.username })}
+          disabled={agent.status !== "stopped" && agent.status !== "crashed"}
+          onClick={() =>
+            void local
+              .act(agent.id, "start")
+              .catch((reason: unknown) =>
+                setError(reason instanceof Error ? reason.message : String(reason)),
+              )
+          }
+        >
+          {agent.status === "stopped" || agent.status === "crashed" ? t("启动") : t("正在启动…")}
+        </Button>
+      </span>
+    ) : removed ? (
+      <span className="member-recovery-actions">
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={t("重新接入 {0}", { 0: participant.username })}
+          onClick={(event) => openRejoinAgent(participant, event.currentTarget)}
+        >
+          {t("重新接入")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={t("从列表隐藏 {0}", { 0: participant.username })}
+          onClick={() => void hideRemovedMember(participant)}
+        >
+          {t("从列表隐藏")}
+        </Button>
+      </span>
+    ) : null;
+  }
 
   const goToAgentStep = useCallback((step: AgentSetupStep) => {
     setAgentStep(step);
@@ -1510,7 +1614,9 @@ export function App({
 
   const online = participants.filter((participant) => participant.status !== "offline");
 
-  const offline = participants.filter((participant) => participant.status === "offline");
+  const offline = participants.filter(
+    (participant) => participant.status === "offline" && !participant.hidden,
+  );
 
   async function ensureNotificationPermission(): Promise<boolean> {
     if (!("Notification" in window)) {
@@ -1949,6 +2055,7 @@ export function App({
         setError(reason instanceof Error ? reason.message : String(reason));
       });
     const live = agent && agent.status !== "stopped" && agent.status !== "crashed";
+    const removed = removedAgentFor(participant);
     return [
       ...(!self
         ? [
@@ -1959,6 +2066,12 @@ export function App({
           ]
         : []),
       { label: t("复制名字"), onSelect: () => void copyForMenu(participant.username) },
+      ...(removed && local.canManage
+        ? [
+            { label: t("重新接入"), onSelect: () => openRejoinAgent(participant) },
+            { label: t("从列表隐藏"), onSelect: () => void hideRemovedMember(participant) },
+          ]
+        : []),
       ...(participant.type === "agent"
         ? [
             "separator" as const,
@@ -2422,6 +2535,8 @@ export function App({
           loadWhiteboardHistory={loadWhiteboardHistory}
           local={local}
           localAgentNames={localAgentNames}
+          isRemovedMember={(participant) => Boolean(removedAgentFor(participant))}
+          memberRecoveryActions={memberRecoveryActions}
           locateProgress={locateProgress}
           membersCloseRef={membersCloseRef}
           mobilePanel={mobilePanel}
@@ -2698,6 +2813,7 @@ export function App({
 
       {agentDialogOpen && (
         <AgentSetupDialog
+          rejoin={rejoinAgent}
           agentAccess={agentAccess}
           agentConnected={agentConnected}
           agentDialogCloseRef={agentDialogCloseRef}

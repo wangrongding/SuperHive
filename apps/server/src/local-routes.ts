@@ -136,6 +136,11 @@ export const MANAGE_GRANT_MS = 12 * 60 * 60_000;
 const APPROVAL_HEADER = "x-hive-approval";
 
 export type LocalRoomActions = {
+  members?: {
+    removedAgents(): import("@superhive/protocol").RemovedLocalAgent[];
+    requireRemoved(id: string, name?: string): void;
+    hide(id: string): void;
+  };
   worktrees?: {
     list: (roomId: string) => Promise<unknown>;
     cleanup: (
@@ -961,6 +966,7 @@ export function registerLocalAgentRoutes(
     const currentVersion = supervisor!.currentCodeVersion();
     return {
       agents,
+      removedAgents: rooms.members?.removedAgents() ?? [],
       autoUpdate: supervisor!.autoUpdateEnabled(),
       ...(currentVersion ? { currentVersion } : {}),
     };
@@ -986,6 +992,16 @@ export function registerLocalAgentRoutes(
     const parsed = createLocalAgentRequestSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
+    if (parsed.data.rejoinParticipantId) {
+      if (!authorize(request, reply, "local")) return reply;
+      try {
+        if (!rooms.members)
+          throw new HiveError("MEMBER_NOT_FOUND", serverText("error.member.notFound"));
+        rooms.members.requireRemoved(parsed.data.rejoinParticipantId, parsed.data.name);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    }
     if (
       parsed.data.access === "full" &&
       !stepUp(
@@ -1022,6 +1038,21 @@ export function registerLocalAgentRoutes(
         true,
       );
       return reply.code(201).send({ agent });
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/local/members/:id/hide", async (request, reply) => {
+    if (!authorize(request, reply, "local")) return reply;
+    if (!z.string().uuid().safeParse(request.params.id).success)
+      return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
+    try {
+      if (!rooms.members)
+        throw new HiveError("MEMBER_NOT_FOUND", serverText("error.member.notFound"));
+      rooms.members.requireRemoved(request.params.id);
+      rooms.members.hide(request.params.id);
+      return { ok: true };
     } catch (error) {
       return fail(reply, error);
     }

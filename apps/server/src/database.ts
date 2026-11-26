@@ -21,6 +21,8 @@ import {
   type ServerText,
   type WireServerText,
   type RoomClearOptions,
+  localAgentProviderSchema,
+  type RemovedLocalAgent,
 } from "@superhive/protocol";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
@@ -64,6 +66,7 @@ type ParticipantRow = {
   provider: string | null;
   joined_at: string;
   last_seen_at: string;
+  hidden: number;
 };
 
 type MessageRow = {
@@ -393,6 +396,7 @@ function mapParticipant(row: ParticipantRow): Participant {
     ...(row.provider ? { provider: row.provider } : {}),
     joinedAt: row.joined_at,
     lastSeenAt: row.last_seen_at,
+    ...(row.hidden ? { hidden: true } : {}),
   };
 }
 
@@ -809,6 +813,12 @@ export class HiveDatabase {
         autostart INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS removed_local_agents (
+        name_key TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        cwd TEXT
+      );
     `);
     const localAgentColumns = this.db.pragma("table_info(local_agents)") as Array<{ name: string }>;
     if (!localAgentColumns.some((column) => column.name === "pid")) {
@@ -832,6 +842,9 @@ export class HiveDatabase {
     }>;
     if (!participantColumns.some((column) => column.name === "provider")) {
       this.db.exec("ALTER TABLE participants ADD COLUMN provider TEXT");
+    }
+    if (!participantColumns.some((column) => column.name === "hidden")) {
+      this.db.exec("ALTER TABLE participants ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
     }
     const boardColumns = this.db.pragma("table_info(whiteboard_entries)") as Array<{
       name: string;
@@ -1152,7 +1165,7 @@ export class HiveDatabase {
       }
       this.db
         .prepare(
-          "UPDATE participants SET username = ?, persona = ?, provider = ?, status = 'online', last_seen_at = ? WHERE id = ?",
+          "UPDATE participants SET username = ?, persona = ?, provider = ?, status = 'online', hidden = 0, last_seen_at = ? WHERE id = ?",
         )
         .run(input.username, input.persona ?? null, input.provider ?? null, now, existing.id);
       return this.getParticipant(existing.id)!;
@@ -2639,6 +2652,47 @@ export class HiveDatabase {
     return rows.map(mapLocalAgent);
   }
 
+  participantsNamed(name: string): Participant[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM participants WHERE username_key = ?")
+        .all(name.toLocaleLowerCase()) as ParticipantRow[]
+    ).map(mapParticipant);
+  }
+
+  listRemovedLocalAgents(): RemovedLocalAgent[] {
+    const current = new Set(this.listLocalAgents().map((agent) => agent.name.toLocaleLowerCase()));
+    const removed = new Map<string, RemovedLocalAgent>();
+    const rows = this.db
+      .prepare("SELECT name, provider, cwd FROM removed_local_agents")
+      .all() as RemovedLocalAgent[];
+    for (const agent of rows) removed.set(agent.name.toLocaleLowerCase(), agent);
+    if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'managed_worktrees'").get()) {
+      const legacy = this.db
+        .prepare(
+          "SELECT agent_name AS name, repo AS cwd FROM managed_worktrees ORDER BY rowid DESC",
+        )
+        .all() as Array<{ name: string; cwd: string }>;
+      for (const record of legacy) {
+        const key = record.name.toLocaleLowerCase();
+        if (removed.has(key) || current.has(key)) continue;
+        for (const member of this.participantsNamed(record.name)) {
+          const provider = localAgentProviderSchema.safeParse(member.provider);
+          if (member.type === "agent" && provider.success) {
+            removed.set(key, { name: member.username, cwd: record.cwd, provider: provider.data });
+            break;
+          }
+        }
+      }
+    }
+    return [...removed.values()].filter((agent) => !current.has(agent.name.toLocaleLowerCase()));
+  }
+
+  hideParticipant(id: string): Participant {
+    this.db.prepare("UPDATE participants SET hidden = 1 WHERE id = ?").run(id);
+    return this.getParticipant(id)!;
+  }
+
   createLocalAgent(
     input: Omit<LocalAgentConfig, "id" | "createdAt" | "autostart">,
   ): LocalAgentConfig {
@@ -2727,7 +2781,17 @@ export class HiveDatabase {
   }
 
   deleteLocalAgent(id: string): boolean {
-    return this.db.prepare("DELETE FROM local_agents WHERE id = ?").run(id).changes > 0;
+    return this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO removed_local_agents(name_key, name, provider, cwd)
+           SELECT name_key, name, provider, cwd FROM local_agents WHERE id = ?
+           ON CONFLICT(name_key) DO UPDATE SET name = excluded.name, provider = excluded.provider,
+             cwd = excluded.cwd`,
+        )
+        .run(id);
+      return this.db.prepare("DELETE FROM local_agents WHERE id = ?").run(id).changes > 0;
+    })();
   }
 
   /**

@@ -20,6 +20,7 @@ import type {
   RemoteJoinRemoveResponse,
   RemoteJoinResponse,
   LocalAgent,
+  RemovedLocalAgent,
   LocalAgentsResponse,
   LocalAgentMcpResponse,
   LocalAgentModelsResponse,
@@ -157,6 +158,8 @@ export type LocalAgentsState = {
   joinRemote(request: RemoteJoinRequest): Promise<{ id: string; status: string }>;
   /** 接入面板没开时也要知道装了哪些运行时（「带 Agent 加入」里选） */
   refreshProviders(): Promise<void>;
+  removedAgents?: RemovedLocalAgent[];
+  hideMember(id: string): Promise<void>;
   /** restart 默认等它手上的任务做完再重启；now 立即重启（会中断正在做的任务，调用方先让人确认） */
   act(id: string, action: AgentAction, options?: { now?: boolean }): Promise<void>;
   /**
@@ -351,6 +354,7 @@ export function useLocalAgents(
   const [session, setSession] = useState<LocalSessionResponse | undefined>();
   const [providers, setProviders] = useState<LocalProviderInfo[] | undefined>();
   const [agents, setAgents] = useState<LocalAgent[]>([]);
+  const [removedAgents, setRemovedAgents] = useState<RemovedLocalAgent[]>([]);
   const tokenRef = useRef<string | undefined>(undefined);
   const deviceToken = authToken?.startsWith("hod_") ? authToken : undefined;
   const deviceRef = useRef(deviceToken);
@@ -522,6 +526,7 @@ export function useLocalAgents(
     const response = await request("/api/local/agents");
     const body = (await response.json()) as LocalAgentsResponse;
     setAgents(body.agents);
+    setRemovedAgents(body.removedAgents ?? []);
     setAutoUpdateState(body.autoUpdate);
     setCurrentVersion(body.currentVersion);
   }, [request]);
@@ -562,6 +567,9 @@ export function useLocalAgents(
       });
       const { agent } = (await response.json()) as { agent: LocalAgent };
       setAgents((current) => [...current.filter((item) => item.id !== agent.id), agent]);
+      setRemovedAgents((current) =>
+        current.filter((item) => item.name.toLocaleLowerCase() !== agent.name.toLocaleLowerCase()),
+      );
       return agent;
     },
     [requestApproved],
@@ -639,6 +647,14 @@ export function useLocalAgents(
     async (id: string) => {
       await request(`/api/local/agents/${id}`, { method: "DELETE" });
       setAgents((current) => current.filter((item) => item.id !== id));
+      await refreshAgents();
+    },
+    [request, refreshAgents],
+  );
+
+  const hideMember = useCallback(
+    async (id: string) => {
+      await request(`/api/local/members/${id}/hide`, { method: "POST" });
     },
     [request],
   );
@@ -1138,6 +1154,8 @@ export function useLocalAgents(
     writeRuntimeFile,
     providers,
     agents,
+    removedAgents,
+    hideMember,
     refreshAgents,
     autoUpdate,
     setAutoUpdate,
@@ -1321,7 +1339,9 @@ export function LocalLaunch({
   providerLabel,
   children,
   onLaunched,
+  rejoin,
 }: {
+  rejoin?: { participantId: string; name: string; cwd: string | null };
   /** 房间里已有的成员名（小写）：一次接入多个时给后面几个自增取名用 */
   takenNames?: ReadonlySet<string>;
   /** 已经在本机启动：弹窗据此显示「完成」 */
@@ -1338,7 +1358,7 @@ export function LocalLaunch({
   // 用户手动改过名字后，自动建议（含重名自增）不再覆盖输入；切换 provider 时重新采用建议
   const nameEditedRef = useRef(false);
   const lastProviderRef = useRef(provider);
-  const [cwd, setCwd] = useState("");
+  const [cwd, setCwd] = useState(rejoin?.cwd ?? "");
   const [picking, setPicking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
@@ -1370,7 +1390,12 @@ export function LocalLaunch({
   const launchedAgents = launchedIds
     .map((id) => local.agents.find((agent) => agent.id === id))
     .filter((agent): agent is NonNullable<typeof agent> => Boolean(agent));
-  const batchNames = name.trim() ? agentBatchNames(name.trim(), count, takenNames) : [];
+  const batchNames = rejoin
+    ? [rejoin.name]
+    : name.trim()
+      ? agentBatchNames(name.trim(), count, takenNames)
+      : [];
+  const nameTaken = rejoin && takenNames?.has(rejoin.name.toLocaleLowerCase());
 
   // Claude Code / Codex 接入时就能选加载哪些本机 MCP，不必先接入再去设置里改
   const mcpSelectable = provider === "claude" || provider === "codex";
@@ -1420,6 +1445,7 @@ export function LocalLaunch({
           provider,
           name: agentName,
           access,
+          ...(rejoin ? { rejoinParticipantId: rejoin.participantId } : {}),
           ...(access === "read-only" ? {} : { cwd: cwd.trim() }),
           ...(mcpSelectable && mcpDisabled.size > 0 ? { mcpDisabled: [...mcpDisabled] } : {}),
         });
@@ -1484,6 +1510,7 @@ export function LocalLaunch({
               <span>{t("名称")}</span>
               <input
                 value={name}
+                readOnly={Boolean(rejoin)}
                 onChange={(event) => {
                   nameEditedRef.current = true;
                   setName(event.target.value);
@@ -1493,17 +1520,19 @@ export function LocalLaunch({
                 aria-label={t("Agent 名称")}
               />
             </label>
-            <div className="local-launch-count">
-              <span aria-hidden="true">{t("数量")}</span>
-              <Stepper
-                value={count}
-                min={1}
-                max={MAX_BATCH}
-                onChange={setCount}
-                label={t("一次接入几个")}
-                disabled={submitting}
-              />
-            </div>
+            {!rejoin && (
+              <div className="local-launch-count">
+                <span aria-hidden="true">{t("数量")}</span>
+                <Stepper
+                  value={count}
+                  min={1}
+                  max={MAX_BATCH}
+                  onChange={setCount}
+                  label={t("一次接入几个")}
+                  disabled={submitting}
+                />
+              </div>
+            )}
           </div>
           {count > 1 && batchNames.length > 1 && (
             <p className="local-launch-batch">
@@ -1588,27 +1617,40 @@ export function LocalLaunch({
               {error}
             </p>
           )}
+          {nameTaken && (
+            <p className="local-agent-error" role="alert">
+              {t("名称 {0} 已被占用，请关闭表单并刷新成员列表。", { 0: rejoin.name })}
+            </p>
+          )}
           <Button
             type="submit"
             variant="primary"
             block
             disabled={
-              submitting || !canManage || !name.trim() || (info !== undefined && !info.installed)
+              submitting ||
+              !canManage ||
+              !name.trim() ||
+              Boolean(nameTaken) ||
+              (info !== undefined && !info.installed)
             }
           >
             {submitting
               ? t("正在启动…")
-              : local.mode === "device"
-                ? t("在 {0} 上启动", { 0: local.hostLabel ?? t("Server 所在电脑") })
-                : t("在本机启动")}
+              : rejoin
+                ? t("确认重新接入")
+                : local.mode === "device"
+                  ? t("在 {0} 上启动", { 0: local.hostLabel ?? t("Server 所在电脑") })
+                  : t("在本机启动")}
             {!submitting && count > 1 ? ` ×${count}` : ""}
           </Button>
         </form>
       )}
-      <details className="local-launch-command">
-        <summary>{t("或复制命令，到其他终端运行")}</summary>
-        {children}
-      </details>
+      {!rejoin && (
+        <details className="local-launch-command">
+          <summary>{t("或复制命令，到其他终端运行")}</summary>
+          {children}
+        </details>
+      )}
     </div>
   );
 }

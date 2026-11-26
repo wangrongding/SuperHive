@@ -556,6 +556,7 @@ describe("local agent routes", () => {
       (await app.inject({ method: "GET", url: "/api/local/agents", headers: owner })).json(),
     ).toEqual({
       agents: [],
+      removedAgents: [],
       // 自动更新默认开；这里的 CLI 路径不存在，判断不出当前版本，所以不带 currentVersion
       autoUpdate: true,
     });
@@ -1350,7 +1351,7 @@ describe("LocalAgentSupervisor", () => {
     expect(supervisor.get(agent.id).status).toBe("running");
     expect(() =>
       supervisor.create({ provider: "omp", name: "Alice", access: "read-only" }),
-    ).toThrow("已被在线成员使用");
+    ).toThrow("已被其他成员使用");
     database.close();
   });
 

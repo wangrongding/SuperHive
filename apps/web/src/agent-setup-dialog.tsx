@@ -1,4 +1,4 @@
-import type { MetaResponse } from "@superhive/protocol";
+import type { MetaResponse, RemovedLocalAgent } from "@superhive/protocol";
 import { t } from "./i18n";
 import { Icon } from "./app-icons";
 import { DocsLink } from "./docs-link";
@@ -53,7 +53,9 @@ export function AgentSetupDialog({
   setAgentProviderChosen,
   takenAgentNames,
   username,
+  rejoin,
 }: {
+  rejoin?: RemovedLocalAgent & { participantId: string };
   agentAccess: AgentAccessMode;
   agentConnected: boolean;
   agentDialogCloseRef: RefObject<HTMLButtonElement | null>;
@@ -101,15 +103,24 @@ export function AgentSetupDialog({
       >
         <header className="agent-dialog-header">
           <div>
-            <h2 id="agent-dialog-title">{t("把 Agent 接入 Hive")}</h2>
+            <h2 id="agent-dialog-title">
+              {rejoin ? t("重新接入 {0}", { 0: rejoin.name }) : t("把 Agent 接入 Hive")}
+            </h2>
             <p id="agent-dialog-description">
-              {local.enabled
-                ? local.mode === "device"
-                  ? t("三步完成：选择 Agent、设置权限，然后一键在 {0} 上启动（也可以复制命令）。", {
-                      0: local.hostLabel ?? t("Server 所在电脑"),
-                    })
-                  : t("三步完成：选择 Agent、设置本机权限，然后一键在本机启动（也可以复制命令）。")
-                : t("三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。")}
+              {rejoin
+                ? t("重新确认运行时、权限和工作目录，然后用原名字接入。")
+                : local.enabled
+                  ? local.mode === "device"
+                    ? t(
+                        "三步完成：选择 Agent、设置权限，然后一键在 {0} 上启动（也可以复制命令）。",
+                        {
+                          0: local.hostLabel ?? t("Server 所在电脑"),
+                        },
+                      )
+                    : t(
+                        "三步完成：选择 Agent、设置本机权限，然后一键在本机启动（也可以复制命令）。",
+                      )
+                  : t("三步完成：选择 Agent、设置本机权限，然后把命令复制到终端运行。")}
             </p>
           </div>
           <IconButton
@@ -121,6 +132,11 @@ export function AgentSetupDialog({
             <Icon name="close" />
           </IconButton>
         </header>
+        {rejoin && (
+          <p className="agent-rejoin-note">
+            {t("使用原名称重新接入，保留成员身份、历史消息和白板署名。请重新确认权限和工作目录。")}
+          </p>
+        )}
 
         <ol className="agent-steps" aria-label={t("接入步骤")}>
           {agentSetupSteps.map(({ step, label: baseLabel }) => {
@@ -184,7 +200,11 @@ export function AgentSetupDialog({
             )}
             {agentStep === 3 && (
               <p>
-                {t("将以")} <code>{agentNameFor(username, agentProvider, takenAgentNames)}</code>{" "}
+                {t("将以")}{" "}
+                <code>
+                  {rejoin?.name ?? agentNameFor(username, agentProvider, takenAgentNames)}
+                </code>{" "}
+                {rejoin && <span>({agentProviderLabel(agentProvider)}) </span>}
                 {t("身份加入 · 权限：")}
                 <strong className={`agent-access-label ${agentAccess}`}>
                   {agentAccessOptions.find((option) => option.id === agentAccess)?.label}
@@ -427,12 +447,15 @@ export function AgentSetupDialog({
                     local={local}
                     provider={agentProvider}
                     access={agentAccess}
-                    defaultName={agentNameFor(username, agentProvider, takenAgentNames)}
+                    defaultName={
+                      rejoin?.name ?? agentNameFor(username, agentProvider, takenAgentNames)
+                    }
+                    rejoin={rejoin}
                     takenNames={takenAgentNames}
                     providerLabel={agentProviderLabel(agentProvider)}
                     onLaunched={() => setAgentConnected(true)}
                   >
-                    {commandSection}
+                    {rejoin ? null : commandSection}
                   </LocalLaunch>
                 </>
               ) : (

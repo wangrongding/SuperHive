@@ -745,7 +745,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           database,
           joinToken,
           isAgentOnline: (name) => onlineAnywhere(name, true),
-          isNameInUse: (name) => onlineAnywhere(name, false),
+          isNameInUse: (name) =>
+            onlineAnywhere(name, false) ||
+            database
+              .participantsNamed(name)
+              .some(
+                (participant) =>
+                  participant.type !== "agent" || Boolean(guestSessionOf(participant)),
+              ),
           runningVersion: (name) => {
             const suffix = `:${name.toLocaleLowerCase()}`;
             for (const [key, set] of onlineByName) {
@@ -858,6 +865,64 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   registerLocalAgentRoutes(app, localAgents, {
+    members: {
+      removedAgents: () =>
+        database
+          .listRemovedLocalAgents()
+          .filter(
+            (agent) =>
+              !database
+                .participantsNamed(agent.name)
+                .some(
+                  (participant) =>
+                    participant.type !== "agent" || Boolean(guestSessionOf(participant)),
+                ),
+          ),
+      requireRemoved: (id, name) => {
+        const participant = database.getParticipant(id);
+        if (!participant)
+          throw new HiveError("MEMBER_NOT_FOUND", serverText("error.member.notFound"));
+        if (
+          name !== undefined &&
+          localAgents
+            ?.list()
+            .some(
+              (agent) =>
+                agent.name.toLocaleLowerCase() === participant.username.toLocaleLowerCase(),
+            )
+        )
+          throw new HiveError(
+            "LOCAL_AGENT_NAME_TAKEN",
+            serverText("error.localAgent.nameExists", { name }),
+          );
+        if (name !== undefined && onlineAnywhere(participant.username, false))
+          throw new HiveError(
+            "LOCAL_AGENT_NAME_TAKEN",
+            serverText("error.localAgent.nameInUse", { name }),
+          );
+        if (
+          participant.type !== "agent" ||
+          participant.status !== "offline" ||
+          guestSessionOf(participant) ||
+          (name !== undefined &&
+            name.toLocaleLowerCase() !== participant.username.toLocaleLowerCase()) ||
+          !database
+            .listRemovedLocalAgents()
+            .some(
+              (agent) =>
+                agent.name.toLocaleLowerCase() === participant.username.toLocaleLowerCase(),
+            )
+        )
+          throw new HiveError("MEMBER_NOT_REMOVED", serverText("error.localAgent.notRemoved"));
+      },
+      hide: (id) => {
+        const participant = database.hideParticipant(id);
+        broadcast(participant.roomId, {
+          type: "presence.changed",
+          participant: withAccess(participant),
+        });
+      },
+    },
     worktrees: {
       list: async (roomId) => {
         const workspace = database.getRoom(roomId)?.workspace;

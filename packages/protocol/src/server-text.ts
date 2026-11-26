@@ -1276,10 +1276,14 @@ export const serverTexts = {
     en: "There's already a local agent named {name}.",
   },
   "error.localAgent.nameInUse": {
-    zh: "名称 {name} 已被在线成员使用，请换一个。",
-    en: "{name} is already used by an online member. Pick another.",
+    zh: "名称 {name} 已被其他成员使用，请换一个。",
+    en: "{name} is already used by another member. Pick another.",
   },
   "error.localAgent.notFound": { zh: "找不到这个本机 Agent。", en: "Local agent not found." },
+  "error.localAgent.notRemoved": {
+    zh: "这个成员不是已移除的本机 Agent，或已经重新接入。请刷新成员列表。",
+    en: "This member is not a removed local agent, or has already rejoined. Refresh the member list.",
+  },
   "error.localAgent.restarting": { zh: "这个 Agent 正在重启。", en: "This agent is restarting." },
   "error.localAgent.restartingSettings": {
     zh: "这个 Agent 正在重启，等它启动后再改设置。",

@@ -58,6 +58,8 @@ export function SidePanel({
   loadWhiteboardHistory,
   local,
   localAgentNames,
+  isRemovedMember,
+  memberRecoveryActions,
   locateProgress,
   membersCloseRef,
   mobilePanel,
@@ -107,6 +109,8 @@ export function SidePanel({
   loadWhiteboardHistory: () => Promise<void>;
   local: LocalAgentsState;
   localAgentNames: Set<string>;
+  isRemovedMember: (participant: Participant) => boolean;
+  memberRecoveryActions: (participant: Participant) => ReactNode;
   locateProgress: (target: ProgressTarget) => void;
   membersCloseRef: RefObject<HTMLButtonElement | null>;
   mobilePanel: MobilePanel | undefined;
@@ -136,6 +140,13 @@ export function SidePanel({
 }) {
   // 每种运行时的模型列表：成员副标题把模型 id 换成名称，设置是「运行时默认」时找出默认的那个
   const runtimeModels = useRuntimeModels(local.canManage ? local.agents : [], local.models);
+  const offlineGroups = [
+    {
+      label: "离线 · {0}",
+      members: offline.filter((participant) => !isRemovedMember(participant)),
+    },
+    { label: "已移除 · {0}", members: offline.filter(isRemovedMember) },
+  ];
   return (
     <aside
       className={`members-panel panel ${mobilePanel === "members" ? "mobile-open" : ""}`}
@@ -423,66 +434,85 @@ export function SidePanel({
                     </div>
                   );
                 })}
-                {offline.length > 0 && (
-                  <p className="offline-label">{t("离线 · {0}", { 0: offline.length })}</p>
+                {offlineGroups.map(
+                  (group) =>
+                    group.members.length > 0 && (
+                      <Fragment key={group.label}>
+                        <p className="offline-label">
+                          {t(group.label, { 0: group.members.length })}
+                        </p>
+                        {group.members.map((participant) => (
+                          <div
+                            key={participant.id}
+                            className="member-row"
+                            onContextMenu={(event) => openMemberMenu(event, participant)}
+                          >
+                            <div className="member muted">
+                              <span
+                                className={`avatar ${participant.type}`}
+                                style={
+                                  participant.type === "human"
+                                    ? avatarHueStyle(participant.username)
+                                    : undefined
+                                }
+                                aria-hidden="true"
+                              >
+                                <AvatarGlyph
+                                  type={participant.type}
+                                  name={participant.username}
+                                  provider={participant.provider}
+                                />
+                              </span>
+                              <span className="member-copy">
+                                <strong className="member-name-row">
+                                  <MemberName name={participant.username} />
+                                  {isLeadAgent(participant) && <LeadMark />}
+                                  {participant.type === "agent" &&
+                                    agentSettingsButton(participant.username)}
+                                  {isOwner && authToken && participant.access && (
+                                    <GuestMemberActions
+                                      participant={participant}
+                                      base={base}
+                                      adminToken={authToken}
+                                      now={accessNow}
+                                      onError={setError}
+                                    />
+                                  )}
+                                </strong>
+                                <small>
+                                  {participant.access ? (
+                                    <>
+                                      {participant.type === "agent"
+                                        ? `${agentProviderLabel(participant.provider)} · `
+                                        : ""}
+                                      <GuestAccessBadge participant={participant} now={accessNow} />
+                                    </>
+                                  ) : participant.type === "agent" ? (
+                                    isRemovedMember(participant) ? (
+                                      t("{0} · 已移除", {
+                                        0: agentProviderLabel(participant.provider),
+                                      })
+                                    ) : (
+                                      t("{0} · 离线", {
+                                        0: agentProviderLabel(participant.provider),
+                                      })
+                                    )
+                                  ) : (
+                                    t("Human · 离线")
+                                  )}
+                                </small>
+                                {memberRecoveryActions(participant)}
+                              </span>
+                              <span
+                                className="status-dot offline"
+                                aria-label={isRemovedMember(participant) ? t("已移除") : t("离线")}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </Fragment>
+                    ),
                 )}
-                {offline.map((participant) => (
-                  <div
-                    key={participant.id}
-                    className="member-row"
-                    onContextMenu={(event) => openMemberMenu(event, participant)}
-                  >
-                    <div className="member muted">
-                      <span
-                        className={`avatar ${participant.type}`}
-                        style={
-                          participant.type === "human"
-                            ? avatarHueStyle(participant.username)
-                            : undefined
-                        }
-                        aria-hidden="true"
-                      >
-                        <AvatarGlyph
-                          type={participant.type}
-                          name={participant.username}
-                          provider={participant.provider}
-                        />
-                      </span>
-                      <span className="member-copy">
-                        <strong className="member-name-row">
-                          <MemberName name={participant.username} />
-                          {isLeadAgent(participant) && <LeadMark />}
-                          {participant.type === "agent" &&
-                            agentSettingsButton(participant.username)}
-                          {isOwner && authToken && participant.access && (
-                            <GuestMemberActions
-                              participant={participant}
-                              base={base}
-                              adminToken={authToken}
-                              now={accessNow}
-                              onError={setError}
-                            />
-                          )}
-                        </strong>
-                        <small>
-                          {participant.access ? (
-                            <>
-                              {participant.type === "agent"
-                                ? `${agentProviderLabel(participant.provider)} · `
-                                : ""}
-                              <GuestAccessBadge participant={participant} now={accessNow} />
-                            </>
-                          ) : participant.type === "agent" ? (
-                            t("{0} · 离线", { 0: agentProviderLabel(participant.provider) })
-                          ) : (
-                            t("Human · 离线")
-                          )}
-                        </small>
-                      </span>
-                      <span className="status-dot offline" aria-label={t("离线")} />
-                    </div>
-                  </div>
-                ))}
               </div>
               {/* 成员栏底部只留一行：邀请成员、接入 Agent 并排，说明放到悬停提示里 */}
               <div className="member-invite" role="group" aria-label={t("添加成员")}>

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   Artifact,
   LocalAgent,
+  RemovedLocalAgent,
   ChatMessage,
   Invocation,
   Participant,
@@ -171,12 +172,13 @@ const pinnedSummary = (id: string) => {
 const localApi: {
   enabled: boolean;
   agents: LocalAgent[];
+  removedAgents: RemovedLocalAgent[];
   requests: Array<{ url: string; method: string; owner: string | null; body?: unknown }>;
   cleanupBatch: { id: string; count: number } | null;
   clearFailure?: string;
   /** Server 所在电脑的平台（/api/local/session 的 hostPlatform）；不给时模拟旧版 Server */
   hostPlatform?: string;
-} = { enabled: false, agents: [], requests: [], cleanupBatch: null };
+} = { enabled: false, agents: [], removedAgents: [], requests: [], cleanupBatch: null };
 
 function localAgent(overrides: Partial<LocalAgent> = {}): LocalAgent {
   return {
@@ -216,6 +218,7 @@ describe("App mention autocomplete", () => {
     whiteboardApi.requests = [];
     localApi.enabled = false;
     localApi.agents = [];
+    localApi.removedAgents = [];
     delete localApi.hostPlatform;
     localApi.requests = [];
     localApi.clearFailure = undefined;
@@ -316,7 +319,11 @@ describe("App mention autocomplete", () => {
             localApi.agents.push(agent);
             return jsonResponse({ agent }, 201);
           }
-          if (url.endsWith("/api/local/agents")) return jsonResponse({ agents: localApi.agents });
+          if (url.endsWith("/api/local/agents"))
+            return jsonResponse({ agents: localApi.agents, removedAgents: localApi.removedAgents });
+          if (/\/api\/local\/members\/[^/]+\/hide$/.test(url)) return jsonResponse({ ok: true });
+          if (/\/api\/local\/agents\/[^/]+\/start$/.test(url))
+            return jsonResponse({ agent: localApi.agents[0] });
           if (/\/api\/local\/rooms\/[^/]+\/attachments\/[^/]+\/open$/.test(url))
             return jsonResponse({ opened: true, name: "plan.md" });
           if (url.includes("/api/local/worktrees/"))
@@ -636,6 +643,180 @@ describe("App mention autocomplete", () => {
     expect(memberNames()).toEqual(expected);
     act(() => snapshot([activeSelf, recent, disconnected, newcomer, offlineRecent, reconnected]));
     expect(memberNames()).toEqual(expected);
+  });
+
+  it("distinguishes stopped local, removed local and remote agents and prefills recovery", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
+    localApi.enabled = true;
+    localApi.agents = [localAgent({ name: "stopped", status: "stopped" })];
+    localApi.removedAgents = [
+      { name: "removed", provider: "claude", cwd: "/Users/alice/old-project" },
+    ];
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const members = ["stopped", "removed", "remote"].map((name, index) => ({
+      ...participant(`00000000-0000-4000-8000-00000000000${index + 2}`, name, "agent"),
+      status: "offline" as const,
+      provider: "claude",
+    }));
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, ...members],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    const panel = document.querySelector<HTMLElement>("#side-panel-members")!;
+    expect(await within(panel).findByRole("button", { name: "启动 stopped" })).toBeTruthy();
+    expect(within(panel).getByText("Claude Code · 已移除")).toBeTruthy();
+    expect(within(panel).queryByRole("button", { name: "启动 remote" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "重新接入 remote" })).toBeNull();
+    await user.click(within(panel).getByRole("button", { name: "启动 stopped" }));
+    expect(
+      localApi.requests.some(
+        (request) =>
+          request.url.endsWith(`/api/local/agents/${localApi.agents[0]!.id}/start`) &&
+          request.owner === "owner-secret",
+      ),
+    ).toBe(true);
+    await user.click(within(panel).getByRole("button", { name: "重新接入 removed" }));
+    expect(screen.getByRole("dialog", { name: "重新接入 removed" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const name = screen.getByRole("textbox", { name: "Agent 名称" }) as HTMLInputElement;
+    expect(name.value).toBe("removed");
+    expect(name.readOnly).toBe(true);
+    expect(
+      within(screen.getByRole("dialog", { name: "重新接入 removed" })).queryByText("Alice-claude"),
+    ).toBeNull();
+    expect((screen.getByRole("textbox", { name: "工作目录" }) as HTMLInputElement).value).toBe(
+      "/Users/alice/old-project",
+    );
+    expect(screen.queryByRole("spinbutton", { name: "一次接入几个" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "复制命令" })).toBeNull();
+    expect(screen.queryByText("或复制命令，到其他终端运行")).toBeNull();
+    act(() =>
+      socket.serverEvent({
+        type: "presence.changed",
+        participant: { ...members[1]!, status: "online" },
+      }),
+    );
+    expect(screen.getByRole("alert").textContent).toContain("名称 removed 已被占用");
+    expect(
+      (screen.getByRole("button", { name: "确认重新接入" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    act(() => socket.serverEvent({ type: "presence.changed", participant: members[1]! }));
+    await user.click(screen.getByRole("button", { name: "确认重新接入" }));
+    expect(
+      localApi.requests.find(
+        (request) => request.url.endsWith("/api/local/agents") && request.method === "POST",
+      )?.body,
+    ).toMatchObject({
+      name: "removed",
+      provider: "claude",
+      access: "workspace",
+      cwd: "/Users/alice/old-project",
+      rejoinParticipantId: members[1]!.id,
+    });
+  });
+
+  it("hides a removed member without dropping its historical sender or recovery menu", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
+    localApi.enabled = true;
+    localApi.removedAgents = [{ name: "removed", provider: "claude", cwd: null }];
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const removed = {
+      ...participant("00000000-0000-4000-8000-000000000002", "removed", "agent"),
+      status: "offline" as const,
+      provider: "claude",
+    };
+    const message: ChatMessage = {
+      id: "00000000-0000-4000-8000-000000000003",
+      roomId: "general",
+      seq: 1,
+      senderId: removed.id,
+      senderName: removed.username,
+      senderType: "agent",
+      content: "historical result",
+      mentions: [],
+      traceId: "00000000-0000-4000-8000-000000000004",
+      hopCount: 0,
+      clientMessageId: "historical",
+      createdAt: removed.joinedAt,
+    };
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, removed],
+        messages: [message],
+        latestSeq: 1,
+      }),
+    );
+    const hide = await screen.findByRole("button", { name: "从列表隐藏 removed" });
+    await user.click(hide);
+    expect(
+      localApi.requests.some(
+        (request) =>
+          request.url.endsWith(`/api/local/members/${removed.id}/hide`) &&
+          request.owner === "owner-secret",
+      ),
+    ).toBe(true);
+    act(() =>
+      socket.serverEvent({ type: "presence.changed", participant: { ...removed, hidden: true } }),
+    );
+    expect(document.querySelector("#side-panel-members")?.textContent).not.toContain("removed");
+    const history = within(
+      document.querySelector(".message-list")!.shadowRoot as unknown as HTMLElement,
+    );
+    expect(await history.findByText("historical result")).toBeTruthy();
+    const sender = history.getByText("removed");
+    fireEvent.contextMenu(sender);
+    expect(screen.getByRole("menuitem", { name: "重新接入" })).toBeTruthy();
+    act(() =>
+      socket.serverEvent({
+        type: "presence.changed",
+        participant: { ...removed, status: "online", hidden: false },
+      }),
+    );
+    expect(document.querySelector("#side-panel-members")?.textContent).toContain("removed");
+  });
+
+  it("does not show host recovery buttons on a remote or unavailable host", async () => {
+    localStorage.setItem("superhive.username", "Alice");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const remote = {
+      ...participant("00000000-0000-4000-8000-000000000002", "remote", "agent"),
+      status: "offline" as const,
+    };
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, remote],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "启动 remote" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新接入 remote" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "从列表隐藏 remote" })).toBeNull();
   });
 
   it("removes expired worktree notices without dismissing a newer batch", async () => {

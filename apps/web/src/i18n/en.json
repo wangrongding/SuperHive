@@ -2188,5 +2188,16 @@
   "暂时无法载入 Hive": "Couldn't load Hive",
   "重新加载": "Reload",
   "与 Hive Server 的连接已中断，正在自动重试。": "The connection to Hive Server was interrupted. Retrying automatically.",
-  "等待 Hive Server 响应超时，请确认服务已启动并检查网络。": "Hive Server took too long to respond. Make sure it's running and check your network."
+  "等待 Hive Server 响应超时，请确认服务已启动并检查网络。": "Hive Server took too long to respond. Make sure it's running and check your network.",
+  "{0} · 已移除": "{0} · Removed",
+  "已移除 · {0}": "Removed · {0}",
+  "重新接入": "Reconnect",
+  "重新确认运行时、权限和工作目录，然后用原名字接入。": "Confirm the runtime, permissions and working directory, then reconnect with the original name.",
+  "重新接入 {0}": "Reconnect {0}",
+  "从列表隐藏": "Hide from list",
+  "从列表隐藏 {0}": "Hide {0} from list",
+  "启动 {0}": "Start {0}",
+  "确认重新接入": "Confirm reconnection",
+  "使用原名称重新接入，保留成员身份、历史消息和白板署名。请重新确认权限和工作目录。": "Reconnect with the original name to keep the member identity, message history and whiteboard attribution. Confirm permissions and the working directory again.",
+  "名称 {0} 已被占用，请关闭表单并刷新成员列表。": "The name {0} is already taken. Close this form and refresh the member list."
 }

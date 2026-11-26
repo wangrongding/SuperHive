@@ -177,6 +177,7 @@ export const participantSchema = z.object({
   context: agentContextStatusSchema.optional(),
   /** Agent 在这个房间最近一轮实际用的模型（从用量账本取，Hive 重启后也在） */
   lastModel: agentLastModelSchema.optional(),
+  hidden: z.boolean().optional(),
 });
 
 /** 外部 IM 渠道：飞书（含 Lark）与个人微信 */
@@ -1406,6 +1407,7 @@ export const createLocalAgentRequestSchema = z.object({
   model: z.string().trim().min(1).max(200).optional(),
   /** 接入时就关掉的本机 MCP（仅 Claude Code / Codex），之后可在 Agent 设置里改 */
   mcpDisabled: z.array(z.string().trim().min(1).max(200)).max(200).optional(),
+  rejoinParticipantId: z.string().uuid().optional(),
 });
 
 export const localAgentSchema = z.object({
@@ -1589,8 +1591,16 @@ export const localDirectoryListingSchema = z.object({
   }),
 });
 
+export const removedLocalAgentSchema = z.object({
+  name: z.string(),
+  provider: localAgentProviderSchema,
+  cwd: z.string().nullable(),
+});
+export type RemovedLocalAgent = z.infer<typeof removedLocalAgentSchema>;
+
 export const localAgentsResponseSchema = z.object({
   agents: z.array(localAgentSchema),
+  removedAgents: z.array(removedLocalAgentSchema).optional(),
   /** 自动更新开关；旧版 Server 不返回 */
   autoUpdate: z.boolean().optional(),
   /** 本机 Agent 用的这份代码当前的版本；判断不出来时没有 */
