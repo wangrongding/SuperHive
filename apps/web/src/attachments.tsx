@@ -18,6 +18,7 @@ import {
   type UploadedAttachment,
 } from "@superhive/protocol";
 import { t } from "./i18n";
+import { createClientMessageId } from "./client-id";
 import { OfficePreview } from "./office-preview/office-preview";
 import { officeKind } from "./office-preview/office-kind";
 import { Tooltip } from "./tooltip";
@@ -159,7 +160,7 @@ export function useAttachmentQueue(options: {
         const name = nameForPastedFile(file, index);
         const isImage = /^image\/(png|jpeg|gif|webp)$/.test(file.type);
         accepted.push({
-          localId: crypto.randomUUID(),
+          localId: createClientMessageId(),
           file,
           name,
           size: file.size,
