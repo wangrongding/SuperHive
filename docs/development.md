@@ -344,7 +344,7 @@ Agent 的行为规则有一份权威来源：`apps/server/src/agent-instructions
 
 ## Agent 防循环和可靠性
 
-系统只响应明确的 `@agent-name`（以及设了主 Agent 的房间里人发的、不带 @ 的消息），拦截 Agent 自我响应，并使用 `clientMessageId` 幂等、严格递增 `seq`、`afterSeq` 补拉、消息 cursor、hop/trace 上限、每分钟限流和持久化去重，避免断线或重试导致重复回复。
+系统只响应明确的 `@agent-name`（以及设了主 Agent 的房间里人发的、不带 @ 的消息），拦截 Agent 自我响应，并使用 `clientMessageId` 幂等、严格递增 `seq`、`afterSeq` 补拉、消息 cursor、来回检测（同一对 Agent 不经人互相 @ 超过 `LIMITS.maxAgentPingPongMessages` 条就暂停）、连续轮数预算、每分钟限流和持久化去重，避免断线或重试导致重复回复。转交链本身不限深度和总条数：`hive_invoke` 的派活和子任务回执是有上游在等结果的结构化委派，不计入轮数预算，也不触发来回检测（rd #6608 之前的 12 跳 / 40 条上限会把正常的长委派链拦下，已取消）。
 
 在此基础上：
 

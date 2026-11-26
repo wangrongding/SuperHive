@@ -1796,10 +1796,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       );
       emitInvocation(database.getInvocation(child.id)!);
     } catch (error) {
-      // 链条深度、条数到顶这类错误重试也无济于事；限流等暂时性错误放回待发，由扫描重试
+      // 派活消息已不在这类错误重试也无济于事；限流等暂时性错误放回待发，由扫描重试
       const permanent =
-        error instanceof HiveError &&
-        ["HOP_LIMIT", "TRACE_LIMIT", "PARENT_NOT_FOUND", "SELF_RESPONSE"].includes(error.code);
+        error instanceof HiveError && ["PARENT_NOT_FOUND", "SELF_RESPONSE"].includes(error.code);
       database.releaseContinuation(child.id, permanent ? "failed" : "pending");
       emitInvocation(
         database.updateInvocation(child.id, {
@@ -1916,24 +1915,36 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   /**
-   * 多维防循环预算（参考 yobiru）：传递深度、人类缺席时的 Agent 连续轮数、每对 Agent 每日次数。
-   * 人发出的 @ 只受深度限制；人在 UI 中追加轮数后，被拦下的调用会被恢复。
+   * 防循环预算（参考 yobiru）：只拦真正的失控，不拦正常推进（rd #6608）。
+   * - 转交链不限深度、不限总条数：hive_invoke 派活 → 回执 → 再派活多少轮都照常派发；
+   * - 来回检测：同一对 Agent 不经人、没有实际产出地互相 @ 太多条，暂停等人确认；
+   * - 人类缺席时 Agent 普通 @ 的连续轮数（费用刹车）、每对 Agent 每天经普通 @ 的次数；
+   * - 每个 Agent 每分钟条数在发消息时就拦（database.createMessage）。
+   * 人发出的 @ 不受这些限制；人在 UI 中追加轮数后，被拦下的调用会被恢复。
    */
   function budgetBlock(
     sender: Participant,
     message: ChatMessage,
     agent: Participant,
   ): { reason: InvocationBlockReason; detail: ServerText } | undefined {
-    const hopLimit = LIMITS.maxHopCount + database.turnAllowance(message.roomId);
-    if (message.hopCount >= hopLimit) {
+    if (sender.type !== "agent") return undefined;
+    // 回执把已放行的委派结果交回发起方：拦下它，发起方就永远等不到结果；
+    // 派活是上游调用在等结果的结构化委派（互相等待已由 DELEGATION_CYCLE 拒绝），两者都不受轮数预算约束
+    if (message.kind === "receipt" || message.kind === "delegation") return undefined;
+    const allowance = database.turnAllowance(message.roomId);
+    // 这对 Agent 已经不经人来回了 limit 条，再往下的唤醒先停一停
+    const pingPongLimit = LIMITS.maxAgentPingPongMessages + allowance;
+    const run = database.pingPongRun(message, sender.id, agent.id, pingPongLimit + 1);
+    if (run > pingPongLimit) {
       return {
-        reason: "hop_limit",
-        detail: serverText("invocation.blockedHop", { limit: hopLimit }),
+        reason: "ping_pong",
+        detail: serverText("invocation.blockedPingPong", {
+          sender: sender.username,
+          agent: agent.username,
+          count: run - 1,
+        }),
       };
     }
-    if (sender.type !== "agent") return undefined;
-    // 回执把已放行的委派结果交回发起方：拦下它，发起方就永远等不到结果，只受转交深度约束
-    if (message.kind === "receipt") return undefined;
     const budget = database.agentTurnBudget(message.roomId);
     if (budget.used > budget.limit) {
       return {
@@ -2196,7 +2207,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   /**
    * Agent 回复另一个 Agent 用 @ 发来的请求、正文却没 @ 回对方时，把回复也送到请求方，
-   * 否则请求方收不到结果、只能靠人提醒。照常走下面的派发循环，hop / trace / 轮数预算一样生效。
+   * 否则请求方收不到结果、只能靠人提醒。照常走下面的派发循环，来回检测和轮数预算一样生效。
    * 不送的情况：已经 @ 了请求方；请求来自人（人看得到回复）；hive_invoke 的委派（有子任务回执）；
    * 进度、回执、委派消息；同一个请求已经送过一次回复。
    */
@@ -3427,12 +3438,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       try {
         post(parentMessageId);
       } catch (error) {
-        // 挂不到触发消息下（链条到顶、消息已不在）就单独发一条，说明不能因此丢掉
-        if (
-          parentMessageId &&
-          error instanceof HiveError &&
-          ["HOP_LIMIT", "TRACE_LIMIT", "PARENT_NOT_FOUND"].includes(error.code)
-        ) {
+        // 挂不到触发消息下（消息已不在）就单独发一条，说明不能因此丢掉
+        if (parentMessageId && error instanceof HiveError && error.code === "PARENT_NOT_FOUND") {
           post(undefined);
         } else {
           throw error;
@@ -3538,7 +3545,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       settledUnknown ||
       invocation.status === "failed" ||
       invocation.status === "cancelled" ||
-      (invocation.status === "blocked" && invocation.blockReason !== "hop_limit");
+      // 旧版按转交深度拦下的（hop_limit）也能直接重试：深度上限已经取消，重试不会再被拦
+      invocation.status === "blocked";
     if (!retryable) {
       throw new HiveError("INVOCATION_NOT_RETRYABLE", serverText("error.invocation.notRetryable"));
     }

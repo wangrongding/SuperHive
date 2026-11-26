@@ -1379,26 +1379,18 @@ export class HiveDatabase {
       if (parent.senderId === sender.id && parent.text?.key !== "roomPost.forwarded") {
         throw new HiveError("SELF_RESPONSE", serverText("error.message.selfResponse"));
       }
-      if (parent.hopCount >= LIMITS.maxHopCount + this.turnAllowance(sender.roomId)) {
-        throw new HiveError("HOP_LIMIT", serverText("error.message.hopLimit"));
-      }
     }
 
+    // 转交链不限深度、不限总条数（rd #6608）：hopCount 只用来记账和挑回复挂在哪条消息下，
+    // 防失控靠每分钟条数和派发时的来回检测（见 app.ts budgetBlock）
     const traceId = parent?.traceId ?? randomUUID();
     const hopCount = parent ? parent.hopCount + 1 : 0;
-    if (sender.type === "agent") {
-      const traceCount = this.db
-        .prepare(
-          "SELECT COUNT(*) AS count FROM messages WHERE trace_id = ? AND sender_type = 'agent'",
-        )
-        .get(traceId) as { count: number };
-      if (traceCount.count >= LIMITS.maxAgentMessagesPerTrace + this.turnAllowance(sender.roomId)) {
-        throw new HiveError("TRACE_LIMIT", serverText("error.message.traceLimit"));
-      }
+    // 子任务回执由服务端以被委派方名义代发，不是它在发言，不占它每分钟的条数
+    if (sender.type === "agent" && input.kind !== "receipt") {
       const since = new Date(Date.now() - 60_000).toISOString();
       const recentCount = this.db
         .prepare(
-          "SELECT COUNT(*) AS count FROM messages WHERE sender_id = ? AND sender_type = 'agent' AND created_at >= ?",
+          "SELECT COUNT(*) AS count FROM messages WHERE sender_id = ? AND sender_type = 'agent' AND created_at >= ? AND (kind IS NULL OR kind != 'receipt')",
         )
         .get(sender.id, since) as { count: number };
       if (recentCount.count >= LIMITS.maxAgentRepliesPerMinute) {
@@ -1505,17 +1497,24 @@ export class HiveDatabase {
     const used = (
       this.db
         .prepare(
-          // 进度消息只是给人看的，不唤醒任何 Agent；子任务回执由服务端代发，是已放行的委派的收尾。都不占连续轮数
-          "SELECT COUNT(*) AS count FROM messages WHERE room_id = ? AND sender_type = 'agent' AND seq > ? AND (kind IS NULL OR kind NOT IN ('progress', 'receipt'))",
+          // 进度消息只是给人看的，不唤醒任何 Agent；子任务回执由服务端代发，是已放行的委派的收尾。都不占连续轮数。
+          // hive_invoke 的派活、被委派方对派活不再 @ 别人的答复也不占：委派链是有人（上游调用）在等结果的正常推进，
+          // 来回多少轮都不该被这个费用刹车拦下（rd #6608）；答复里又 @ 了别人的照常计数
+          `SELECT COUNT(*) AS count FROM messages m
+           WHERE m.room_id = ? AND m.sender_type = 'agent' AND m.seq > ?
+             AND (m.kind IS NULL OR m.kind NOT IN ('progress', 'receipt', 'delegation'))
+             AND NOT (m.mentions = '[]' AND m.parent_message_id IN (
+               SELECT id FROM messages WHERE room_id = ? AND kind = 'delegation' AND seq > ?
+             ))`,
         )
-        .get(roomId, lastHumanSeq) as { count: number }
+        .get(roomId, lastHumanSeq, roomId, lastHumanSeq) as { count: number }
     ).count;
     return { used, limit: LIMITS.maxConsecutiveAgentTurns + this.turnAllowance(roomId) };
   }
 
   /**
-   * 人为当前这段 Agent 对话追加的轮数。连续轮数、转交深度、单链条数共用这一份额度，
-   * 人点「继续」后三者一起放宽，不会出现轮数放开了却被深度卡住的情况；人一发言即失效。
+   * 人为当前这段 Agent 对话追加的轮数。连续轮数、同一对每天次数、来回检测共用这一份额度，
+   * 人点「继续」后一起放宽，不会出现轮数放开了却被另一项卡住的情况；人一发言即失效。
    */
   turnAllowance(roomId: string): number {
     const room = this.db
@@ -1541,14 +1540,47 @@ export class HiveDatabase {
     return next;
   }
 
-  /** 发起方 Agent 在 24 小时内唤醒目标 Agent 的次数（被拦下的不计） */
+  /**
+   * 来回检测：从 message 沿回复链往上数，同一对 Agent（a、b）交替发出的普通消息有几条（含 message 本身）。
+   * 遇到人、第三个 Agent、派活/回执/定时触发这类结构化消息、带附件的消息就断开；
+   * 这对 Agent 在某条消息之后更新过白板，也算有了实际产出，从那里断开。最多数到 cap 条。
+   */
+  pingPongRun(message: ChatMessage, a: string, b: string, cap: number): number {
+    const board = this.db
+      .prepare(
+        "SELECT MAX(updated_at) AS at FROM whiteboard_entries WHERE room_id = ? AND author_id IN (?, ?)",
+      )
+      .get(message.roomId, a, b) as { at: string | null };
+    let count = 0;
+    let expected = message.senderId;
+    let current: ChatMessage | undefined = message;
+    while (current && count < cap) {
+      if (
+        current.senderType !== "agent" ||
+        current.senderId !== expected ||
+        current.kind ||
+        current.deletedAt ||
+        current.attachments?.length ||
+        (board.at && current.createdAt < board.at)
+      ) {
+        break;
+      }
+      count += 1;
+      expected = expected === a ? b : a;
+      current = current.parentMessageId ? this.getMessage(current.parentMessageId) : undefined;
+    }
+    return count;
+  }
+
+  /** 发起方 Agent 在 24 小时内经普通 @ 唤醒目标 Agent 的次数（被拦下的、派活和回执不计） */
   pairTurnsToday(roomId: string, requesterId: string, agentId: string): number {
     const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
     const row = this.db
       .prepare(
-        `SELECT COUNT(*) AS count FROM invocations
-         WHERE room_id = ? AND requester_id = ? AND agent_id = ? AND created_at >= ?
-           AND status != 'blocked'`,
+        `SELECT COUNT(*) AS count FROM invocations i JOIN messages m ON m.id = i.message_id
+         WHERE i.room_id = ? AND i.requester_id = ? AND i.agent_id = ? AND i.created_at >= ?
+           AND i.status != 'blocked'
+           AND (m.kind IS NULL OR m.kind NOT IN ('delegation', 'receipt'))`,
       )
       .get(roomId, requesterId, agentId, since) as { count: number };
     return row.count;
@@ -2059,7 +2091,8 @@ export class HiveDatabase {
       .prepare(
         `SELECT i.* FROM invocations i JOIN messages m ON m.id = i.message_id
          WHERE i.room_id = ? AND i.status = 'blocked'
-           AND i.block_reason IN ('hop_limit', 'consecutive_limit', 'pair_limit') AND m.seq > ?
+           AND i.block_reason IN ('hop_limit', 'consecutive_limit', 'pair_limit', 'ping_pong')
+           AND m.seq > ?
          ORDER BY m.seq ASC`,
       )
       .all(roomId, afterSeq) as InvocationRow[];

@@ -17,17 +17,21 @@ import {
 import { Tooltip } from "./tooltip";
 import { Button } from "./button";
 
-/** 人点一次「继续」为当前 Agent 对话追加的轮数，同时放宽连续轮数、转交深度和单链条数 */
+/** 人点一次「继续」为当前 Agent 对话追加的轮数，同时放宽连续轮数、同一对每天次数和来回检测 */
 export const BUDGET_EXTEND_TURNS = 10;
 
-/** 被预算拦下、可以由人点「继续」恢复的调用：三种预算都随追加的轮数一起放宽 */
+/**
+ * 被防循环预算拦下、可以由人点「继续」恢复的调用：几种预算都随追加的轮数一起放宽。
+ * hop_limit 是旧版转交深度上限留下的记录（上限已取消），点「继续」同样能恢复。
+ */
 export function isExtendableBlock(invocation: Invocation): boolean {
   return (
     !invocation.messageRecalled &&
     invocation.status === "blocked" &&
     (invocation.blockReason === "hop_limit" ||
       invocation.blockReason === "consecutive_limit" ||
-      invocation.blockReason === "pair_limit")
+      invocation.blockReason === "pair_limit" ||
+      invocation.blockReason === "ping_pong")
   );
 }
 
@@ -65,7 +69,7 @@ export function canRetryInvocation(invocation: Invocation, agentOnline = true): 
     (invocation.status === "timed_out" && needsDecision(invocation) && agentOnline) ||
     invocation.status === "failed" ||
     invocation.status === "cancelled" ||
-    (invocation.status === "blocked" && invocation.blockReason !== "hop_limit")
+    invocation.status === "blocked"
   );
 }
 

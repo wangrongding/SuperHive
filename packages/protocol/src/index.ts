@@ -12,24 +12,32 @@ import { worktreeCleanupEventSchema } from "./worktree.js";
 import { pluginsChangedEventSchema } from "./plugin-manifest.js";
 
 export const LIMITS = {
-  /** 一条 Agent 转交链的最大深度；人追加轮数时同步放宽，人一发言即恢复默认 */
-  maxHopCount: 12,
-  /** 一条转交链内 Agent 消息总数；同样随人追加的轮数放宽 */
-  maxAgentMessagesPerTrace: 40,
-  /** 单个 Agent 每分钟最多发言条数，防止失控刷屏 */
+  /**
+   * 单个 Agent 每分钟最多发言条数，防止失控刷屏。服务端代发的子任务回执不算这个 Agent 发言。
+   * 转交链本身不再限深度、不限总条数：hive_invoke 派活 → 回执 → 再派活是正常推进，多少轮都不拦；
+   * 真正的死循环由下面的「来回检测」和每分钟条数兜住（rd #6608）。
+   */
   maxAgentRepliesPerMinute: 12,
+  /**
+   * 来回检测：同一对 Agent 不经人、互相 @ 的连续消息条数（沿回复链往上数，两边交替发言）达到这个数，
+   * 下一次唤醒就暂停等人确认。8 条＝各说 4 次：一问一答、review 一来一回改两轮都在 8 条以内，
+   * 再往下仍没人插话、也没有附件或白板更新这类实际产出，基本是在客套或绕圈子。
+   * 派活（hive_invoke）、子任务回执、定时触发不算互相 @，遇到就断开计数；人点「继续」按追加的轮数放宽。
+   */
+  maxAgentPingPongMessages: 8,
   /** 防止误粘巨型文件；展示折叠和模型上下文预算与此保护上限分开。单位为 UTF-16 code units。 */
   maxMessageLength: 100_000,
   /** 容纳上限内正文的 UTF-8 / JSON 转义开销，同时限制传输层的内存占用。 */
   maxClientPayloadBytes: 1_048_576,
   /**
    * 自上一条人类消息以来，房间内 Agent 发言触发其他 Agent 的最多轮数；人一发言即清零。
-   * 这是费用刹车，不是防循环：环路由转交深度、单链条数、每分钟条数、同一对每天次数兜住，
+   * 这是费用刹车，不是防循环：环路由来回检测、每分钟条数、同一对每天次数兜住，
    * 所以放得比较宽，一次委派几个 Agent、来回 review 两轮的协作不用人中途点「继续」。
-   * 服务端代发的子任务回执、进度消息不计入。
+   * 服务端代发的子任务回执、进度消息不计入；hive_invoke 的派活消息和被委派方对派活的最终答复
+   * （不再 @ 别人时）也不计入，委派链来回多少轮都不占这份额度。
    */
   maxConsecutiveAgentTurns: 50,
-  /** 同一对 Agent（发起方 → 目标）在一个房间里 24 小时内的最多唤醒次数 */
+  /** 同一对 Agent（发起方 → 目标）在一个房间里 24 小时内经普通 @ 的最多唤醒次数；派活和回执不计 */
   maxAgentPairTurnsPerDay: 100,
   /** running 调用超过这么久没有任何回报，视为结果未知（timed_out） */
   invocationStaleMs: 10 * 60_000,
@@ -370,6 +378,8 @@ export const invocationStatusSchema = z.enum([
   "waiting_human",
 ]);
 /**
+ * hop_limit：旧版的转交深度上限，已取消（rd #6608），只为读得懂历史记录保留；
+ * ping_pong：同一对 Agent 不经人互相 @ 来回太多轮，见 LIMITS.maxAgentPingPongMessages。
  * guest_approval：访客（或访客带入的 Agent）@ 了房主的 Agent。房主的 Agent 可能拥有本机完全权限，
  * 不能让远程访客直接驱动，需房主点「批准」（即重试）后才派发；邀请时勾选「允许调度 Agent」可免批准。
  */
@@ -377,6 +387,7 @@ export const invocationBlockReasonSchema = z.enum([
   "hop_limit",
   "consecutive_limit",
   "pair_limit",
+  "ping_pong",
   "guest_approval",
 ]);
 

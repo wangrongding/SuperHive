@@ -37,11 +37,17 @@ describe("currentPausedInvocations", () => {
         blocked("old-hop", "m1", "hop_limit"),
         blocked("new-hop", "m3", "hop_limit"),
         blocked("new-turns", "m3", "consecutive_limit"),
+        blocked("new-ping-pong", "m3", "ping_pong"),
+        blocked("guest", "m3", "guest_approval"),
         { ...blocked("queued", "m3", undefined), status: "queued" },
       ],
       messages,
     );
-    expect(paused.map((invocation) => invocation.id)).toEqual(["new-hop", "new-turns"]);
+    expect(paused.map((invocation) => invocation.id)).toEqual([
+      "new-hop",
+      "new-turns",
+      "new-ping-pong",
+    ]);
   });
 });
 

@@ -1545,42 +1545,44 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
   it("blocks long agent-to-agent chains until a human extends the budget", async () => {
     const { port, join } = await startRoom();
     const { peer: alice } = await join("Alice", "human");
-    const { peer: agentA } = await join("agent-a", "agent");
-    const { peer: agentB } = await join("agent-b", "agent");
+    const names = ["agent-a", "agent-b", "agent-c"];
+    const agents = [];
+    for (const name of names) {
+      const { peer } = await join(name, "agent");
+      const mcp = mcpClient(port, name);
+      await mcp.connect();
+      agents.push({ name, peer, client: mcp.client });
+    }
 
     alice.send({ type: "message.send", clientMessageId: "start", content: "@agent-a 开始" });
-    let trigger = await agentA.next((event) => event.type === "agent.mentioned");
-    const mcpA = mcpClient(port, "agent-a");
-    const mcpB = mcpClient(port, "agent-b");
-    await mcpA.connect();
-    await mcpB.connect();
-
-    // 每轮都由人重新发起一条链，绕开 hop 限制，只测试"连续轮数"预算
-    let speaker = { client: mcpA.client, peer: agentA, other: "agent-b", otherPeer: agentB };
-    let listener = { client: mcpB.client, peer: agentB, other: "agent-a", otherPeer: agentA };
+    let trigger = await agents[0]!.peer.next((event) => event.type === "agent.mentioned");
+    // 三个 Agent 轮流 @ 下一个：没有哪一对在来回，只测试"连续轮数"预算（转交链本身不限深度）
     // 连续轮数上限比单 Agent 每分钟条数大：只假装时间在走（定时器照常），免得先撞上限流
     vi.useFakeTimers({ toFake: ["Date"] });
     for (let turn = 1; turn <= LIMITS.maxConsecutiveAgentTurns; turn += 1) {
       vi.setSystemTime(Date.now() + 6_000);
+      const speaker = agents[(turn - 1) % 3]!;
+      const listener = agents[turn % 3]!;
       const parent = trigger.type === "agent.mentioned" ? trigger.message : undefined;
       const sent = await speaker.client.callTool({
         name: "hive_message_send",
-        arguments: {
-          content: `@${speaker.other} 第 ${turn} 轮`,
-          // 超过 hop 上限后改为不带 parent 的主动消息，链条深度不再增长
-          ...(parent && parent.hopCount < LIMITS.maxHopCount - 1
-            ? { parentMessageId: parent.id }
-            : {}),
-        },
+        arguments: { content: `@${listener.name} 第 ${turn} 轮`, parentMessageId: parent!.id },
       });
       expect(sent.isError).not.toBe(true);
-      trigger = await listener.peer.next((event) => event.type === "agent.mentioned");
-      [speaker, listener] = [listener, speaker];
+      // 回复没 @ 回请求方时也会送到请求方，只认这一轮 @ 给自己的那条
+      trigger = await listener.peer.next(
+        (event) =>
+          event.type === "agent.mentioned" && event.message.content.endsWith(`第 ${turn} 轮`),
+      );
     }
+    const speaker = agents[LIMITS.maxConsecutiveAgentTurns % 3]!;
+    const listener = agents[(LIMITS.maxConsecutiveAgentTurns + 1) % 3]!;
+    const parent = trigger.type === "agent.mentioned" ? trigger.message : undefined;
+    expect(parent!.hopCount).toBeGreaterThan(12);
 
     const sent = await speaker.client.callTool({
       name: "hive_message_send",
-      arguments: { content: `@${speaker.other} 再来一轮` },
+      arguments: { content: `@${listener.name} 再来一轮`, parentMessageId: parent!.id },
     });
     expect(sent.isError).not.toBe(true);
     const blocked = invocationOf(
@@ -1588,10 +1590,10 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
         (event) => event.type === "invocation.updated" && event.invocation.status === "blocked",
       ),
     );
-    expect(blocked).toMatchObject({ blockReason: "consecutive_limit", agentName: speaker.other });
-    await expect(
-      listener.peer.next((event) => event.type === "agent.mentioned", 200),
-    ).rejects.toThrow();
+    expect(blocked).toMatchObject({ blockReason: "consecutive_limit", agentName: listener.name });
+    const again = (event: ServerEvent) =>
+      event.type === "agent.mentioned" && event.message.content.endsWith("再来一轮");
+    await expect(listener.peer.next(again, 200)).rejects.toThrow();
 
     alice.send({ type: "budget.extend", turns: 3 });
     const resumed = invocationOf(
@@ -1601,11 +1603,10 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
     );
     expect(resumed).toMatchObject({ status: "queued", attempts: 2 });
     expect(resumed.blockReason).toBeUndefined();
-    const delivered = await listener.peer.next((event) => event.type === "agent.mentioned");
+    const delivered = await listener.peer.next(again);
     expect(delivered.type === "agent.mentioned" && delivered.retry).toBe(true);
 
-    await mcpA.client.close();
-    await mcpB.client.close();
+    for (const agent of agents) await agent.client.close();
   });
 
   describe("replies to another agent's request", () => {
@@ -1721,7 +1722,7 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       await helperMcp.client.close();
     });
 
-    it("keeps reply delivery under the hop limit", async () => {
+    it("applies back-and-forth detection to reply delivery too", async () => {
       const { port, join } = await startRoom();
       const { peer: alice } = await join("Alice", "human");
       const { peer: agentA } = await join("agent-a", "agent");
@@ -1736,15 +1737,16 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
         { client: mcpA.client, other: "agent-b", otherPeer: agentB },
         { client: mcpB.client, other: "agent-a", otherPeer: agentA },
       ];
-      for (let hop = 1; hop <= LIMITS.maxHopCount; hop += 1) {
-        const step = route[(hop - 1) % 2]!;
+      const limit = LIMITS.maxAgentPingPongMessages;
+      for (let turn = 1; turn <= limit + 1; turn += 1) {
+        const step = route[(turn - 1) % 2]!;
         const parent = trigger.type === "agent.mentioned" ? trigger.message : undefined;
-        // 最后一跳只回复、不 @ 对方：代为送达同样受 hop 上限约束
-        const last = hop === LIMITS.maxHopCount;
+        // 最后一条只回复、不 @ 对方：代为送达同样受来回检测约束
+        const last = turn === limit + 1;
         await step.client.callTool({
           name: "hive_message_send",
           arguments: {
-            content: last ? `hop ${hop} 回复` : `@${step.other} hop ${hop}`,
+            content: last ? `第 ${turn} 条回复` : `@${step.other} 第 ${turn} 条`,
             parentMessageId: parent!.id,
           },
         });
@@ -1755,13 +1757,13 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
           (event) => event.type === "invocation.updated" && event.invocation.status === "blocked",
         ),
       );
-      expect(blocked.blockReason).toBe("hop_limit");
+      expect(blocked.blockReason).toBe("ping_pong");
       await mcpA.client.close();
       await mcpB.client.close();
     });
   });
 
-  it("marks hop-limited mentions as blocked instead of silently dropping them", async () => {
+  it("pauses two agents bouncing @ back and forth until a human continues", async () => {
     const { port, join } = await startRoom();
     const { peer: alice } = await join("Alice", "human");
     const { peer: agentA } = await join("agent-a", "agent");
@@ -1777,14 +1779,17 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       { client: mcpA.client, other: "agent-b", otherPeer: agentB },
       { client: mcpB.client, other: "agent-a", otherPeer: agentA },
     ];
-    for (let hop = 1; hop <= LIMITS.maxHopCount; hop += 1) {
-      const step = route[(hop - 1) % 2]!;
+    const limit = LIMITS.maxAgentPingPongMessages;
+    // 前 limit 条照常互相唤醒，第 limit + 1 条的唤醒被暂停
+    for (let turn = 1; turn <= limit + 1; turn += 1) {
+      const step = route[(turn - 1) % 2]!;
       const parent = trigger.type === "agent.mentioned" ? trigger.message : undefined;
-      await step.client.callTool({
+      const sent = await step.client.callTool({
         name: "hive_message_send",
-        arguments: { content: `@${step.other} hop ${hop}`, parentMessageId: parent!.id },
+        arguments: { content: `@${step.other} 第 ${turn} 条`, parentMessageId: parent!.id },
       });
-      if (hop < LIMITS.maxHopCount) {
+      expect(sent.isError).not.toBe(true);
+      if (turn <= limit) {
         trigger = await step.otherPeer.next((event) => event.type === "agent.mentioned");
       }
     }
@@ -1793,12 +1798,11 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
         (event) => event.type === "invocation.updated" && event.invocation.status === "blocked",
       ),
     );
-    expect(blocked.blockReason).toBe("hop_limit");
-    alice.send({ type: "invocation.retry", invocationId: blocked.id });
-    const refused = await alice.next((event) => event.type === "error");
-    expect(refused.type === "error" && refused.code).toBe("INVOCATION_NOT_RETRYABLE");
+    expect(blocked).toMatchObject({ blockReason: "ping_pong", agentName: "agent-b" });
+    expect(blocked.detail).toContain("互相 @ 了 8 条");
+    await expect(agentB.next((event) => event.type === "agent.mentioned", 200)).rejects.toThrow();
 
-    // 人点「继续」后深度上限随追加轮数一起放宽，被深度拦下的调用恢复投递，链条可以接着往下走
+    // 人点「继续」后来回检测随追加轮数一起放宽，被暂停的唤醒恢复投递，还能再来回 turns 条
     alice.send({ type: "budget.extend", turns: 2 });
     const resumed = invocationOf(
       await alice.next(
@@ -1806,17 +1810,58 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       ),
     );
     expect(resumed).toMatchObject({ status: "queued", attempts: 2 });
-    const delivered = await agentA.next(
+    const delivered = await agentB.next(
       (event) => event.type === "agent.mentioned" && event.retry === true,
     );
     const last = delivered.type === "agent.mentioned" ? delivered.message : undefined;
-    expect(last?.hopCount).toBe(LIMITS.maxHopCount);
-    const reply = await mcpA.client.callTool({
+    const reply = await mcpB.client.callTool({
       name: "hive_message_send",
-      arguments: { content: "@agent-b 续上", parentMessageId: last!.id },
+      arguments: { content: "@agent-a 续上", parentMessageId: last!.id },
     });
     expect(reply.isError).not.toBe(true);
-    await agentB.next((event) => event.type === "agent.mentioned");
+    await agentA.next((event) => event.type === "agent.mentioned");
+    await mcpA.client.close();
+    await mcpB.client.close();
+  });
+
+  it("resets back-and-forth detection when a human speaks", async () => {
+    const { port, join } = await startRoom();
+    const { peer: alice } = await join("Alice", "human");
+    const { peer: agentA } = await join("agent-a", "agent");
+    const { peer: agentB } = await join("agent-b", "agent");
+    const mcpA = mcpClient(port, "agent-a");
+    const mcpB = mcpClient(port, "agent-b");
+    await mcpA.connect();
+    await mcpB.connect();
+    const route = [
+      { client: mcpA.client, other: "agent-b", otherPeer: agentB },
+      { client: mcpB.client, other: "agent-a", otherPeer: agentA },
+    ];
+    const limit = LIMITS.maxAgentPingPongMessages;
+    // 两段对话各来回 limit 条，中间人插了一句话：都不会被暂停
+    for (const round of [1, 2]) {
+      alice.send({
+        type: "message.send",
+        clientMessageId: `start-${round}`,
+        content: `@agent-a 第 ${round} 段`,
+      });
+      let trigger = await agentA.next((event) => event.type === "agent.mentioned");
+      for (let turn = 1; turn <= limit; turn += 1) {
+        const step = route[(turn - 1) % 2]!;
+        const parent = trigger.type === "agent.mentioned" ? trigger.message : undefined;
+        await step.client.callTool({
+          name: "hive_message_send",
+          arguments: { content: `@${step.other} ${round}-${turn}`, parentMessageId: parent!.id },
+        });
+        trigger = await step.otherPeer.next((event) => event.type === "agent.mentioned");
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(
+      alice.drain(
+        (event) => event.type === "invocation.updated" && event.invocation.status === "blocked",
+      ),
+    ).toHaveLength(0);
     await mcpA.client.close();
     await mcpB.client.close();
   });
@@ -2267,11 +2312,11 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       await plannerMcp.client.close();
     });
 
-    it("returns immediately when the subtask is blocked by the budget", async () => {
-      const { plannerMcp, workerMcp, invoke } = await delegationRoom();
+    it("keeps delegating after the consecutive-turn budget for plain @ is used up", async () => {
+      const { worker, plannerMcp, workerMcp, invoke } = await delegationRoom();
       // 两个 Agent 轮流发言，耗尽「人上次发言以来的 Agent 连续发言」预算（避开单 Agent 每分钟上限）
       vi.useFakeTimers({ toFake: ["Date"] });
-      for (let index = 0; index < LIMITS.maxConsecutiveAgentTurns; index += 1) {
+      for (let index = 0; index <= LIMITS.maxConsecutiveAgentTurns; index += 1) {
         vi.setSystemTime(Date.now() + 6_000);
         const sent = await (index % 2 ? plannerMcp : workerMcp).client.callTool({
           name: "hive_message_send",
@@ -2279,17 +2324,71 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
         });
         expect(sent.isError).not.toBe(true);
       }
+      // 派活是上游在等结果的结构化委派，不受这个费用刹车约束（rd #6608）
       const { data } = await invoke({ agent: "worker", task: "再做一件事" });
-      expect(data).toMatchObject({ status: "blocked", blockReason: "consecutive_limit" });
-      const waited = await plannerMcp.client.callTool({
-        name: "hive_wait",
-        arguments: { invocationId: data.invocationId, timeoutSeconds: 10 },
-      });
-      expect(waited.structuredContent).toMatchObject({ done: false, needsHuman: true });
+      expect(data).toMatchObject({ status: "queued" });
+      await worker.next(
+        (event) => event.type === "agent.mentioned" && event.message.kind === "delegation",
+      );
 
       await plannerMcp.client.close();
       await workerMcp.client.close();
     });
+
+    // 180 条消息逐条走 WebSocket 往返，全量并行跑、机器负载高时默认 5 秒不够
+    it("never blocks a long delegate → receipt → delegate chain", async () => {
+      const { alice, planner, worker, plannerMcp, workerMcp, invoke } = await delegationRoom();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      // 60 轮 = 60 条派活 + 60 条答复 + 60 条回执，远超旧版 12 跳 / 40 条的上限
+      const rounds = 60;
+      let lastReceipt: { id: string; hopCount: number } | undefined;
+      for (let round = 1; round <= rounds; round += 1) {
+        vi.setSystemTime(Date.now() + 6_000);
+        const { data } = await invoke({
+          agent: "worker",
+          task: `第 ${round} 步`,
+          clientMessageId: `step-${round}`,
+        });
+        expect(data).toMatchObject({ status: "queued" });
+        const delegated = await worker.next(
+          (event) => event.type === "agent.mentioned" && event.message.kind === "delegation",
+        );
+        const delegation = delegated.type === "agent.mentioned" ? delegated.message : undefined;
+        const reply = await workerMcp.client.callTool({
+          name: "hive_message_send",
+          arguments: { content: `第 ${round} 步做完了`, parentMessageId: delegation!.id },
+        });
+        expect(reply.isError).not.toBe(true);
+        const receiptEvent = await planner.next(
+          (event) => event.type === "agent.mentioned" && event.message.kind === "receipt",
+        );
+        const receipt = receiptEvent.type === "agent.mentioned" ? receiptEvent.message : undefined;
+        // 委派方收到回执后接着这条回执往下派活，链条越来越深
+        planner.send({ type: "invocation.report", messageId: receipt!.id, status: "running" });
+        await alice.next(
+          (event) =>
+            event.type === "invocation.updated" &&
+            event.invocation.messageId === receipt!.id &&
+            event.invocation.status === "running",
+        );
+        lastReceipt = receipt;
+      }
+      expect(lastReceipt!.hopCount).toBeGreaterThanOrEqual(rounds * 2);
+      expect(
+        alice.drain(
+          (event) => event.type === "invocation.updated" && event.invocation.status === "blocked",
+        ),
+      ).toHaveLength(0);
+      // 委派方最后的汇总照常发出
+      const summary = await plannerMcp.client.callTool({
+        name: "hive_message_send",
+        arguments: { content: "全部做完了", parentMessageId: lastReceipt!.id },
+      });
+      expect(summary.isError).not.toBe(true);
+
+      await plannerMcp.client.close();
+      await workerMcp.client.close();
+    }, 30_000);
 
     it("tells the delegator when the subtask outcome is unknown", async () => {
       const { planner, worker, plannerMcp, workerMcp, invoke } = await delegationRoom();

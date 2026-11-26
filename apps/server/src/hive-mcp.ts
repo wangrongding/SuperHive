@@ -360,7 +360,7 @@ export function createHiveMcpServer(context: HiveMcpContext): McpServer {
     "hive_message_send",
     {
       title: "Send a Hive room message",
-      description: `以当前已连接 Agent 身份向 Hive 房间发送一条公共消息。可在 content 中 @其他在线 Agent。回复或委派时传入触发消息 ID；执行调用期间省略时，服务端会自动挂到当前触发消息下，防循环上限照常生效。人发起的任务预计要做很久（比如超过 5 分钟）时，开工先传 progress=true 发一条进度，说清打算怎么做、大概要多久；之后完成一个阶段、发现和预期不一样或有中间产物时再发：人发起的任务每个最多 ${LIMITS.maxProgressPerTask} 条，Agent 之间委派的任务 1 条；进度不算这一轮的回复（最终结论照常直接输出），也不会唤醒其他 Agent（要别人干活用 hive_invoke）。不要发心跳、不要发百分比。`,
+      description: `以当前已连接 Agent 身份向 Hive 房间发送一条公共消息。可在 content 中 @其他在线 Agent。回复或委派时传入触发消息 ID；执行调用期间省略时，服务端会自动挂到当前触发消息下，防循环检测照常生效。人发起的任务预计要做很久（比如超过 5 分钟）时，开工先传 progress=true 发一条进度，说清打算怎么做、大概要多久；之后完成一个阶段、发现和预期不一样或有中间产物时再发：人发起的任务每个最多 ${LIMITS.maxProgressPerTask} 条，Agent 之间委派的任务 1 条；进度不算这一轮的回复（最终结论照常直接输出），也不会唤醒其他 Agent（要别人干活用 hive_invoke）。不要发心跳、不要发百分比。`,
       inputSchema: {
         content: messageContentSchema.describe("要发送到公共房间的文本"),
         clientMessageId: z

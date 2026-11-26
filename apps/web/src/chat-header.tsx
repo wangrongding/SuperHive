@@ -500,7 +500,7 @@ export function ChatNotices({
               <p>
                 <strong>{t("Agent 连续对话已暂停，等待你确认")}</strong>
                 {pausedAgentNames.slice(0, 3).join(t("、"))}
-                {pausedAgentNames.length > 3 ? t(" 等") : ""} {t("的调用触及了轮数上限。")}
+                {pausedAgentNames.length > 3 ? t(" 等") : ""} {t("的调用触及了防循环限制。")}
               </p>
               <div className="notification-prompt-actions">
                 <Button variant="primary" onClick={extendAgentBudget}>

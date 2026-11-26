@@ -240,53 +240,88 @@ describe("HiveDatabase", () => {
     expect(db.latestSeq("general")).toBe(message.seq + 1);
   });
 
-  it("stops dispatch chains at the hop limit", () => {
+  it("does not cap how deep a reply chain can go", () => {
     vi.useFakeTimers();
-    // 分批推进时间，只测深度，不触发每分钟发言上限
+    // 转交深度上限已取消（rd #6608）：分批推进时间避开每分钟条数，链条可以一直往下接
     let tail = db.createMessage(human, { content: "start", clientMessageId: "hop-root" }).message;
-    for (let hop = 1; hop <= LIMITS.maxHopCount; hop += 1) {
-      vi.advanceTimersByTime(60_000);
+    for (let hop = 1; hop <= 120; hop += 1) {
+      vi.advanceTimersByTime(10_000);
       tail = db.createMessage(hop % 2 ? agentA : agentB, {
         content: `hop ${hop}`,
         clientMessageId: `hop-${hop}`,
         parentMessageId: tail.id,
       }).message;
     }
-    expect(tail.hopCount).toBe(LIMITS.maxHopCount);
-    expect(() =>
-      db.createMessage(tail.senderId === agentA.id ? agentB : agentA, {
-        content: "too far",
-        clientMessageId: "hop-over",
-        parentMessageId: tail.id,
-      }),
-    ).toThrowError(/转交深度已到上限/);
+    expect(tail.hopCount).toBe(120);
     vi.useRealTimers();
   });
 
-  it("extends the hop limit by the turns a human granted, until the next human message", () => {
-    vi.useFakeTimers();
-    let tail = db.createMessage(human, { content: "start", clientMessageId: "grant-root" }).message;
-    const send = (sender: Participant, id: string) => {
-      vi.advanceTimersByTime(60_000);
+  describe("pingPongRun", () => {
+    const send = (sender: Participant, id: string, parent?: string, extra = {}) => {
+      vi.advanceTimersByTime(10_000);
       return db.createMessage(sender, {
         content: id,
         clientMessageId: id,
-        parentMessageId: tail.id,
+        ...(parent ? { parentMessageId: parent } : {}),
+        ...extra,
       }).message;
     };
-    for (let hop = 1; hop <= LIMITS.maxHopCount; hop += 1)
-      tail = send(hop % 2 ? agentA : agentB, `grant-${hop}`);
-    const next = () => (tail.senderId === agentA.id ? agentB : agentA);
-    expect(() => send(next(), "grant-blocked")).toThrowError(/转交深度已到上限/);
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
 
-    db.extendAgentTurns("general", 1);
-    tail = send(next(), "grant-extended");
-    expect(tail.hopCount).toBe(LIMITS.maxHopCount + 1);
+    it("counts alternating messages between the same pair back to the human", () => {
+      let tail = send(human, "pp-root");
+      for (let index = 1; index <= 6; index += 1) {
+        tail = send(index % 2 ? agentA : agentB, `pp-${index}`, tail.id);
+      }
+      expect(db.pingPongRun(tail, agentB.id, agentA.id, 100)).toBe(6);
+      // cap 封顶，不会把整条链都走一遍
+      expect(db.pingPongRun(tail, agentB.id, agentA.id, 4)).toBe(4);
+    });
 
-    // 人一发言，追加额度失效，旧链条恢复默认深度上限
-    db.createMessage(human, { content: "ok", clientMessageId: "grant-human" });
-    expect(() => send(next(), "grant-after-human")).toThrowError(/转交深度已到上限/);
-    vi.useRealTimers();
+    it("breaks at a third agent, a delegation, a receipt or a message with attachments", () => {
+      const agentC = db.upsertParticipant({
+        roomId: "general",
+        username: "agent-c",
+        type: "agent",
+      });
+      const root = send(human, "br-root");
+      const third = send(agentC, "br-c", root.id);
+      let tail = send(agentA, "br-a1", third.id);
+      tail = send(agentB, "br-b1", tail.id);
+      expect(db.pingPongRun(tail, agentB.id, agentA.id, 100)).toBe(2);
+
+      const delegation = send(agentA, "br-delegate", root.id, { kind: "delegation" });
+      tail = send(agentB, "br-b2", delegation.id);
+      expect(db.pingPongRun(tail, agentB.id, agentA.id, 100)).toBe(1);
+
+      const withFile = send(agentA, "br-file", root.id, {
+        attachments: [
+          {
+            id: "00000000-0000-4000-8000-000000000001",
+            name: "report.md",
+            mime: "text/markdown",
+            size: 10,
+            kind: "text",
+            sha256: "a".repeat(64),
+          },
+        ],
+      });
+      tail = send(agentB, "br-b3", withFile.id);
+      tail = send(agentA, "br-a3", tail.id);
+      expect(db.pingPongRun(tail, agentA.id, agentB.id, 100)).toBe(2);
+    });
+
+    it("treats a whiteboard update by either agent as real output", () => {
+      let tail = send(human, "wb-root");
+      for (let index = 1; index <= 4; index += 1) {
+        tail = send(index % 2 ? agentA : agentB, `wb-${index}`, tail.id);
+      }
+      vi.advanceTimersByTime(10_000);
+      db.upsertWhiteboardEntry(agentA, { key: "wb", slot: "in_progress", summary: "做到一半" });
+      tail = send(agentA, "wb-5", tail.id);
+      expect(db.pingPongRun(tail, agentA.id, agentB.id, 100)).toBe(1);
+    });
   });
 
   it("claims a subtask receipt exactly once and lists receipts still owed", () => {
@@ -544,35 +579,43 @@ describe("HiveDatabase", () => {
     ).toThrowError(/每分钟上限/);
   });
 
-  it("limits the agent messages in one trace", () => {
+  it("does not cap the agent messages in one trace", () => {
+    vi.useFakeTimers();
     const root = db.createMessage(human, {
       content: "root",
       clientMessageId: "trace-root",
     }).message;
-    for (let index = 0; index < LIMITS.maxAgentMessagesPerTrace; index += 1) {
-      const agent = db.upsertParticipant({
-        roomId: "general",
-        username: `trace-agent-${index}`,
-        type: "agent",
-      });
-      db.createMessage(agent, {
+    // 旧版一条链最多 40 条 Agent 消息，长委派链会被拦下（rd #6608）
+    for (let index = 0; index < 120; index += 1) {
+      vi.advanceTimersByTime(10_000);
+      db.createMessage(index % 2 ? agentA : agentB, {
         content: `reply ${index}`,
         clientMessageId: `trace-${index}`,
         parentMessageId: root.id,
       });
     }
-    const lastAgent = db.upsertParticipant({
-      roomId: "general",
-      username: "trace-agent-last",
-      type: "agent",
-    });
+    expect(db.getMessages("general").filter((m) => m.traceId === root.traceId)).toHaveLength(121);
+    vi.useRealTimers();
+  });
+
+  it("does not count server-sent receipts toward the delegate's per-minute limit", () => {
+    const root = db.createMessage(human, { content: "root", clientMessageId: "rr-root" }).message;
+    for (let index = 0; index < LIMITS.maxAgentRepliesPerMinute; index += 1) {
+      db.createMessage(agentB, {
+        content: `receipt ${index}`,
+        clientMessageId: `rr-receipt-${index}`,
+        parentMessageId: root.id,
+        kind: "receipt",
+      });
+    }
+    // 回执不算 agent-b 自己发言：它仍能照常回复，回执本身也不受每分钟条数限制
     expect(() =>
-      db.createMessage(lastAgent, {
-        content: "one too many",
-        clientMessageId: "trace-over",
+      db.createMessage(agentB, {
+        content: "own reply",
+        clientMessageId: "rr-own",
         parentMessageId: root.id,
       }),
-    ).toThrowError(/发言已到上限/);
+    ).not.toThrow();
   });
 
   it("preserves the token and message history across a database restart", () => {

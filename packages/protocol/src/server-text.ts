@@ -344,6 +344,7 @@ export const serverTexts = {
     zh: "Agent 在线但没有确认收到（可能是不支持回报状态的旧版 superhive）",
     en: "The agent is online but never confirmed receipt (it may be an older superhive that can't report status)",
   },
+  // 转交深度上限已取消（rd #6608），留着只为显示旧的拦截记录
   "invocation.blockedHop": {
     zh: "Agent 之间的转交已达 {limit} 跳上限，点「继续」或由人重新 @ 即可续上。",
     en: "Agents have handed this off {limit} times, the limit. Select Continue or @ an agent again to resume.",
@@ -351,6 +352,10 @@ export const serverTexts = {
   "invocation.blockedTurns": {
     zh: "自上次有人发言以来 Agent 已连续对话 {used} 轮（上限 {limit}），等待人确认后继续。",
     en: "Agents have taken {used} turns in a row since anyone last spoke (limit {limit}). Waiting for someone to continue.",
+  },
+  "invocation.blockedPingPong": {
+    zh: "{sender} 和 {agent} 没人插话地互相 @ 了 {count} 条，也没有附件或白板更新，像在来回绕圈，等人确认后继续。",
+    en: "{sender} and {agent} have @-mentioned each other {count} times in a row with no one else joining and nothing produced (no attachments or board updates). This looks like a loop, so it's waiting for someone to continue.",
   },
   "invocation.blockedPair": {
     zh: "{sender} 今天已唤醒 {agent} {limit} 次，达到上限。",
@@ -1323,6 +1328,7 @@ export const serverTexts = {
   },
   "error.member.notFound": { zh: "找不到这个成员。", en: "Member not found." },
   "error.message.empty": { zh: "消息内容为空。", en: "The message is empty." },
+  // hopLimit / traceLimit：转交深度和单链条数上限已取消（rd #6608），留着只为显示旧记录里的原因
   "error.message.hopLimit": {
     zh: "这段 Agent 对话的转交深度已到上限。",
     en: "This agent conversation has been handed off too many times.",

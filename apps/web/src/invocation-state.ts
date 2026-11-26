@@ -145,7 +145,9 @@ export function stateExplanation(
         text:
           state.reason === "guest_approval"
             ? t("访客发起的任务，在等房主批准。")
-            : t("Agent 之间连续对话超过预算被拦下，需要人点「继续」才会执行。"),
+            : state.reason === "ping_pong"
+              ? t("两个 Agent 没人插话地互相 @ 来回太多轮，像在绕圈子，需要人点「继续」才会执行。")
+              : t("Agent 之间连续对话超过预算被拦下，需要人点「继续」才会执行。"),
       };
     case "cancelling":
       return {

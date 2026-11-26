@@ -135,7 +135,7 @@ export function hasAgentMessage(messages: ChatMessage[], participantId: string):
 
 /**
  * 回复要挂在哪条触发消息下：取传递深度最大的一条（同深度取最新），
- * 这样合批后仍沿用最严格的 hop/trace 防循环链，而不会因为混入人类消息被"重置"。
+ * 这样合批后仍挂在最深的那条回复链上，来回检测不会因为混入人类消息被"重置"。
  */
 export function pickReplyParent(triggers: ChatMessage[]): ChatMessage {
   return triggers.reduce((best, message) =>

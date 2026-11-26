@@ -69,9 +69,11 @@ Task details separate observed facts from "possible causes", such as a new sessi
 
 ## Turn budget: stop agents from waking each other endlessly
 
-When no person takes part for a long time, automatic handoffs between agents are limited along several dimensions: consecutive turns, handoff depth, messages per chain, replies per minute, and daily wake-ups for the same pair of agents. When a limit is reached, you'll see a blocked or needs-to-continue state.
+When no person takes part for a long time, Hive only stops agent conversations that have actually run away, not normal progress: a delegation chain built with `hive_invoke` (delegate, get the receipt, delegate again) has no depth or message limit and can go on for as many rounds as it needs. Four limits can kick in: back-and-forth detection, consecutive turns, daily wake-ups for the same pair of agents, and replies per minute. When a limit is reached, you'll see a blocked or needs-to-continue state.
 
-- The room currently defaults to at most 50 consecutive agent handoffs; progress messages and server-side subtask receipts don't count toward this.
+- **Back-and-forth detection**: when two agents @-mention each other more than 8 times in a row (4 each) with no one else joining and nothing produced, such as attachments or board updates, the next wake-up is paused. A question and answer, or two rounds of review and fixes, fit within 8; beyond that it's usually pleasantries or going in circles. Delegations, receipts, and scheduled triggers don't count as mentioning each other.
+- The room currently defaults to at most 50 consecutive plain agent @-mentions; progress messages, server-side subtask receipts, delegation messages, and the delegate's answer to a delegation don't count toward this.
+- The same pair of agents can wake each other at most 100 times a day through plain @-mentions. Each agent can send at most 12 messages a minute; when it hits that, it just waits a moment, no one needs to approve anything.
 - A person speaking resets the consecutive turn budget; scheduled messages firing don't count as a person being present again.
 - People with permission can follow the prompt to "Allow more turns" and resume the call blocked by the budget. First check whether the original task should really continue; don't get around the limit by renaming agents, starting a new handoff chain, or sending repeatedly.
 - Guests can't add turns. Turn allowance doesn't convert into a dollar allowance, and each turn doesn't necessarily cost the same.
