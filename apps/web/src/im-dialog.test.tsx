@@ -148,6 +148,63 @@ describe("我的 IM 连接", () => {
     );
   });
 
+  it.each(["zh-CN", "en"] as const)(
+    "%s：跨房间全部推送默认关闭，开关保存且说明过滤范围和摘要频率",
+    async (locale) => {
+      setLocalePreference(locale);
+      let connection: ImConnection = { ...feishu, level: "all" };
+      const calls = mockServer((route) => {
+        if (route.url === "/api/im/channels")
+          return { feishu: { enabled: true }, wechat: { enabled: false } };
+        if (route.url === "/api/im/connections") return { connections: [connection] };
+        if (route.url.endsWith("/cross-room-all"))
+          connection = { ...connection, ...(route.body as { crossRoomAll: boolean }) };
+        return connection;
+      });
+      renderDialog();
+      const label = locale === "en" ? "Include all messages from other rooms" : "其它房间也推全部";
+      const toggle = await screen.findByRole("switch", { name: new RegExp(label) });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      expect(
+        screen.getByText(
+          locale === "en"
+            ? /All levels exclude scheduled trigger notes/
+            : /所有档位均不推定时触发备忘/,
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(locale === "en" ? /around 20 per hour/ : /约 20 张\/小时/),
+      ).toBeTruthy();
+      fireEvent.click(toggle);
+      await waitFor(() =>
+        expect(
+          screen.getByRole("switch", { name: new RegExp(label) }).getAttribute("aria-checked"),
+        ).toBe("true"),
+      );
+      expect(calls.find((route) => route.method === "POST")).toMatchObject({
+        url: `/api/im/connections/${feishu.id}/cross-room-all`,
+        body: { crossRoomAll: true },
+      });
+      fireEvent.click(screen.getByRole("switch", { name: new RegExp(label) }));
+      await waitFor(() => expect(connection.crossRoomAll).toBe(false));
+    },
+  );
+
+  it.each([
+    { level: "mine", scope: "all" },
+    { level: "all", scope: "current" },
+  ] as const)("跨房间开关仅在 all 档且接收所有房间时出现：%o", async (setting) => {
+    mockServer((route) => {
+      if (route.url === "/api/im/channels")
+        return { feishu: { enabled: true }, wechat: { enabled: false } };
+      if (route.url === "/api/im/connections") return { connections: [{ ...feishu, ...setting }] };
+      return feishu;
+    });
+    renderDialog();
+    await screen.findByText("Autoclaw助手");
+    expect(screen.queryByRole("switch", { name: /其它房间也推全部/ })).toBeNull();
+  });
+
   it("还没有连接时显示引导；新增连接单独一步：个人微信先确认风险再扫码", async () => {
     const calls = mockServer((route) => {
       if (route.url === "/api/im/channels")

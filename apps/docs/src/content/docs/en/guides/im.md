@@ -57,6 +57,19 @@ With no default target or explicit recipient, the room's lead agent rules may ta
 
 Notification levels are "Relevant to me", "IM tasks & mentions", "All agents", and "All messages". By default you receive notifications from every room you belong to; narrow it with `/scope current`. The notification scope and the current room you send messages to are two separate things.
 
+| Level                    | Content and frequency                                                                                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Relevant to me (default) | Final results of your tasks, questions for you, mentions of you, failures and actionable states; immediate, with volume depending on your tasks.                                   |
+| IM tasks & mentions      | Replies and progress for IM-started tasks, and mentions of you; final results and exceptions for your tasks are still retained.                                                    |
+| All agents               | Relevant updates arrive immediately; other human-facing agent messages are bundled per room about every 3 minutes.                                                                 |
+| All messages             | Other human members' messages and human-facing agent replies in the default room are bundled every 3 minutes; mentions of you, questions and actionable alerts arrive immediately. |
+
+**Every level filters noise**: scheduled trigger notes for agents (`kind=schedule`), echoes of your own web or other-channel messages, internal agent delegations and receipts (unless they mention you), agent-to-agent replies, and progress on tasks you did not initiate. Schedule creation confirmations, actual results, unknown outcomes and questions for you are not trigger notes and still follow task-notification rules. This does not cancel or stop schedules.
+
+"All messages" with "All rooms" no longer copies every room into one IM conversation: **other rooms only send updates relevant to you by default**. To include their ordinary messages, enable "Include all messages from other rooms" in connection settings (off for existing connections too). It only affects the "All messages" level and does not expand the room scope. Cross-room digests retain the room name and switch-room action.
+
+Bundling produces about 20 digest cards per hour for each continuously active room (text digests on WeChat), rather than one notification per ordinary message. Empty windows send nothing. Long messages can split; mentions of you, questions, task results, exceptions and attachments are additional, so this is not a hard cap on total notifications. For the quietest option use "Relevant to me", and optionally "Only the default room".
+
 - Feishu cards show the room and sender, and distinguish progress, results, failures, Outcome unknown, pending approval, and other states.
 - Mid-task progress on your own tasks may also be pushed; a progress note is not proof of completion.
 - Supported cards let you answer options, approve, retry, or continue directly; these actions still go through Hive's permission and task-state checks.

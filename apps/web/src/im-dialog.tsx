@@ -14,6 +14,7 @@ import {
   setImLocale,
   setImRoom,
   setImScope,
+  setImCrossRoomAll,
   startImLogin,
   submitImLoginCode,
 } from "./im-api";
@@ -21,6 +22,7 @@ import { LOCALE_OPTIONS, getLocale, localized, t } from "./i18n";
 import { Select } from "./select";
 import { DocsLink } from "./docs-link";
 import { Button, IconButton } from "./button";
+import { SettingsSwitch } from "./settings-switch";
 
 function CloseGlyph() {
   return (
@@ -383,6 +385,9 @@ export function ImDialog({
                       update(setImLocale(base, adminToken, connection.id, locale))
                     }
                     onScope={(scope) => update(setImScope(base, adminToken, connection.id, scope))}
+                    onCrossRoomAll={(enabled) =>
+                      update(setImCrossRoomAll(base, adminToken, connection.id, enabled))
+                    }
                     onRoom={(room) => update(setImRoom(base, adminToken, connection.id, room))}
                   />
                 ))}
@@ -469,6 +474,7 @@ function ConnectionCard({
   onLevel,
   onLocale,
   onScope,
+  onCrossRoomAll,
   onRoom,
 }: {
   connection: ImConnection;
@@ -479,6 +485,7 @@ function ConnectionCard({
   onLevel: (level: ImConnection["level"]) => void;
   onLocale: (locale: NonNullable<ImConnection["locale"]>) => void;
   onScope: (scope: NonNullable<ImConnection["scope"]>) => void;
+  onCrossRoomAll: (enabled: boolean) => void;
   onRoom: (roomId: string) => void;
 }) {
   const health = connectionHealth(connection);
@@ -598,6 +605,32 @@ function ConnectionCard({
             }}
           />
         </Fact>
+      </div>
+
+      <div className="im-card-policy">
+        <p>{IM_LEVELS.find((item) => item.level === connection.level)?.hint}</p>
+        <p>
+          {t(
+            "所有档位均不推定时触发备忘、你自己的消息回显、Agent 内部派活和回执（提到你除外）、非你任务的进度。提到你、问你和需要处理的通知立即推送。",
+          )}
+        </p>
+        {(connection.level === "all" || connection.level === "agents") && (
+          <p>
+            {t(
+              "普通消息每个活跃房间约每 3 分钟一张摘要；约 20 张/小时，长消息可能拆分，紧急通知和附件另计。",
+            )}
+          </p>
+        )}
+        {connection.level === "all" && scope === "all" && (
+          <SettingsSwitch
+            checked={connection.crossRoomAll ?? false}
+            label={t("其它房间也推全部")}
+            description={t(
+              "默认关闭：其它房间只推与你相关的；开启后其它房间的普通消息也按 3 分钟合并，仍过滤噪音。",
+            )}
+            onChange={onCrossRoomAll}
+          />
+        )}
       </div>
 
       <p className="im-card-activity">

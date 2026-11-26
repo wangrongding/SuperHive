@@ -44,6 +44,7 @@ import {
   setImDeliveryLevelRequestSchema,
   setImLocaleRequestSchema,
   setImScopeRequestSchema,
+  setImCrossRoomAllRequestSchema,
   setImRoomRequestSchema,
   submitImLoginCodeRequestSchema,
   type ImChannel,
@@ -4485,6 +4486,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           if (!body.success)
             return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
           return imHub.setScope(request.params.id, body.data.scope);
+        }
+        if (request.params.action === "cross-room-all") {
+          const body = setImCrossRoomAllRequestSchema.safeParse(request.body);
+          if (!body.success)
+            return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
+          return imHub.setCrossRoomAll(request.params.id, body.data.crossRoomAll);
         }
         return reply.code(404).send({ ...errorText(serverText("error.request.invalid")) });
       } catch (error) {

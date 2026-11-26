@@ -307,6 +307,18 @@
   font-size: var(--text-xs);
 }
 
+.im-card-policy {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.im-card-policy p {
+  margin: 0;
+}
+
 .im-problem {
   display: grid;
   gap: 4px;

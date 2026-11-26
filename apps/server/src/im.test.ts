@@ -716,7 +716,7 @@ describe("IM 连接", () => {
   it("飞书发来的图片带进房间；房间里带附件的消息把文件真的发过去", async () => {
     const { join, connect, fake, api, base } = await start({ richCards: true });
     const helper = await join("helper", "agent");
-    const { rd } = await connect();
+    await connect();
     fake.emit({ text: "@helper 看这张图", files: [{ key: "img_1", kind: "image" }] });
     const mentioned = await helper.next((event) => event.type === "agent.mentioned");
     const posted = (mentioned as { message: ChatMessage }).message;
@@ -724,7 +724,6 @@ describe("IM 连接", () => {
       expect.objectContaining({ name: "img_1.png", kind: "image" }),
     ]);
 
-    // 网页上传一个附件，rd 以「全部消息」档发出：卡片之后跟着真实文件
     const [connection] = (await api("GET", "/api/rooms/general/im")).body.connections;
     await api("POST", `/api/im/connections/${connection.id}/level`, { level: "all" });
     const form = new FormData();
@@ -735,15 +734,16 @@ describe("IM 连接", () => {
       body: form,
     });
     const attachment = (await upload.json()) as { id: string };
-    rd.send({
+    helper.send({
       type: "message.send",
       clientMessageId: "with-file",
-      content: "截图在这",
+      content: "@rd 截图在这",
+      parentMessageId: posted.id,
       attachmentIds: [attachment.id],
     });
     const file = await until(() => fake.files.find((item) => item.name === "shot.png"));
     expect(file).toMatchObject({ kind: "image", size: PNG.length });
-    const cardItem = fake.sent.find((item) => item.rich?.body === "截图在这")!;
+    const cardItem = fake.sent.find((item) => item.rich?.body?.includes("截图在这"))!;
     expect(file.replyTo).toBe(fake.sentIds.get(cardItem));
   });
 
@@ -1067,14 +1067,28 @@ describe("IM 推送档位", () => {
     expect(fake.sent.filter((item) => item.text.includes("失败"))).toHaveLength(1);
   });
 
-  it("「全部消息」：人和 Agent 的消息都逐条推送，IM 自己发进来的不回推", async () => {
-    const { fake, rd, helper, setLevel } = await setup();
+  it("「全部消息」：不回显房主，其他人和 Agent 的普通消息合并，提到房主立即推", async () => {
+    const { fake, rd, helper, setLevel, join, clock, api } = await setup({ richCards: true });
     expect((await setLevel("all")).level).toBe("all");
+    const guest = await join("guest", "human");
     rd.send({ type: "message.send", clientMessageId: "hi", content: "大家好" });
-    const human = await until(() => fake.sent.find((item) => item.text.includes("大家好")));
-    expect(human.text).toBe("general - rd\n大家好");
+    guest.send({ type: "message.send", clientMessageId: "guest-hi", content: "客人问好" });
     helper.send({ type: "message.send", clientMessageId: "chat", content: "收到" });
-    await until(() => fake.sent.find((item) => item.text === "general - helper\n收到"));
+    await rd.next((event) => event.type === "message.created" && event.message.content === "收到");
+    expect(fake.sent.some((item) => item.text.includes("收到"))).toBe(false);
+    helper.send({ type: "message.send", clientMessageId: "urgent", content: "@rd 请确认" });
+    await until(() => fake.sent.find((item) => item.text.includes("请确认")));
+    clock.offset = 4 * 60_000;
+    const digest = await until(
+      () => fake.sent.find((item) => item.text.includes("客人问好")),
+      5_000,
+    );
+    expect(digest.rich).toMatchObject({ tone: "digest", title: "2 条新消息" });
+    expect(digest.text).toContain("general - helper\n收到");
+    expect(fake.sent.some((item) => item.text.includes("大家好"))).toBe(false);
+    expect((await api("GET", "/api/rooms/general/im")).body.connections[0].crossRoomAll).toBe(
+      false,
+    );
     const before = fake.sent.length;
     fake.emit({ text: "从飞书说一句" });
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -1082,6 +1096,149 @@ describe("IM 推送档位", () => {
       false,
     );
   });
+
+  it("跨房间 all 默认仅相关；显式开启后按房间合并，保留跨房间标记和切换按钮", async () => {
+    const ctx = await setup({ richCards: true });
+    const { fake, helper, setLevel, clock, api, id, rd } = ctx;
+    const { omp, rdProj } = await otherRoom(ctx);
+    await setLevel("all");
+    expect(
+      (await api("POST", `/api/im/connections/${id}/cross-room-all`, { crossRoomAll: "true" }))
+        .status,
+    ).toBe(400);
+    omp.send({ type: "message.send", clientMessageId: "other-noise", content: "不相关跨房间发言" });
+    await rdProj.next(
+      (event) => event.type === "message.created" && event.message.content === "不相关跨房间发言",
+    );
+    omp.send({ type: "message.send", clientMessageId: "other-urgent", content: "@rd 跨房间确认" });
+    await until(() => fake.sent.find((item) => item.text.includes("跨房间确认")));
+    expect(
+      (await api("POST", `/api/im/connections/${id}/cross-room-all`, { crossRoomAll: true })).body
+        .crossRoomAll,
+    ).toBe(true);
+    for (const [peer, prefix] of [
+      [helper, "当前"],
+      [omp, "其它"],
+    ] as const) {
+      peer.send({
+        type: "message.send",
+        clientMessageId: `${prefix}-1`,
+        content: `${prefix}房间第一条`,
+      });
+      peer.send({
+        type: "message.send",
+        clientMessageId: `${prefix}-2`,
+        content: `${prefix}房间第二条`,
+      });
+    }
+    await rd.next(
+      (event) => event.type === "message.created" && event.message.content === "当前房间第二条",
+    );
+    await rdProj.next(
+      (event) => event.type === "message.created" && event.message.content === "其它房间第二条",
+    );
+    clock.offset = 4 * 60_000;
+    const current = await until(
+      () => fake.sent.find((item) => item.text.includes("当前房间第一条")),
+      5_000,
+    );
+    const other = await until(
+      () => fake.sent.find((item) => item.text.includes("其它房间第一条")),
+      5_000,
+    );
+    expect(current.rich).toMatchObject({ tone: "digest", room: "general" });
+    expect(current.text).not.toContain("其它房间");
+    expect(other.rich).toMatchObject({
+      tone: "digest",
+      room: "项目",
+      otherRoom: { id: "proj", name: "项目" },
+    });
+    expect(other.rich!.actions!.at(-1)).toMatchObject({ value: { do: "goto", room: "proj" } });
+    expect(fake.sent.some((item) => item.text.includes("不相关跨房间发言"))).toBe(false);
+    expect(
+      (await api("POST", `/api/im/connections/${id}/cross-room-all`, { crossRoomAll: false })).body
+        .crossRoomAll,
+    ).toBe(false);
+  });
+
+  it.each(["im", "mine", "agents", "all"])(
+    "%s：真实定时触发不推，IM 创建确认、提问及最终结果照推",
+    async (level) => {
+      const { fake, helper, rd, clock, setLevel, app } = await setup({ richCards: true });
+      await setLevel(level);
+      fake.emit({ text: "@helper 两分钟后检查" });
+      const start = await helper.next((event) => event.type === "agent.mentioned");
+      const trigger = (start as { message: ChatMessage }).message;
+      helper.send({ type: "invocation.report", messageId: trigger.id, status: "running" });
+      await rd.next(
+        (event) => event.type === "invocation.updated" && event.invocation.status === "running",
+      );
+      const port = (app.server.address() as AddressInfo).port;
+      const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: {
+          headers: {
+            Authorization: "Bearer test-token",
+            "X-Hive-Room": "general",
+            "X-Hive-Agent-Name": "helper",
+          },
+        },
+      });
+      const client = new Client({ name: "im-schedule-test", version: "0.1.0" });
+      await client.connect(transport as unknown as Transport);
+      try {
+        const created = await client.callTool({
+          name: "hive_schedule_create",
+          arguments: {
+            runAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+            task: "给 Agent 的长备忘，不应推送",
+            clientMessageId: "im-schedule",
+          },
+        });
+        expect(created.isError).toBeFalsy();
+        helper.send({
+          type: "message.send",
+          clientMessageId: "schedule-confirmed",
+          content: "已安排两分钟后检查",
+          parentMessageId: trigger.id,
+        });
+        await until(() => fake.sent.find((item) => item.text.includes("已安排两分钟后检查")));
+        clock.offset = 3 * 60_000;
+        (app as unknown as { runSchedules: () => void }).runSchedules();
+        const fired = await helper.next(
+          (event) => event.type === "agent.mentioned" && event.message.kind === "schedule",
+        );
+        const scheduled = (fired as { message: ChatMessage }).message;
+        expect(scheduled.senderType).toBe("human");
+        helper.send({ type: "invocation.report", messageId: scheduled.id, status: "running" });
+        await rd.next(
+          (event) =>
+            event.type === "invocation.updated" &&
+            event.invocation.messageId === scheduled.id &&
+            event.invocation.status === "running",
+        );
+        await client.callTool({
+          name: "hive_ask_human",
+          arguments: { question: "定时检查需要确认吗？", options: ["确认", "取消"] },
+        });
+        await until(() => fake.sent.find((item) => item.rich?.tone === "question"));
+        fake.emit({ text: "a" });
+        const answered = await helper.next(
+          (event) => event.type === "agent.mentioned" && Boolean(event.message.answer),
+        );
+        helper.send({
+          type: "message.send",
+          clientMessageId: "scheduled-result",
+          content: "定时检查结果已确认",
+          parentMessageId: (answered as { message: ChatMessage }).message.id,
+        });
+        await until(() => fake.sent.find((item) => item.text.includes("定时检查结果已确认")));
+        expect(fake.sent.some((item) => item.text.includes("给 Agent 的长备忘"))).toBe(false);
+        expect(fake.sent.some((item) => item.text.includes("⏰ 定时任务"))).toBe(false);
+      } finally {
+        await client.close();
+      }
+    },
+  );
 
   it("「全部 Agent 消息」：其它 Agent 发言攒满 3 分钟合并成一条", async () => {
     const { fake, helper, clock, setLevel } = await setup();

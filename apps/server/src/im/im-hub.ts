@@ -25,6 +25,7 @@ import {
 } from "./im-store.js";
 import { OPTION_FIELD_PREFIX, OTHER_FIELD } from "./feishu-card.js";
 import { applyChoice, matchAgents, resolveAliases } from "./im-routing.js";
+import { decideImDelivery } from "./im-policy.js";
 import {
   imLocaleOf,
   imText,
@@ -2567,6 +2568,16 @@ export class ImHub {
     return this.view(this.setScopeOf(this.require(id), scope));
   }
 
+  setCrossRoomAll(id: string, crossRoomAll: boolean): ImConnection {
+    const connection = this.require(id);
+    const updated =
+      this.deps.store.update(id, {
+        config: { ...connection.config, crossRoomAll: String(crossRoomAll) },
+      }) ?? connection;
+    this.deps.onConnectionsChanged(connection.roomId);
+    return this.view(updated);
+  }
+
   private setScopeOf(connection: StoredConnection, scope: ImScope): StoredConnection {
     const updated =
       this.deps.store.update(connection.id, { config: { ...connection.config, scope } }) ??
@@ -2920,36 +2931,20 @@ export class ImHub {
   }
 
   private decide(connection: StoredConnection, message: ChatMessage): "now" | "batch" | "skip" {
-    if (connection.level === "all") {
-      // 回执只是把子任务结果转给派活的 Agent，结果那条回复已经推过了；回执 @ 到房主（定时任务没完成）时照推
-      return message.kind === "receipt" && !this.mentionsOwner(message, connection)
-        ? "skip"
-        : "now";
-    }
-    if (message.senderType !== "agent" || message.via || message.kind === "topic") return "skip";
-    // 进度：只推房主自己派的任务（IM 档只推从这个 IM 发起的），每个任务有条数上限，马上推不会刷屏
-    if (message.kind === "progress") {
-      if (connection.level === "im") return this.originOf(message, connection.id) ? "now" : "skip";
-      return this.isOwnersTask(connection, message) ? "now" : "skip";
-    }
-    const mentionsOwner = this.mentionsOwner(message, connection);
-    if (connection.level === "im") {
-      // 早期行为：IM 发起的任务链里给人看的回复，以及提到房主的消息
-      if (message.kind === "delegation" || message.kind === "receipt") return "skip";
-      const origin = this.originOf(message, connection.id);
-      const mentionsAgent = message.mentions.some(
-        (name) =>
-          name.toLocaleLowerCase() !== connection.ownerName.toLocaleLowerCase() &&
-          this.deps.findParticipant(message.roomId, name)?.type === "agent",
-      );
-      return mentionsOwner || (origin && (message.kind === "question" || !mentionsAgent))
-        ? "now"
-        : "skip";
-    }
-    // 与我相关：真正提到房主的消息（含问房主的问题）马上推；任务的最终结果由调用状态推
-    if (mentionsOwner) return "now";
-    if (connection.level === "agents" && message.kind !== "receipt") return "batch";
-    return "skip";
+    const owner = this.ownerOf(connection, message.roomId);
+    const parent = message.parentMessageId
+      ? this.deps.getMessage(message.parentMessageId)
+      : undefined;
+    return decideImDelivery(connection, message, {
+      ownerId: owner?.id,
+      mentionsOwner: this.mentionsOwner(message, connection),
+      ownersTask: this.isOwnersTask(connection, message),
+      fromIm: Boolean(this.originOf(message, connection.id)),
+      mentionsAgent: message.mentions.some(
+        (name) => this.deps.findParticipant(message.roomId, name)?.type === "agent",
+      ),
+      parentSenderType: parent?.senderType,
+    });
   }
 
   /**
@@ -3321,7 +3316,8 @@ export class ImHub {
       const batches = new Map<string, OutboxItem[]>();
       for (const item of due) {
         if (!item.batch) continue;
-        const key = `${item.connectionId}\u0000${item.chatId}`;
+        const roomId = item.messageId ? this.deps.getMessage(item.messageId)?.roomId : undefined;
+        const key = `${item.connectionId}\u0000${item.chatId}\u0000${roomId ?? ""}`;
         batches.set(key, [...(batches.get(key) ?? []), item]);
       }
       for (const item of due) {
@@ -3525,10 +3521,14 @@ function combineRich(locale: ImLocale, items: ImRich[]): ImRich {
   if (items.length === 1) return items[0]!;
   const rooms = [...new Set(items.map((item) => item.room).filter(Boolean))] as string[];
   const link = items.find((item) => item.link)?.link;
+  const otherRoom = items[0]!.otherRoom;
+  const actions = items[0]!.actions?.filter((action) => action.value.do === "goto");
   return {
     title: imText(locale, "im.digest.title", { count: items.length }),
     ...(rooms.length ? { room: rooms.join(imText(locale, "im.sep.list")) } : {}),
     tone: "digest",
+    ...(otherRoom ? { otherRoom } : {}),
+    ...(actions?.length ? { actions } : {}),
     sections: items.map((item) => ({
       title: rooms.length > 1 && item.room ? `${item.room}｜${item.title}` : item.title,
       ...(item.subtitle ? { subtitle: item.subtitle } : {}),

@@ -166,10 +166,13 @@ export const imTexts = {
     en: "Only results of tasks started here, and messages that mention you",
   },
   "im.level.agents.desc": {
-    zh: "另外把 Agent 的发言每 3 分钟合并推一次",
-    en: "Also a digest of agent messages every 3 minutes",
+    zh: "另外把给人看的 Agent 发言每 3 分钟合并，不推 Agent 内部讨论",
+    en: "Also a digest of human-facing agent messages every 3 minutes; no internal agent discussions",
   },
-  "im.level.all.desc": { zh: "房间里每条消息都推", en: "Every message in the room" },
+  "im.level.all.desc": {
+    zh: "默认房间的普通消息每 3 分钟合并，其它房间默认只推与你相关的；不推定时触发、本人回显或 Agent 内部讨论",
+    en: "Ordinary messages in the default room are bundled every 3 minutes; other rooms send relevant updates by default. No scheduled triggers, own-message echoes or internal agent discussions",
+  },
   "im.level.default": { zh: "（默认）", en: " (default)" },
   "im.level.full": { zh: "{name}：{desc}", en: "{name}: {desc}" },
 

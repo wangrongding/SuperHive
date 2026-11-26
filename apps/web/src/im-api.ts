@@ -134,11 +134,27 @@ export const IM_LEVELS: Array<{ level: ImDeliveryLevel; label: string; hint: str
     {
       level: "agents",
       label: t("全部 Agent"),
-      hint: t("与我相关的马上推，其余 Agent 发言每 3 分钟合并成一条"),
+      hint: t("与你相关的马上推，其余给人看的 Agent 发言每 3 分钟合并；不推 Agent 内部讨论"),
     },
-    { level: "all", label: t("全部消息"), hint: t("房间里所有人和 Agent 的消息逐条推送，不合并") },
+    {
+      level: "all",
+      label: t("全部消息"),
+      hint: t("默认房间的人类消息和 Agent 给人看的回复每 3 分钟合并；其它房间默认只推与你相关的"),
+    },
   ],
 );
+
+export function setImCrossRoomAll(
+  base: string,
+  token: string,
+  id: string,
+  crossRoomAll: boolean,
+): Promise<ImConnection> {
+  return call(`${base}/api/im/connections/${id}/cross-room-all`, token, {
+    method: "POST",
+    body: JSON.stringify({ crossRoomAll }),
+  });
+}
 
 /** 接收哪些房间的推送：所有房间（默认）或只收当前房间；在 IM 里发 /scope 也能切 */
 export function setImScope(

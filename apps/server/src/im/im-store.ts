@@ -117,6 +117,7 @@ export function publicConnection(
     locale: connection.config.locale === "en" ? "en" : "zh-CN",
     // 没设过的（包括以前的连接）都是「所有房间」
     scope: connection.config.scope === "current" ? "current" : "all",
+    crossRoomAll: connection.config.crossRoomAll === "true",
     delivery,
     id: connection.id,
     roomId: connection.roomId,

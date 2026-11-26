@@ -1240,8 +1240,8 @@ export const imConnectionStatusSchema = z.enum(["connecting", "connected", "paus
  * 往 IM 推哪些消息：
  * mine=与我相关（默认）：我的任务的最终结果、问我的问题、真正提到我的消息、我的任务出了问题或等我批准；
  * im=只推从 IM 发起的任务和提到我的消息（早期行为）；
- * agents=在「与我相关」之外，房间里其余 Agent 发言每 3 分钟合并成一条；
- * all=房间里所有消息（含人类）逐条推送，不合并。
+ * agents=在「与我相关」之外，房间里其余给人看的 Agent 发言每 3 分钟合并成一条；
+ * all=默认房间的人类消息和给人看的 Agent 回复每 3 分钟合并，其它房间默认仅与我相关。
  */
 export const imDeliveryLevelSchema = z.enum(["mine", "im", "agents", "all"]);
 export const imDeliveryStatsSchema = z.object({
@@ -1275,6 +1275,7 @@ export const imConnectionSchema = z.object({
   level: imDeliveryLevelSchema,
   locale: imLocaleSchema.optional(),
   scope: imScopeSchema.optional(),
+  crossRoomAll: z.boolean().optional(),
   /** 默认发到的房间名（roomId 对应的显示名） */
   roomName: z.string().optional(),
   /**
@@ -1330,6 +1331,7 @@ export const startImLoginRequestSchema = z.object({
 export const setImDeliveryLevelRequestSchema = z.object({ level: imDeliveryLevelSchema });
 export const setImLocaleRequestSchema = z.object({ locale: imLocaleSchema });
 export const setImScopeRequestSchema = z.object({ scope: imScopeSchema });
+export const setImCrossRoomAllRequestSchema = z.object({ crossRoomAll: z.boolean() });
 export const setImRoomRequestSchema = z.object({ roomId: z.string().min(1).max(64) });
 export const submitImLoginCodeRequestSchema = z.object({
   code: z
