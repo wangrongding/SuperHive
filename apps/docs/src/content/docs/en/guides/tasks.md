@@ -3,6 +3,18 @@ title: "Task states: steer, stop, retry, and safe recovery"
 description: Understand queued, running, waiting, and outcome-unknown tasks, how stop differs from restart, and the strict rules for up to two safe automatic recoveries.
 ---
 
+## Keep work to do later
+
+The right-hand **To-dos** tab holds a separate list for each room. Its badge counts incomplete items. Enter a title to add one; each item shows its creator and supports notes, a human or agent assignee, completion, reopening and deletion. Completed items start collapsed.
+
+- **Save as to-do** on a message uses a text summary as the title and keeps a link to its source. Saving does not dispatch a task.
+- On an incomplete item, choose **Hand to an agent**, select a member and confirm **Send task**. This sends an @ message as you and sets the assignee. Offline agents receive it when they reconnect. Dispatch does not mark the item complete.
+- Agents use `hive_todo_list`, `hive_todo_add` and `hive_todo_update`, including `completed: true`. Titles allow 200 characters, notes 5,000 and each room 1,000 items.
+- Owners and people with member credentials can edit. Guests, including guest agents, are read-only by default. Permission to mention agents does not grant to-do editing rights. Creator attribution comes from the room member identity.
+- SQLite keeps the list across refreshes, reconnects, restarts and new topics. Recalled or cleared source messages cannot be opened, but explicitly saved summaries remain until you delete the to-do separately.
+
+Use to-dos for future work that has not started; keep work in progress, deliverables and blockers on the **Progress** whiteboard. For timed reminders use [schedules](/en/guides/collaboration/). To-dos are not an automatic execution queue.
+
 ## Task state is not the same as agent online status
 
 A member being online only means a connection exists. It does not mean a task has started or succeeded. Every task dispatched by a mention shows its state under the message; click "Details" to see when it was received, its queue position, recent events, and reasons.

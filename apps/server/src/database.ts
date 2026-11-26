@@ -23,6 +23,9 @@ import {
   type RoomClearOptions,
   localAgentProviderSchema,
   type RemovedLocalAgent,
+  type Todo,
+  type TodoInput,
+  type TodoUpdate,
 } from "@superhive/protocol";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
@@ -666,6 +669,13 @@ export class HiveDatabase {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS room_todos (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        data TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS room_todos_room ON room_todos(room_id);
 
       CREATE TABLE IF NOT EXISTS participants (
         id TEXT PRIMARY KEY,
@@ -2406,6 +2416,97 @@ export class HiveDatabase {
       values.push(patch[key]);
     }
     return { sets: sets.join(", "), values };
+  }
+
+  listTodos(roomId: string): Todo[] {
+    const rows = this.db
+      .prepare("SELECT data FROM room_todos WHERE room_id = ?")
+      .all(roomId) as Array<{ data: string }>;
+    return rows
+      .map((row) => JSON.parse(row.data) as Todo)
+      .sort(
+        (first, second) =>
+          Number(first.completed) - Number(second.completed) ||
+          second.createdAt.localeCompare(first.createdAt),
+      );
+  }
+
+  getTodo(roomId: string, id: string): Todo {
+    const row = this.db
+      .prepare("SELECT data FROM room_todos WHERE room_id = ? AND id = ?")
+      .get(roomId, id) as { data: string } | undefined;
+    if (!row) throw new HiveError("TODO_NOT_FOUND", serverText("error.todo.notFound"));
+    return JSON.parse(row.data) as Todo;
+  }
+
+  private todoAssignee(roomId: string, id: string | null): Participant | undefined {
+    if (!id) return undefined;
+    const assignee = this.getParticipant(id);
+    if (!assignee || assignee.roomId !== roomId)
+      throw new HiveError("TODO_ASSIGNEE_INVALID", serverText("error.todo.assignee"));
+    return assignee;
+  }
+
+  addTodo(creator: Participant, input: TodoInput): Todo {
+    const count = this.db
+      .prepare("SELECT COUNT(*) AS count FROM room_todos WHERE room_id = ?")
+      .get(creator.roomId) as { count: number };
+    if (count.count >= LIMITS.maxTodosPerRoom)
+      throw new HiveError("TODO_LIMIT", serverText("error.todo.limit"));
+    const assignee = this.todoAssignee(creator.roomId, input.assigneeId);
+    const source = input.sourceMessageId ? this.getMessage(input.sourceMessageId) : undefined;
+    if (input.sourceMessageId && (!source || source.roomId !== creator.roomId || source.deletedAt))
+      throw new HiveError("MESSAGE_NOT_FOUND", serverText("error.message.unreadable"));
+    const now = new Date().toISOString();
+    const todo: Todo = {
+      ...input,
+      id: randomUUID(),
+      roomId: creator.roomId,
+      creatorId: creator.id,
+      creatorName: creator.username,
+      creatorType: creator.type,
+      assigneeName: assignee?.username ?? null,
+      sourceMessageSeq: source?.seq ?? null,
+      completed: false,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    };
+    this.db
+      .prepare("INSERT INTO room_todos (id, room_id, data) VALUES (?, ?, ?)")
+      .run(todo.id, todo.roomId, JSON.stringify(todo));
+    return todo;
+  }
+
+  updateTodo(roomId: string, id: string, input: TodoUpdate): Todo {
+    const current = this.getTodo(roomId, id);
+    const assignee =
+      input.assigneeId !== undefined ? this.todoAssignee(roomId, input.assigneeId) : undefined;
+    const now = new Date().toISOString();
+    const todo: Todo = {
+      ...current,
+      title: input.title ?? current.title,
+      notes: input.notes ?? current.notes,
+      assigneeId: input.assigneeId === undefined ? current.assigneeId : input.assigneeId,
+      completed: input.completed ?? current.completed,
+      ...(input.assigneeId !== undefined ? { assigneeName: assignee?.username ?? null } : {}),
+      updatedAt: now,
+      completedAt:
+        input.completed === undefined
+          ? current.completedAt
+          : input.completed
+            ? (current.completedAt ?? now)
+            : null,
+    };
+    this.db
+      .prepare("UPDATE room_todos SET data = ? WHERE room_id = ? AND id = ?")
+      .run(JSON.stringify(todo), roomId, id);
+    return todo;
+  }
+
+  removeTodo(roomId: string, id: string): void {
+    this.getTodo(roomId, id);
+    this.db.prepare("DELETE FROM room_todos WHERE room_id = ? AND id = ?").run(roomId, id);
   }
 
   listWhiteboard(

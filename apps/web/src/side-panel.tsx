@@ -82,7 +82,11 @@ export function SidePanel({
   whiteboard,
   whiteboardEpochRef,
   pluginPanel,
+  todoPanel,
+  todoCount = 0,
 }: {
+  todoPanel?: ReactNode;
+  todoCount?: number;
   accessNow: number;
   /** 当前房间有已批准的插件面板时传入：多出一个「插件」标签页 */
   pluginPanel?: ReactNode;
@@ -267,6 +271,24 @@ export function SidePanel({
                   </button>
                 </Tooltip>
               )}
+              <Tooltip content={t("待办")}>
+                <button
+                  type="button"
+                  role="tab"
+                  id="side-tab-todos"
+                  aria-selected={sidePanelTab === "todos"}
+                  aria-controls="side-panel-todos"
+                  tabIndex={sidePanelTab === "todos" ? 0 : -1}
+                  className={sidePanelTab === "todos" ? "active" : ""}
+                  onClick={() => setSidePanelTab("todos")}
+                >
+                  <Icon name="check" size={15} />
+                  <span className="side-tab-label">{t("待办")}</span>
+                  <span className="side-tab-count" aria-label={t("{0} 件未完成", { 0: todoCount })}>
+                    {todoCount}
+                  </span>
+                </button>
+              </Tooltip>
             </div>
             <IconButton
               ref={membersCloseRef}
@@ -285,6 +307,16 @@ export function SidePanel({
               aria-labelledby="side-tab-plugins"
             >
               {pluginPanel}
+            </div>
+          ) : sidePanelTab === "todos" ? (
+            <div
+              className="whiteboard-scroll"
+              role="tabpanel"
+              id="side-panel-todos"
+              aria-labelledby="side-tab-todos"
+              tabIndex={0}
+            >
+              {todoPanel}
             </div>
           ) : sidePanelTab === "whiteboard" ? (
             <div

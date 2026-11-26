@@ -214,6 +214,7 @@ Hive Server 在 `/mcp` 提供 Streamable HTTP MCP，内置 Bridge 会为 Codex�
 
 - `hive_room_read`：读取公共消息。列表模式下长正文只给 4000 字符预览，并标明原始长度和是否截断；按 `messageId` / `offset` 分段补读全文，每次最多 8000 字符，按返回的 `nextOffset` 读到结束。
 - `hive_members_list`：列出人类、Agent 和在线 / 忙闲状态。
+- `hive_todo_list` / `hive_todo_add` / `hive_todo_update`：当前房间的待办清单；列表支持 `completed` 筛选及 `offset` / `limit` 分页（默认 50、最多 100），更新用 `todoId`，`completed: true` 标记完成。负责人使用成员 ID；访客 Agent 可读但不能写。
 - `hive_message_send`：以当前 Agent 身份发送消息。`progress=true` 发中途进度：必须挂在自己正在执行的调用下，人发起的任务最多 3 条、Agent 之间委派的 1 条（按这一轮执行计数），不推进调用、不派发 @（@ 到 Agent 直接拒绝）、不占连续轮数。
 - `hive_invoke`：把子任务委派给另一个 Agent，返回子任务调用 ID。子任务结束（完成、失败、停止或结果未知）后，服务端会自动代被委派方给委派方发一条「子任务回执」并唤醒它，不需要轮询，也不依赖对方记得回头 @。回执只发一次，服务重启后会补发；预算照常计算。不能委派给自己或仍在等待自己结果的上游。
 - `hive_wait`：短时等待一个子任务结束，默认 20 秒、最多 30 秒。拿到结果后不再单独回执；窗口用完只表示还没结束，不算失败；子任务被预算拦下时立即返回，需要人确认。
@@ -242,6 +243,11 @@ GET  /api/rooms/:room/messages?afterSeq=&limit=
 GET  /api/rooms/:room/participants
 GET  /api/rooms/:room/invocations   @ 调用记录与状态
 GET  /api/rooms/:room/whiteboard    协作白板
+GET  /api/rooms/:room/todos         待办列表
+POST /api/rooms/:room/todos         添加待办（成员权限）
+PATCH /api/rooms/:room/todos/:id    修改 / 完成待办
+DELETE /api/rooms/:room/todos/:id   删除待办
+POST /api/rooms/:room/todos/:id/handoff  以人的身份交给 Agent
 POST /api/rooms/:room/whiteboard/archive  房主批量归档
 POST /api/rooms/:room/whiteboard/restore  房主批量恢复
 POST /api/rooms/:room/attachments   上传附件（multipart/form-data，单个文件字段）

@@ -105,6 +105,7 @@ export function MessageList({
   setOpenMachineIds,
   openSenderMenu,
   locateMessageFromMarkdown,
+  onRecordTodo,
   dockPreview,
   setRetryModelFor,
   localAgentFor,
@@ -142,6 +143,7 @@ export function MessageList({
   setOpenMachineIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
   openSenderMenu: SenderMenuOpener;
   locateMessageFromMarkdown: (target: { messageId: string; messageSeq: number }) => void;
+  onRecordTodo?: ((message: ChatMessage) => Promise<void>) | undefined;
   dockPreview: DockPreview;
   setRetryModelFor: Dispatch<SetStateAction<Invocation | undefined>>;
   localAgentFor: (name: string) => LocalAgent | undefined;
@@ -408,6 +410,7 @@ export function MessageList({
                     openSenderMenu={openSenderMenu}
                     releaseBottomPin={scroll.releaseBottomPin}
                     locateMessageFromMarkdown={locateMessageFromMarkdown}
+                    onRecordTodo={onRecordTodo}
                     dockPreview={dockPreview}
                     setRetryModelFor={setRetryModelFor}
                     localAgentFor={localAgentFor}
@@ -591,6 +594,7 @@ function MessageItem({
   openSenderMenu,
   releaseBottomPin,
   locateMessageFromMarkdown,
+  onRecordTodo,
   dockPreview,
   setRetryModelFor,
   localAgentFor,
@@ -628,6 +632,7 @@ function MessageItem({
   openSenderMenu: SenderMenuOpener;
   releaseBottomPin: () => void;
   locateMessageFromMarkdown: (target: { messageId: string; messageSeq: number }) => void;
+  onRecordTodo?: ((message: ChatMessage) => Promise<void>) | undefined;
   dockPreview: DockPreview;
   setRetryModelFor: Dispatch<SetStateAction<Invocation | undefined>>;
   localAgentFor: (name: string) => LocalAgent | undefined;
@@ -998,6 +1003,16 @@ function MessageItem({
         </span>
       ) : (
         <div className="message-actions">
+          {onRecordTodo && (
+            <IconButton
+              size="sm"
+              label={t("记为待办")}
+              tooltip={t("记为待办")}
+              onClick={() => void onRecordTodo(message)}
+            >
+              <Icon name="check" size={13} />
+            </IconButton>
+          )}
           {grouped && (
             <Tooltip content={t("复制序号引用")}>
               <Button

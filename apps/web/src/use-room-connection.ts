@@ -108,6 +108,7 @@ export function useRoomConnection({
     setLoadingPhase,
     setInvocations,
     setWhiteboard,
+    setTodos,
     whiteboardEpochRef,
     whiteboardChangesRef,
     setPendingApprovals,
@@ -294,6 +295,7 @@ export function useRoomConnection({
             new Map((event.invocations ?? []).map((invocation) => [invocation.id, invocation])),
           );
           setWhiteboard(new Map((event.whiteboard ?? []).map((entry) => [entry.id, entry])));
+          setTodos(new Map((event.todos ?? []).map((todo) => [todo.id, todo])));
           whiteboardEpochRef.current += 1;
           whiteboardChangesRef.current.clear();
           setPendingApprovals(new Set(event.approvals ?? []));
@@ -424,6 +426,16 @@ export function useRoomConnection({
             });
           }
           setInvocations((current) => upsertInvocation(current, event.invocation));
+        } else if (event.type === "todo.updated") {
+          if (event.todo.roomId !== currentRoomId) return;
+          setTodos((current) => new Map(current).set(event.todo.id, event.todo));
+        } else if (event.type === "todo.removed") {
+          if (event.roomId !== currentRoomId) return;
+          setTodos((current) => {
+            const next = new Map(current);
+            next.delete(event.todoId);
+            return next;
+          });
         } else if (event.type === "whiteboard.updated") {
           if (event.entry.roomId !== currentRoomId) return;
           whiteboardChangesRef.current.set(

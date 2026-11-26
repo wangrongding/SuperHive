@@ -1,0 +1,91 @@
+.todos {
+  display: grid;
+  gap: 12px;
+  padding: 6px 0 16px;
+}
+.todo-hint,
+.todo-empty,
+.todo-meta {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+.todo-hint,
+.todo-empty {
+  margin: 0;
+  line-height: 1.6;
+}
+.todo-add,
+.todo-heading,
+.todo-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.todos input:not([type="checkbox"]),
+.todos textarea,
+.todos select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  padding: 7px 8px;
+  font: inherit;
+}
+.todos textarea {
+  resize: vertical;
+}
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.todo-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.todo-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: var(--weight-medium);
+}
+.todo-item.completed .todo-title {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+.todo-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+  max-height: 180px;
+  overflow: auto;
+}
+.todo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+.todo-edit,
+.todo-handoff {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.todo-edit label,
+.todo-handoff label {
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-xs);
+}
+.todo-completed summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.todo-error {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}

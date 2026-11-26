@@ -64,6 +64,9 @@ describe("ClaudeCodeResponder", () => {
     // 提示词要求 Agent 用白板登记长任务，白名单必须同步放行，否则 Claude 根本调不动
     expect(args.join(" ")).toContain("mcp__hive__hive_board_read");
     expect(args.join(" ")).toContain("mcp__hive__hive_board_update");
+    expect(args.join(" ")).toContain("mcp__hive__hive_todo_list");
+    expect(args.join(" ")).toContain("mcp__hive__hive_todo_add");
+    expect(args.join(" ")).toContain("mcp__hive__hive_todo_update");
     expect(args.join(" ")).toContain("mcp__hive__hive_schedule_create");
     // Claude 自带的定时随这一轮的进程退出就没了：禁用，改走服务端的 hive_schedule
     expect(args[args.indexOf("--disallowedTools") + 1]).toBe(

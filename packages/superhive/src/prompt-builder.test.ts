@@ -10,6 +10,17 @@ import {
 } from "./prompt-builder.js";
 
 describe("buildMentionPrompt", () => {
+  it("distinguishes future to-dos from progress and scheduled work", () => {
+    const instructions = buildDeveloperInstructions({
+      agentName: "worker",
+      persona: "",
+      serverRules: "",
+    });
+    expect(instructions).toContain("hive_todo_list");
+    expect(instructions).toContain("hive_todo_add");
+    expect(instructions).toContain("hive_todo_update");
+    expect(instructions).toContain("待办不会自动执行");
+  });
   it("includes stable message IDs for hive_message_send parentMessageId", () => {
     const mention: ChatMessage = {
       id: "00000000-0000-4000-8000-000000000001",

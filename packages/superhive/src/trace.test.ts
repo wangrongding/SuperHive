@@ -167,6 +167,15 @@ describe("isMutatingStep", () => {
   });
   it("treats reads, searches and plainly read-only commands as safe to re-run", () => {
     expect(isMutatingStep(step("read", "src/a.ts"))).toBe(false);
+    expect(
+      isMutatingStep(step("collaboration", "hive_todo_list", "mcp__hive__hive_todo_list")),
+    ).toBe(false);
+    expect(isMutatingStep(step("collaboration", "hive_todo_add", "mcp__hive__hive_todo_add"))).toBe(
+      true,
+    );
+    expect(
+      isMutatingStep(step("collaboration", "hive_todo_update", "mcp__hive__hive_todo_update")),
+    ).toBe(true);
     expect(isMutatingStep(step("search", "TODO"))).toBe(false);
     expect(isMutatingStep(step("command", "git status && git log --oneline -3"))).toBe(false);
     expect(isMutatingStep(step("command", "cd apps/web && ls -la | wc -l"))).toBe(false);

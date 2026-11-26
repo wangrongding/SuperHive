@@ -24,6 +24,26 @@ export type ServerTextEntry = { zh: string; en: string | PluralTemplate; plural?
 type Entry = ServerTextEntry;
 
 export const serverTexts = {
+  "todo.handoff": {
+    zh: "请处理待办：{title}\n{notes}\n待办 ID：{id}。完成后用 hive_todo_update 勾选完成；开始做时在白板登记进展。",
+    en: "Please handle this to-do: {title}\n{notes}\nTo-do ID: {id}. Mark it complete with hive_todo_update when done; track work in progress on the whiteboard.",
+  },
+  "error.todo.notFound": {
+    zh: "这个房间里没有所选待办。",
+    en: "The selected to-do was not found in this room.",
+  },
+  "error.todo.assignee": {
+    zh: "负责人必须是这个房间的成员。",
+    en: "The assignee must be a member of this room.",
+  },
+  "error.todo.limit": {
+    zh: "房间待办已达上限，请先删除不再需要的事项。",
+    en: "This room reached its to-do limit. Delete items you no longer need first.",
+  },
+  "error.todo.completed": {
+    zh: "已完成的待办不能交给 Agent，请先重新打开。",
+    en: "Reopen the completed to-do before handing it to an agent.",
+  },
   "error.whiteboard.conflict": {
     zh: "白板事项已变化，请刷新后重新选择。",
     en: "The whiteboard items changed. Refresh and select them again.",

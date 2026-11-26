@@ -2484,7 +2484,7 @@ describe("App mention autocomplete", () => {
       within(screen.getByRole("tablist", { name: "侧栏视图" }))
         .getAllByRole("tab")
         .map((tab) => tab.id),
-    ).toEqual(["side-tab-members", "side-tab-whiteboard"]);
+    ).toEqual(["side-tab-members", "side-tab-whiteboard", "side-tab-todos"]);
     await user.click(entry);
     expect(entry.getAttribute("aria-pressed")).toBe("true");
     const panel = screen.getByRole("dialog", { name: "产物" });
@@ -3409,6 +3409,82 @@ describe("App mention autocomplete", () => {
     whiteboardApi.entries = [{ ...entry, archivedAt: now }];
     await user.click(within(board).getByRole("button", { name: "历史归档" }));
     await waitFor(() => expect(within(board).getByText(entry.summary)).toBeTruthy());
+  });
+
+  it("keeps the to-do count and list synchronized with snapshots and changes", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("superhive.username", "Alice");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const now = new Date().toISOString();
+    const todo = {
+      id: "00000000-0000-4000-8000-0000000000b1",
+      roomId: "general",
+      title: "Do later",
+      notes: "",
+      creatorId: self.id,
+      creatorName: self.username,
+      creatorType: "human" as const,
+      assigneeId: null,
+      assigneeName: null,
+      sourceMessageId: null,
+      sourceMessageSeq: null,
+      completed: false,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    };
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+        todos: [todo],
+      }),
+    );
+    const tab = screen.getByRole("tab", { name: /待办/ });
+    expect(within(tab).getByLabelText("1 件未完成")).toBeTruthy();
+    await user.click(tab);
+    expect(screen.getByText("Do later")).toBeTruthy();
+    act(() =>
+      socket.serverEvent({
+        type: "todo.updated",
+        todo: { ...todo, completed: true, completedAt: now },
+      }),
+    );
+    expect(within(tab).getByLabelText("0 件未完成")).toBeTruthy();
+    expect(screen.getByText("已完成 (1)")).toBeTruthy();
+    act(() =>
+      socket.serverEvent({
+        type: "todo.updated",
+        todo: {
+          ...todo,
+          id: "00000000-0000-4000-8000-0000000000b2",
+          roomId: "other",
+          title: "Not this room",
+        },
+      }),
+    );
+    expect(screen.queryByText("Not this room")).toBeNull();
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+        todos: [{ ...todo, title: "After reconnect" }],
+      }),
+    );
+    expect(screen.getByText("After reconnect")).toBeTruthy();
+    act(() => socket.serverEvent({ type: "todo.removed", roomId: "general", todoId: todo.id }));
+    expect(screen.queryByText("After reconnect")).toBeNull();
+    expect(screen.getByText("没有未完成的待办")).toBeTruthy();
   });
 
   it("shows the room whiteboard grouped by slot and keeps it in sync", async () => {

@@ -456,6 +456,7 @@ const readOnlyHiveTools = new Set([
   "hive_room_read",
   "hive_members_list",
   "hive_board_read",
+  "hive_todo_list",
   "hive_attachment_read",
   "hive_schedule_list",
   "hive_wait",

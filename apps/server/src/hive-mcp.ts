@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   LIMITS,
+  todoInputSchema,
+  todoUpdateSchema,
+  type Todo,
+  type TodoInput,
+  type TodoUpdate,
   messageContentSchema,
   type Attachment,
   type ChatMessage,
@@ -68,6 +73,9 @@ export type HiveMcpContext = {
     progress?: boolean;
   }) => ChatMessage;
   readWhiteboard: () => WhiteboardEntry[];
+  listTodos: () => Todo[];
+  addTodo: (input: TodoInput) => Todo;
+  updateTodo: (id: string, input: TodoUpdate) => Todo;
   updateWhiteboard: (input: {
     key: string;
     slot: WhiteboardEntry["slot"];
@@ -764,6 +772,81 @@ export function createHiveMcpServer(context: HiveMcpContext): McpServer {
             seq: message.seq,
             messageId: message.id,
           },
+          context.takeInbox(),
+        );
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "hive_todo_list",
+    {
+      title: "List room to-dos",
+      description:
+        "读取当前房间待办。待办记的是以后要做、还没开始的事；正在做、已交付或阻塞的事项仍登记在白板。",
+      inputSchema: {
+        completed: z.boolean().optional().describe("省略时列出全部；false=未完成，true=已完成"),
+        offset: z.number().int().nonnegative().default(0),
+        limit: z.number().int().min(1).max(100).default(50),
+      },
+    },
+    async (input) => {
+      try {
+        const all = context
+          .listTodos()
+          .filter((todo) => input.completed === undefined || todo.completed === input.completed);
+        const todos = all.slice(input.offset, input.offset + input.limit);
+        return toolResult(
+          {
+            roomId: context.roomId,
+            todos,
+            total: all.length,
+            nextOffset:
+              input.offset + todos.length < all.length ? input.offset + todos.length : null,
+          },
+          context.takeInbox(),
+        );
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+  server.registerTool(
+    "hive_todo_add",
+    {
+      title: "Add a room to-do",
+      description:
+        "记下一件以后要做、还没开始的事。不会自动派活或定时执行。负责人用 hive_members_list 的成员 id；访客默认只读。",
+      inputSchema: todoInputSchema.shape,
+    },
+    async (input) => {
+      try {
+        return toolResult({ todo: context.addTodo(input) }, context.takeInbox());
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+  server.registerTool(
+    "hive_todo_update",
+    {
+      title: "Update a room to-do",
+      description:
+        "更新待办标题、备注、负责人或完成状态。completed=true 勾选完成，false 重新打开；访客默认只读。",
+      inputSchema: {
+        todoId: z.string().uuid(),
+        title: todoInputSchema.shape.title.optional(),
+        notes: todoInputSchema.shape.notes.optional(),
+        assigneeId: todoInputSchema.shape.assigneeId.optional(),
+        completed: z.boolean().optional(),
+      },
+    },
+    async ({ todoId, ...input }) => {
+      try {
+        return toolResult(
+          { todo: context.updateTodo(todoId, todoUpdateSchema.parse(input)) },
           context.takeInbox(),
         );
       } catch (error) {

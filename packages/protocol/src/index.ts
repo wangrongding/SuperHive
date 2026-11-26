@@ -44,6 +44,9 @@ export const LIMITS = {
   /** Agent 在线却一直没确认收到 @，视为投递未被接收 */
   invocationUnacknowledgedMs: 2 * 60_000,
   maxWhiteboardEntriesPerSlot: 50,
+  maxTodoTitleLength: 200,
+  maxTodoNoteLength: 5000,
+  maxTodosPerRoom: 1000,
   /** hive_ask_human 的选项数上限（字母 A 起依次分配）与每项长度 */
   maxQuestionOptions: 10,
   maxQuestionOptionLength: 64,
@@ -667,6 +670,34 @@ export const invocationSchema = z.object({
 
 export const whiteboardSlotSchema = z.enum(["ready", "in_progress", "blocked", "milestone"]);
 
+export const todoInputSchema = z.object({
+  title: z.string().trim().min(1).max(LIMITS.maxTodoTitleLength),
+  notes: z.string().trim().max(LIMITS.maxTodoNoteLength).default(""),
+  assigneeId: z.string().uuid().nullable().default(null),
+  sourceMessageId: z.string().uuid().nullable().default(null),
+});
+export const todoUpdateSchema = todoInputSchema
+  .omit({ sourceMessageId: true })
+  .partial()
+  .extend({ completed: z.boolean().optional() })
+  .refine((input) => Object.keys(input).length > 0);
+export const todoSchema = todoInputSchema.extend({
+  id: z.string().uuid(),
+  roomId: z.string().min(1).max(64),
+  creatorId: z.string().uuid(),
+  creatorName: z.string(),
+  creatorType: z.enum(["human", "agent"]),
+  assigneeName: z.string().nullable(),
+  sourceMessageSeq: z.number().int().positive().nullable(),
+  completed: z.boolean(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  completedAt: z.string().datetime().nullable(),
+});
+export type Todo = z.infer<typeof todoSchema>;
+export type TodoInput = z.infer<typeof todoInputSchema>;
+export type TodoUpdate = z.infer<typeof todoUpdateSchema>;
+
 export {
   worktreeClaimSchema,
   createWorktreeRequestSchema,
@@ -920,6 +951,7 @@ export const roomSnapshotEventSchema = z.object({
   firstSeq: z.number().int().nonnegative().optional(),
   invocations: z.array(invocationSchema).default([]),
   whiteboard: z.array(whiteboardEntrySchema).default([]),
+  todos: z.array(todoSchema).optional(),
   schedules: z.array(scheduleSchema).default([]),
   /** 还在等人批的权限申请（对应提问消息的 ID） */
   approvals: z.array(z.string().uuid()).default([]),
@@ -998,6 +1030,15 @@ export const invocationUpdatedEventSchema = z.object({
 export const whiteboardUpdatedEventSchema = z.object({
   type: z.literal("whiteboard.updated"),
   entry: whiteboardEntrySchema,
+});
+export const todoUpdatedEventSchema = z.object({
+  type: z.literal("todo.updated"),
+  todo: todoSchema,
+});
+export const todoRemovedEventSchema = z.object({
+  type: z.literal("todo.removed"),
+  roomId: z.string(),
+  todoId: z.string().uuid(),
 });
 export const whiteboardRemovedEventSchema = z.object({
   type: z.literal("whiteboard.removed"),
@@ -1149,6 +1190,8 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   agentShutdownEventSchema,
   invocationUpdatedEventSchema,
   whiteboardUpdatedEventSchema,
+  todoUpdatedEventSchema,
+  todoRemovedEventSchema,
   whiteboardRemovedEventSchema,
   scheduleUpdatedEventSchema,
   invocationTraceUpdatedEventSchema,

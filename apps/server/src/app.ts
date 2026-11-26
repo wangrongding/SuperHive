@@ -2,6 +2,9 @@ import {
   artifactsQuerySchema,
   serverText,
   type RoomClearOptions,
+  todoInputSchema,
+  todoUpdateSchema,
+  renderServerText,
   isResumableUnknown,
   isAgentOutdated,
   type AgentCodeVersion,
@@ -16,7 +19,7 @@ import { resolveRoom, roomsNamedLike } from "./room-lookup.js";
 import { observeRuntime } from "./runtime-observation.js";
 import { feedbackInfo } from "./feedback-info.js";
 import type { NpmUpdates } from "./npm-updates.js";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { open, readFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5598,6 +5601,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         ).message;
       },
       readWhiteboard: () => database.listWhiteboard(participant.roomId),
+      listTodos: () => database.listTodos(participant.roomId),
+      addTodo: (input) => {
+        if (requestPrincipal(request)?.kind !== "admin")
+          throw new HiveError("OWNER_ONLY", serverText("error.auth.ownerOnly"));
+        const todo = database.addTodo(participant, input);
+        broadcast(participant.roomId, { type: "todo.updated", todo });
+        return todo;
+      },
+      updateTodo: (id, input) => {
+        if (requestPrincipal(request)?.kind !== "admin")
+          throw new HiveError("OWNER_ONLY", serverText("error.auth.ownerOnly"));
+        const todo = database.updateTodo(participant.roomId, id, input);
+        broadcast(participant.roomId, { type: "todo.updated", todo });
+        return todo;
+      },
       updateWhiteboard: async (input) => {
         if (input.claim) {
           const workspace = localWorktreeAgent(participant, isLocal(request.raw).local, false);
@@ -5959,6 +5977,131 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
   );
 
+  function todoError(reply: FastifyReply, error: unknown) {
+    if (!(error instanceof HiveError)) throw error;
+    return reply.code(error.code.endsWith("NOT_FOUND") ? 404 : 409).send(hiveErrorBody(error));
+  }
+
+  app.get<{ Params: { roomId: string } }>("/api/rooms/:roomId/todos", async (request, reply) => {
+    const params = roomParamsSchema.safeParse(request.params);
+    if (!params.success)
+      return reply.code(400).send(errorText(serverText("error.request.invalid")));
+    if (!guard(request, reply, params.data.roomId)) return reply;
+    return { todos: database.listTodos(params.data.roomId) };
+  });
+
+  app.post<{ Params: { roomId: string } }>("/api/rooms/:roomId/todos", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    const params = roomParamsSchema.safeParse(request.params);
+    const body = todoInputSchema
+      .extend({ username: z.string().trim().min(1).max(32) })
+      .safeParse(request.body);
+    if (!params.success || !body.success)
+      return reply.code(400).send(errorText(serverText("error.request.invalid")));
+    const creator = database.findParticipant(params.data.roomId, body.data.username);
+    if (!creator || creator.type !== "human")
+      return reply.code(403).send(errorText(serverText("error.auth.unauthorized")));
+    try {
+      const todo = database.addTodo(creator, todoInputSchema.parse(body.data));
+      broadcast(todo.roomId, { type: "todo.updated", todo });
+      return reply.code(201).send({ todo });
+    } catch (error) {
+      return todoError(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { roomId: string; todoId: string } }>(
+    "/api/rooms/:roomId/todos/:todoId",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      const params = roomParamsSchema
+        .extend({ todoId: z.string().uuid() })
+        .safeParse(request.params);
+      const body = todoUpdateSchema.safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply.code(400).send(errorText(serverText("error.request.invalid")));
+      try {
+        const todo = database.updateTodo(params.data.roomId, params.data.todoId, body.data);
+        broadcast(todo.roomId, { type: "todo.updated", todo });
+        return { todo };
+      } catch (error) {
+        return todoError(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { roomId: string; todoId: string } }>(
+    "/api/rooms/:roomId/todos/:todoId",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      const params = roomParamsSchema
+        .extend({ todoId: z.string().uuid() })
+        .safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send(errorText(serverText("error.request.invalid")));
+      try {
+        database.removeTodo(params.data.roomId, params.data.todoId);
+        broadcast(params.data.roomId, {
+          type: "todo.removed",
+          roomId: params.data.roomId,
+          todoId: params.data.todoId,
+        });
+        return { removed: true };
+      } catch (error) {
+        return todoError(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { roomId: string; todoId: string } }>(
+    "/api/rooms/:roomId/todos/:todoId/handoff",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      const params = roomParamsSchema
+        .extend({ todoId: z.string().uuid() })
+        .safeParse(request.params);
+      const body = z
+        .object({
+          username: z.string().trim().min(1).max(32),
+          agentId: z.string().uuid(),
+          clientMessageId: z.string().min(1).max(100),
+          locale: z.enum(["zh-CN", "en"]).default("zh-CN"),
+        })
+        .safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply.code(400).send(errorText(serverText("error.request.invalid")));
+      const human = database.findParticipant(params.data.roomId, body.data.username);
+      const agent = database.getParticipant(body.data.agentId);
+      if (
+        !human ||
+        human.type !== "human" ||
+        !agent ||
+        agent.type !== "agent" ||
+        agent.roomId !== params.data.roomId
+      )
+        return reply.code(400).send(errorText(serverText("error.todo.assignee")));
+      try {
+        const todo = database.getTodo(params.data.roomId, params.data.todoId);
+        if (todo.completed)
+          throw new HiveError("TODO_COMPLETED", serverText("error.todo.completed"));
+        const source = todo.sourceMessageId ? database.getMessage(todo.sourceMessageId) : undefined;
+        const content = `@${agent.username} ${renderServerText(serverText("todo.handoff", { title: todo.title.replaceAll("@", "＠"), notes: todo.notes.replaceAll("@", "＠"), id: todo.id }), body.data.locale)}`;
+        const { message } = createAndDispatchMessage(human, {
+          content,
+          clientMessageId: createHash("sha256")
+            .update(`todo:${todo.id}:${agent.id}:${body.data.clientMessageId}`)
+            .digest("hex"),
+          ...(source && !source.deletedAt ? { replyToMessageId: source.id } : {}),
+        });
+        const updated = database.updateTodo(todo.roomId, todo.id, { assigneeId: agent.id });
+        broadcast(todo.roomId, { type: "todo.updated", todo: updated });
+        return { todo: updated, message };
+      } catch (error) {
+        return todoError(reply, error);
+      }
+    },
+  );
+
   app.get<{ Params: { roomId: string }; Querystring: { view?: string } }>(
     "/api/rooms/:roomId/whiteboard",
     async (request, reply) => {
@@ -6296,6 +6439,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         firstSeq: database.getMessages(roomId, 0, 1)[0]?.seq ?? 0,
         invocations: database.listInvocations(roomId).map(visibleInvocation),
         whiteboard: database.listWhiteboard(roomId),
+        todos: database.listTodos(roomId),
         schedules: database.listSchedules(roomId),
         approvals: [...approvals.values()]
           .filter((item) => item.roomId === roomId)

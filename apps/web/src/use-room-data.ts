@@ -5,6 +5,7 @@ import type {
   Participant,
   TraceStep,
   WhiteboardEntry,
+  Todo,
 } from "@superhive/protocol";
 import { serverError } from "./server-text";
 import { upsertWhiteboardEntry } from "./whiteboard";
@@ -17,6 +18,7 @@ type CachedRoom = {
   messages: ChatMessage[];
   invocations: ReadonlyMap<string, Invocation>;
   whiteboard: ReadonlyMap<string, WhiteboardEntry>;
+  todos: ReadonlyMap<string, Todo>;
   pendingApprovals: ReadonlySet<string>;
   traces: ReadonlyMap<string, TraceStep[]>;
   endedTraces: Set<string>;
@@ -46,6 +48,7 @@ export function useRoomData({
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("joining");
   const [invocations, setInvocations] = useState<ReadonlyMap<string, Invocation>>(new Map());
   const [whiteboard, setWhiteboard] = useState<ReadonlyMap<string, WhiteboardEntry>>(new Map());
+  const [todos, setTodos] = useState<ReadonlyMap<string, Todo>>(new Map());
   const whiteboardEpochRef = useRef(0);
   const whiteboardChangesRef = useRef(new Map<string, number>());
   /** 还在等人批的权限申请（提问消息 ID） */
@@ -81,6 +84,7 @@ export function useRoomData({
     setParticipants([]);
     setInvocations(new Map());
     setWhiteboard(new Map());
+    setTodos(new Map());
     setPendingApprovals(new Set());
     setTraces(new Map());
     endedTracesRef.current.clear();
@@ -93,6 +97,7 @@ export function useRoomData({
         messages,
         invocations,
         whiteboard,
+        todos,
         pendingApprovals,
         traces,
         endedTraces: endedTracesRef.current,
@@ -114,6 +119,7 @@ export function useRoomData({
     setLoadingPhase("messages");
     setInvocations(cached?.invocations ?? new Map());
     setWhiteboard(cached?.whiteboard ?? new Map());
+    setTodos(cached?.todos ?? new Map());
     whiteboardEpochRef.current += 1;
     whiteboardChangesRef.current.clear();
     setPendingApprovals(cached?.pendingApprovals ?? new Set());
@@ -194,6 +200,8 @@ export function useRoomData({
   }
 
   return {
+    todos,
+    setTodos,
     participants,
     setParticipants,
     messages,

@@ -139,6 +139,8 @@ import { useMessageScroll } from "./use-message-scroll";
 import { useMessageJump, useMessageWindow } from "./use-message-timeline";
 import { useComposer } from "./use-composer";
 import { useMessageActions } from "./use-message-actions";
+import { TodoPanel } from "./todos";
+import { todoApi, todoFromMessage } from "./todo-api";
 import { useActivityData } from "./use-activity-data";
 import { ChatHeader, ChatNotices } from "./chat-header";
 import { MessageList } from "./message-list";
@@ -1344,6 +1346,27 @@ export function App({
     if (messages.length > 0) markRoomRead(currentRoomId);
   }, [currentRoomId, markRoomRead, messages]);
 
+  const todosApi = useMemo(
+    () => todoApi(base, authToken, currentRoomId, username),
+    [base, authToken, currentRoomId, username],
+  );
+  const recordingTodoRef = useRef(new Set<string>());
+  async function recordMessageTodo(message: ChatMessage) {
+    if (recordingTodoRef.current.has(message.id)) return;
+    recordingTodoRef.current.add(message.id);
+    try {
+      await todosApi.add(todoFromMessage(message));
+      if (currentRoomIdRef.current === message.roomId) {
+        setSidePanelTab("todos");
+        setMobilePanel("members");
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      recordingTodoRef.current.delete(message.id);
+    }
+  }
+
   const actions = useMessageActions({
     socketRef: room.socketRef,
     setError,
@@ -2479,6 +2502,9 @@ export function App({
                 setOpenMachineIds={setOpenMachineIds}
                 openSenderMenu={openSenderMenu}
                 locateMessageFromMarkdown={locateMessageFromMarkdown}
+                onRecordTodo={
+                  isOwner && connectionState === "online" ? recordMessageTodo : undefined
+                }
                 dockPreview={dockPreview}
                 setRetryModelFor={setRetryModelFor}
                 localAgentFor={localAgentFor}
@@ -2572,6 +2598,23 @@ export function App({
         )}
 
         <SidePanel
+          todoCount={[...room.todos.values()].filter((todo) => !todo.completed).length}
+          todoPanel={
+            <TodoPanel
+              key={currentRoomId}
+              todos={[...room.todos.values()]}
+              members={participants}
+              canManage={isOwner && connectionState === "online"}
+              actions={todosApi}
+              onLocate={(todo) => {
+                if (todo.sourceMessageId && todo.sourceMessageSeq)
+                  locateMessageFromMarkdown({
+                    messageId: todo.sourceMessageId,
+                    messageSeq: todo.sourceMessageSeq,
+                  });
+              }}
+            />
+          }
           roomWorkspace={currentRoom?.workspace}
           accessNow={accessNow}
           agentDialogOpen={agentDialogOpen}
