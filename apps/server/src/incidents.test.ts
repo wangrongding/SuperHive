@@ -232,6 +232,46 @@ describe("incident classification", () => {
       sample: { url: "http://localhost:5173/rooms/build" },
     });
   });
+
+  it("files no incident for Vite dev-server noise, but keeps production errors", () => {
+    const report = (stack: string) =>
+      classifyClientError({ kind: "error", name: "TypeError", message: "boom", stack }, {});
+    // 热更新替换过的模块（改到一半的代码、Hook 顺序对不上）
+    expect(
+      report(
+        "ReferenceError: Button is not defined\n    at Composer (http://localhost:5188/src/composer.tsx?t=1795578227463:661:43)\n    at renderWithHooks (http://localhost:5188/node_modules/.vite/deps/react-dom_client.js?v=7c706b7b:4398:19)",
+      ),
+    ).toBeUndefined();
+    // 依赖重新预构建：页面里混着两份 React
+    expect(
+      report(
+        "TypeError: Cannot read properties of null (reading 'useRef')\n    at exports.useRef (http://localhost:5188/node_modules/.vite/deps/react-BBoXEtLn.js?v=3619afb2:766:30)\n    at RichComposer (http://localhost:5188/src/rich-composer.tsx:131:19)\n    at renderWithHooks (http://localhost:5188/node_modules/.vite/deps/react-dom_client.js?v=7c706b7b:4398:19)",
+      ),
+    ).toBeUndefined();
+    // 同一份预构建依赖、没被热更新过的源码：真实的报错照常记
+    expect(
+      report(
+        "TypeError: boom\n    at RichComposer (http://localhost:5188/src/rich-composer.tsx:131:19)\n    at renderWithHooks (http://localhost:5188/node_modules/.vite/deps/react-dom_client.js?v=7c706b7b:4398:19)\n    at x (http://localhost:5188/node_modules/.vite/deps/react-BBoXEtLn.js?v=7c706b7b:1:1)",
+      ),
+    ).toMatchObject({ source: "web" });
+    expect(
+      report("TypeError: boom\n    at Panel (http://127.0.0.1:8787/assets/index-Zz91kk2a.js:3:10)"),
+    ).toMatchObject({ source: "web" });
+  });
+
+  it("files no incident when the server itself ended the agent mid-turn", () => {
+    for (const key of [
+      "invocation.interruptedAgentStopped",
+      "invocation.interruptedAgentRestarted",
+      "invocation.interruptedAgentRemoved",
+      "invocation.interruptedServerStopped",
+    ]) {
+      expect(invocationOrigin(key)).toBeUndefined();
+      expect(
+        classifyInvocation(invocation({ status: "failed", detailText: { key } }), {}),
+      ).toBeUndefined();
+    }
+  });
 });
 
 describe("credential redaction", () => {

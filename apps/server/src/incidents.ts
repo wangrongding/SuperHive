@@ -10,6 +10,7 @@ import {
   type Invocation,
   type ServerText,
   type WireServerText,
+  isViteDevNoise,
 } from "@superhive/protocol";
 
 /**
@@ -70,6 +71,11 @@ const NOT_INCIDENTS = new Set([
   "bridge.worktreeCleaned",
   "invocation.recalledStopUnconfirmed",
   "invocation.recalledStopped",
+  // Server 主动停止、重启、删除本机 Agent 或自己停下时结束了 Agent 进程：人或流程有意为之，原因写明、可重试
+  "invocation.interruptedAgentStopped",
+  "invocation.interruptedAgentRestarted",
+  "invocation.interruptedAgentRemoved",
+  "invocation.interruptedServerStopped",
 ]);
 
 export function invocationOrigin(key: string | undefined): IncidentOrigin | undefined {
@@ -211,11 +217,15 @@ export function classifyProtocolError(
   };
 }
 
-/** 网页上报的报错：打包后的文件名带内容哈希，去掉后同一处代码在不同版本里指纹不变 */
+/**
+ * 网页上报的报错：打包后的文件名带内容哈希，去掉后同一处代码在不同版本里指纹不变。
+ * Vite 开发服务器热更新、依赖重新预构建造成的报错（见 isViteDevNoise）刷新即好，不算故障，返回 undefined
+ */
 export function classifyClientError(
   report: ClientErrorReport,
   context: { roomId?: string | undefined; codeVersion?: string | undefined },
-): IncidentOccurrence {
+): IncidentOccurrence | undefined {
+  if (isViteDevNoise(report.stack)) return undefined;
   const name =
     report.name?.trim() || (report.kind === "unhandledrejection" ? "Rejection" : "Error");
   const message = normalizeMessage(report.message);

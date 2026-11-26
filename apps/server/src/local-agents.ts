@@ -104,6 +104,11 @@ export type LocalAgentSupervisorOptions = {
   updateCheckMs?: number;
   /** 当前代码版本变了（合入、升级）：成员列表里谁是旧版本跟着变 */
   onCurrentVersionChange?: () => void;
+  /**
+   * Server 主动结束了这个 Agent 的进程（停止、重启、删除、Server 自己停下；交接给下一个 Server 不算）：
+   * 它手上没做完的调用不会再有结果，交给调用方立即标为已中断，不等卡住超时判「结果未知」
+   */
+  onAgentEnded?: (name: string, reason: LocalAgentEndReason) => void;
   log?: (message: string) => void;
   spawn?: SpawnAgent;
   adopt?: AdoptAgent;
@@ -155,6 +160,33 @@ export const AUTO_RESTART_COOLDOWN_MS = 10 * 60_000;
 /** 自动更新开关（设置项，默认开） */
 export const AUTO_UPDATE_SETTING = "local-agents:auto-update";
 
+/** `hive mcp list` 子进程失败时给人看的原因：超时单独说；否则取它 stderr 最后一行（不带命令行） */
+export function mcpListError(error: unknown): HiveError {
+  const failure = error as { killed?: boolean; signal?: string | null; stderr?: unknown };
+  if (failure?.killed && failure.signal) {
+    return new HiveError(
+      "LOCAL_AGENT_MCP_LIST_FAILED",
+      serverText("error.localAgent.mcpListTimedOut", { seconds: MCP_LIST_TIMEOUT_MS / 1000 }),
+    );
+  }
+  const stderr = typeof failure?.stderr === "string" ? failure.stderr : "";
+  const reason = stderr
+    .replace(ANSI_PATTERN, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1)
+    ?.slice(0, 300);
+  return new HiveError(
+    "LOCAL_AGENT_MCP_LIST_FAILED",
+    reason
+      ? serverText("error.localAgent.mcpListFailedReason", { reason })
+      : serverText("error.localAgent.mcpListFailed"),
+  );
+}
+
+export type LocalAgentEndReason = "stopped" | "restarted" | "removed" | "serverStopped";
+
 export type McpLister = (args: string[]) => Promise<string>;
 export type ModelLister = (provider: LocalAgentProvider) => Promise<LocalAgentModelsResponse>;
 /** 模型列表缓存：起 Codex app-server、跑 opencode models 都要几秒 */
@@ -165,6 +197,8 @@ const MCP_SELECTABLE: ReadonlySet<LocalAgentProvider> = new Set(["claude", "code
 /** 实测：Claude Code 不带任何 MCP 时开局约 4 万 token（系统提示与内置工具） */
 const CLAUDE_BASELINE_TOKENS = 40_000;
 const MCP_MEASURE_CACHE_MS = 10 * 60_000;
+/** `hive mcp list`（测量时逐个连上 MCP）最多等这么久 */
+const MCP_LIST_TIMEOUT_MS = 90_000;
 
 export const PROVIDER_COMMANDS: Record<LocalAgentProvider, string> = {
   codex: "codex",
@@ -592,8 +626,9 @@ export class LocalAgentSupervisor {
           execFile(
             options.cli.command,
             [...options.cli.args, ...args],
-            { timeout: 90_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
-            (error, stdout) => (error ? reject(error) : resolve(stdout)),
+            { timeout: MCP_LIST_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+            (error, stdout, stderr) =>
+              error ? reject(Object.assign(error, { stderr })) : resolve(stdout),
           ),
         ));
     this.listModels =
@@ -846,15 +881,21 @@ export class LocalAgentSupervisor {
       cachedEntry && this.now() - cachedEntry.at < MCP_MEASURE_CACHE_MS
         ? cachedEntry.result
         : undefined;
-    const stdout = await this.listMcp([
-      "mcp",
-      "list",
-      cliOption("provider", provider),
-      cliOption("cwd", cwd ?? homedir()),
-      ...(settingsFile ? [cliOption("agent-settings", settingsFile)] : []),
-      "--json",
-      ...(measure && provider === "claude" ? ["--measure"] : []),
-    ]);
+    let stdout: string;
+    try {
+      stdout = await this.listMcp([
+        "mcp",
+        "list",
+        cliOption("provider", provider),
+        cliOption("cwd", cwd ?? homedir()),
+        ...(settingsFile ? [cliOption("agent-settings", settingsFile)] : []),
+        "--json",
+        ...(measure && provider === "claude" ? ["--measure"] : []),
+      ]);
+    } catch (error) {
+      // 超时、某个 MCP 起不来、模型服务限流时测量失败：按设计会发生，告诉人原因，不当成 Server 故障
+      throw mcpListError(error);
+    }
     const line = stdout.trim().split("\n").at(-1) ?? "";
     let servers: LocalAgentMcpResponse["servers"];
     try {
@@ -960,7 +1001,7 @@ export class LocalAgentSupervisor {
     const runtime = this.require(id);
     runtime.pendingRestart = undefined;
     this.options.database.setLocalAgentAutostart(id, false);
-    await this.terminate(runtime);
+    await this.terminate(runtime, "stopped");
     await this.stopStrays(runtime);
     runtime.phase = "stopped";
     return this.view(runtime);
@@ -978,7 +1019,7 @@ export class LocalAgentSupervisor {
     runtime.pendingRestart = undefined;
     runtime.transitioning = true;
     try {
-      await this.terminate(runtime);
+      await this.terminate(runtime, "restarted");
       if (guard && !guard(this.view(runtime))) {
         runtime.phase = "stopped";
         throw new HiveError(
@@ -1196,7 +1237,7 @@ export class LocalAgentSupervisor {
 
   async remove(id: string): Promise<void> {
     const runtime = this.require(id);
-    await this.terminate(runtime);
+    await this.terminate(runtime, "removed");
     await this.stopStrays(runtime);
     this.runtimes.delete(id);
     this.options.database.deleteLocalAgent(id);
@@ -1245,7 +1286,9 @@ export class LocalAgentSupervisor {
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     this.cancelUpdateTimers();
-    await Promise.all([...this.runtimes.values()].map((runtime) => this.terminate(runtime)));
+    await Promise.all(
+      [...this.runtimes.values()].map((runtime) => this.terminate(runtime, "serverStopped")),
+    );
   }
 
   private require(id: string): Runtime {
@@ -1462,7 +1505,7 @@ export class LocalAgentSupervisor {
     }, delay);
   }
 
-  private async terminate(runtime: Runtime): Promise<void> {
+  private async terminate(runtime: Runtime, reason?: LocalAgentEndReason): Promise<void> {
     runtime.timer?.cancel();
     runtime.timer = undefined;
     const child = runtime.child;
@@ -1485,6 +1528,14 @@ export class LocalAgentSupervisor {
     ]);
     forced?.cancel();
     if (runtime.child === child) runtime.child = undefined;
+    // 进程已经退出：它来得及自己报的结果（停下、下线）已经收到，剩下还在进行的就不会再有结果了
+    if (reason) {
+      try {
+        this.options.onAgentEnded?.(runtime.config.name, reason);
+      } catch (error) {
+        this.log(`[local-agents] ${runtime.config.name}：标记中断的调用失败：${String(error)}`);
+      }
+    }
   }
 
   private appendLog(runtime: Runtime, chunk: string): void {

@@ -55,6 +55,10 @@ const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   "bridge.upstreamFailed": "uncertain",
   "bridge.worktreeCheckBeforeContinue": "uncertain",
   "bridge.unsafe": "unsafe",
+  // Server 主动结束了 Agent 进程：这一轮可能已执行过一部分
+  "invocation.interruptedAgentStopped": "uncertain",
+  "invocation.interruptedAgentRestarted": "uncertain",
+  "invocation.interruptedServerStopped": "uncertain",
 };
 
 export function failureClass(invocation: {

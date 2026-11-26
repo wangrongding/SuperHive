@@ -1843,6 +1843,18 @@ export class HiveDatabase {
     return rows.map(mapInvocation);
   }
 
+  /** 这个名字的 Agent（跨房间，不分大小写）当前正在执行（含停止中、提问后本轮尚未结束）的调用 */
+  listExecutingInvocationsNamed(agentName: string): Invocation[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM invocations WHERE lower(agent_name) = lower(?)
+           AND (status IN ('running', 'cancelling')
+             OR (status = 'waiting_human' AND finished_at IS NULL))`,
+      )
+      .all(agentName) as InvocationRow[];
+    return rows.map(mapInvocation);
+  }
+
   updateInvocation(id: string, patch: InvocationPatch): Invocation {
     const columns: Record<Exclude<keyof InvocationPatch, "failure">, string> = {
       status: "status",

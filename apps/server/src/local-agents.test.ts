@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { failureClass } from "@superhive/protocol";
 import { buildApp, type BuildAppOptions } from "./app.js";
 import { HiveDatabase } from "./database.js";
 import {
@@ -687,6 +688,75 @@ describe("local agent routes", () => {
     ]);
   });
 
+  it("marks the turns of an agent it stops as interrupted at once, without filing an incident", async () => {
+    const { app, owner } = await setup();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/local/agents",
+      headers: owner,
+      payload: { provider: "opencode", name: "rd-opencode", access: "read-only" },
+    });
+    const database = (app as unknown as { hiveDatabase: HiveDatabase }).hiveDatabase;
+    const human = database.upsertParticipant({ roomId: "general", username: "rd", type: "human" });
+    const agent = database.upsertParticipant({
+      roomId: "general",
+      username: "rd-opencode",
+      type: "agent",
+    });
+    const other = database.upsertParticipant({
+      roomId: "general",
+      username: "rd-codex",
+      type: "agent",
+    });
+    const start = (target: typeof agent, clientMessageId: string) => {
+      const message = database.createMessage(human, {
+        content: `@${target.username} go`,
+        clientMessageId,
+      }).message;
+      const { invocation } = database.createInvocation({
+        message,
+        agent: target,
+        status: "queued",
+      });
+      return database.updateInvocation(invocation.id, { status: "running" });
+    };
+    const running = start(agent, "c-run");
+    const cancelling = database.updateInvocation(start(agent, "c-cancel").id, {
+      status: "cancelling",
+    });
+    const unrelated = start(other, "c-other");
+
+    const stopped = await app.inject({
+      method: "POST",
+      url: `/api/local/agents/${created.json().agent.id}/stop`,
+      headers: owner,
+    });
+    expect(stopped.statusCode).toBe(200);
+    expect(database.getInvocation(running.id)).toMatchObject({
+      status: "failed",
+      detailText: { key: "invocation.interruptedAgentStopped" },
+    });
+    expect(database.getInvocation(running.id)!.finishedAt).toBeTruthy();
+    expect(database.getInvocation(cancelling.id)).toMatchObject({
+      status: "cancelled",
+      detailText: { key: "invocation.interruptedAgentStopped" },
+    });
+    // 别的 Agent 不受影响；也没有建故障单（故障单在下一拍归类）
+    expect(database.getInvocation(unrelated.id)!.status).toBe("running");
+    await new Promise((resolve) => setImmediate(resolve));
+    const incidents = await app.inject({
+      method: "GET",
+      url: "/api/local/incidents",
+      headers: owner,
+    });
+    expect(incidents.json().incidents).toEqual([]);
+    // 人可以直接重试
+    const after = database.getInvocation(running.id)!;
+    expect(failureClass({ status: after.status, detailText: { key: after.detailText!.key } })).toBe(
+      "uncertain",
+    );
+  });
+
   it("passes an agent settings file and applies MCP selections without a restart", async () => {
     const settingsDir = mkdtempSync(path.join(tmpdir(), "hive-agent-settings-"));
     const listMcp = vi.fn(async (args: string[]) => {
@@ -1060,6 +1130,50 @@ describe("local agent routes", () => {
     rmSync(settingsDir, { recursive: true, force: true });
   });
 
+  it("answers a failed or timed-out MCP measurement with a readable error, not an incident", async () => {
+    const settingsDir = mkdtempSync(path.join(tmpdir(), "hive-agent-settings-"));
+    let failure: Error = Object.assign(
+      new Error("Command failed: node cli.js mcp list --measure"),
+      {
+        code: 1,
+        stderr: "\u001b[31mwarn\u001b[0m\nError: 429 rate limited by upstream\n",
+      },
+    );
+    const listMcp = vi.fn<(args: string[]) => Promise<string>>(async (args) => {
+      if (args.includes("--measure")) throw failure;
+      return JSON.stringify({ servers: [] });
+    });
+    const { app, owner } = await setup({ settingsDir, listMcp });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/local/agents",
+      headers: owner,
+      payload: { provider: "claude", name: "rd-claude", access: "read-only" },
+    });
+    const measure = () =>
+      app.inject({
+        method: "POST",
+        url: `/api/local/agents/${created.json().agent.id}/mcp/measure`,
+        headers: owner,
+      });
+    const failed = await measure();
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({
+      code: "LOCAL_AGENT_MCP_LIST_FAILED",
+      error: "没能读取这个 Agent 的 MCP 列表：Error: 429 rate limited by upstream",
+    });
+    expect(failed.body).not.toContain("Command failed");
+    failure = Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" });
+    expect((await measure()).json().error).toMatch(/超时（90 秒）/);
+    const incidents = await app.inject({
+      method: "GET",
+      url: "/api/local/incidents",
+      headers: owner,
+    });
+    expect(incidents.json().incidents).toEqual([]);
+    rmSync(settingsDir, { recursive: true, force: true });
+  });
+
   it("validates access, working directory and name before starting anything", async () => {
     const { app, owner, spawner } = await setup();
     const post = (payload: object) =>
@@ -1352,6 +1466,29 @@ describe("LocalAgentSupervisor", () => {
     expect(() =>
       supervisor.create({ provider: "omp", name: "Alice", access: "read-only" }),
     ).toThrow("已被其他成员使用");
+    database.close();
+  });
+
+  it("tells the server which agents it ended and why, but not the ones that were not running", async () => {
+    const database = new HiveDatabase(":memory:");
+    const ended: Array<[string, string]> = [];
+    const { supervisor } = supervisorWith(database, {
+      onAgentEnded: (name, reason) => ended.push([name, reason]),
+    });
+    const a = supervisor.create({ provider: "omp", name: "rd-a", access: "read-only" });
+    supervisor.create({ provider: "omp", name: "rd-b", access: "read-only" });
+    const c = supervisor.create({ provider: "omp", name: "rd-c", access: "read-only" });
+    await supervisor.restart(a.id);
+    await supervisor.stop(c.id);
+    // 已经停了的再停：没有进程被结束
+    await supervisor.stop(c.id);
+    await supervisor.shutdown();
+    expect(ended).toEqual([
+      ["rd-a", "restarted"],
+      ["rd-c", "stopped"],
+      ["rd-a", "serverStopped"],
+      ["rd-b", "serverStopped"],
+    ]);
     database.close();
   });
 

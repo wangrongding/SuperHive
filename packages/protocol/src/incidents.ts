@@ -172,6 +172,22 @@ export const clientErrorReportSchema = z.object({
   userAgent: z.string().max(500).optional(),
 });
 
+/**
+ * 只会出现在 Vite 开发服务器上的报错现场，刷新页面即好、不是代码缺陷：
+ * - 调用栈里有带 `?t=` 的源码模块：这个文件刚被热更新替换过（改到一半的代码、热更新后 Hook 顺序对不上）
+ * - `node_modules/.vite/deps/` 里的预构建依赖带着不同的 `?v=`：依赖重新预构建了，页面里混着新旧两份 React
+ * 生产构建的文件名带内容哈希、没有这些查询串，不受影响。网页（不上报）和 Server（不建故障单）共用。
+ */
+export function isViteDevNoise(stack: string | undefined): boolean {
+  if (!stack) return false;
+  if (/\/src\/[^\s?:)]+\.[cm]?[jt]sx?\?t=\d+/.test(stack)) return true;
+  const versions = new Set<string>();
+  for (const match of stack.matchAll(/\/\.vite\/deps\/[^\s?:)]+\?v=([0-9a-f]+)/gi)) {
+    versions.add(match[1]!.toLowerCase());
+  }
+  return versions.size > 1;
+}
+
 export type IncidentOrigin = z.infer<typeof incidentOriginSchema>;
 export type IncidentSource = z.infer<typeof incidentSourceSchema>;
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;

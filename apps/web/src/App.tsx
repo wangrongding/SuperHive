@@ -428,6 +428,7 @@ export function App({
       base,
       token: authToken,
       roomId: () => currentRoomIdRef.current,
+      dev: import.meta.env.DEV,
     });
   }, [base, authToken, isOwner]);
   // 「Agent 运行时」只给页面开在 Server 所在电脑上的本机房主

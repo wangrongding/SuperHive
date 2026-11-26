@@ -103,6 +103,7 @@ import {
   LocalAgentSupervisor,
   autoSteerKey,
   resolveWorkspace,
+  type LocalAgentEndReason,
   type LocalAgentSupervisorOptions,
 } from "./local-agents.js";
 import { MANAGE_GRANT_MS, registerLocalAgentRoutes } from "./local-routes.js";
@@ -778,6 +779,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
               });
             }
           },
+          onAgentEnded: (name, reason) => interruptEndedAgent(name, reason),
           requestShutdown: (name) => {
             const suffix = `:${name.toLocaleLowerCase()}`;
             let sent = false;
@@ -1558,6 +1560,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const approvals = new Map<string, PendingApproval>();
   const approvalByQuestion = new Map<string, string>();
 
+  /** 数据库已关闭（Server 停下时最后一步）：之后排到下一拍的收尾不再执行，重启后由补发、清扫接上 */
+  let databaseClosed = false;
+  /** emitInvocation 的后续处理放到下一拍；Server 停下时结束本机 Agent 也会走到这里，关库后就跳过 */
+  function afterEmit(task: () => void): void {
+    setImmediate(() => {
+      if (!databaseClosed) task();
+    });
+  }
+
   function emitInvocation(invocation: Invocation): Invocation {
     broadcastAll({ type: "invocation.updated", invocation });
     endTrace(invocation);
@@ -1568,7 +1579,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
     }
     // 这个 Agent 在房间里正常完成了一次任务：它更早留下的异常多半已经过时，自动收起
-    if (invocation.status === "completed") setImmediate(() => supersedeStale(invocation.roomId));
+    if (invocation.status === "completed") afterEmit(() => supersedeStale(invocation.roomId));
     // 任务结果和需要人处理的状态推到房主的 IM（失败、被拦下这些往往没有对应的聊天消息）
     imHub.onInvocationUpdated(invocation);
     scheduleKeepAwake();
@@ -1577,16 +1588,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       invocation.continuation === "pending" &&
       CONTINUATION_READY_STATUSES.includes(invocation.status)
     ) {
-      setImmediate(() => deliverContinuation(invocation.id));
+      afterEmit(() => deliverContinuation(invocation.id));
     }
     // 定时任务触发的调用结束了：没有正常回复时由服务端补一条说明
     if (CONTINUATION_READY_STATUSES.includes(invocation.status)) {
       const schedule = database.scheduleForInvocation(invocation.id);
-      if (schedule) setImmediate(() => reportSchedule(schedule.id));
+      if (schedule) afterEmit(() => reportSchedule(schedule.id));
     }
     // 失败或结果未知：归类后记进故障单（同一次只记一次）
     if (invocation.status === "failed" || invocation.status === "timed_out") {
-      setImmediate(() => {
+      afterEmit(() => {
         const occurrence = classifyInvocation(invocation, {
           provider: database.getParticipant(invocation.agentId)?.provider,
           codeVersion: runningCommit,
@@ -3892,6 +3903,38 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const sleepGapMs = Math.max(sweepIntervalMs * 3, 60_000);
   let lastSweepAt = Date.now();
   let staleGraceUntil = 0;
+  /**
+   * Server 主动结束了本机 Agent 的进程（停止、重启、删除、Server 自己停下；交接不算）：它手上没做完的调用
+   * 不会再有结果。立即写明原因标为已中断（可重试），不等 10 分钟判「结果未知」，也不建故障单；
+   * 停止中的就是停下了；提问后本轮还没结束的保留提问，只记下这一轮已结束
+   */
+  function interruptEndedAgent(name: string, reason: LocalAgentEndReason): void {
+    const text = serverText(
+      reason === "stopped"
+        ? "invocation.interruptedAgentStopped"
+        : reason === "restarted"
+          ? "invocation.interruptedAgentRestarted"
+          : reason === "removed"
+            ? "invocation.interruptedAgentRemoved"
+            : "invocation.interruptedServerStopped",
+    );
+    const finishedAt = new Date(options.now?.() ?? Date.now()).toISOString();
+    for (const invocation of database.listExecutingInvocationsNamed(name)) {
+      if (invocation.status === "waiting_human") {
+        emitInvocation(database.updateInvocation(invocation.id, { finishedAt, progress: null }));
+        continue;
+      }
+      emitInvocation(
+        database.updateInvocation(invocation.id, {
+          status: invocation.status === "cancelling" ? "cancelled" : "failed",
+          detail: text,
+          progress: null,
+          finishedAt,
+        }),
+      );
+    }
+  }
+
   function sweepStaleInvocations(): void {
     const sweptAt = Date.now();
     if (sweptAt - lastSweepAt > sleepGapMs) staleGraceUntil = sweptAt + 2 * 60_000;
@@ -4542,12 +4585,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       .regex(/^[A-Za-z0-9_-]+$/)
       .max(64)
       .safeParse(request.headers["x-hive-room"]);
-    recordIncident(
-      classifyClientError(body.data, {
-        ...(roomId.success ? { roomId: roomId.data } : {}),
-        codeVersion: runningCommit,
-      }),
-    );
+    const occurrence = classifyClientError(body.data, {
+      ...(roomId.success ? { roomId: roomId.data } : {}),
+      codeVersion: runningCommit,
+    });
+    if (occurrence) recordIncident(occurrence);
     return reply.code(204).send();
   });
 
@@ -6923,6 +6965,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     connections.clear();
     onlineByName.clear();
+    databaseClosed = true;
     database.close();
   });
 

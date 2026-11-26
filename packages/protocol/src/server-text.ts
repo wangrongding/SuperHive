@@ -320,6 +320,22 @@ export const serverTexts = {
     zh: "超过 {minutes} 分钟没有任何进展，结果未知",
     en: "No progress for over {minutes} min; outcome unknown",
   },
+  "invocation.interruptedAgentStopped": {
+    zh: "Agent 被停止，这一轮已中断；可能已执行过一部分，核对后可重试",
+    en: "The agent was stopped, so this turn was interrupted. It may have done part of the work; check, then retry",
+  },
+  "invocation.interruptedAgentRestarted": {
+    zh: "Agent 被重启，这一轮已中断；可能已执行过一部分，核对后可重试",
+    en: "The agent was restarted, so this turn was interrupted. It may have done part of the work; check, then retry",
+  },
+  "invocation.interruptedAgentRemoved": {
+    zh: "Agent 已被删除，这一轮已中断",
+    en: "The agent was removed, so this turn was interrupted",
+  },
+  "invocation.interruptedServerStopped": {
+    zh: "Hive Server 停止时结束了 Agent，这一轮已中断；可能已执行过一部分，核对后可重试",
+    en: "Hive Server stopped and ended the agent, so this turn was interrupted. It may have done part of the work; check, then retry",
+  },
   "invocation.redelivered": {
     zh: "Agent 在线但一直没确认收到，已重新派发一次",
     en: "The agent is online but never confirmed receipt; delivered once more",
@@ -1258,6 +1274,14 @@ export const serverTexts = {
   "error.localAgent.mcpListFailed": {
     zh: "没能读取这个 Agent 的 MCP 列表。",
     en: "Couldn't read this agent's MCP servers.",
+  },
+  "error.localAgent.mcpListFailedReason": {
+    zh: "没能读取这个 Agent 的 MCP 列表：{reason}",
+    en: "Couldn't read this agent's MCP servers: {reason}",
+  },
+  "error.localAgent.mcpListTimedOut": {
+    zh: "读取这个 Agent 的 MCP 列表超时（{seconds} 秒），可能是某个 MCP 启动太慢或模型服务繁忙，稍后再试。",
+    en: "Reading this agent's MCP servers timed out ({seconds}s). An MCP may be slow to start or the model service busy; try again later.",
   },
   "error.localAgent.mcpUnsupported": {
     zh: "这个 Agent 类型暂不支持在 Hive 里开关 MCP。",
