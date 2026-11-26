@@ -2472,5 +2472,17 @@
   "给这台电脑上的各个 CLI 装 MCP、管理技能": "Install MCP servers and manage skills for the CLIs on this computer",
   "代码与 Git": "Code & Git",
   "文档与搜索": "Docs & search",
-  "设计": "Design"
+  "设计": "Design",
+  "自动（现在是 {0}）": "Automatic (currently {0})",
+  "自动：第一个加入的 Agent 当主 Agent（同时进来的优先本机的）；它被删除或移出房间时换成下一个在线的，只是离线不换。": "Automatic: the first agent to join becomes the lead (agents on this computer win when several join at once). If it's deleted or removed from the room, the next online agent takes over; going offline doesn't count.",
+  "手动设的不会被自动换掉；选「不设置」后也不再自动设。": "A lead you pick is never replaced automatically, and choosing “None” turns automatic assignment off.",
+  "主 Agent {0} 已不在这个房间：没 @ 任何人的消息没人接，请重新选择": "Lead agent {0} has left this room, so messages that don't @ anyone go unanswered. Pick a new one",
+  "主 Agent {0} 已不在这个房间，请重新选择。": "Lead agent {0} has left this room. Pick a new one.",
+  "建议：{0}": "Suggested: {0}",
+  "在线，先加入的本机 Agent 优先": "Online; agents on this computer and earlier joiners come first",
+  "设为主 Agent": "Make lead agent",
+  "主 Agent {0}（自动设的）：{1}": "Lead Agent {0} (assigned automatically): {1}",
+  "设定": "Set by",
+  "自动（第一个加入的 Agent）": "Automatic (first agent to join)",
+  "房主指定": "Owner"
 }

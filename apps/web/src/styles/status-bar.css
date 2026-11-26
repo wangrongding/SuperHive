@@ -422,3 +422,33 @@
   display: inline-flex;
   align-items: center;
 }
+
+/* 自动设的主 Agent：名字后面一个小标签，窄了也不收起 */
+.status-lead-auto {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* 没有主 Agent 时的建议人选：一行名字 + 「设为主 Agent」 */
+.status-lead-suggest {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.status-lead-suggest > span {
+  display: grid;
+  gap: 2px;
+  font-weight: var(--weight-medium);
+}
+
+.status-lead-suggest small {
+  color: var(--text-tertiary);
+  font-weight: normal;
+  font-size: var(--text-xs);
+}

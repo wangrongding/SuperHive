@@ -164,6 +164,8 @@ const app = await buildApp({
   )
     ? false
     : {},
+  // 默认主 Agent：没有主 Agent 的房间里第一个上线的 Agent 自动当主 Agent
+  autoLead: true,
   logger: true,
 });
 /**

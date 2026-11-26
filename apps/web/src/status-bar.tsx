@@ -38,6 +38,8 @@ import { effectiveCompactWindow, memberContextHint } from "./member-context";
 import { modelDisplayName } from "./agent-models";
 import { SettingsSwitch } from "./settings-switch";
 import { Tooltip } from "./tooltip";
+import { Button } from "./button";
+import { suggestLead } from "./lead-agent";
 import type { LocalAgentsState } from "./local-agents";
 import "./styles/status-bar.css";
 
@@ -324,6 +326,8 @@ export type StatusBarProps = {
   meta: MetaResponse | undefined;
   participants: readonly Participant[];
   leadAgentName: string | undefined;
+  /** 主 Agent 是服务端自动设的（第一个加入的、或自动顺延的） */
+  leadAuto?: boolean;
   /** 房主才有：在状态栏里直接换主 Agent */
   setLeadAgent?: ((name: string) => void) | undefined;
   isOwner: boolean;
@@ -358,6 +362,7 @@ export function StatusBar(props: StatusBarProps) {
     meta,
     participants,
     leadAgentName,
+    leadAuto = false,
     setLeadAgent,
     local,
     im,
@@ -554,26 +559,38 @@ export function StatusBar(props: StatusBarProps) {
           />
         )}
         {lead && (
-          <LeadAgentItem lead={lead} agents={agentsOf(participants)} onSwitch={setLeadAgent} />
+          <LeadAgentItem
+            lead={lead}
+            auto={leadAuto}
+            agents={agentsOf(participants)}
+            onSwitch={setLeadAgent}
+          />
         )}
         {!lead && setLeadAgent && agentsOf(participants).length > 0 && (
           <StatusItem
             className="status-lead"
             icon={<Icon name="users" size={13} />}
             label={t("设主 Agent")}
-            tooltip={t("这个房间还没有主 Agent：没 @ 任何人的消息没人接")}
+            tooltip={
+              leadAgentName
+                ? t("主 Agent {0} 已不在这个房间：没 @ 任何人的消息没人接，请重新选择", {
+                    0: leadAgentName,
+                  })
+                : t("这个房间还没有主 Agent：没 @ 任何人的消息没人接")
+            }
             popover={(close) => (
-              <PopoverSection title={t("选一个主 Agent")}>
-                <div className="status-lead-choices">
-                  <LeadChoices
-                    agents={agentsOf(participants)}
-                    onSwitch={(name) => {
-                      close();
-                      setLeadAgent(name);
-                    }}
-                  />
-                </div>
-              </PopoverSection>
+              <LeadPicker
+                agents={agentsOf(participants)}
+                suggested={suggestLead(
+                  participants,
+                  local.enabled ? local.agents.map((agent) => agent.name) : [],
+                )}
+                missing={leadAgentName}
+                onPick={(name) => {
+                  close();
+                  setLeadAgent(name);
+                }}
+              />
             )}
           />
         )}
@@ -925,6 +942,50 @@ function LeadChoices({
   );
 }
 
+/** 还没有主 Agent（或手动设的那个已经不在房间）时：先给一个建议人选，下面是完整列表 */
+function LeadPicker({
+  agents,
+  suggested,
+  missing,
+  onPick,
+}: {
+  agents: readonly Participant[];
+  suggested: Participant | undefined;
+  /** 手动设的主 Agent 已经不在房间时它的名字 */
+  missing: string | undefined;
+  onPick: (name: string) => void;
+}) {
+  return (
+    <>
+      {(missing || suggested) && (
+        <PopoverSection>
+          {missing && (
+            <p className="status-popover-note">
+              {t("主 Agent {0} 已不在这个房间，请重新选择。", { 0: missing })}
+            </p>
+          )}
+          {suggested && (
+            <div className="status-lead-suggest">
+              <span>
+                {t("建议：{0}", { 0: suggested.username })}
+                <small>{t("在线，先加入的本机 Agent 优先")}</small>
+              </span>
+              <Button size="sm" variant="primary" onClick={() => onPick(suggested.username)}>
+                {t("设为主 Agent")}
+              </Button>
+            </div>
+          )}
+        </PopoverSection>
+      )}
+      <PopoverSection title={t("选一个主 Agent")}>
+        <div className="status-lead-choices">
+          <LeadChoices agents={agents} onSwitch={onPick} />
+        </div>
+      </PopoverSection>
+    </>
+  );
+}
+
 /** 详情下面先只有一个「切换主 Agent」，点了才展开列表 */
 function LeadSwitcher({
   agents,
@@ -951,10 +1012,13 @@ function LeadSwitcher({
 /** 主 Agent：名字、模型和上下文用量；点开看详情 */
 function LeadAgentItem({
   lead,
+  auto,
   agents,
   onSwitch,
 }: {
   lead: Participant;
+  /** 服务端自动设的：名字后面标「自动」 */
+  auto: boolean;
   agents: readonly Participant[];
   onSwitch?: ((name: string) => void) | undefined;
 }) {
@@ -977,6 +1041,7 @@ function LeadAgentItem({
       label={
         <>
           {lead.username}
+          {auto && <span className="status-lead-auto">{t("自动")}</span>}
           {model && <span className="status-item-meta">{model}</span>}
           {percent !== undefined && (
             <span className={`status-item-meta${percent >= 80 ? " warning" : ""}`}>
@@ -985,7 +1050,11 @@ function LeadAgentItem({
           )}
         </>
       }
-      tooltip={t("主 Agent {0}：{1}", { 0: lead.username, 1: statusText })}
+      tooltip={
+        auto
+          ? t("主 Agent {0}（自动设的）：{1}", { 0: lead.username, 1: statusText })
+          : t("主 Agent {0}：{1}", { 0: lead.username, 1: statusText })
+      }
       popover={(close) => (
         <>
           <PopoverSection>
@@ -995,6 +1064,8 @@ function LeadAgentItem({
                 <Dot tone={tone} />
                 {statusText}
               </dd>
+              <dt>{t("设定")}</dt>
+              <dd>{auto ? t("自动（第一个加入的 Agent）") : t("房主指定")}</dd>
               {model && (
                 <>
                   <dt>{t("模型")}</dt>

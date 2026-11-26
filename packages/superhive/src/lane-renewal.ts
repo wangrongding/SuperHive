@@ -178,7 +178,8 @@ export function buildHandoffSummary(input: {
       (message) =>
         message.senderId === input.ownId &&
         message.kind !== "progress" &&
-        message.kind !== "delegation",
+        message.kind !== "delegation" &&
+        message.kind !== "notice",
     )
     .slice(-3);
   const waiting = pendingDelegations(visible, input.ownId);

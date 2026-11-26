@@ -180,6 +180,7 @@ type RoomRow = {
   archived_at: string | null;
   workspace: string | null;
   lead_agent: string | null;
+  lead_mode: string | null;
   workspace_files_guests: number | null;
   online_count: number;
   latest_seq: number;
@@ -427,7 +428,8 @@ function mapMessage(row: MessageRow): ChatMessage {
     row.kind === "receipt" ||
     row.kind === "question" ||
     row.kind === "schedule" ||
-    row.kind === "progress"
+    row.kind === "progress" ||
+    row.kind === "notice"
       ? { kind: row.kind as NonNullable<ChatMessage["kind"]> }
       : {}),
     ...(row.deleted_at ? {} : parseMessageMeta(row.meta)),
@@ -639,6 +641,7 @@ function mapRoom(row: RoomRow): RoomSummary {
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
     ...(row.workspace ? { workspace: row.workspace } : {}),
     ...(row.lead_agent ? { leadAgent: row.lead_agent } : {}),
+    ...(row.lead_mode === "auto" || row.lead_mode === "manual" ? { leadMode: row.lead_mode } : {}),
     ...(row.workspace_files_guests ? { workspaceFilesGuests: true } : {}),
     onlineCount: row.online_count,
     latestSeq: row.latest_seq,
@@ -647,7 +650,7 @@ function mapRoom(row: RoomRow): RoomSummary {
 }
 
 const roomSummarySelect = `
-  SELECT r.id, r.name, r.created_at, r.created_by, r.archived_at, r.workspace, r.lead_agent,
+  SELECT r.id, r.name, r.created_at, r.created_by, r.archived_at, r.workspace, r.lead_agent, r.lead_mode,
          r.workspace_files_guests,
          COALESCE(p.online_count, 0) AS online_count,
          COALESCE(m.latest_seq, 0) AS latest_seq,
@@ -983,6 +986,12 @@ export class HiveDatabase {
     if (!roomColumns.some((column) => column.name === "lead_agent")) {
       this.db.exec("ALTER TABLE rooms ADD COLUMN lead_agent TEXT");
     }
+    if (!roomColumns.some((column) => column.name === "lead_mode")) {
+      // 主 Agent 是谁定的：auto=服务端自动设的（被删时顺延），manual=房主手动设或手动取消的（自动逻辑不再碰）。
+      // 旧库里已经设了的主 Agent 都是房主手动设的
+      this.db.exec("ALTER TABLE rooms ADD COLUMN lead_mode TEXT");
+      this.db.exec("UPDATE rooms SET lead_mode = 'manual' WHERE lead_agent IS NOT NULL");
+    }
     if (!roomColumns.some((column) => column.name === "workspace_files_guests")) {
       // 房主允许访客只读查看工作区文件与 git 变更；默认关
       this.db.exec(
@@ -1124,6 +1133,8 @@ export class HiveDatabase {
       archived?: boolean | undefined;
       workspace?: string | null | undefined;
       leadAgent?: string | null | undefined;
+      /** 和 leadAgent 一起改；只给 leadMode 时只改方式（例如房主改回「自动」） */
+      leadMode?: "auto" | "manual" | null | undefined;
       workspaceFilesGuests?: boolean | undefined;
     },
   ): RoomSummary {
@@ -1140,6 +1151,9 @@ export class HiveDatabase {
     }
     if (patch.leadAgent !== undefined) {
       this.db.prepare("UPDATE rooms SET lead_agent = ? WHERE id = ?").run(patch.leadAgent, id);
+    }
+    if (patch.leadMode !== undefined) {
+      this.db.prepare("UPDATE rooms SET lead_mode = ? WHERE id = ?").run(patch.leadMode, id);
     }
     if (patch.workspaceFilesGuests !== undefined) {
       this.db
@@ -1403,12 +1417,12 @@ export class HiveDatabase {
     // 防失控靠每分钟条数和派发时的来回检测（见 app.ts budgetBlock）
     const traceId = parent?.traceId ?? randomUUID();
     const hopCount = parent ? parent.hopCount + 1 : 0;
-    // 子任务回执由服务端以被委派方名义代发，不是它在发言，不占它每分钟的条数
-    if (sender.type === "agent" && input.kind !== "receipt") {
+    // 子任务回执由服务端以被委派方名义代发、主 Agent 变动的提示由服务端以新主 Agent 名义代发，都不是它在发言，不占它每分钟的条数
+    if (sender.type === "agent" && input.kind !== "receipt" && input.kind !== "notice") {
       const since = new Date(Date.now() - 60_000).toISOString();
       const recentCount = this.db
         .prepare(
-          "SELECT COUNT(*) AS count FROM messages WHERE sender_id = ? AND sender_type = 'agent' AND created_at >= ? AND (kind IS NULL OR kind != 'receipt')",
+          "SELECT COUNT(*) AS count FROM messages WHERE sender_id = ? AND sender_type = 'agent' AND created_at >= ? AND (kind IS NULL OR kind NOT IN ('receipt', 'notice'))",
         )
         .get(sender.id, since) as { count: number };
       if (recentCount.count >= LIMITS.maxAgentRepliesPerMinute) {
@@ -1527,7 +1541,7 @@ export class HiveDatabase {
           // 来回多少轮都不该被这个费用刹车拦下（rd #6608）；答复里又 @ 了别人的照常计数
           `SELECT COUNT(*) AS count FROM messages m
            WHERE m.room_id = ? AND m.sender_type = 'agent' AND m.seq > ?
-             AND (m.kind IS NULL OR m.kind NOT IN ('progress', 'receipt', 'delegation'))
+             AND (m.kind IS NULL OR m.kind NOT IN ('progress', 'receipt', 'delegation', 'notice'))
              AND NOT (m.mentions = '[]' AND m.parent_message_id IN (
                SELECT id FROM messages WHERE room_id = ? AND kind = 'delegation' AND seq > ?
              ))`,
@@ -1605,7 +1619,7 @@ export class HiveDatabase {
         `SELECT COUNT(*) AS count FROM invocations i JOIN messages m ON m.id = i.message_id
          WHERE i.room_id = ? AND i.requester_id = ? AND i.agent_id = ? AND i.created_at >= ?
            AND i.status != 'blocked'
-           AND (m.kind IS NULL OR m.kind NOT IN ('delegation', 'receipt'))`,
+           AND (m.kind IS NULL OR m.kind NOT IN ('delegation', 'receipt', 'notice'))`,
       )
       .get(roomId, requesterId, agentId, since) as { count: number };
     return row.count;

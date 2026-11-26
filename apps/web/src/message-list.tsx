@@ -379,6 +379,13 @@ export function MessageList({
                     </span>
                     <small>{t("之前的消息不再作为 Agent 的上下文")}</small>
                   </div>
+                ) : message.kind === "notice" ? (
+                  // 服务端的房间提示（例如自动设了主 Agent）：一行居中的系统提示，不当成谁的发言
+                  <div className="room-notice" role="note" data-message-id={message.id}>
+                    <Icon name="users" size={13} />
+                    <span>{message.content}</span>
+                    <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
+                  </div>
                 ) : (
                   <MessageItem
                     message={message}

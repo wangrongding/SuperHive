@@ -172,6 +172,54 @@ describe("StatusBar", () => {
     expect(setLeadAgent).toHaveBeenCalledWith("rd-claude");
   });
 
+  it("自动设的主 Agent 名字后面标「自动」，详情里写明是自动设的", () => {
+    renderBar({ leadAuto: true });
+    const trigger = screen.getByRole("button", { name: "主 Agent rd-claude（自动设的）：忙碌" });
+    expect(trigger.textContent).toContain("自动");
+    fireEvent.click(trigger);
+    expect(screen.getByText("自动（第一个加入的 Agent）")).toBeTruthy();
+    cleanup();
+    renderBar();
+    const manual = screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" });
+    expect(manual.textContent).not.toContain("自动");
+    fireEvent.click(manual);
+    expect(screen.getByText("房主指定")).toBeTruthy();
+  });
+
+  it("手动设的主 Agent 被删后，「设主 Agent」先给建议人选：在线的本机 Agent 优先", () => {
+    const setLeadAgent = vi.fn();
+    renderBar({
+      setLeadAgent,
+      leadAgentName: "gone",
+      participants: [
+        agent("remote", "online", { joinedAt: "2026-11-26T05:00:00.000Z" }),
+        agent("offline-local", "offline"),
+        agent("local", "busy"),
+      ],
+      local: fakeLocal({
+        agents: [{ name: "local" }, { name: "offline-local" }],
+      } as unknown as Partial<LocalAgentsState>),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /主 Agent gone 已不在这个房间/ }));
+    expect(screen.getByText("主 Agent gone 已不在这个房间，请重新选择。")).toBeTruthy();
+    expect(screen.getByText("建议：local")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "设为主 Agent" }));
+    expect(setLeadAgent).toHaveBeenCalledWith("local");
+  });
+
+  it("没有本机 Agent 时建议最先加入的在线 Agent", () => {
+    renderBar({
+      setLeadAgent: vi.fn(),
+      leadAgentName: undefined,
+      participants: [
+        agent("late", "online", { joinedAt: "2026-11-26T07:00:00.000Z" }),
+        agent("early", "online", { joinedAt: "2026-11-26T05:00:00.000Z" }),
+      ],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /这个房间还没有主 Agent/ }));
+    expect(screen.getByText("建议：early")).toBeTruthy();
+  });
+
   it("改发送方式：弹出单选、写进 localStorage，Esc 关掉并把焦点还给按钮", () => {
     const props = renderBar();
     const trigger = screen.getByRole("button", { name: "发送消息的快捷键" });

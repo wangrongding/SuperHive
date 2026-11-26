@@ -120,6 +120,7 @@ import { serverBase } from "./server-base";
 import { HostApprovalsBanner, HostApprovalWaiting } from "./host-settings";
 import { LoginDialog } from "./login-dialog";
 import { RoomDialog } from "./room-dialog";
+import { isAutoLead, leadChoiceOf, leadPatchOf } from "./lead-agent";
 import { SettingsDialog } from "./settings-dialog";
 import { RuntimeHubDialog } from "./runtime-hub";
 import { AgentSetupDialog } from "./agent-setup-dialog";
@@ -1140,7 +1141,7 @@ export function App({
       setRoomDialogId(dialog.mode === "manage" ? dialog.room.id : "");
       setRoomDialogName(dialog.mode === "manage" ? dialog.room.name : "");
       setRoomDialogWorkspace(dialog.mode === "manage" ? (dialog.room.workspace ?? "") : "");
-      setRoomDialogLead(dialog.mode === "manage" ? (dialog.room.leadAgent ?? "") : "");
+      setRoomDialogLead(dialog.mode === "manage" ? leadChoiceOf(dialog.room) : "");
       setRoomDialogGuestFiles(
         dialog.mode === "manage" && Boolean(dialog.room.workspaceFilesGuests),
       );
@@ -2274,7 +2275,7 @@ export function App({
       const updated = await roomRequest(`/api/rooms/${encodeURIComponent(room.id)}`, "PATCH", {
         name,
         ...(workspace !== (room.workspace ?? "") ? { workspace: workspace || null } : {}),
-        ...(roomDialogLead !== (room.leadAgent ?? "") ? { leadAgent: roomDialogLead || null } : {}),
+        ...leadPatchOf(room, roomDialogLead),
         ...(roomDialogGuestFiles !== Boolean(room.workspaceFilesGuests)
           ? { workspaceFilesGuests: roomDialogGuestFiles }
           : {}),
@@ -2722,6 +2723,7 @@ export function App({
           meta={meta}
           participants={participants}
           leadAgentName={currentRoom?.leadAgent ?? undefined}
+          leadAuto={isAutoLead(currentRoom)}
           setLeadAgent={isOwner ? (name) => void setLeadAgent(name) : undefined}
           isOwner={isOwner}
           local={local}

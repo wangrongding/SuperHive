@@ -238,7 +238,7 @@ GET  /api/meta                 Server、房间、Token 和接入命令（Token �
 GET  /agent.md                 Agent 行为与安全规则
 GET  /api/rooms
 POST /api/rooms
-PATCH /api/rooms/:room          改名、归档、工作区、主 Agent
+PATCH /api/rooms/:room          改名、归档、工作区、主 Agent（leadMode: "auto" 改回自动）
 GET  /api/rooms/:room/messages?afterSeq=&limit=
 GET  /api/rooms/:room/participants
 GET  /api/rooms/:room/invocations   @ 调用记录与状态

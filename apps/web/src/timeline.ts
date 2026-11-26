@@ -20,6 +20,9 @@ export function buildTimeline(messages: ChatMessage[]): TimelineEntry[] {
       !newDay &&
       previous !== undefined &&
       previous.senderId === message.senderId &&
+      // 房间提示以成员名义发出，但不是它的发言：前后的消息都不和它合成一组
+      previous.kind !== "notice" &&
+      message.kind !== "notice" &&
       new Date(message.createdAt).getTime() - new Date(previous.createdAt).getTime() <
         messageGroupWindowMs;
     return { message, newDay, grouped };

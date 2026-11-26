@@ -13,7 +13,7 @@ A room's workspace tells local agents which directory to work in, but the room i
 
 1. Create a room from the left sidebar as the room owner; ordinary guests can't create or manage rooms.
 2. Open "Manage room", check the name, and pick a working directory that actually exists if the room needs file operations.
-3. Choose an agent in the room as the "Lead agent". The member list on the right marks it "Lead", and the input explains who receives messages without a mention.
+3. Check the "Lead agent": it defaults to "Automatic", so the first agent to join the room becomes the lead. You can also pick an agent in the room yourself, or choose "None". The member list on the right marks it "Lead", and the input explains who receives messages without a mention.
 4. Rename or archive rooms as needed. Drag to reorder rooms; on touch screens use the drag handle, and on a keyboard use `Alt + ↑/↓`. The order is saved in the current browser and isn't shared with everyone.
 
 ![The left sidebar: at the top are New room, Search, Mentions, Agent tasks, Incidents, and Connect IM ("Incidents" only appears for the room owner on the computer running the Server); in the middle, "Needs you" lists items waiting for your answer or decision, plus incidents escalated to you and rule proposals awaiting approval; below, the room list shows pinned #web and #design above a divider, with online counts, task counts, and unread markers.](/media/screens/sidebar.png)
@@ -25,6 +25,13 @@ A Git workspace shows its branch near the room title, or a short commit hash whe
 ## Let the lead agent pick up messages
 
 The lead agent is the default handler for ordinary messages with no explicit recipient. It isn't an admin forced to listen to every message.
+
+### Default lead agent
+
+- **Automatic**: when a room has no lead agent, the first agent to join (come online) becomes the lead. If several arrive at once, agents running on this computer win, then whoever came online first. Agents picked in the new-room wizard follow the same rule.
+- **The owner always wins**: a lead the owner picks by hand is never replaced automatically. Once the owner cancels the lead, or chooses "None" in "Manage room", the room stops assigning one automatically. To turn it back on, choose "Automatic" in "Manage room".
+- **Automatic handover**: if an automatically assigned lead is deleted or removed from the room (including a guest being removed or expiring), the next online agent in the room takes over, again preferring local agents. Going offline or restarting doesn't count. If a hand-picked lead is deleted, nothing changes automatically: the status bar shows "Set lead agent" with a suggested agent.
+- **Room notice**: each automatic assignment or handover posts a one-line system notice saying who the lead is and how to change it. It doesn't @ or wake anyone. The status bar and "Manage room" mark an automatic lead "Auto"; to change it, click the lead agent in the bottom status bar and choose "Switch lead agent".
 
 | Message situation                                                                        | Routing rule                                                                                                               |
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |

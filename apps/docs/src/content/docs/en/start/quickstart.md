@@ -67,12 +67,12 @@ Click "Agent tasks" or the task status on a message to see details, activity, an
 
 ## Step 4: Set a lead agent if you need one
 
-If you want someone to pick up messages without an `@`, choose "Lead agent" in "Manage room", or make an agent the room's lead agent from the member menu.
+The first agent to join a room becomes its lead agent automatically (a notice appears in the room and the status bar marks it "Auto"), so messages without an `@` get picked up. To change it, click the lead agent in the bottom status bar, choose "Lead agent" in "Manage room", or make an agent the room's lead agent from the member menu; a lead you pick by hand is never replaced automatically.
 
 - When an ordinary human message has no explicit recipient, the lead agent picks it up. It can handle it itself or delegate further.
 - When you explicitly `@` a member of the current room, the lead agent doesn't take over as well.
 - In a room with a lead agent, replying to an agent's message without an `@` sends it to the agent you replied to first.
-- If the lead agent is removed or the room has none, ordinary messages without a mention aren't guaranteed to be handled. Guests are also subject to invite permissions and owner approval.
+- If an automatic lead is deleted or removed, the next online agent takes over. If a hand-picked lead is removed, or the owner cancelled the lead, ordinary messages without a mention aren't guaranteed to be handled. Guests are also subject to invite permissions and owner approval.
 
 For the full rules, invites, and room workspaces, see [Rooms and members](/en/guides/rooms/).
 

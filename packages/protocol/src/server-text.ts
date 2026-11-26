@@ -593,6 +593,16 @@ export const serverTexts = {
   /* ---------- 话题与转发 ---------- */
   "topic.cleared": { zh: "{name} 清空了房间", en: "{name} cleared the room" },
   "topic.started": { zh: "{name} 开启了新话题", en: "{name} started a new topic" },
+
+  /* ---------- 房间提示 ---------- */
+  "notice.leadAuto": {
+    zh: "{name} 自动成为这个房间的主 Agent：没有 @ 任何人的消息交给它接话。要换人，点底部状态栏的主 Agent 切换。",
+    en: "{name} is now this room's lead agent automatically: messages that don't @ anyone go to it. To change it, click the lead agent in the bottom status bar.",
+  },
+  "notice.leadSucceeded": {
+    zh: "{previous} 已不在这个房间，主 Agent 自动换成 {name}。要换人，点底部状态栏的主 Agent 切换。",
+    en: "{previous} has left this room, so {name} is now the lead agent automatically. To change it, click the lead agent in the bottom status bar.",
+  },
   "roomPost.forwarded": {
     zh: "{content}\n\n（{agent} 从 #{room} 的 #{seq} 转来，发起人 {requester}）",
     en: "{content}\n\n(Forwarded by {agent} from #{seq} in #{room}; requested by {requester})",
@@ -1614,6 +1624,10 @@ export const serverTexts = {
   "error.room.guestAgentForbidden": {
     zh: "访客带入的 Agent 不能{action}。",
     en: "Agents brought in by a guest can't {action}.",
+  },
+  "error.room.leadModeConflict": {
+    zh: "改回自动时不能同时指定主 Agent。",
+    en: "Don't name a lead agent when switching back to automatic.",
   },
   "error.room.leadInvalid": {
     zh: "{agent} 不是这个房间里的 Agent。",

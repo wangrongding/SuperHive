@@ -132,6 +132,32 @@
   color: var(--text-tertiary);
 }
 
+/* 房间提示：服务端发的一行系统提示（例如自动设了主 Agent），不占气泡 */
+.room-notice {
+  display: flex;
+  max-width: 640px;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
+  margin: 10px auto;
+  padding: 0 12px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.room-notice > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+.room-notice > time {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
 /* ---------- 单条消息 ---------- */
 /* 左右负 margin 配内边距：选中态和跳转高亮的整行底色需要一点呼吸空间，
    同时正文不位移 */

@@ -272,6 +272,12 @@ export type BuildAppOptions = {
    * 免得每个建任务线的用例都去跑安装）；由 index.ts 按 HIVE_WORKTREE_DEPS 打开。
    */
   worktreeDependencies?: DependencySettings | false;
+  /**
+   * 默认主 Agent：没有主 Agent 的房间里有 Agent 上线时自动设一个，自动设的被删除或移出时顺延给下一个在线的。
+   * 省略或 false 时关闭（测试默认关闭，免得每个有 Agent 加入的用例都多出一条提示）；由 index.ts 打开。
+   * delayMs：第一个 Agent 上线后等这么久再挑，同时进来的几个里优先本机的；isLocal 给测试用，默认按本机 Agent 列表判断
+   */
+  autoLead?: boolean | { delayMs?: number; isLocal?: (name: string) => boolean };
 };
 
 function participantKey(roomId: string, username: string): string {
@@ -936,6 +942,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           type: "presence.changed",
           participant: withAccess(participant),
         });
+        reconcileLead(participant.roomId);
+      },
+      agentRemoved: (name) => {
+        reconcileLeads(database.participantsNamed(name).map((participant) => participant.roomId));
       },
     },
     worktrees: {
@@ -1299,6 +1309,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       send(connection.socket, { type: "error", ...endedMessages[reason] });
       connection.socket.close(4401, reason);
       disconnect(connection);
+    }
+    // 访客（及其带入的 Agent）被移除或到期：自动设的主 Agent 是它的话顺延；暂停不算离开
+    if (reason !== "paused") {
+      reconcileLeads(
+        sessionIds.flatMap((id) => {
+          const session = access.getSession(id);
+          return session ? [session.roomId] : [];
+        }),
+      );
     }
   }
 
@@ -2085,6 +2104,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       supersedeStale(message.roomId);
       forgetAgentSessions(message.roomId);
     }
+    // 房间提示（自动设了主 Agent）只是告知：不推进调用，也不唤醒任何人
+    if (message.kind === "notice") return result;
     // 进度只是给人看的：不推进调用，也不唤醒任何 Agent；调用上记一笔最近进度
     if (message.kind === "progress") {
       const invocation = message.parentMessageId
@@ -2257,6 +2278,124 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const name = database.getRoom(roomId)?.leadAgent;
     const agent = name ? database.findParticipant(roomId, name) : undefined;
     return agent?.type === "agent" ? agent : undefined;
+  }
+
+  /* ---------- 默认主 Agent ---------- */
+
+  const autoLead = options.autoLead
+    ? { delayMs: 1500, ...(options.autoLead === true ? {} : options.autoLead) }
+    : undefined;
+  /** 房间 → 等着挑主 Agent 的计时器；同一个窗口里陆续上线的 Agent 按上线顺序记下 */
+  const leadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const leadArrivals = new Map<string, string[]>();
+
+  function isLocalAgentName(name: string): boolean {
+    if (autoLead?.isLocal) return autoLead.isLocal(name);
+    const key = name.toLocaleLowerCase();
+    return localAgents?.list().some((agent) => agent.name.toLocaleLowerCase() === key) ?? false;
+  }
+
+  /**
+   * 这个 Agent 已经不在房间了：成员没了或被隐藏、本机 Agent 被删了、访客会话被移除或到期。
+   * 只是离线（重启、断线、关机）不算
+   */
+  function leftRoom(participant: Participant | undefined): boolean {
+    if (!participant || participant.type !== "agent" || participant.hidden) return true;
+    const guest = guestSessionOf(participant);
+    if (guest) return guest.state === "revoked" || guest.state === "expired";
+    // 刚删掉的本机 Agent 可能还没来得及断开，不看在线状态
+    const key = participant.username.toLocaleLowerCase();
+    return database
+      .listRemovedLocalAgents()
+      .some((agent) => agent.name.toLocaleLowerCase() === key);
+  }
+
+  /** 该接任主 Agent 的人：在线的本机 Agent 优先，其次按这次上线的先后，再按加入房间的先后 */
+  function leadCandidate(
+    roomId: string,
+    arrivals: readonly string[] = [],
+  ): Participant | undefined {
+    const order = (participant: Participant) => {
+      const index = arrivals.indexOf(participant.id);
+      return index === -1 ? arrivals.length : index;
+    };
+    return database
+      .listParticipants(roomId)
+      .filter(
+        (participant) =>
+          participant.type === "agent" &&
+          participant.status !== "offline" &&
+          !leftRoom(participant),
+      )
+      .map((participant) => ({ participant, local: isLocalAgentName(participant.username) }))
+      .sort(
+        (a, b) =>
+          Number(b.local) - Number(a.local) ||
+          order(a.participant) - order(b.participant) ||
+          a.participant.joinedAt.localeCompare(b.participant.joinedAt),
+      )[0]?.participant;
+  }
+
+  /** 有 Agent 上线：没有主 Agent 的房间等一小会儿再挑，让同时进来的几个都到齐 */
+  function scheduleAutoLead(roomId: string, participantId: string): void {
+    if (!autoLead) return;
+    const room = database.getRoom(roomId);
+    if (!room || room.leadMode === "manual") return;
+    // 已经有主 Agent 而且它还在房间（重连、重启的常见情况）：不用挑
+    if (room.leadAgent && !leftRoom(database.findParticipant(roomId, room.leadAgent))) return;
+    const arrivals = leadArrivals.get(roomId) ?? [];
+    if (!arrivals.includes(participantId)) arrivals.push(participantId);
+    leadArrivals.set(roomId, arrivals);
+    if (leadTimers.has(roomId)) return;
+    const timer = setTimeout(() => {
+      leadTimers.delete(roomId);
+      try {
+        reconcileLead(roomId);
+      } catch (error) {
+        app.log.warn({ err: error, roomId }, "auto lead failed");
+      }
+    }, autoLead.delayMs);
+    timer.unref?.();
+    leadTimers.set(roomId, timer);
+  }
+
+  /**
+   * 按规则补上主 Agent：房主手动设过或手动取消过的（manual）一概不动；
+   * 没有主 Agent、或自动设的那个已经不在房间时，交给下一个在线的 Agent，并在房间里发一条不 @ 任何人的提示
+   */
+  function reconcileLead(roomId: string): void {
+    if (!autoLead) return;
+    const arrivals = leadArrivals.get(roomId) ?? [];
+    leadArrivals.delete(roomId);
+    const room = database.getRoom(roomId);
+    if (!room || room.archivedAt || room.leadMode === "manual") return;
+    const previous = room.leadAgent ? database.findParticipant(roomId, room.leadAgent) : undefined;
+    if (room.leadAgent && !leftRoom(previous)) return;
+    const next = leadCandidate(roomId, arrivals);
+    if (!next) {
+      // 自动设的走了、眼下又没有在线的：先空着，下一个上线的接任
+      if (room.leadAgent) {
+        const updated = database.updateRoom(roomId, { leadAgent: null, leadMode: "auto" });
+        broadcastAll({ type: "rooms.changed", room: withBranch(updated) });
+      }
+      return;
+    }
+    const updated = database.updateRoom(roomId, { leadAgent: next.username, leadMode: "auto" });
+    broadcastAll({ type: "rooms.changed", room: withBranch(updated) });
+    const text = room.leadAgent
+      ? serverText("notice.leadSucceeded", { previous: room.leadAgent, name: next.username })
+      : serverText("notice.leadAuto", { name: next.username });
+    createAndDispatchMessage(next, {
+      content: zhText(text),
+      text,
+      clientMessageId: `lead-auto-${randomUUID()}`,
+      kind: "notice",
+    });
+  }
+
+  /** 成员被删除或移出后：这些房间里自动设的主 Agent 要是走了就顺延 */
+  function reconcileLeads(roomIds: Iterable<string>): void {
+    for (const roomId of new Set(roomIds)) reconcileLead(roomId);
   }
 
   /** Agent 离线超过这么久才算「不在」；重启、断线重连这种几秒钟的离线照旧排队等它回来 */
@@ -6394,9 +6533,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         body.data.archived === undefined &&
         body.data.workspace === undefined &&
         body.data.leadAgent === undefined &&
+        body.data.leadMode === undefined &&
         body.data.workspaceFilesGuests === undefined)
     ) {
       return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
+    }
+    if (body.data.leadMode === "auto" && body.data.leadAgent !== undefined) {
+      return reply.code(400).send({
+        ...errorText(serverText("error.room.leadModeConflict")),
+        code: "ROOM_LEAD_INVALID",
+      });
     }
     // 主 Agent 只能是这个房间里的 Agent；按房间里的大小写存
     let leadAgent = body.data.leadAgent;
@@ -6411,14 +6557,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       leadAgent = agent.username;
     }
     try {
-      const room = withBranch(
+      const { leadMode, ...patch } = body.data;
+      let room = withBranch(
         database.updateRoom(params.data.roomId, {
-          ...body.data,
+          ...patch,
           ...(body.data.workspace ? { workspace: roomWorkspace(body.data.workspace) } : {}),
-          ...(leadAgent !== undefined ? { leadAgent } : {}),
+          // 房主手动设的、手动取消的都记为 manual：自动逻辑不再改它；改回自动时先清空，交给下面重新挑
+          ...(leadAgent !== undefined ? { leadAgent, leadMode: "manual" as const } : {}),
+          ...(leadMode === "auto" ? { leadAgent: null, leadMode: "auto" as const } : {}),
         }),
       );
       broadcastAll({ type: "rooms.changed", room });
+      if (leadMode === "auto") {
+        reconcileLead(params.data.roomId);
+        room = withBranch(database.getRoom(params.data.roomId)!);
+      }
       return { room };
     } catch (error) {
       if (error instanceof HiveError && error.code === "ROOM_NOT_FOUND") {
@@ -6655,6 +6808,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             for (const invocation of database.listCancellingInvocations(participant.id)) {
               send(socket, { type: "agent.cancel", messageId: invocation.messageId });
             }
+            scheduleAutoLead(event.roomId, participant.id);
           }
           if (!existingParticipant) {
             broadcast(event.roomId, {
@@ -7183,6 +7337,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     clearInterval(accessTimer);
     clearInterval(attachmentTimer);
     if (scheduleTimer) clearTimeout(scheduleTimer);
+    for (const timer of leadTimers.values()) clearTimeout(timer);
+    leadTimers.clear();
     for (const connection of connections) {
       if (connection.participant)
         database.setParticipantStatus(connection.participant.id, "offline");

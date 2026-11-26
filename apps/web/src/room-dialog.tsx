@@ -1,3 +1,4 @@
+import { AUTO_LEAD, isAutoLead } from "./lead-agent";
 import { t } from "./i18n";
 import { Icon } from "./app-icons";
 import { Select } from "./select";
@@ -202,8 +203,16 @@ export function RoomDialog({
                 value={roomDialogLead}
                 onChange={setRoomDialogLead}
                 options={[
+                  {
+                    value: AUTO_LEAD,
+                    label: isAutoLead(roomDialog.room)
+                      ? t("自动（现在是 {0}）", { 0: roomDialog.room.leadAgent ?? "" })
+                      : t("自动"),
+                  },
                   { value: "", label: t("不设置") },
-                  ...(roomDialogLead && !leadCandidates(roomDialog.room).includes(roomDialogLead)
+                  ...(roomDialogLead &&
+                  roomDialogLead !== AUTO_LEAD &&
+                  !leadCandidates(roomDialog.room).includes(roomDialogLead)
                     ? [{ value: roomDialogLead, label: roomDialogLead }]
                     : []),
                   ...leadCandidates(roomDialog.room).map((name) => ({
@@ -222,6 +231,7 @@ export function RoomDialog({
                 ]}
               />
               {roomDialogLead &&
+                roomDialogLead !== AUTO_LEAD &&
                 roomDialog.room.id === currentRoomId &&
                 !leadCandidates(roomDialog.room).includes(roomDialogLead) && (
                   <small className="room-field-warning" role="alert">
@@ -236,6 +246,13 @@ export function RoomDialog({
                       "人发的、没有 @ 任何人的消息交给它接话，由它决定自己做还是用 hive_invoke 分派给其他 Agent；带 @ 的消息照常只发给被 @ 的成员。",
                     )
                   : t("进入这个房间后才能从它的 Agent 里选择。")}
+              </small>
+              <small>
+                {roomDialogLead === AUTO_LEAD
+                  ? t(
+                      "自动：第一个加入的 Agent 当主 Agent（同时进来的优先本机的）；它被删除或移出房间时换成下一个在线的，只是离线不换。",
+                    )
+                  : t("手动设的不会被自动换掉；选「不设置」后也不再自动设。")}
               </small>
             </label>
           )}

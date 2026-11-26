@@ -276,8 +276,11 @@ export const chatMessageSchema = z.object({
    * question：Agent 经 hive_ask_human 向人提的问题；人回复它即可把答案交回并唤醒提问的 Agent。
    * schedule：定时任务到点后服务端代发起人发出的触发消息；不算人在场，不重置 Agent 连续轮数。
    * progress：Agent 执行中途发给人看的进度（hive_message_send progress=true）；不算这一轮的回复，不唤醒其他 Agent。
+   * notice：服务端发的房间提示（例如自动设了主 Agent），以相关成员名义发出；不唤醒任何人，网页显示成一行系统提示。
    */
-  kind: z.enum(["topic", "delegation", "receipt", "question", "schedule", "progress"]).optional(),
+  kind: z
+    .enum(["topic", "delegation", "receipt", "question", "schedule", "progress", "notice"])
+    .optional(),
   /** kind=question 且带选项时的题目定义；没有它就是自由回答的问题 */
   question: questionSpecSchema.optional(),
   /** 经网页点选提交的答案；手打的回答没有这个字段，正文照样是答案 */
@@ -1099,6 +1102,11 @@ export const roomSummarySchema = z.object({
   branch: z.string().max(200).optional(),
   /** 主 Agent 的名字：人发的、没有 @ 任何人的消息默认交给它接话和调度；不设就和以前一样没人接 */
   leadAgent: z.string().max(32).optional(),
+  /**
+   * 主 Agent 是怎么定的：auto=服务端自动设的（第一个加入的 Agent；它被删除或移出时自动顺延给下一个在线的），
+   * manual=房主手动设的或手动取消的（自动逻辑不再改它）。没有这个字段且没有 leadAgent 时，下一个加入的 Agent 会自动成为主 Agent
+   */
+  leadMode: z.enum(["auto", "manual"]).optional(),
   /** 房主允许访客只读查看工作区文件与 git 变更；默认关（没有这个字段） */
   workspaceFilesGuests: z.boolean().optional(),
   onlineCount: z.number().int().nonnegative(),
@@ -1258,8 +1266,10 @@ export const updateRoomRequestSchema = z.object({
   name: z.string().trim().min(1).max(64).optional(),
   archived: z.boolean().optional(),
   workspace: roomWorkspaceSchema.nullable().optional(),
-  /** 设为 null 取消主 Agent */
+  /** 设为 null 取消主 Agent（之后不再自动设）；房主手动设的都记为 manual */
   leadAgent: z.string().trim().min(1).max(32).nullable().optional(),
+  /** 改回「自动」：交给服务端挑（在线的本机 Agent 优先），之后被删除或移出时自动顺延；不能和 leadAgent 一起给 */
+  leadMode: z.literal("auto").optional(),
   /** 允许访客只读查看工作区文件与 git 变更 */
   workspaceFilesGuests: z.boolean().optional(),
 });

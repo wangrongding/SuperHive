@@ -144,6 +144,8 @@ export type LocalRoomActions = {
     removedAgents(): import("@superhive/protocol").RemovedLocalAgent[];
     requireRemoved(id: string, name?: string): void;
     hide(id: string): void;
+    /** 本机 Agent 删掉之后：它所在房间里自动设的主 Agent 顺延 */
+    agentRemoved?(name: string): void;
   };
   worktrees?: {
     list: (roomId: string) => Promise<unknown>;
@@ -1535,6 +1537,7 @@ export function registerLocalAgentRoutes(
     try {
       const name = supervisor!.list().find((agent) => agent.id === request.params.id)?.name;
       await supervisor!.remove(request.params.id);
+      if (name) rooms.members?.agentRemoved?.(name);
       audit(
         request,
         caller,

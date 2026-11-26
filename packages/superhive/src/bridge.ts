@@ -2105,14 +2105,15 @@ export class AgentBridge {
         this.room.fetchMessages(context.latestSeq),
       );
       // 经 hive_invoke 发出的委派、hive_ask_human 提的问题只是中间动作，服务端代发的回执（子任务、定时任务说明）
-      // 也不是这一轮自己发的，都不能当成这一轮的回复，否则最终答复会被吞掉
+      // 也不是这一轮自己发的；服务端以它名义发的房间提示（成了主 Agent）同样不算。都不能当成这一轮的回复，否则最终答复会被吞掉
       const toolMessages = messagesAfterReply.messages.filter(
         (message) =>
           message.senderId === this.ownParticipantId &&
           message.kind !== "delegation" &&
           message.kind !== "question" &&
           message.kind !== "receipt" &&
-          message.kind !== "progress",
+          message.kind !== "progress" &&
+          message.kind !== "notice",
       );
       // 这一轮用 hive_message_send 发过消息，最终回复仍要照常代发：工具发的往往只是中途的进度（「收到，开始做」），
       // 只有最终输出为 NO_REPLY、和已发的内容相同，或只是一句「已发送」时，才把工具发的那条当作这一轮的回复
