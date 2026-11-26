@@ -240,6 +240,8 @@ function formatTokens(tokens: number): string {
 }
 
 const MAX_ATTEMPTS = 3;
+/** 落盘待补发的终态回报最多留这么多条（按触发消息），超出丢最早的 */
+const MAX_UNDELIVERED_REPORTS = 50;
 /** 最多收起几段会话（每个目录 + 道一段），多了先丢最早收起的子任务道 */
 const MAX_PARKED_SESSIONS = 16;
 /** 房间主对话所在的那一道；子任务各自一道（键是开启它的那次委派的调用 ID） */
@@ -577,8 +579,45 @@ export class AgentBridge {
     // 停止进程时中断正在进行的回合；执行意图会在中断回报后清除
     this.active?.controller.abort();
     await this.draining?.catch(() => undefined);
+    await this.saveUndelivered();
     this.room.stop();
     await this.responder.close?.();
+  }
+
+  /** 连接断开时产生、还没送达的终态回报（比如停止回报）落盘，进程退出也不丢 */
+  private async saveUndelivered(): Promise<void> {
+    const unsent = this.room.undeliveredReports();
+    if (!this.state || unsent.length === 0) return;
+    const saved = { ...this.state.undeliveredReports };
+    for (const event of unsent) {
+      const report: Omit<InvocationReport, "type"> & { type?: string } = { ...event };
+      delete report.type;
+      saved[report.messageId] = report;
+    }
+    const ids = Object.keys(saved);
+    for (const id of ids.slice(0, Math.max(0, ids.length - MAX_UNDELIVERED_REPORTS)))
+      delete saved[id];
+    this.state.undeliveredReports = saved;
+    await this.store.save(this.state).catch(() => undefined);
+  }
+
+  /**
+   * 补发上次进程没送达的终态回报：服务端那条调用还挂着（执行中、停止中、超时未收起）才发；
+   * 不在快照里（已落定）、被人收起、或已重新排队（人点了重试）的不再覆盖
+   */
+  private deliverSaved(snapshot: Snapshot): void {
+    const saved = this.state.undeliveredReports;
+    if (!saved) return;
+    delete this.state.undeliveredReports;
+    const open = new Map<string, Invocation>();
+    for (const invocation of snapshot.invocations ?? [])
+      if (invocation.agentId === this.ownParticipantId) open.set(invocation.messageId, invocation);
+    for (const report of Object.values(saved)) {
+      const invocation = open.get(report.messageId);
+      if (!invocation || invocation.resolution) continue;
+      if (!["running", "cancelling", "timed_out"].includes(invocation.status)) continue;
+      this.room.report(report);
+    }
   }
 
   /**
@@ -734,6 +773,7 @@ export class AgentBridge {
   private async onSnapshot(snapshot: Snapshot): Promise<void> {
     this.ownParticipantId = snapshot.self.id;
     this.log(`[hive] 已加入 #${this.options.roomId}，公共消息最新 seq=${snapshot.latestSeq}`);
+    this.deliverSaved(snapshot);
     if (!this.stateExisted) {
       // 首次加入不回放历史聊天，但服务端仍为本 Agent 挂着的 queued 调用要接着做，
       // 否则这些 @ 永远没人处理，最后被扫成"结果未知"

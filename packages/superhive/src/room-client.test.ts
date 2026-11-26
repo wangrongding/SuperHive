@@ -259,8 +259,14 @@ describe("RoomClient reports", () => {
       },
     );
     const messageId = "00000000-0000-4000-8000-000000000001";
+    const progressOnly = "00000000-0000-4000-8000-000000000003";
+    client.report({ messageId: progressOnly, status: "running" });
     client.report({ messageId, status: "failed", detail: "crash" });
     client.report({ messageId, status: "running" });
+    // 还没送达的只交出终态（进程退出前由 Bridge 落盘），进度不交
+    expect(client.undeliveredReports()).toEqual([
+      { type: "invocation.report", messageId, status: "failed", detail: "crash" },
+    ]);
     client.start();
     await waitFor<void>((resolve) => {
       const check = () => (socket ? resolve() : setTimeout(check, 5));
@@ -280,14 +286,19 @@ describe("RoomClient reports", () => {
     await snapshot;
     await waitFor<void>((resolve) => {
       const check = () =>
-        received.some((event) => event.type === "invocation.report")
+        received.some(
+          (event) => event.type === "invocation.report" && event.messageId === messageId,
+        )
           ? resolve()
           : setTimeout(check, 5);
       check();
     });
-    expect(received.filter((event) => event.type === "invocation.report")).toEqual([
-      { type: "invocation.report", messageId, status: "failed", detail: "crash" },
-    ]);
+    expect(
+      received.filter(
+        (event) => event.type === "invocation.report" && event.messageId === messageId,
+      ),
+    ).toEqual([{ type: "invocation.report", messageId, status: "failed", detail: "crash" }]);
+    expect(client.undeliveredReports()).toEqual([]);
 
     const cancel = waitFor<{ id: string; turn?: string[] }>((resolve) => (resolveCancel = resolve));
     socket!.send(JSON.stringify({ type: "agent.cancel", messageId }));

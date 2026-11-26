@@ -44,6 +44,11 @@ export type AgentState = {
     string,
     Array<{ summary: string; done: boolean; irreversible?: boolean }>
   >;
+  /**
+   * 退出前没能送达服务端的终态回报（按触发消息）：Server 先断开、Agent 随后被结束时，停止回报只进了
+   * 内存 outbox。下次加入时服务端那条调用还没落定就补发，否则它会一直挂着，10 分钟后被判「结果未知」
+   */
+  undeliveredReports?: Record<string, Omit<import("./hive-protocol.js").InvocationReport, "type">>;
   /** 进程中途退出后已自动重跑的次数（按触发消息），用于封顶并写进状态说明；处理完即删 */
   crashResumes?: Record<string, number>;
   /** 距上次发送完整上下文（成员、白板、规则提示）以来的轮数与时间，用于提示节流 */

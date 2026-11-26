@@ -108,9 +108,21 @@ class FakeRoom {
     this.participantCalls += 1;
     return this.participants;
   }
+  /** 模拟连接断开：回报进 outbox，不算送达 */
+  disconnected = false;
+  outbox: InvocationReport[] = [];
   report(report: Omit<InvocationReport, "type">) {
+    if (this.disconnected) {
+      this.outbox.push({ type: "invocation.report", ...report });
+      return;
+    }
     this.order.push(report.status);
     this.reports.push(report);
+  }
+  undeliveredReports() {
+    return this.outbox.filter(
+      (report) => report.status !== "received" && report.status !== "running",
+    );
   }
   async sendMessage(input: { content: string; clientMessageId: string; parentMessageId: string }) {
     this.offline();
@@ -2186,6 +2198,49 @@ describe("AgentBridge", () => {
       expect(responder.calls[0]!.prompt).toContain("git push origin main（可能没执行完）");
       responder.finish("核对过了", "s1");
       await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    });
+
+    it("delivers the stop report it could not send before exiting once the next process joins", async () => {
+      const mention = chat();
+      room.messages.push(mention);
+      await startBridge(baseState(), [invocationFor(mention, "queued")]);
+      room.handlers.onMention(mention, mention.seq, false);
+      await waitUntil(() => responder.calls.length === 1);
+      // Server 先断开（重启、换代），Agent 随后被结束：停止回报只能进 outbox，进程就退出了
+      room.disconnected = true;
+      await bridge.stop();
+      expect(room.statuses(mention.id)).not.toContain("cancelled");
+      // 下一个进程用落盘的状态加入：服务端那条调用还挂在执行中，要补上停止回报，不能等 10 分钟判结果未知
+      room = new FakeRoom();
+      responder = new ControlledResponder();
+      await startBridge(undefined, [invocationFor(mention, "running")]);
+      await waitUntil(() => room.statuses(mention.id).includes("cancelled"));
+      expect(room.reports.find((report) => report.status === "cancelled")?.detailText).toEqual({
+        key: "bridge.offline",
+      });
+      expect(responder.calls).toHaveLength(0);
+      expect((await store.load())?.undeliveredReports).toBeUndefined();
+    });
+
+    it("drops a saved stop report when the server already settled or was told to retry", async () => {
+      const settled = chat();
+      const retried = chat();
+      room.messages.push(settled, retried);
+      await store.save({
+        ...baseState(),
+        lastProcessedSeq: retried.seq,
+        processedMessageIds: [settled.id, retried.id],
+        undeliveredReports: {
+          [settled.id]: { messageId: settled.id, status: "cancelled" },
+          [retried.id]: { messageId: retried.id, status: "cancelled" },
+        },
+      });
+      // settled 不在快照里（早已落定）；retried 被人点了重试、重新排队
+      await startBridge(undefined, [invocationFor(retried, "queued")]);
+      await flush();
+      expect(room.statuses(settled.id)).toEqual([]);
+      expect(room.statuses(retried.id)).not.toContain("cancelled");
+      expect((await store.load())?.undeliveredReports).toBeUndefined();
     });
 
     it("still reports reconnectedGone for a running call it knows nothing about", async () => {

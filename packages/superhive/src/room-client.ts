@@ -156,6 +156,13 @@ export class RoomClient {
     this.outbox.set(report.messageId, event);
   }
 
+  /** 还在 outbox 里没送达的终态回报：进程退出前由 Bridge 落盘，下次加入时补发 */
+  undeliveredReports(): InvocationReport[] {
+    return [...this.outbox.values()].filter(
+      (report) => report.status !== "received" && report.status !== "running",
+    );
+  }
+
   /** 上报执行过程：只是实时状态，连接不可用就直接丢掉，不进 outbox */
   /** 把执行中的权限申请交给服务端转给人批；连不上或服务端不支持时返回 false（调用方按拒绝处理） */
   requestApproval(request: {
