@@ -916,7 +916,12 @@ label.question-option:hover {
   border-bottom: 1px solid var(--border);
   background: transparent;
   color: var(--text);
+  font: inherit;
   font-size: var(--text-sm);
+  line-height: 1.5;
+  max-height: 160px;
+  overflow-y: auto;
+  resize: none;
   outline: none;
 }
 

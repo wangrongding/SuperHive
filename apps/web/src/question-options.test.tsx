@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { QuestionSpec } from "@superhive/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QuestionOptions } from "./question-options";
+import { storedSendShortcutKey } from "./app-storage";
 
 afterEach(cleanup);
 
@@ -43,6 +44,30 @@ describe("QuestionOptions", () => {
     fireEvent.change(screen.getByLabelText("其它回答"), { target: { value: "都不要" } });
     fireEvent.click(submit);
     expect(onSubmit).toHaveBeenLastCalledWith([], "都不要");
+  });
+
+  it("其它可以换行：Enter / Shift+Enter 换行，⌘/Ctrl+Enter 提交；设成 Enter 发送时跟着变", () => {
+    const onSubmit = renderOptions({ options, multiple: false }, {});
+    fireEvent.click(screen.getByText("都不合适？点这里自己写"));
+    const input = screen.getByLabelText("其它回答");
+    expect(input.tagName).toBe("TEXTAREA");
+    fireEvent.change(input, { target: { value: "第一行\n第二行" } });
+    expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: "Enter", shiftKey: true })).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenLastCalledWith([], "第一行\n第二行");
+
+    localStorage.setItem(storedSendShortcutKey, "enter");
+    try {
+      onSubmit.mockClear();
+      expect(fireEvent.keyDown(input, { key: "Enter", shiftKey: true })).toBe(true);
+      expect(onSubmit).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    } finally {
+      localStorage.clear();
+    }
   });
 
   it("权限申请只有允许 / 拒绝，没有「其它」", () => {

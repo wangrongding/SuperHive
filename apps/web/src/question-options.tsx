@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { QuestionAnswer, QuestionSpec } from "@superhive/protocol";
 import { t } from "./i18n";
 import { Button } from "./button";
+import { storedSendShortcut } from "./app-storage";
 
 /**
  * Agent 提问的选项：单选点一下即提交，多选勾选后统一提交；最后一行固定是「其它」自由输入。
@@ -115,16 +116,28 @@ export function QuestionOptions({
               </button>
             )}
             {otherOpen && (
-              <input
-                type="text"
+              <textarea
                 className="question-other-input"
+                rows={1}
                 value={other}
                 placeholder={t("输入选项之外的回答…")}
                 aria-label={t("其它回答")}
                 autoFocus
-                onChange={(event) => setOther(event.target.value)}
+                onChange={(event) => {
+                  setOther(event.target.value);
+                  // 跟着内容长高，最多到样式里的 max-height，再多就滚动
+                  event.target.style.height = "auto";
+                  event.target.style.height = `${event.target.scrollHeight}px`;
+                }}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                  // 和输入框的发送方式一致：⌘/Ctrl+Enter 总是提交，Shift+Enter 总是换行，
+                  // 单独 Enter 按设置（默认换行）
+                  const submit =
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    (!event.shiftKey && storedSendShortcut() === "enter");
+                  if (!submit) return;
                   event.preventDefault();
                   if (spec.multiple) submitMultiple();
                   else if (otherText) onSubmit([], otherText);
