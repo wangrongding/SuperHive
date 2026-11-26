@@ -70,6 +70,15 @@ export function useMessageActions({
     }
   }
 
+  /** 右键菜单里的复制（选中内容、代码、链接、消息链接）：复制失败时提示手动复制 */
+  async function copyPlainText(text: string) {
+    try {
+      await copyTextToClipboard(text);
+    } catch {
+      setError(t("浏览器未允许自动复制，请选中文本后手动复制。"));
+    }
+  }
+
   /** stop：一起停掉这条消息派出、还没结束的任务（服务端处理，只停直接派出的，不连带下游） */
   function recallMessage(messageId: string, stop = false) {
     const socket = socketRef.current;
@@ -167,6 +176,7 @@ export function useMessageActions({
     submitChoice,
     copyMessageContent,
     copySeqReference,
+    copyPlainText,
     recallMessage,
     retryInvocation,
     dismissInvocations,

@@ -37,6 +37,8 @@ export type ChatMessage = {
   /** 服务端代发消息的结构化正文（键见 protocol 的 server-text.ts），比如 roomPost.forwarded */
   text?: { key: string; params?: Record<string, unknown> };
   todoHandoff?: { todoId: string; notes: string };
+  /** 网页「引用回复」引用的原消息；正文开头照样有给人看的 Markdown 引用块 */
+  quote?: { messageId: string; seq: number; senderName: string };
 };
 
 export type Attachment = {

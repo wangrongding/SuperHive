@@ -113,6 +113,7 @@ function props(messages: ChatMessage[], task: Invocation): ComponentProps<typeof
     openMachineIds: new Set(),
     setOpenMachineIds: vi.fn(),
     openSenderMenu: vi.fn(),
+    openContextMenu: vi.fn(),
     locateMessageFromMarkdown: vi.fn(),
     dockPreview: vi.fn(),
     setRetryModelFor: vi.fn(),

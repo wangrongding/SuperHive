@@ -1193,3 +1193,78 @@ label.question-option:hover {
 .message-reply-to-row {
   margin-bottom: 2px;
 }
+
+/* ---------- 引用卡片 ---------- */
+/* 消息开头引用的原消息：点了跳回去；左边一道竖线和正文的 > 引用同一个意思 */
+.message-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 2px 0 6px;
+  padding: 4px 10px 5px;
+  border: 0;
+  border-left: 3px solid var(--border-heavy);
+  border-radius: var(--radius-xs);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: start;
+  cursor: pointer;
+}
+
+button.message-quote:hover {
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
+button.message-quote:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.message-quote.gone {
+  cursor: default;
+}
+
+.message-quote-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.message-quote-head strong {
+  color: var(--text-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.message-quote-seq {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.message-quote-excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-height: 1.45;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.message-quote.gone .message-quote-excerpt {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* 从右键菜单点「撤回」：确认条在操作条里，不悬停也要露出来 */
+.message-actions:has(.message-recall-confirm) {
+  opacity: 1;
+  pointer-events: auto;
+}

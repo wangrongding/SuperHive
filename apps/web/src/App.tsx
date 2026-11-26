@@ -2520,6 +2520,7 @@ export function App({
                 openMachineIds={openMachineIds}
                 setOpenMachineIds={setOpenMachineIds}
                 openSenderMenu={openSenderMenu}
+                openContextMenu={setContextMenu}
                 locateMessageFromMarkdown={locateMessageFromMarkdown}
                 onRecordTodo={
                   isOwner && connectionState === "online" ? recordMessageTodo : undefined

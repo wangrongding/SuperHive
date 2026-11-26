@@ -27,6 +27,7 @@ import {
   type TodoInput,
   type TodoUpdate,
   todoHandoffSchema,
+  messageQuoteSchema,
 } from "@superhive/protocol";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
@@ -381,6 +382,8 @@ export type CreateMessageInput = {
   /** 服务端代发的系统消息的结构化正文（网页按语言渲染；content 是中文给 Agent 读） */
   text?: ServerText;
   todoHandoff?: NonNullable<ChatMessage["todoHandoff"]>;
+  /** 引用回复的原消息；不在同一房间或已撤回时当作没引用 */
+  quotedMessageId?: string;
   /** 与写消息在同一事务里执行（把附件绑定到这条消息）；抛错则整条消息不写入 */
   onInsert?: (messageId: string) => void;
 };
@@ -441,7 +444,7 @@ function parseMessageMeta(
   raw: string | null,
 ): Pick<
   ChatMessage,
-  "question" | "answer" | "approval" | "via" | "attachments" | "text" | "todoHandoff"
+  "question" | "answer" | "approval" | "via" | "attachments" | "text" | "todoHandoff" | "quote"
 > {
   if (!raw) return {};
   try {
@@ -453,9 +456,11 @@ function parseMessageMeta(
       attachments?: unknown;
       text?: unknown;
       todoHandoff?: unknown;
+      quote?: unknown;
     };
     const text = serverTextSchema.safeParse(value.text);
     const todoHandoff = todoHandoffSchema.safeParse(value.todoHandoff);
+    const quote = messageQuoteSchema.safeParse(value.quote);
     const question = questionSpecSchema.safeParse(value.question);
     const answer = questionAnswerSchema.safeParse(value.answer);
     const approval = approvalRefSchema.safeParse(value.approval);
@@ -469,6 +474,7 @@ function parseMessageMeta(
       ...(attachments.success ? { attachments: attachments.data } : {}),
       ...(text.success ? { text: text.data } : {}),
       ...(todoHandoff.success ? { todoHandoff: todoHandoff.data } : {}),
+      ...(quote.success ? { quote: quote.data } : {}),
     };
   } catch {
     return {};
@@ -1435,6 +1441,11 @@ export class HiveDatabase {
     if (!content && !attachments) {
       throw new HiveError("EMPTY_MESSAGE", serverText("error.message.empty"));
     }
+    const quoted = input.quotedMessageId ? this.getMessage(input.quotedMessageId) : undefined;
+    const quote: ChatMessage["quote"] =
+      quoted && quoted.roomId === sender.roomId && !quoted.deletedAt
+        ? { messageId: quoted.id, seq: quoted.seq, senderName: quoted.senderName }
+        : undefined;
     const id = randomUUID();
     // 话题分隔只是界面上的分界线，不唤醒任何人
     const mentions = input.kind === "topic" ? [] : parseMentions(content);
@@ -1469,8 +1480,10 @@ export class HiveDatabase {
             input.via ||
             attachments ||
             input.text ||
-            input.todoHandoff
+            input.todoHandoff ||
+            quote
             ? JSON.stringify({
+                ...(quote ? { quote } : {}),
                 ...(input.todoHandoff ? { todoHandoff: input.todoHandoff } : {}),
                 ...(input.text ? { text: input.text } : {}),
                 ...(input.question ? { question: input.question } : {}),

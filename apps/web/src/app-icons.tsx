@@ -31,6 +31,7 @@ export type IconName =
   | "panel-right"
   | "plug"
   | "plus"
+  | "quote"
   | "send"
   | "search"
   | "settings"
@@ -117,6 +118,8 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     ),
     bell: <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2H4.5L6 16Zm4 4a2 2 0 0 0 4 0" />,
     undo: <path d="M9 14 4 9l5-5M4 9h9.5a6.5 6.5 0 0 1 0 13H11" />,
+    // 引用回复：折回去的箭头
+    quote: <path d="M10 5 4 11l6 6M4 11h9a7 7 0 0 1 7 7v1" />,
     hash: <path d="M9 4 7 20M17 4l-2 16M4 9h17M3 15h17" />,
     logout: <path d="M10 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4m5-4 3-3-3-3m3 3H9" />,
     more: <path d="M6 12h.01M12 12h.01M18 12h.01" strokeWidth="2.6" />,

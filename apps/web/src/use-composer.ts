@@ -26,6 +26,7 @@ import {
 } from "./app-storage";
 import { initialRoomId } from "./rooms";
 import { resizeComposer, highlightOffsetX } from "./composer-size";
+import { buildQuoteBlock, draftQuotes, insertQuote } from "./message-quote";
 
 /**
  * 输入框：草稿（按房间自动保存）、@ 成员补全、方向键翻历史、附件队列、回答提问，以及发送。
@@ -63,6 +64,8 @@ export function useComposer({
 }) {
   // 正在回答的 Agent 提问；发送时作为 replyToMessageId
   const [answering, setAnswering] = useState<ChatMessage>();
+  // 引用回复的原消息：草稿里还留着它的引用块时，发送带上 quotedMessageId
+  const [quoting, setQuoting] = useState<{ messageId: string; seq: number; roomId: string }>();
   const [draft, setDraft] = useState(() => {
     const storedUsername = localStorage.getItem(storedUsernameKey) ?? "";
     return storedUsername && storedBoolean(storedAutoSaveDraftKey, true)
@@ -190,6 +193,7 @@ export function useComposer({
           : "",
       );
       setMentionContext(undefined);
+      setQuoting(undefined);
     }
   }, [autoSaveDraft, currentRoomId, username]);
 
@@ -266,6 +270,10 @@ export function useComposer({
     if (socket?.readyState !== WebSocket.OPEN) return;
     // 回答提问时带上回复关系：服务端据此把答案交回提问的 Agent，不必再 @ 它
     const replyTo = answering && answering.roomId === currentRoomId ? answering.id : undefined;
+    const quoted =
+      quoting && quoting.roomId === currentRoomId && draftQuotes(content, quoting.seq)
+        ? quoting.messageId
+        : undefined;
     socket.send(
       JSON.stringify({
         type: "message.send",
@@ -273,6 +281,7 @@ export function useComposer({
         content,
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(replyTo ? { replyToMessageId: replyTo } : {}),
+        ...(quoted ? { quotedMessageId: quoted } : {}),
         ...(steer ? { steer: true } : {}),
       }),
     );
@@ -284,6 +293,7 @@ export function useComposer({
     setComposerExpanded(false);
     setMentionContext(undefined);
     setAnswering(undefined);
+    setQuoting(undefined);
   }
 
   function answerQuestion(question: ChatMessage) {
@@ -403,6 +413,31 @@ export function useComposer({
     });
   }
 
+  /**
+   * 引用回复：输入框开头放一块引用（换掉上次的引用块），原来写的字接在下面，光标落到末尾。
+   * selection 是右键时选中的那段文字；mention 是要顺手 @ 的 Agent
+   */
+  function quoteMessage(
+    message: ChatMessage,
+    options: { selection?: string; mention?: string } = {},
+  ) {
+    const block = buildQuoteBlock({
+      seq: message.seq,
+      senderName: message.senderName,
+      content: message.content,
+      selection: options.selection,
+    });
+    const next = insertQuote(draft, block, options.mention);
+    browsingHistoryRef.current = undefined;
+    setDraft(next.value);
+    setQuoting({ messageId: message.id, seq: message.seq, roomId: message.roomId });
+    setMentionContext(undefined);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(next.cursor, next.cursor);
+    });
+  }
+
   function appendMention(usernameToMention: string) {
     // 已经 @ 过就不再重复追加，只把焦点放回输入框
     if (draftMentions(draft, usernameToMention)) {
@@ -427,6 +462,8 @@ export function useComposer({
   return {
     answering,
     setAnswering,
+    quoting,
+    quoteMessage,
     draft,
     setDraft,
     mentionContext,

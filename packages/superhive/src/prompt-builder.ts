@@ -156,6 +156,11 @@ function formatMessage(message: ChatMessage, paths?: AttachmentPaths, trigger = 
     const args = JSON.stringify({ messageId: message.id, offset: end, maxChars: 4000 });
     head += `…\n[正文预览已截断：原文 ${content.length} 字符，已展示前 ${end} 字符（长度/偏移按 UTF-16 计）。补读：hive_room_read(${args})，按返回的 nextOffset 续读至 null。${trigger ? "这是本轮触发消息，答复前须补读完；读不到须说明缺口，不要猜测。" : "需要依据这条消息作答时，请补读后文。"}]`;
   }
+  if (!message.deletedAt && message.quote) {
+    const { messageId, seq, senderName } = message.quote;
+    // 正文开头的「> #seq · 发送者」引用块只是摘录：原消息不在上面的上下文里时按 ID 补读
+    head += `\n  [引用] 这条引用了 #${seq} id=${sanitizeForPrompt(messageId, 64)}（${sanitizeForPrompt(senderName, 64)} 的消息），正文开头的 > 引用块是摘录；需要原文时用 hive_room_read({"messageId":"${sanitizeForPrompt(messageId, 64)}"}) 读取`;
+  }
   if (trigger && !message.deletedAt && message.todoHandoff) {
     const { todoId, notes } = message.todoHandoff;
     const args = JSON.stringify({ todoId, completed: true });

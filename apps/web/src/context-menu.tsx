@@ -30,9 +30,31 @@ export function contextMenuPoint(event: MouseEvent<HTMLElement>): { x: number; y
   return { x: rect.left + 12, y: rect.bottom };
 }
 
-/** 右键菜单：贴着指针弹出、不超出窗口；↑↓ 选择、Enter 执行、Esc 或点别处关闭 */
+/** 当前真正拿着焦点的元素：焦点在 shadow root 里时 document.activeElement 只是宿主 */
+function deepActiveElement(): HTMLElement | undefined {
+  let active: Element | null = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active instanceof HTMLElement && active !== document.body ? active : undefined;
+}
+
+/**
+ * 右键菜单：贴着指针弹出、不超出窗口；↑↓ 选择、Enter 执行、Esc 或点别处关闭。
+ * 关掉时焦点还给打开前的元素（菜单项自己把焦点挪去别处的，比如引用后聚焦输入框，不抢回来）
+ */
 export function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | undefined>(undefined);
+  if (returnFocusRef.current === undefined) returnFocusRef.current = deepActiveElement();
+  useEffect(() => {
+    const menuElement = ref.current;
+    return () => {
+      const target = returnFocusRef.current;
+      const active = document.activeElement;
+      const stranded =
+        !active || active === document.body || Boolean(menuElement?.contains(active));
+      if (target?.isConnected && stranded) target.focus({ preventScroll: true });
+    };
+  }, []);
   const [position, setPosition] = useState({ left: menu.x, top: menu.y });
   const actions = menu.items.filter((item) => item !== "separator");
   const [active, setActive] = useState(() => actions.findIndex((item) => !item.disabled));

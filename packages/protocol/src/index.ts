@@ -251,6 +251,16 @@ export const todoHandoffSchema = z.object({
   notes: z.string().max(LIMITS.maxTodoNoteLength),
 });
 
+/**
+ * 这条消息引用了哪条（网页右键「引用回复」）：服务端发送时按房间内的原消息补上序号和发送者，
+ * 原消息之后撤回也不改；正文里照样带着人看的 Markdown 引用块
+ */
+export const messageQuoteSchema = z.object({
+  messageId: z.string().uuid(),
+  seq: z.number().int().positive(),
+  senderName: z.string().max(64),
+});
+
 export const chatMessageSchema = z.object({
   id: z.string().uuid(),
   roomId: z.string().min(1).max(64),
@@ -292,6 +302,8 @@ export const chatMessageSchema = z.object({
   via: messageViaSchema.optional(),
   /** 随消息发出的附件；撤回后清空 */
   attachments: z.array(attachmentSchema).max(LIMITS.maxAttachmentsPerMessage).optional(),
+  /** 引用的原消息；撤回后清空 */
+  quote: messageQuoteSchema.optional(),
   /**
    * 服务端代发的系统消息（回执、定时、权限申请、话题分隔……）的结构化正文：网页按用户语言渲染。
    * content 仍是中文原文，给 Agent 读、给旧客户端显示。
@@ -332,6 +344,8 @@ export const messageSendEventSchema = z.object({
   attachmentIds: z.array(z.string().uuid()).max(LIMITS.maxAttachmentsPerMessage).optional(),
   replyToMessageId: z.string().uuid().optional(),
   parentMessageId: z.string().uuid().optional(),
+  /** 引用回复：同房间、未撤回的消息才记下，否则当作没引用，消息照常发出 */
+  quotedMessageId: z.string().uuid().optional(),
   /** 发送并引导：@ 到的 Agent 正在执行任务时，把这条用来引导当前任务而不是排队（只对人发的消息有效） */
   steer: z.boolean().optional(),
 });

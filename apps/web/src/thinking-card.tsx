@@ -308,6 +308,7 @@ export function ThinkingCard({
   trigger,
   onJumpToTrigger,
   onAvatarContextMenu,
+  onContextMenu,
   onStop,
   flashed = false,
 }: {
@@ -320,6 +321,8 @@ export function ThinkingCard({
   onStop?: () => void;
   /** 右击头像：和成员列表同一套菜单 */
   onAvatarContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
+  /** 右击卡片其它地方：跳回原消息、@ 它、停止这一轮 */
+  onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void;
   /** 这一轮合在一起处理的几条消息的序号（两条以上才显示） */
   batchSeqs?: number[];
   /** 触发这一轮的那条消息：卡片上写明在处理哪个问题，点了跳过去 */
@@ -364,6 +367,7 @@ export function ThinkingCard({
     <article
       className={`thinking-card ${detail}${attention ? ` attention ${attention}` : ""}${flashed ? " jump-flash" : ""}`}
       data-invocation-id={invocation.id}
+      onContextMenu={onContextMenu}
       aria-label={
         attention === "question"
           ? t("{0} 在等你回答", { 0: invocation.agentName })
@@ -527,15 +531,25 @@ export function TraceRecap({
   invocation,
   steps: allSteps,
   replyText,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   invocation: Invocation;
   steps: readonly TraceStep[];
   /** 这一轮的回复正文：用来去掉和回复重复的最后一段 */
   replyText?: string;
+  /** 由外面控制展开（回复的右键「看这一轮过程」）；不传时自己管 */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const steps = withoutFinalReply(allSteps, replyText);
   const lastWords = narrativeSteps(steps).at(-1);
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = (next: boolean) => {
+    setLocalOpen(next);
+    onOpenChange?.(next);
+  };
   const now = useTraceClock(invocation);
   const start = Date.parse(invocation.startedAt ?? invocation.createdAt);
   const end = Date.parse(invocation.finishedAt ?? invocation.updatedAt);
@@ -549,7 +563,7 @@ export function TraceRecap({
     .filter(Boolean)
     .join(" · ");
   return (
-    <div className={`trace-recap${open ? " open" : ""}`}>
+    <div className={`trace-recap${open ? " open" : ""}`} data-invocation-id={invocation.id}>
       <button
         type="button"
         className="trace-recap-toggle"

@@ -41,6 +41,31 @@ describe("buildMentionPrompt", () => {
     expect(trigger.content).not.toContain(todoId);
     expect(trigger.content).not.toContain("hive_todo_update");
   });
+  it("tells the agent which message a quoting message refers to", () => {
+    const quotedId = "00000000-0000-4000-8000-000000000005";
+    const message: ChatMessage = {
+      id: "00000000-0000-4000-8000-000000000001",
+      roomId: "general",
+      seq: 9,
+      senderId: "00000000-0000-4000-8000-000000000002",
+      senderName: "owner",
+      senderType: "human",
+      content: "> #3 · helper\n> 先这样\n\n@worker 这个再看看",
+      mentions: ["worker"],
+      traceId: "00000000-0000-4000-8000-000000000003",
+      hopCount: 0,
+      createdAt: new Date().toISOString(),
+      quote: { messageId: quotedId, seq: 3, senderName: "helper" },
+    };
+    const prompt = buildMentionPrompt({ messages: [message], triggers: [message] });
+    expect(prompt).toContain(`[引用] 这条引用了 #3 id=${quotedId}（helper 的消息）`);
+    expect(prompt).toContain(`hive_room_read({"messageId":"${quotedId}"})`);
+    const recalled = buildMentionPrompt({
+      messages: [{ ...message, content: "", deletedAt: new Date().toISOString() }],
+      triggers: [],
+    });
+    expect(recalled).not.toContain("[引用]");
+  });
   it("distinguishes future to-dos from progress and scheduled work", () => {
     const instructions = buildDeveloperInstructions({
       agentName: "worker",

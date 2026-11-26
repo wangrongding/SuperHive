@@ -64,6 +64,8 @@ describe("rich composer markdown", () => {
       "# 标题\n\n正文 **粗** *斜* `code` ~~删~~ [链接](https://example.com)",
       "- a\n- b\n\n1. x\n2. y",
       "> 引用\n> 第二行",
+      // 右键「引用回复」插的引用块：头一行的 #序号 · 名字发出去要原样，才认得回引用卡片
+      "> #12 · rd-claude\n> 结论：＠rd 可以合\n>\n> 第二段\n\n@rd-claude 我的想法",
       "```ts\nconst a = 1;\n\nb\n```",
     ];
     for (const block of blocks) expect(roundTrip(block)).toBe(block);

@@ -57,7 +57,7 @@ export function currentPausedInvocations(
 
 export { UPSTREAM_FAILURE_PREFIX, isUpstreamInterrupted, needsDecision };
 
-function retryLabel(invocation: Invocation): string {
+export function retryLabel(invocation: Invocation): string {
   if (invocation.blockReason === "guest_approval") return t("批准");
   return needsDecision(invocation) ? t("继续") : t("重试");
 }

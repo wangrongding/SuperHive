@@ -208,3 +208,64 @@ describe("插件的 / 命令", () => {
     });
   });
 });
+
+describe("引用回复", () => {
+  const original = {
+    id: "00000000-0000-4000-8000-000000000002",
+    roomId: "build",
+    seq: 12,
+    senderId: "w",
+    senderName: "worker",
+    senderType: "agent" as const,
+    content: "结论：@rd 可以合\n第二行",
+    mentions: ["rd"],
+    traceId: "t",
+    hopCount: 0,
+    createdAt: "2026-11-26T04:00:00.000Z",
+  };
+  function renderWithSocket() {
+    const send = vi.fn();
+    const socket = { readyState: WebSocket.OPEN, send } as unknown as WebSocket;
+    const view = renderHook(() =>
+      useComposer({
+        username: "rd",
+        currentRoomId: "build",
+        participants: [],
+        messages: [],
+        invocations: new Map(),
+        autoSaveDraft: false,
+        sendShortcut: "enter",
+        richComposer: false,
+        currentLeadAgent: undefined,
+        base: "http://hive",
+        authToken: "t",
+        socketRef: { current: socket },
+      }),
+    );
+    return { ...view, send };
+  }
+
+  it("引用块插到开头、原文的 @ 不再生效、补上 @Agent，发送带上 quotedMessageId", () => {
+    const { result, send } = renderWithSocket();
+    act(() => result.current.setDraft("我的想法"));
+    act(() => result.current.quoteMessage(original, { mention: "worker" }));
+    expect(result.current.draft).toBe(
+      "> #12 · worker\n> 结论：＠rd 可以合\n> 第二行\n\n@worker 我的想法",
+    );
+    act(() => result.current.sendMessage());
+    expect(JSON.parse(send.mock.calls[0]![0] as string)).toMatchObject({
+      content: "> #12 · worker\n> 结论：＠rd 可以合\n> 第二行\n\n@worker 我的想法",
+      quotedMessageId: original.id,
+    });
+    expect(result.current.quoting).toBeUndefined();
+  });
+
+  it("删掉了引用块再发，就不带引用关系", () => {
+    const { result, send } = renderWithSocket();
+    act(() => result.current.quoteMessage(original, { selection: "第二行" }));
+    expect(result.current.draft).toBe("> #12 · worker\n> 第二行\n\n");
+    act(() => result.current.setDraft("算了，不引用了"));
+    act(() => result.current.sendMessage());
+    expect(JSON.parse(send.mock.calls[0]![0] as string).quotedMessageId).toBeUndefined();
+  });
+});

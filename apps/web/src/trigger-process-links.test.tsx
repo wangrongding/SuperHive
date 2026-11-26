@@ -116,6 +116,7 @@ function setup(
     openMachineIds: new Set(),
     setOpenMachineIds: vi.fn(),
     openSenderMenu: vi.fn(),
+    openContextMenu: vi.fn(),
     locateMessageFromMarkdown: vi.fn(),
     dockPreview: vi.fn(),
     setRetryModelFor: vi.fn(),

@@ -48,6 +48,8 @@ const RAW_BUTTON_CLASSES = new Set([
   // 跳转面板筛选条里的「下一个要处理的」：和左边的筛选片同一组
   "goto-next",
   "message-machine-card",
+  // 消息里引用的原消息：整块卡片可点，点了跳回原消息
+  "message-quote",
   "message-file",
   "message-image",
   "workspace-media-image",

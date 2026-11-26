@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useMemo,
+  useState,
   type Dispatch,
   type MouseEvent as ReactMouseEvent,
   type SetStateAction,
@@ -22,6 +23,9 @@ import type {
 import {
   InvocationChips,
   canCancelInvocation,
+  canRetryInvocation,
+  isExtendableBlock,
+  retryLabel,
   groupInvocationsByMessage,
   guestCanStopTurn,
   waitingInvocationForQuestion,
@@ -58,6 +62,10 @@ import type { ComposerState } from "./use-composer";
 import type { MessageActions } from "./use-message-actions";
 import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
+import { contextMenuPoint, type ContextMenuState } from "./context-menu";
+import { messageMenuItems, thinkingCardMenuItems } from "./message-menu";
+import { isEditableTarget, menuTargetOf, selectedTextWithin } from "./message-selection";
+import { splitQuote } from "./message-quote";
 
 type SenderMenuOpener = (
   event: ReactMouseEvent<HTMLElement>,
@@ -73,6 +81,18 @@ type ReplyTarget = {
 };
 
 type DockPreview = (attachment: Attachment, origin: { senderId: string; seq: number }) => void;
+type MenuOpener = (menu: ContextMenuState) => void;
+/** 这条消息引用的原消息；excerpt / body 是从正文开头拆出来的引用块和其余正文 */
+type QuoteState = {
+  messageId: string;
+  seq: number;
+  senderName: string;
+  /** 原消息已撤回或不在了 */
+  gone: boolean;
+  loaded: boolean;
+  excerpt?: string;
+  body?: string;
+};
 
 /** 对话流：消息、日期与话题分隔、Agent 的「思考中」卡片和「正在处理」一行 */
 export function MessageList({
@@ -104,6 +124,7 @@ export function MessageList({
   openMachineIds,
   setOpenMachineIds,
   openSenderMenu,
+  openContextMenu,
   locateMessageFromMarkdown,
   onRecordTodo,
   dockPreview,
@@ -142,6 +163,8 @@ export function MessageList({
   openMachineIds: ReadonlySet<string>;
   setOpenMachineIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
   openSenderMenu: SenderMenuOpener;
+  /** 消息、执行中卡片的右键菜单：和成员右键用同一个菜单组件 */
+  openContextMenu: MenuOpener;
   locateMessageFromMarkdown: (target: { messageId: string; messageSeq: number }) => void;
   onRecordTodo?: ((message: ChatMessage) => Promise<void>) | undefined;
   dockPreview: DockPreview;
@@ -242,6 +265,34 @@ export function MessageList({
     () => new Map(messages.map((message) => [message.id, message])),
     [messages],
   );
+  // 展开着的「这一轮过程」回顾：回复的右键「看这一轮过程」从这里打开
+  const [openRecapIds, setOpenRecapIds] = useState<ReadonlySet<string>>(() => new Set());
+  const setRecapOpen = useCallback((invocationId: string, open: boolean) => {
+    setOpenRecapIds((current) => {
+      if (current.has(invocationId) === open) return current;
+      const next = new Set(current);
+      if (open) next.add(invocationId);
+      else next.delete(invocationId);
+      return next;
+    });
+  }, []);
+  /** 展开回复上方的过程回顾并滚到它 */
+  const revealRecap = useCallback(
+    (invocationId: string) => {
+      setRecapOpen(invocationId, true);
+      window.requestAnimationFrame(() => {
+        const list = messageListRef.current;
+        const root = list?.shadowRoot ?? list;
+        root
+          ?.querySelector<HTMLElement>(`.trace-recap[data-invocation-id="${invocationId}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
+    },
+    [setRecapOpen, messageListRef],
+  );
+  const traceAllowed = !guest || guest.showTrace !== false;
+  // 访客邀请没开「可以 @ Agent」时，菜单里不给 @ Agent、引用 Agent 也不自动补 @
+  const canMentionAgents = !guest || guest.allowAgents !== false;
   /**
    * Agent 的回复在回应哪条消息：产生它的那次调用的触发消息，没有调用记录（刷新后）时按 parentMessageId。
    * 进度、提问、委派、回执这些中间消息不算；原消息撤回了不给入口
@@ -276,6 +327,24 @@ export function MessageList({
   const loadedMessageIds = useMemo(
     () => new Set(messages.filter((message) => !message.deletedAt).map((message) => message.id)),
     [messages],
+  );
+  /** 引用了别的消息：正文开头的引用块拆出来画成卡片；原消息撤回了只说「不可见」 */
+  const quoteStateOf = useCallback(
+    (message: ChatMessage): QuoteState | undefined => {
+      if (message.deletedAt || !message.quote) return undefined;
+      const { messageId, seq, senderName } = message.quote;
+      const split = splitQuote(messageBodyContent(message), seq);
+      const original = messageById.get(messageId);
+      return {
+        messageId,
+        seq,
+        senderName,
+        gone: recalledMessageIds.has(messageId) || Boolean(original?.deletedAt),
+        loaded: loadedMessageIds.has(messageId),
+        ...(split ? { excerpt: split.excerpt, body: split.body } : {}),
+      };
+    },
+    [messageById, recalledMessageIds, loadedMessageIds],
   );
   const formatMessageTime = useCallback(
     (iso: string) =>
@@ -369,7 +438,13 @@ export function MessageList({
                   const source = message.deletedAt ? undefined : invocationByReply.get(message.id);
                   const steps = source ? traces.get(source.id) : undefined;
                   return source && steps?.length ? (
-                    <TraceRecap invocation={source} steps={steps} replyText={message.content} />
+                    <TraceRecap
+                      invocation={source}
+                      steps={steps}
+                      replyText={message.content}
+                      open={openRecapIds.has(source.id)}
+                      onOpenChange={(open) => setRecapOpen(source.id, open)}
+                    />
                   ) : null;
                 })()}
                 {message.kind === "topic" ? (
@@ -397,6 +472,8 @@ export function MessageList({
                     loadedMessageIds={loadedMessageIds}
                     processCardOf={processCardOf}
                     replyTarget={replyTargetOf(message)}
+                    replySource={message.deletedAt ? undefined : invocationByReply.get(message.id)}
+                    quoteState={quoteStateOf(message)}
                     jump={jump}
                     share={share}
                     composer={composer}
@@ -415,6 +492,11 @@ export function MessageList({
                     openMachineIds={openMachineIds}
                     setOpenMachineIds={setOpenMachineIds}
                     openSenderMenu={openSenderMenu}
+                    openContextMenu={openContextMenu}
+                    traceAllowed={traceAllowed}
+                    canMentionAgents={canMentionAgents}
+                    guestName={guest ? username : undefined}
+                    revealRecap={revealRecap}
                     releaseBottomPin={scroll.releaseBottomPin}
                     locateMessageFromMarkdown={locateMessageFromMarkdown}
                     onRecordTodo={onRecordTodo}
@@ -470,6 +552,39 @@ export function MessageList({
                       name: invocation.agentName,
                     })
                   }
+                  onContextMenu={(event) => {
+                    if (isEditableTarget(event.target)) return;
+                    const first = [...batch]
+                      .map((item) => messageById.get(item.messageId))
+                      .filter((message): message is ChatMessage => Boolean(message))
+                      .sort((a, b) => a.seq - b.seq)[0];
+                    const live = batch.filter(canCancelInvocation);
+                    const stoppable =
+                      live.length > 0 && (!guest || guestCanStopTurn(invocation, batch, username));
+                    event.preventDefault();
+                    openContextMenu({
+                      ...contextMenuPoint(event),
+                      title: invocation.agentName,
+                      items: thinkingCardMenuItems({
+                        agentName: invocation.agentName,
+                        selection: selectedTextWithin(event.currentTarget),
+                        triggerSeq: first?.seq,
+                        jumpToTrigger: first
+                          ? () => {
+                              jumpToMessage(first.id);
+                              jump.flashOrigin({ invocationIds: batch.map((item) => item.id) });
+                            }
+                          : undefined,
+                        mention:
+                          canMentionAgents &&
+                          invocation.agentName.toLocaleLowerCase() !== username.toLocaleLowerCase()
+                            ? () => composer.appendMention(invocation.agentName)
+                            : undefined,
+                        copySelection: (text) => void actions.copyPlainText(text),
+                        stop: stoppable ? () => actions.cancelInvocation(live[0]!) : undefined,
+                      }),
+                    });
+                  }}
                   defaultCollapsed={
                     working.length > 3 && latestWorking?.invocation.id !== invocation.id
                   }
@@ -581,6 +696,8 @@ function MessageItem({
   loadedMessageIds,
   processCardOf,
   replyTarget,
+  replySource,
+  quoteState,
   jump,
   share,
   composer,
@@ -599,6 +716,11 @@ function MessageItem({
   openMachineIds,
   setOpenMachineIds,
   openSenderMenu,
+  openContextMenu,
+  traceAllowed,
+  canMentionAgents,
+  guestName,
+  revealRecap,
   releaseBottomPin,
   locateMessageFromMarkdown,
   onRecordTodo,
@@ -619,6 +741,9 @@ function MessageItem({
   loadedMessageIds: ReadonlySet<string>;
   processCardOf: ReadonlyMap<string, string>;
   replyTarget: ReplyTarget | undefined;
+  /** 产生这条回复的那次调用（有过程记录时右键能「看这一轮过程」） */
+  replySource: Invocation | undefined;
+  quoteState: QuoteState | undefined;
   jump: ReturnType<typeof useMessageJump>;
   share: ShareSelection;
   composer: ComposerState;
@@ -637,6 +762,12 @@ function MessageItem({
   openMachineIds: ReadonlySet<string>;
   setOpenMachineIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
   openSenderMenu: SenderMenuOpener;
+  openContextMenu: MenuOpener;
+  traceAllowed: boolean;
+  canMentionAgents: boolean;
+  /** 访客的名字：访客只能停全是自己发起的一轮 */
+  guestName: string | undefined;
+  revealRecap: (invocationId: string) => void;
   releaseBottomPin: () => void;
   locateMessageFromMarkdown: (target: { messageId: string; messageSeq: number }) => void;
   onRecordTodo?: ((message: ChatMessage) => Promise<void>) | undefined;
@@ -675,8 +806,109 @@ function MessageItem({
     extendAgentBudget,
     steerInvocation,
     preemptInvocation,
+    copyPlainText,
   } = actions;
   const bodyContent = messageBodyContent(message);
+  const self = message.senderName.toLocaleLowerCase() === username.toLocaleLowerCase();
+  /** 引用回复：引用 Agent 的话默认顺手 @ 它（访客不能 @ Agent 时不补） */
+  const quoteThis = (selection?: string) =>
+    composer.quoteMessage(
+      { ...message, content: bodyContent },
+      {
+        ...(selection ? { selection } : {}),
+        ...(message.senderType === "agent" && canMentionAgents && !self
+          ? { mention: message.senderName }
+          : {}),
+      },
+    );
+  /**
+   * 消息的右键菜单（也从操作条的「更多」按钮打开）：分享模式、已撤回的、点在输入框里的留给浏览器原生菜单。
+   * anchor 是「更多」按钮：菜单贴着按钮弹出
+   */
+  const openMessageMenu = (event: ReactMouseEvent<HTMLElement>, anchor?: HTMLElement) => {
+    if (shareMode || message.deletedAt || isEditableTarget(event.target)) return;
+    const article = event.currentTarget.closest<HTMLElement>("article.message");
+    if (!article) return;
+    event.preventDefault();
+    const selection = selectedTextWithin(article);
+    const own = invocationsByMessage.get(message.id) ?? [];
+    const online = (invocation: Invocation) =>
+      participants.some((p) => p.id === invocation.agentId && p.status !== "offline");
+    const cardInvocation = own.find((invocation) => processCardOf.has(invocation.id));
+    const replySteps = replySource ? traces.get(replySource.id) : undefined;
+    const point = anchor
+      ? (() => {
+          const rect = anchor.getBoundingClientRect();
+          return { x: rect.right, y: rect.bottom + 4, align: "end" as const };
+        })()
+      : contextMenuPoint(event);
+    openContextMenu({
+      ...point,
+      title: `#${message.seq} · ${message.senderName}`,
+      items: messageMenuItems({
+        seq: message.seq,
+        senderName: message.senderName,
+        selection,
+        target: anchor ? {} : menuTargetOf(event.target, article),
+        quote: quoteThis,
+        copyText: () => void copyMessageContent(message),
+        copySelection: (text) => void copyPlainText(text),
+        copySeq: () => void copySeqReference(message),
+        copyLink: () =>
+          void copyPlainText(`[#${message.seq}](#message/${message.id}/${message.seq})`),
+        copyValue: (value) => void copyPlainText(value),
+        mention:
+          !self && (message.senderType === "human" || canMentionAgents)
+            ? () => appendMention(message.senderName)
+            : undefined,
+        showProcess: !traceAllowed
+          ? undefined
+          : replySource && replySteps?.length
+            ? () => revealRecap(replySource.id)
+            : cardInvocation
+              ? () =>
+                  void jumpToProcess(processCardOf.get(cardInvocation.id)!, {
+                    invocationIds: [cardInvocation.id],
+                  })
+              : undefined,
+        viewChanges:
+          message.senderType === "agent" && canViewWorkspace && currentRoomWorkspace
+            ? () => openWorkspaceFor(message.senderName)
+            : undefined,
+        recordTodo: onRecordTodo ? () => void onRecordTodo(message) : undefined,
+        retries: own
+          .filter(
+            (invocation) =>
+              !isExtendableBlock(invocation) &&
+              canRetryInvocation(invocation, online(invocation)) &&
+              (invocation.blockReason !== "guest_approval" || isOwner),
+          )
+          .map((invocation) => ({
+            label: `${retryLabel(invocation)} @${invocation.agentName}`,
+            run: () => retryInvocation(invocation),
+          })),
+        stops: own
+          .filter(
+            (invocation) =>
+              canCancelInvocation(invocation) &&
+              (!guestName || guestCanStopTurn(invocation, invocations.values(), guestName)),
+          )
+          .map((invocation) => ({
+            label: t("停止 @{0}", { 0: invocation.agentName }),
+            run: () => cancelInvocation(invocation),
+          })),
+        recall: self
+          ? () => {
+              setRecallCandidateId(message.id);
+              // 确认条在操作条里：显示出来并把焦点放上去，键盘也能接着选
+              window.requestAnimationFrame(() =>
+                article.querySelector<HTMLButtonElement>(".message-recall-confirm button")?.focus(),
+              );
+            }
+          : undefined,
+      }),
+    });
+  };
   const replyLink = replyTarget && !shareMode && (
     <Tooltip
       content={
@@ -732,6 +964,7 @@ function MessageItem({
       onClick={
         shareMode && !message.deletedAt ? () => toggleMessageSelected(message.id) : undefined
       }
+      onContextMenu={openMessageMenu}
     >
       {grouped ? (
         <span className="hover-time" aria-hidden="true">
@@ -871,21 +1104,43 @@ function MessageItem({
                   {t("收起")}
                 </button>
               )}
-              <CollapsibleMessage
-                content={bodyContent}
-                enabled={message.senderType === "agent"}
-                storageKey={`superhive.message-expanded:${message.roomId}:${message.id}`}
-                expandOnLocate={pendingJumpId === message.id || highlightedMessageId === message.id}
-                forceExpanded={shareMode}
-                onToggle={releaseBottomPin}
-              >
-                <Suspense fallback={<p className="message-body-fallback">{bodyContent}</p>}>
-                  <MessageMarkdown
-                    content={bodyContent}
-                    onLocateMessage={locateMessageFromMarkdown}
-                  />
-                </Suspense>
-              </CollapsibleMessage>
+              {quoteState && (
+                <QuoteCard
+                  quote={quoteState}
+                  onOpen={() => {
+                    if (quoteState.loaded) jumpToMessage(quoteState.messageId);
+                    else
+                      void locateMessage({
+                        messageId: quoteState.messageId,
+                        messageSeq: quoteState.seq,
+                      });
+                    flashOrigin({ messageIds: [message.id] });
+                  }}
+                />
+              )}
+              {(quoteState?.body ?? bodyContent) && (
+                <CollapsibleMessage
+                  content={quoteState?.body ?? bodyContent}
+                  enabled={message.senderType === "agent"}
+                  storageKey={`superhive.message-expanded:${message.roomId}:${message.id}`}
+                  expandOnLocate={
+                    pendingJumpId === message.id || highlightedMessageId === message.id
+                  }
+                  forceExpanded={shareMode}
+                  onToggle={releaseBottomPin}
+                >
+                  <Suspense
+                    fallback={
+                      <p className="message-body-fallback">{quoteState?.body ?? bodyContent}</p>
+                    }
+                  >
+                    <MessageMarkdown
+                      content={quoteState?.body ?? bodyContent}
+                      onLocateMessage={locateMessageFromMarkdown}
+                    />
+                  </Suspense>
+                </CollapsibleMessage>
+              )}
             </div>
           )
         )}
@@ -1036,6 +1291,14 @@ function MessageItem({
           )}
           <IconButton
             size="sm"
+            label={t("引用回复 #{0}", { 0: message.seq })}
+            tooltip={t("引用")}
+            onClick={() => quoteThis()}
+          >
+            <Icon name="quote" size={13} />
+          </IconButton>
+          <IconButton
+            size="sm"
             label={t("复制消息原文")}
             tooltip={t("复制消息")}
             onClick={() => void copyMessageContent(message)}
@@ -1119,8 +1382,53 @@ function MessageItem({
               <Icon name="undo" size={13} />
             </IconButton>
           )}
+          {recallCandidateId !== message.id && (
+            // 右键菜单的键盘 / 触屏入口：和右键是同一份菜单
+            <IconButton
+              size="sm"
+              label={t("更多操作")}
+              tooltip={t("更多（也可以右键消息）")}
+              aria-haspopup="menu"
+              onClick={(event) => openMessageMenu(event, event.currentTarget)}
+            >
+              <Icon name="more" size={13} />
+            </IconButton>
+          )}
         </div>
       )}
     </article>
+  );
+}
+
+/** 消息里引用的原消息：点了跳回去并闪一下；原消息撤回了就只说不可见，不再露出摘录 */
+function QuoteCard({ quote, onOpen }: { quote: QuoteState; onOpen: () => void }) {
+  const head = (
+    <span className="message-quote-head">
+      <Icon name="quote" size={12} />
+      <span className="message-quote-seq">#{quote.seq}</span>
+      <strong>{quote.senderName}</strong>
+    </span>
+  );
+  if (quote.gone) {
+    return (
+      <div className="message-quote gone">
+        {head}
+        <span className="message-quote-excerpt">{t("原消息已不可见")}</span>
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="message-quote"
+      aria-label={t("跳到引用的原消息 #{0}（{1}）", { 0: quote.seq, 1: quote.senderName })}
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+    >
+      {head}
+      {quote.excerpt && <span className="message-quote-excerpt">{quote.excerpt}</span>}
+    </button>
   );
 }

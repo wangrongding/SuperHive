@@ -209,6 +209,46 @@ describe("HiveDatabase", () => {
     expect(second.message.content).toBe("hello");
   });
 
+  it("records a quote only for a live message in the same room and drops it on recall", () => {
+    const original = db.createMessage(agentA, {
+      content: "原回复",
+      clientMessageId: "q-1",
+    }).message;
+    const quoting = db.createMessage(human, {
+      content: "> #1 · agent-a\n> 原回复\n\n接着说",
+      clientMessageId: "q-2",
+      quotedMessageId: original.id,
+    }).message;
+    expect(quoting.quote).toEqual({
+      messageId: original.id,
+      seq: original.seq,
+      senderName: "agent-a",
+    });
+    expect(db.getMessage(quoting.id)?.quote).toEqual(quoting.quote);
+
+    // 别的房间的、已撤回的、不存在的：当作没引用，消息照常发出
+    const elsewhere = db.upsertParticipant({ roomId: "other", username: "Bob", type: "human" });
+    const foreign = db.createMessage(elsewhere, { content: "x", clientMessageId: "q-3" }).message;
+    const gone = db.createMessage(human, { content: "gone", clientMessageId: "q-4" }).message;
+    db.deleteMessage(human, gone.id);
+    for (const [index, quotedMessageId] of [
+      foreign.id,
+      gone.id,
+      "00000000-0000-4000-8000-000000000009",
+    ].entries()) {
+      const sent = db.createMessage(human, {
+        content: "hi",
+        clientMessageId: `q-skip-${index}`,
+        quotedMessageId,
+      });
+      expect(sent.created).toBe(true);
+      expect(sent.message.quote).toBeUndefined();
+    }
+
+    // 引用它的消息撤回后，引用关系一起清掉
+    expect(db.deleteMessage(human, quoting.id).quote).toBeUndefined();
+  });
+
   it("lets only the sender recall a message and purges its content", () => {
     const { message } = db.createMessage(human, {
       content: "@agent-a 密钥是 sk-secret",

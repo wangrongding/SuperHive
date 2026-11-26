@@ -7195,6 +7195,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             clientMessageId: event.clientMessageId,
             ...(event.replyToMessageId ? { replyToMessageId: event.replyToMessageId } : {}),
             ...(event.parentMessageId ? { parentMessageId: event.parentMessageId } : {}),
+            ...(event.quotedMessageId ? { quotedMessageId: event.quotedMessageId } : {}),
             ...(claimed
               ? {
                   attachments: claimed,
