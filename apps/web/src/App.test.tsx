@@ -2484,7 +2484,7 @@ describe("App mention autocomplete", () => {
       within(screen.getByRole("tablist", { name: "侧栏视图" }))
         .getAllByRole("tab")
         .map((tab) => tab.id),
-    ).toEqual(["side-tab-members", "side-tab-whiteboard", "side-tab-todos"]);
+    ).toEqual(["side-tab-members", "side-tab-whiteboard"]);
     await user.click(entry);
     expect(entry.getAttribute("aria-pressed")).toBe("true");
     const panel = screen.getByRole("dialog", { name: "产物" });
@@ -3437,6 +3437,19 @@ describe("App mention autocomplete", () => {
       updatedAt: now,
       completedAt: null,
     };
+    const waiting = {
+      id: "00000000-0000-4000-8000-0000000000c1",
+      roomId: "general",
+      messageId: "00000000-0000-4000-8000-0000000000c2",
+      agentId: "00000000-0000-4000-8000-0000000000c3",
+      agentName: "worker",
+      requesterName: self.username,
+      requesterType: "human" as const,
+      status: "waiting_human" as const,
+      attempts: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
     act(() =>
       socket.serverEvent({
         type: "room.snapshot",
@@ -3445,20 +3458,34 @@ describe("App mention autocomplete", () => {
         messages: [],
         latestSeq: 0,
         todos: [todo],
+        invocations: [waiting],
       }),
     );
-    const tab = screen.getByRole("tab", { name: /待办/ });
-    expect(within(tab).getByLabelText("1 件未完成")).toBeTruthy();
+    const tab = screen.getByRole("tab", { name: /进展/ });
+    expect(document.querySelector("#side-tab-todos")).toBeNull();
+    expect(within(tab).getByLabelText("未完成待办 1 件 · 需要你处理 1 件")).toBeTruthy();
+    expect(tab.textContent).toBe("进展2");
     await user.click(tab);
     expect(screen.getByText("Do later")).toBeTruthy();
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("tab", { name: /成员/ }).getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{ArrowRight}");
+    expect(tab.getAttribute("aria-selected")).toBe("true");
     act(() =>
       socket.serverEvent({
         type: "todo.updated",
         todo: { ...todo, completed: true, completedAt: now },
       }),
     );
-    expect(within(tab).getByLabelText("0 件未完成")).toBeTruthy();
+    expect(tab.textContent).toBe("进展1");
     expect(screen.getByText("已完成 (1)")).toBeTruthy();
+    act(() =>
+      socket.serverEvent({
+        type: "invocation.updated",
+        invocation: { ...waiting, status: "completed" },
+      }),
+    );
+    expect(tab.textContent).toBe("进展");
     act(() =>
       socket.serverEvent({
         type: "todo.updated",
@@ -3551,15 +3578,14 @@ describe("App mention autocomplete", () => {
     expect(tab.getAttribute("aria-selected")).toBe("false");
     await user.click(tab);
     expect(tab.getAttribute("aria-selected")).toBe("true");
-    // 白板阻塞留在「在做」里标「卡住了」；没有要人处理的事，标签数字显示在做的条数
-    expect(tab.textContent).toBe("进展2");
+    expect(tab.textContent).toBe("进展");
     const progress = within(panel).getByRole("tabpanel");
     expect(
       within(progress)
         .getAllByRole("heading")
-        .slice(0, 3)
+        .slice(0, 5)
         .map((heading) => heading.textContent),
-    ).toEqual(["等你处理", "在做2", "最近完成"]);
+    ).toEqual(["需要你处理", "待办", "进行中1", "已就绪1", "里程碑"]);
     expect(within(progress).getByText("做完待验收")).toBeTruthy();
     expect(within(progress).getByText("卡住了")).toBeTruthy();
     // 任务目录登记只在原文里
@@ -3603,7 +3629,7 @@ describe("App mention autocomplete", () => {
     expect(whiteboardApi.requests).toEqual([
       { action: "archive", entries: [{ id: ready.id, updatedAt: ready.updatedAt }] },
     ]);
-    expect(tab.textContent).toBe("进展2");
+    expect(tab.textContent).toBe("进展");
     await user.click(within(board).getByRole("button", { name: "历史归档" }));
     await waitFor(() => expect(within(board).getByText(ready.summary)).toBeTruthy());
     expect(within(board).queryByText(blockedEntry.summary)).toBeNull();
@@ -3706,7 +3732,6 @@ describe("App mention autocomplete", () => {
     act(() => {
       socket.serverEvent({
         type: "whiteboard.updated",
-        // 恢复后刚更新过：超过 1 天没更新的「在做」条目不计入标签数字
         entry: { ...current, updatedAt: new Date().toISOString() },
       });
       socket.serverEvent({ type: "whiteboard.removed", roomId: "general", entryId: deleted.id });
@@ -3717,7 +3742,7 @@ describe("App mention autocomplete", () => {
     expect(within(board).queryByText(restored.summary)).toBeNull();
     await user.click(within(board).getByRole("button", { name: "当前事项" }));
     expect(within(board).getByText(restored.summary)).toBeTruthy();
-    expect(tab.textContent).toBe("进展1");
+    expect(tab.textContent).toBe("进展");
   });
 
   it.each(["snapshot", "clear"])(

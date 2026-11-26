@@ -2427,6 +2427,7 @@ export class HiveDatabase {
       .sort(
         (first, second) =>
           Number(first.completed) - Number(second.completed) ||
+          (first.sortOrder ?? 0) - (second.sortOrder ?? 0) ||
           second.createdAt.localeCompare(first.createdAt),
       );
   }
@@ -2468,6 +2469,8 @@ export class HiveDatabase {
       assigneeName: assignee?.username ?? null,
       sourceMessageSeq: source?.seq ?? null,
       completed: false,
+      sortOrder:
+        Math.min(0, ...this.listTodos(creator.roomId).map((item) => item.sortOrder ?? 0)) - 1,
       createdAt: now,
       updatedAt: now,
       completedAt: null,
@@ -2476,6 +2479,30 @@ export class HiveDatabase {
       .prepare("INSERT INTO room_todos (id, room_id, data) VALUES (?, ?, ?)")
       .run(todo.id, todo.roomId, JSON.stringify(todo));
     return todo;
+  }
+
+  moveTodo(roomId: string, id: string, direction: "up" | "down"): Todo[] {
+    return this.db.transaction(() => {
+      const current = this.getTodo(roomId, id);
+      if (current.completed)
+        throw new HiveError("TODO_COMPLETED", serverText("error.todo.completed"));
+      const items = this.listTodos(roomId).filter((item) => !item.completed);
+      const index = items.findIndex((item) => item.id === id);
+      const next = index + (direction === "up" ? -1 : 1);
+      if (next < 0 || next >= items.length) return [];
+      [items[index], items[next]] = [items[next]!, items[index]!];
+      const statement = this.db.prepare(
+        "UPDATE room_todos SET data = ? WHERE room_id = ? AND id = ?",
+      );
+      const changed: Todo[] = [];
+      for (const [position, item] of items.entries()) {
+        if (item.sortOrder === position) continue;
+        const updated = { ...item, sortOrder: position, updatedAt: new Date().toISOString() };
+        statement.run(JSON.stringify(updated), roomId, item.id);
+        changed.push(updated);
+      }
+      return changed;
+    })();
   }
 
   updateTodo(roomId: string, id: string, input: TodoUpdate): Todo {

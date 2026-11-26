@@ -38,6 +38,9 @@
 .progress-section.done .progress-dot {
   background: var(--success);
 }
+.progress-section.ready .progress-dot {
+  background: var(--success);
+}
 
 /* 有事等你处理时整组标题醒目一些 */
 .progress-section.attention:not([data-empty]) h3 {

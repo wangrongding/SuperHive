@@ -33,7 +33,7 @@ import type {
 } from "@superhive/protocol";
 import { localizeServerPayload, serverError } from "./server-text";
 import { invocationStatusLabel } from "./invocations";
-import { activeCount, buildProgress } from "./progress";
+import { buildProgress } from "./progress";
 import { SchedulesDialog } from "./schedules";
 import { ArtifactsPanel, useArtifactCount } from "./artifacts";
 import { moveRoom } from "./room-reorder";
@@ -688,7 +688,6 @@ export function App({
       }),
     [currentRoomId, whiteboard, invocations, messages, progressNow],
   );
-  const doingCount = activeCount(progressGroups.doing);
 
   useEffect(() => {
     notificationPreferencesRef.current = {
@@ -1357,7 +1356,7 @@ export function App({
     try {
       await todosApi.add(todoFromMessage(message));
       if (currentRoomIdRef.current === message.roomId) {
-        setSidePanelTab("todos");
+        setSidePanelTab("whiteboard");
         setMobilePanel("members");
       }
     } catch (reason) {
@@ -2629,7 +2628,6 @@ export function App({
           currentRoomId={currentRoomId}
           dockedNewerNotice={dockedNewerNotice}
           dockedPreview={dockedPreview}
-          doingCount={doingCount}
           guest={guest}
           isLeadAgent={isLeadAgent}
           isOwner={isOwner}

@@ -6054,6 +6054,30 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   );
 
   app.post<{ Params: { roomId: string; todoId: string } }>(
+    "/api/rooms/:roomId/todos/:todoId/move",
+    async (request, reply) => {
+      if (!adminOnly(request, reply)) return reply;
+      const params = roomParamsSchema
+        .extend({ todoId: z.string().uuid() })
+        .safeParse(request.params);
+      const body = z.object({ direction: z.enum(["up", "down"]) }).safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply.code(400).send(errorText(serverText("error.request.invalid")));
+      try {
+        const todos = database.moveTodo(
+          params.data.roomId,
+          params.data.todoId,
+          body.data.direction,
+        );
+        for (const todo of todos) broadcast(todo.roomId, { type: "todo.updated", todo });
+        return { todos };
+      } catch (error) {
+        return todoError(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { roomId: string; todoId: string } }>(
     "/api/rooms/:roomId/todos/:todoId/handoff",
     async (request, reply) => {
       if (!adminOnly(request, reply)) return reply;

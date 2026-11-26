@@ -39,6 +39,8 @@ export function todoApi(
     update: (id: string, input: TodoUpdate) =>
       request("PATCH", `/${encodeURIComponent(id)}`, input),
     remove: (id: string) => request("DELETE", `/${encodeURIComponent(id)}`),
+    move: (id: string, direction: "up" | "down") =>
+      request("POST", `/${encodeURIComponent(id)}/move`, { direction }),
     handoff: (id: string, agentId: string, clientMessageId: string = createClientMessageId()) =>
       request("POST", `/${encodeURIComponent(id)}/handoff`, {
         username,

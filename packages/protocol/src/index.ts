@@ -690,6 +690,7 @@ export const todoSchema = todoInputSchema.extend({
   assigneeName: z.string().nullable(),
   sourceMessageSeq: z.number().int().positive().nullable(),
   completed: z.boolean(),
+  sortOrder: z.number().int().safe().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   completedAt: z.string().datetime().nullable(),

@@ -78,7 +78,24 @@ describe("progressHeadline", () => {
 });
 
 describe("buildProgress", () => {
-  it("sorts entries and human-waiting invocations into three groups", () => {
+  it("distinguishes queued and stopping tasks and excludes recalled processes", () => {
+    const groups = buildProgress({
+      roomId: "build",
+      entries: [],
+      messages: [],
+      invocations: [
+        invocation({ status: "queued" }),
+        invocation({ status: "cancelling" }),
+        invocation({ status: "running", messageRecalled: true }),
+      ],
+    });
+    expect(groups.doing.map((item) => item.title)).toEqual([
+      "helper 的任务正在排队",
+      "helper 的任务正在停止",
+    ]);
+  });
+
+  it("separates attention, running work, ready work and milestones", () => {
     const trigger = message({ seq: 10, senderType: "human", senderName: "rd" });
     const question = message({
       seq: 11,
@@ -125,9 +142,12 @@ describe("buildProgress", () => {
     ]);
     expect(groups.attention[0]!.target).toMatchObject({ messageId: question.id, messageSeq: 11 });
     expect(groups.doing.map((item) => [item.title, item.badge?.label])).toEqual([
+      ["helper 正在处理", undefined],
       ["在做 A", undefined],
-      ["B 做完了", "做完待验收"],
       ["C 卡住了", "卡住了"],
+    ]);
+    expect(groups.ready.map((item) => [item.title, item.badge?.label])).toEqual([
+      ["B 做完了", "做完待验收"],
     ]);
     expect(groups.done.map((item) => [item.title, item.badge?.label])).toEqual([
       ["D 合入了", "已合入"],
@@ -202,10 +222,10 @@ describe("stale doing items", () => {
     expect(groups.doing.map((item) => [item.title, !!item.stale])).toEqual([
       ["刚登记", false],
       ["刚好一天", false],
-      ["两天前做完", true],
       ["三天前的", true],
     ]);
     expect(groups.done[0]!.stale).toBeUndefined();
+    expect(groups.ready[0]!.stale).toBe(true);
     expect(activeCount(groups.doing)).toBe(2);
   });
 
@@ -216,7 +236,7 @@ describe("stale doing items", () => {
     } finally {
       vi.useRealTimers();
     }
-    const doing = screen.getByRole("region", { name: /在做/ });
+    const doing = screen.getByRole("region", { name: /进行中/ });
     expect(within(doing).getByText("2").className).toBe("progress-count");
     const stale = within(doing).getByText("三天前的").closest("li")!;
     expect(stale.dataset.stale).toBe("true");
@@ -224,9 +244,11 @@ describe("stale doing items", () => {
     expect(stale.querySelector<HTMLElement>(".progress-row")!.title).toContain(
       "超过 1 天没有更新，可能已经没人在做",
     );
-    expect(within(doing).getByText("两天前做完").closest("li")!.textContent).toContain(
-      "2 天没更新",
-    );
+    expect(
+      within(screen.getByRole("region", { name: /已就绪/ }))
+        .getByText("两天前做完")
+        .closest("li")!.textContent,
+    ).toContain("2 天没更新");
     const fresh = within(doing).getByText("刚登记").closest("li")!;
     expect(fresh.dataset.stale).toBeUndefined();
     expect(fresh.textContent).not.toContain("没更新");
@@ -235,6 +257,32 @@ describe("stale doing items", () => {
 
 describe("ProgressPanel", () => {
   afterEach(cleanup);
+
+  it("places to-dos between attention and running work in the same panel", () => {
+    const groups = buildProgress({ roomId: "build", entries: [], invocations: [], messages: [] });
+    render(
+      <ProgressPanel
+        groups={groups}
+        onLocate={vi.fn()}
+        board={null}
+        todos={<section aria-label="待办分区">future work</section>}
+      />,
+    );
+    expect(
+      screen
+        .getAllByRole("region")
+        .map(
+          (element) =>
+            element.getAttribute("aria-labelledby") ?? element.getAttribute("aria-label"),
+        ),
+    ).toEqual([
+      "progress-attention",
+      "待办分区",
+      "progress-doing",
+      "progress-ready",
+      "progress-done",
+    ]);
+  });
 
   it("jumps to the chat on click and keeps the raw board folded", async () => {
     const user = userEvent.setup();
@@ -272,7 +320,7 @@ describe("ProgressPanel", () => {
       messages: [],
     });
     render(<ProgressPanel groups={groups} onLocate={() => undefined} board={null} />);
-    const done = screen.getByRole("region", { name: /最近完成/ });
+    const done = screen.getByRole("region", { name: /里程碑/ });
     expect(within(done).getAllByRole("listitem")).toHaveLength(8);
     expect(within(done).queryByText("完成 0")).toBeNull();
     await user.click(within(done).getByRole("button", { name: "显示全部 10 条" }));

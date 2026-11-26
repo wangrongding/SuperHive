@@ -51,7 +51,6 @@ export function SidePanel({
   currentRoomId,
   dockedNewerNotice,
   dockedPreview,
-  doingCount,
   guest,
   isLeadAgent,
   isOwner,
@@ -107,7 +106,6 @@ export function SidePanel({
   dockedPreview:
     | { roomId: string; attachment: Attachment; senderId: string; seq: number; popped?: boolean }
     | undefined;
-  doingCount: number;
   guest: GuestAccess | undefined;
   isLeadAgent: (participant: Participant) => boolean;
   isOwner: boolean;
@@ -147,6 +145,11 @@ export function SidePanel({
 }) {
   // 每种运行时的模型列表：成员副标题把模型 id 换成名称，设置是「运行时默认」时找出默认的那个
   const runtimeModels = useRuntimeModels(local.canManage ? local.agents : [], local.models);
+  const progressCount = todoCount + progressGroups.attention.length;
+  const progressHint = t("未完成待办 {0} 件 · 需要你处理 {1} 件", {
+    0: todoCount,
+    1: progressGroups.attention.length,
+  });
   const offlineGroups = [
     {
       label: "离线 · {0}",
@@ -222,7 +225,7 @@ export function SidePanel({
                   </span>
                 </button>
               </Tooltip>
-              <Tooltip content={t("进展")}>
+              <Tooltip content={progressHint}>
                 <button
                   type="button"
                   role="tab"
@@ -235,22 +238,13 @@ export function SidePanel({
                 >
                   <Icon name="board" size={15} />
                   <span className="side-tab-label">{t("进展")}</span>
-                  {progressGroups.attention.length > 0 ? (
+                  {progressCount > 0 && (
                     <span
-                      className="side-tab-count warning"
-                      aria-label={t("{0} 件等你处理", { 0: progressGroups.attention.length })}
+                      className={`side-tab-count${progressGroups.attention.length ? " warning" : ""}`}
+                      aria-label={progressHint}
                     >
-                      {progressGroups.attention.length}
+                      {progressCount}
                     </span>
-                  ) : (
-                    doingCount > 0 && (
-                      <span
-                        className="side-tab-count"
-                        aria-label={t("{0} 件在做", { 0: doingCount })}
-                      >
-                        {doingCount}
-                      </span>
-                    )
                   )}
                 </button>
               </Tooltip>
@@ -271,24 +265,6 @@ export function SidePanel({
                   </button>
                 </Tooltip>
               )}
-              <Tooltip content={t("待办")}>
-                <button
-                  type="button"
-                  role="tab"
-                  id="side-tab-todos"
-                  aria-selected={sidePanelTab === "todos"}
-                  aria-controls="side-panel-todos"
-                  tabIndex={sidePanelTab === "todos" ? 0 : -1}
-                  className={sidePanelTab === "todos" ? "active" : ""}
-                  onClick={() => setSidePanelTab("todos")}
-                >
-                  <Icon name="check" size={15} />
-                  <span className="side-tab-label">{t("待办")}</span>
-                  <span className="side-tab-count" aria-label={t("{0} 件未完成", { 0: todoCount })}>
-                    {todoCount}
-                  </span>
-                </button>
-              </Tooltip>
             </div>
             <IconButton
               ref={membersCloseRef}
@@ -308,16 +284,6 @@ export function SidePanel({
             >
               {pluginPanel}
             </div>
-          ) : sidePanelTab === "todos" ? (
-            <div
-              className="whiteboard-scroll"
-              role="tabpanel"
-              id="side-panel-todos"
-              aria-labelledby="side-tab-todos"
-              tabIndex={0}
-            >
-              {todoPanel}
-            </div>
           ) : sidePanelTab === "whiteboard" ? (
             <div
               className="whiteboard-scroll"
@@ -330,6 +296,7 @@ export function SidePanel({
                 key={currentRoomId}
                 groups={progressGroups}
                 onLocate={locateProgress}
+                todos={todoPanel}
                 board={
                   <WhiteboardPanel
                     entries={whiteboard}

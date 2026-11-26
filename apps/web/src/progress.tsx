@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import {
   isTaskDirectoryEntry,
   type ChatMessage,
@@ -22,7 +22,7 @@ import { Button } from "./button";
  * 这里只挑人关心的三件事，每条一句话：等你处理、在做、最近完成；点一条跳回聊天里对应的那段。
  */
 
-export type ProgressGroup = "attention" | "doing" | "done";
+export type ProgressGroup = "attention" | "doing" | "ready" | "done";
 
 /** 跳回聊天的位置：有消息 ID 按 ID 找，只知道序号（摘要里写的 #1234）按序号找 */
 export type ProgressTarget = { messageId?: string; messageSeq?: number; invocation?: Invocation };
@@ -125,11 +125,39 @@ export function buildProgress({
   messages: readonly ChatMessage[];
   now?: number;
 }): Record<ProgressGroup, ProgressItem[]> {
-  const groups: Record<ProgressGroup, ProgressItem[]> = { attention: [], doing: [], done: [] };
+  const groups: Record<ProgressGroup, ProgressItem[]> = {
+    attention: [],
+    doing: [],
+    ready: [],
+    done: [],
+  };
   for (const invocation of invocations) {
     if (invocation.roomId !== roomId) continue;
     const kind = attentionKind(invocation);
-    if (!kind || !humanKinds.includes(kind)) continue;
+    if (!kind || !humanKinds.includes(kind)) {
+      if (
+        !invocation.messageRecalled &&
+        ["queued", "running", "cancelling"].includes(invocation.status)
+      ) {
+        groups.doing.push({
+          id: `invocation:${invocation.id}`,
+          group: "doing",
+          title: t(
+            invocation.status === "queued"
+              ? "{0} 的任务正在排队"
+              : invocation.status === "cancelling"
+                ? "{0} 的任务正在停止"
+                : "{0} 正在处理",
+            { 0: invocation.agentName },
+          ),
+          detail: invocation.detail ?? "",
+          who: invocation.agentName,
+          at: invocation.updatedAt,
+          target: { messageId: invocation.messageId, invocation },
+        });
+      }
+      continue;
+    }
     const question = kind === "question" ? questionOf(invocation, messages) : undefined;
     groups.attention.push({
       id: `invocation:${invocation.id}`,
@@ -167,9 +195,9 @@ export function buildProgress({
         groups.doing.push({ ...base, group: "doing", ...(stale ? { stale } : {}) });
         break;
       case "ready":
-        groups.doing.push({
+        groups.ready.push({
           ...base,
-          group: "doing",
+          group: "ready",
           badge: { label: t("做完待验收"), tone: "success" },
           ...(stale ? { stale } : {}),
         });
@@ -186,6 +214,10 @@ export function buildProgress({
   // 等你处理：等得最久的在前；在做、最近完成：最近有动静的在前，在做里过期的统一排最后
   groups.attention.sort((a, b) => a.at.localeCompare(b.at));
   groups.doing.sort((a, b) => Number(!!a.stale) - Number(!!b.stale) || b.at.localeCompare(a.at));
+  groups.ready.sort(
+    (first, second) =>
+      Number(!!first.stale) - Number(!!second.stale) || second.at.localeCompare(first.at),
+  );
   groups.done.sort((a, b) => b.at.localeCompare(a.at));
   return groups;
 }
@@ -243,11 +275,13 @@ export function ProgressPanel({
   groups,
   onLocate,
   board,
+  todos,
 }: {
   groups: Record<ProgressGroup, ProgressItem[]>;
   onLocate: (target: ProgressTarget) => void;
   /** 折叠在最下面的 Agent 白板原文 */
   board: ReactNode;
+  todos?: ReactNode;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [showAllDone, setShowAllDone] = useState(false);
@@ -256,9 +290,10 @@ export function ProgressPanel({
     return () => window.clearInterval(timer);
   }, []);
   const sections: Array<{ group: ProgressGroup; label: string; empty: string }> = [
-    { group: "attention", label: t("等你处理"), empty: t("没有要你处理的事") },
-    { group: "doing", label: t("在做"), empty: t("现在没有进行中的工作") },
-    { group: "done", label: t("最近完成"), empty: t("最近几天没有完成的事") },
+    { group: "attention", label: t("需要你处理"), empty: t("没有要你处理的事") },
+    { group: "doing", label: t("进行中"), empty: t("现在没有进行中的工作") },
+    { group: "ready", label: t("已就绪"), empty: t("还没有待验收的工作") },
+    { group: "done", label: t("里程碑"), empty: t("最近几天没有完成的事") },
   ];
   return (
     <div className="progress">
@@ -268,37 +303,39 @@ export function ProgressPanel({
         const count = activeCount(items);
         const headingId = `progress-${group}`;
         return (
-          <section
-            key={group}
-            className={`progress-section ${group}`}
-            aria-labelledby={headingId}
-            data-empty={items.length === 0 || undefined}
-          >
-            <h3 id={headingId}>
-              <span className="progress-dot" aria-hidden="true" />
-              {label}
-              {count > 0 && <span className="progress-count">{count}</span>}
-            </h3>
-            {items.length === 0 ? (
-              <p className="progress-empty">{empty}</p>
-            ) : (
-              <ul>
-                {visible.map((item) => (
-                  <ProgressRow key={item.id} item={item} now={now} onLocate={onLocate} />
-                ))}
-              </ul>
-            )}
-            {group === "done" && items.length > DONE_PREVIEW && (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="progress-more"
-                onClick={() => setShowAllDone((value) => !value)}
-              >
-                {showAllDone ? t("收起") : t("显示全部 {0} 条", { 0: items.length })}
-              </Button>
-            )}
-          </section>
+          <Fragment key={group}>
+            <section
+              className={`progress-section ${group}`}
+              aria-labelledby={headingId}
+              data-empty={items.length === 0 || undefined}
+            >
+              <h3 id={headingId}>
+                <span className="progress-dot" aria-hidden="true" />
+                {label}
+                {count > 0 && <span className="progress-count">{count}</span>}
+              </h3>
+              {items.length === 0 ? (
+                <p className="progress-empty">{empty}</p>
+              ) : (
+                <ul>
+                  {visible.map((item) => (
+                    <ProgressRow key={item.id} item={item} now={now} onLocate={onLocate} />
+                  ))}
+                </ul>
+              )}
+              {group === "done" && items.length > DONE_PREVIEW && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="progress-more"
+                  onClick={() => setShowAllDone((value) => !value)}
+                >
+                  {showAllDone ? t("收起") : t("显示全部 {0} 条", { 0: items.length })}
+                </Button>
+              )}
+            </section>
+            {group === "attention" && todos}
+          </Fragment>
         );
       })}
       <details className="progress-board">

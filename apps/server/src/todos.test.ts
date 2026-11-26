@@ -83,10 +83,13 @@ describe("room to-dos", () => {
       expect(db.updateTodo("general", todo.id, { completed: true }).completedAt).toBeTruthy();
       expect(db.updateTodo("general", todo.id, { completed: false }).completedAt).toBeNull();
       expect(() => db.getTodo("other", todo.id)).toThrow();
+      const second = db.addTodo(human, todoInputSchema.parse({ title: "second" }));
+      expect(db.moveTodo("general", todo.id, "up")).toHaveLength(2);
       db.close();
       db = new HiveDatabase(filename);
-      expect(db.listTodos("general")).toHaveLength(1);
+      expect(db.listTodos("general").map((item) => item.id)).toEqual([todo.id, second.id]);
       db.removeTodo("general", todo.id);
+      db.removeTodo("general", second.id);
       expect(db.listTodos("general")).toEqual([]);
     } finally {
       db.close();
@@ -138,6 +141,42 @@ describe("room to-dos", () => {
         })
       ).statusCode,
     ).toBe(404);
+  });
+
+  it("moves unfinished items atomically, broadcasts their order and rejects invalid moves", async () => {
+    const { app, add, owner } = await start();
+    const first = await add({ title: "first" });
+    const second = await add({ title: "second" });
+    const third = await add({ title: "third" });
+    const move = (id: string, direction: string, roomId = "general") =>
+      app.inject({
+        method: "POST",
+        url: `/api/rooms/${roomId}/todos/${id}/move`,
+        headers: OWNER,
+        payload: { direction },
+      });
+    const response = await move(first.id, "up");
+    expect(response.statusCode).toBe(200);
+    expect(
+      (await app.inject({ url: "/api/rooms/general/todos", headers: OWNER }))
+        .json()
+        .todos.map((item: Todo) => item.id),
+    ).toEqual([third.id, first.id, second.id]);
+    const update = await owner.peer.next(
+      (event) =>
+        event.type === "todo.updated" && event.todo.id === first.id && event.todo.sortOrder === 1,
+    );
+    expect(update.type).toBe("todo.updated");
+    expect((await move(third.id, "up")).json().todos).toEqual([]);
+    expect((await move(first.id, "sideways")).statusCode).toBe(400);
+    expect((await move(first.id, "up", "other")).statusCode).toBe(404);
+    await app.inject({
+      method: "PATCH",
+      url: `/api/rooms/general/todos/${first.id}`,
+      headers: OWNER,
+      payload: { completed: true },
+    });
+    expect((await move(first.id, "up")).statusCode).toBe(409);
   });
 
   it("validates limits, room-bound assignees, source messages and creator identity", async () => {
@@ -196,6 +235,16 @@ describe("room to-dos", () => {
     const headers = { authorization: `Bearer ${redeemed.token}` };
     expect((await app.inject({ url: "/api/rooms/general/todos", headers })).statusCode).toBe(200);
     expect((await app.inject({ url: "/api/rooms/other/todos", headers })).statusCode).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/rooms/general/todos/${todo.id}/move`,
+          headers,
+          payload: { direction: "up" },
+        })
+      ).statusCode,
+    ).toBe(403);
     for (const method of ["POST", "PATCH", "DELETE"] as const) {
       expect(
         (

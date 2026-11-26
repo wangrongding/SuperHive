@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   todoInputSchema,
   type Todo,
@@ -44,9 +45,68 @@ const actions = () => ({
   update: vi.fn().mockResolvedValue(undefined),
   remove: vi.fn().mockResolvedValue(undefined),
   handoff: vi.fn().mockResolvedValue(undefined),
+  move: vi.fn().mockResolvedValue(undefined),
 });
 
 describe("to-do panel", () => {
+  it("uses persisted order and keeps keyboard focus when a row moves", async () => {
+    const user = userEvent.setup();
+    const api = actions();
+    const first = { ...todo, id: "first", title: "First", sortOrder: 0 };
+    const second = { ...todo, id: "second", title: "Second", sortOrder: 1 };
+    const props = { members: [agent], canManage: true, actions: api, onLocate: vi.fn() };
+    const { container, rerender } = render(<TodoPanel {...props} todos={[second, first]} />);
+    expect(
+      [...container.querySelectorAll(".todo-title")].map((element) => element.textContent),
+    ).toEqual(["First", "Second"]);
+    const button = screen.getByRole("button", { name: "上移待办：Second" });
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(api.move).toHaveBeenCalledWith("second", "up");
+    rerender(
+      <TodoPanel
+        {...props}
+        todos={[
+          { ...first, sortOrder: 1 },
+          { ...second, sortOrder: 0 },
+        ]}
+      />,
+    );
+    expect(
+      [...container.querySelectorAll(".todo-title")].map((element) => element.textContent),
+    ).toEqual(["Second", "First"]);
+    expect(document.activeElement).toBe(button);
+    expect(button.hasAttribute("disabled")).toBe(true);
+    rerender(<TodoPanel {...props} canManage={false} todos={[first, second]} />);
+    expect(screen.queryByRole("button", { name: /上移待办/ })).toBeNull();
+  });
+
+  it("reuses the edit handoff identity after an uncertain dispatch and does not dispatch metadata edits", async () => {
+    const api = actions();
+    api.handoff.mockRejectedValueOnce(new Error("network"));
+    const props = { members: [agent], canManage: true, actions: api, onLocate: vi.fn() };
+    const { rerender } = render(<TodoPanel {...props} todos={[todo]} />);
+    fireEvent.click(screen.getByLabelText("编辑待办"));
+    fireEvent.change(screen.getByLabelText("负责人"), { target: { value: "agent" } });
+    fireEvent.click(screen.getByText("保存并派给 Agent"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("network"));
+    const identity = api.handoff.mock.calls[0]?.[2];
+    rerender(
+      <TodoPanel {...props} todos={[{ ...todo, assigneeId: "agent", assigneeName: "worker" }]} />,
+    );
+    fireEvent.click(screen.getByText("保存并派给 Agent"));
+    await waitFor(() => expect(api.handoff).toHaveBeenCalledTimes(2));
+    expect(api.handoff.mock.calls[1]?.[2]).toBe(identity);
+    await waitFor(() => expect(screen.queryByText("保存并派给 Agent")).toBeNull());
+    fireEvent.click(screen.getByLabelText("编辑待办"));
+    fireEvent.change(screen.getByLabelText("待办标题", { selector: ".todo-edit input" }), {
+      target: { value: "Only rename" },
+    });
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => expect(screen.queryByText("保存")).toBeNull());
+    expect(api.handoff).toHaveBeenCalledTimes(2);
+  });
+
   it("quick-adds trimmed titles and clears the input only after success", async () => {
     const api = actions();
     render(<TodoPanel todos={[]} members={[agent]} canManage actions={api} onLocate={vi.fn()} />);
@@ -77,15 +137,16 @@ describe("to-do panel", () => {
       target: { value: "Updated" },
     });
     fireEvent.change(screen.getByLabelText("负责人"), { target: { value: "agent" } });
-    fireEvent.click(screen.getByText("保存"));
+    fireEvent.click(screen.getByText("保存并派给 Agent"));
     await waitFor(() =>
       expect(api.update).toHaveBeenCalledWith("a", {
         title: "Updated",
         notes: "Check all paths",
-        assigneeId: "agent",
+        assigneeId: null,
       }),
     );
-    await waitFor(() => expect(screen.queryByText("保存")).toBeNull());
+    await waitFor(() => expect(api.handoff).toHaveBeenCalledWith("a", "agent", expect.any(String)));
+    await waitFor(() => expect(screen.queryByText("保存并派给 Agent")).toBeNull());
     fireEvent.click(screen.getByText("删除"));
     expect(api.remove).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("确认删除"));
@@ -169,5 +230,10 @@ describe("to-do API", () => {
     });
     await api.remove("todo");
     expect(fetcher.mock.calls[1]?.[1].headers["Content-Type"]).toBeUndefined();
+    await api.move("todo", "up");
+    expect(fetcher.mock.calls[2]?.[0]).toBe(
+      "http://localhost/api/rooms/some%20room/todos/todo/move",
+    );
+    expect(JSON.parse(fetcher.mock.calls[2]?.[1].body)).toEqual({ direction: "up" });
   });
 });

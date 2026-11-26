@@ -248,6 +248,7 @@ POST /api/rooms/:room/todos         添加待办（成员权限）
 PATCH /api/rooms/:room/todos/:id    修改 / 完成待办
 DELETE /api/rooms/:room/todos/:id   删除待办
 POST /api/rooms/:room/todos/:id/handoff  以人的身份交给 Agent
+POST /api/rooms/:room/todos/:id/move  上下移动未完成待办
 POST /api/rooms/:room/whiteboard/archive  房主批量归档
 POST /api/rooms/:room/whiteboard/restore  房主批量恢复
 POST /api/rooms/:room/attachments   上传附件（multipart/form-data，单个文件字段）

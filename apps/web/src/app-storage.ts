@@ -36,8 +36,8 @@ export type ThreadWidth = "standard" | "wide" | "full";
 export type MessageSize = "small" | "standard" | "large";
 export type MobilePanel = "members" | "rooms";
 /** plugins 只在当前房间有可用插件面板时出现 */
-export type SidePanelTab = "members" | "whiteboard" | "plugins" | "todos";
-export const sidePanelTabs: SidePanelTab[] = ["members", "whiteboard", "todos"];
+export type SidePanelTab = "members" | "whiteboard" | "plugins";
+export const sidePanelTabs: SidePanelTab[] = ["members", "whiteboard"];
 export const messageNotificationModes = ["off", "mentions", "all"] as const;
 
 export const messageNotificationOptions: Array<{
