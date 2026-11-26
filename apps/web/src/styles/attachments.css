@@ -426,16 +426,17 @@
   z-index: 1000;
   display: grid;
   place-items: center;
-  padding: 32px;
+  padding: 16px;
   background: rgb(0 0 0 / 0.55);
   overscroll-behavior: contain;
 }
 
+/* 弹窗尽量大：长文档、宽表格、代码都要地方，正文本身另有最大宽度（见 doc-markdown.css） */
 .file-preview {
   display: flex;
-  width: min(960px, 100%);
-  height: min(86vh, 100%);
-  height: min(86dvh, 100%);
+  width: min(1200px, 94vw, 100%);
+  height: min(92vh, 1000px, 100%);
+  height: min(92dvh, 1000px, 100%);
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
