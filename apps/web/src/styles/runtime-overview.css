@@ -116,11 +116,6 @@
   cursor: not-allowed;
 }
 
-.runtime-overview-toggle small {
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
-}
-
 .runtime-overview-cell.unsupported,
 .runtime-overview-na {
   background: var(--bg-subtle);

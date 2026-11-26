@@ -357,7 +357,17 @@ function OverviewRow({
             {unsupported ? (
               <span className="runtime-overview-na">{t("不支持")}</span>
             ) : (
-              <label className="runtime-overview-toggle">
+              <label
+                className="runtime-overview-toggle"
+                title={
+                  reason ??
+                  (entry
+                    ? entry.enabled
+                      ? t("已启用")
+                      : t("已停用，配置还在")
+                    : t("还没有，勾上会从别的 CLI 复制过来"))
+                }
+              >
                 <input
                   type="checkbox"
                   ref={(element) => {
@@ -372,7 +382,6 @@ function OverviewRow({
                     else void apply(info.provider, action);
                   }}
                 />
-                {entry && !entry.enabled && <small>{t("已停用")}</small>}
               </label>
             )}
             {reason && <span className="sr-only">{reason}</span>}

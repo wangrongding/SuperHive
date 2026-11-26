@@ -2410,5 +2410,7 @@
   "已经有叫 {0} 的 MCP 了，在表格里勾选要加到哪些 CLI。": "An MCP server named {0} already exists. Check the CLIs to add it to in the table.",
   "会写进勾选的 CLI 的全局配置（原文件先备份），终端里的这些 CLI 也一起变。": "This writes to the global config of the checked CLIs (original files are backed up first), so those CLIs in your terminal change too.",
   "MCP {0} · 技能 {1}": "MCP {0} · Skills {1}",
-  "管理这台电脑上各 CLI 的全局 MCP 和技能": "Manage the global MCP servers and skills of the CLIs on this computer"
+  "管理这台电脑上各 CLI 的全局 MCP 和技能": "Manage the global MCP servers and skills of the CLIs on this computer",
+  "已停用，配置还在": "Disabled; config is kept",
+  "还没有，勾上会从别的 CLI 复制过来": "Not installed; check to copy it from another CLI"
 }
