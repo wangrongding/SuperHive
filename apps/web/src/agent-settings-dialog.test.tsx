@@ -2,12 +2,14 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type {
   LocalAgent,
   LocalAgentMcpResponse,
   LocalAgentModelsResponse,
 } from "@superhive/protocol";
-import { AgentSettingsDialog, formatTokens } from "./agent-settings-dialog";
+import { AgentSettingsDialog, McpChecklist, formatTokens } from "./agent-settings-dialog";
+import { setLocalePreference, t, type Locale } from "./i18n";
 
 const agent = {
   id: "00000000-0000-4000-8000-0000000000e1",
@@ -61,7 +63,102 @@ const modelList: LocalAgentModelsResponse = {
 };
 
 describe("AgentSettingsDialog", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    setLocalePreference("zh-CN");
+  });
+
+  it.each<Locale>(["zh-CN", "en"])(
+    "keeps grouped fields and header controls labelled and keyboard usable in %s",
+    async (locale) => {
+      setLocalePreference(locale);
+      const user = userEvent.setup();
+      const updateSettings = vi.fn(async (_id: string, settings: Partial<LocalAgent>) => ({
+        ...agent,
+        ...settings,
+      }));
+      render(
+        <AgentSettingsDialog
+          agent={agent}
+          local={{
+            mcpServers: async () => listed,
+            updateSettings,
+            act: async () => undefined,
+            canManage: true,
+            logs: async () => [],
+            remove: async () => undefined,
+            models: async () => ({ ...modelList, efforts: ["low", "high"] }),
+          }}
+          onClose={() => undefined}
+        />,
+      );
+      const dialog = screen.getByRole("dialog", {
+        name: t("{0} 的设置", { 0: agent.name }),
+      });
+      const header = dialog.querySelector("header")!;
+      expect(within(header).getByText(new RegExp(t("运行中")))).toBeTruthy();
+      for (const name of [t("重启"), t("立即重启"), t("停止"), t("日志")]) {
+        expect(within(header).getByRole("button", { name })).toBeTruthy();
+      }
+
+      const model = await screen.findByRole("combobox", { name: t("模型") });
+      const effort = await screen.findByRole("combobox", { name: t("思考强度") });
+      expect(model.closest(".agent-settings-fields")).toBe(
+        effort.closest(".agent-settings-fields"),
+      );
+      const window = screen.getByRole("combobox", { name: t("自动压缩") });
+      const cache = screen.getByRole("combobox", { name: t("缓存时长") });
+      expect(window.closest(".agent-settings-fields")).toBe(
+        cache.closest(".agent-settings-fields"),
+      );
+
+      effort.focus();
+      await user.keyboard("{Enter}{End}{Enter}");
+      await waitFor(() =>
+        expect(updateSettings).toHaveBeenCalledWith(agent.id, { effort: "high" }),
+      );
+      const steer = screen.getByRole("checkbox", { name: new RegExp(t("人发的消息自动引导")) });
+      steer.focus();
+      await user.keyboard(" ");
+      await waitFor(() =>
+        expect(updateSettings).toHaveBeenCalledWith(agent.id, { autoSteer: true }),
+      );
+      const mcp = await screen.findByRole("checkbox", { name: /chrome-devtools/ });
+      expect(mcp.closest("label")?.textContent).toContain(t("全局"));
+      expect(mcp.closest("label")?.textContent).toContain("token");
+      mcp.focus();
+      await user.keyboard(" ");
+      await waitFor(() =>
+        expect(updateSettings).toHaveBeenCalledWith(agent.id, {
+          mcpDisabled: ["chrome-devtools"],
+        }),
+      );
+    },
+  );
+
+  it("preserves the shared MCP checklist's full description and labels outside the dialog", () => {
+    const onToggle = vi.fn();
+    render(
+      <McpChecklist
+        data={listed}
+        failed={false}
+        disabled={new Set()}
+        measuring={false}
+        busy={false}
+        onToggle={onToggle}
+      />,
+    );
+    const checkbox = screen.getByRole("checkbox", { name: /rea/ });
+    expect(checkbox.closest("label")?.textContent).toContain(
+      "全局 · stdio · 207 个工具 · 约 35 万 token",
+    );
+    fireEvent.click(checkbox);
+    expect(onToggle).toHaveBeenCalledWith("rea");
+    expect(screen.getByRole("checkbox", { name: /figma.*插件提供，不能在这里开关/ })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: /figma/ }).closest("label")?.textContent).toContain(
+      "插件 · http · 插件提供，不能在这里开关",
+    );
+  });
 
   it("lists MCP sizes, estimates the start cost and saves an unchecked server right away", async () => {
     const mcpServers = vi.fn(async () => listed);

@@ -130,85 +130,93 @@ export function ClaudeContextSettings({
   return (
     <section className="agent-model agent-context" aria-labelledby="agent-context-title">
       <h3 id="agent-context-title">{t("上下文与缓存")}</h3>
-      <h4>{t("自动压缩")}</h4>
-      <Select
-        aria-label={t("自动压缩")}
-        value={choice}
-        options={windowOptions}
-        disabled={disabled}
-        onChange={(next) => {
-          setChoice(next);
-          // 选「自定义…」先等人填数字，填好了（回车或离开输入框）再存
-          if (next === CUSTOM) return;
-          commit(next === "auto" ? "auto" : Number(next), ttl);
-        }}
-      />
-      {choice === CUSTOM && (
-        <label className="agent-context-custom">
-          <input
-            className="model-picker-input"
-            type="number"
-            inputMode="numeric"
-            min={CLAUDE_COMPACT_WINDOW_MIN}
-            max={CLAUDE_COMPACT_WINDOW_MAX}
-            step={10_000}
-            value={custom}
+      <div className="agent-settings-fields">
+        <div className="agent-settings-field">
+          <h4>{t("自动压缩")}</h4>
+          <Select
+            aria-label={t("自动压缩")}
+            value={choice}
+            options={windowOptions}
             disabled={disabled}
-            aria-label={t("自定义压缩阈值（token）")}
-            aria-invalid={!customValid}
-            onChange={(event) => setCustom(event.target.value)}
-            onBlur={() => {
-              const tokens = parseCustom(custom);
-              if (tokens !== undefined) commit(tokens, ttl);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              const tokens = parseCustom(custom);
-              if (tokens !== undefined) commit(tokens, ttl);
+            onChange={(next) => {
+              setChoice(next);
+              // 选「自定义…」先等人填数字，填好了（回车或离开输入框）再存
+              if (next === CUSTOM) return;
+              commit(next === "auto" ? "auto" : Number(next), ttl);
             }}
           />
-          <span>token</span>
-        </label>
-      )}
-      <p
-        className={choice === CUSTOM && !customValid ? "agent-mcp-hint warning" : "agent-mcp-hint"}
-      >
-        {choice === CUSTOM && !customValid
-          ? t("填 {0}～{1} 之间的整数。", {
-              0: CLAUDE_COMPACT_WINDOW_MIN.toLocaleString(),
-              1: CLAUDE_COMPACT_WINDOW_MAX.toLocaleString(),
-            })
-          : t(
-              "对话超过这个大小时，Claude 会把前面的内容压成摘要：每轮的速度和费用更稳定，但很早以前的细节只剩摘要。所选模型的上下文比这个小时，按模型上限，接近上限时压缩。",
-            )}
-      </p>
-      <h4>{t("缓存时长")}</h4>
-      <Select
-        aria-label={t("缓存时长")}
-        value={ttl}
-        options={ttlOptions}
-        disabled={disabled}
-        onChange={(next) => {
-          setTtl(next);
-          // 自定义阈值还没填对：这次只存缓存时长
-          commit(choice === CUSTOM ? parseCustom(custom) : undefined, next);
-        }}
-      />
-      {ttl === "" && lead && (
-        <p className="agent-mcp-hint" role="note">
-          {t(
-            "它是本房间的主 Agent，两轮之间常隔 5 分钟以上（等子任务回执、等人回复），所以默认按 1 小时缓存，进程也常驻 55 分钟。不再是主 Agent 后，下一轮起交回 Claude Code 自己选。",
+          {choice === CUSTOM && (
+            <label className="agent-context-custom">
+              <input
+                className="model-picker-input"
+                type="number"
+                inputMode="numeric"
+                min={CLAUDE_COMPACT_WINDOW_MIN}
+                max={CLAUDE_COMPACT_WINDOW_MAX}
+                step={10_000}
+                value={custom}
+                disabled={disabled}
+                aria-label={t("自定义压缩阈值（token）")}
+                aria-invalid={!customValid}
+                onChange={(event) => setCustom(event.target.value)}
+                onBlur={() => {
+                  const tokens = parseCustom(custom);
+                  if (tokens !== undefined) commit(tokens, ttl);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  const tokens = parseCustom(custom);
+                  if (tokens !== undefined) commit(tokens, ttl);
+                }}
+              />
+              <span>token</span>
+            </label>
           )}
-        </p>
-      )}
-      {ttl === "1h" && (
-        <p className="agent-mcp-hint warning" role="note">
-          {t(
-            "写缓存的费用从输入单价的 1.25 倍变成 2 倍。两轮之间常隔 5 分钟以上时通常更省、更快；偶尔才聊一句的房间反而更贵。",
+          <p
+            className={
+              choice === CUSTOM && !customValid ? "agent-mcp-hint warning" : "agent-mcp-hint"
+            }
+          >
+            {choice === CUSTOM && !customValid
+              ? t("填 {0}～{1} 之间的整数。", {
+                  0: CLAUDE_COMPACT_WINDOW_MIN.toLocaleString(),
+                  1: CLAUDE_COMPACT_WINDOW_MAX.toLocaleString(),
+                })
+              : t(
+                  "对话超过这个大小时，Claude 会把前面的内容压成摘要：每轮的速度和费用更稳定，但很早以前的细节只剩摘要。所选模型的上下文比这个小时，按模型上限，接近上限时压缩。",
+                )}
+          </p>
+        </div>
+        <div className="agent-settings-field">
+          <h4>{t("缓存时长")}</h4>
+          <Select
+            aria-label={t("缓存时长")}
+            value={ttl}
+            options={ttlOptions}
+            disabled={disabled}
+            onChange={(next) => {
+              setTtl(next);
+              // 自定义阈值还没填对：这次只存缓存时长
+              commit(choice === CUSTOM ? parseCustom(custom) : undefined, next);
+            }}
+          />
+          {ttl === "" && lead && (
+            <p className="agent-mcp-hint" role="note">
+              {t(
+                "它是本房间的主 Agent，两轮之间常隔 5 分钟以上（等子任务回执、等人回复），所以默认按 1 小时缓存，进程也常驻 55 分钟。不再是主 Agent 后，下一轮起交回 Claude Code 自己选。",
+              )}
+            </p>
           )}
-        </p>
-      )}
+          {ttl === "1h" && (
+            <p className="agent-mcp-hint warning" role="note">
+              {t(
+                "写缓存的费用从输入单价的 1.25 倍变成 2 倍。两轮之间常隔 5 分钟以上时通常更省、更快；偶尔才聊一句的房间反而更贵。",
+              )}
+            </p>
+          )}
+        </div>
+      </div>
       <SaveStatus
         state={state}
         hint={t("选了就保存，从下一次回复开始生效，不用重启。")}

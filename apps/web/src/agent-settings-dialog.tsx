@@ -122,12 +122,16 @@ export function McpChecklist({
                   />
                   <span className="agent-mcp-copy">
                     <strong>{server.name}</strong>
-                    <small>
-                      {scopeLabels[server.scope]} · {server.transport}
-                      {size ? " · " : ""}
-                      {size && <span className={heavy ? "agent-mcp-heavy" : ""}>{size}</span>}
-                      {!server.configurable &&
-                        ` · ${server.disabledByCli ? t("已在 CLI 配置里关闭") : t("插件提供，不能在这里开关")}`}
+                    <small className="agent-mcp-details">
+                      <span className="agent-mcp-source">
+                        {scopeLabels[server.scope]} · {server.transport}
+                      </span>
+                      <span className="agent-mcp-separator">{size ? " · " : ""}</span>
+                      <span className="agent-mcp-size">
+                        {size && <span className={heavy ? "agent-mcp-heavy" : ""}>{size}</span>}
+                        {!server.configurable &&
+                          ` · ${server.disabledByCli ? t("已在 CLI 配置里关闭") : t("插件提供，不能在这里开关")}`}
+                      </span>
                     </small>
                   </span>
                 </label>
@@ -376,6 +380,82 @@ export function AgentSettingsDialog({
         <header className="invite-dialog-header">
           <div>
             <h2 id="agent-settings-title">{t("{0} 的设置", { 0: agent.name })}</h2>
+            <div className={`agent-run-control local-agent ${agent.status}`}>
+              <span className="local-agent-dot" aria-hidden="true" />
+              <span className="agent-run-status">
+                <strong>
+                  {[localAgentStatusLabels[agent.status], ...agentUpdateNotes(agent)].join(" · ")}
+                  {agent.outdated && <span className="agent-update-badge">{t("旧版本")}</span>}
+                </strong>
+              </span>
+              <div className="agent-run-actions">
+                {live ? (
+                  <>
+                    {onOpenTerminal && (
+                      <Button size="sm" onClick={onOpenTerminal}>
+                        {t("在终端打开会话")}
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      disabled={
+                        acting !== undefined || !local.canManage || agent.restartWhenIdle === true
+                      }
+                      onClick={() => void control("restart")}
+                    >
+                      {acting === "restart" ? t("重启中…") : t("重启")}
+                    </Button>
+                    <RestartNowButton
+                      agent={agent}
+                      local={local}
+                      disabled={acting !== undefined || !local.canManage}
+                      onError={setError}
+                    />
+                    <Button
+                      size="sm"
+                      disabled={acting !== undefined || !local.canManage}
+                      onClick={() => void control("stop")}
+                    >
+                      {acting === "stop" ? t("停止中…") : t("停止")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={acting !== undefined || !local.canManage}
+                      onClick={() => void control("start")}
+                    >
+                      {acting === "start" ? t("启动中…") : t("启动")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      tone="danger"
+                      disabled={acting !== undefined || !local.canManage}
+                      onClick={() => setConfirmRemove(true)}
+                    >
+                      {t("删除")}
+                    </Button>
+                  </>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-expanded={logsOpen}
+                  onClick={() => setLogsOpen(!logsOpen)}
+                >
+                  {t("日志")}
+                </Button>
+              </div>
+            </div>
+            <p className="agent-run-hint">
+              {!live
+                ? t("已停止，房间里不会再有人接它的 @。")
+                : agent.restartWhenIdle
+                  ? t("已安排重启：手上的任务都做完就重启。")
+                  : t("「重启」等它手上的任务都做完再重启；「立即重启」会中断正在执行的任务。")}
+            </p>
             <p>
               {t(
                 "重启、停止这个 Agent，选择它用的模型和加载哪些本机 MCP。每个 MCP 的工具说明会在每个会话开局整段发给模型，体积大的会明显增加新会话和缓存过期时的费用。hive 始终加载。",
@@ -388,80 +468,6 @@ export function AgentSettingsDialog({
         </header>
 
         <div className="invite-dialog-body">
-          <div className={`agent-run-control local-agent ${agent.status}`}>
-            <span className="local-agent-dot" aria-hidden="true" />
-            <span className="agent-run-status">
-              <strong>
-                {[localAgentStatusLabels[agent.status], ...agentUpdateNotes(agent)].join(" · ")}
-                {agent.outdated && <span className="agent-update-badge">{t("旧版本")}</span>}
-              </strong>
-              <small>
-                {!live
-                  ? t("已停止，房间里不会再有人接它的 @。")
-                  : agent.restartWhenIdle
-                    ? t("已安排重启：手上的任务都做完就重启。")
-                    : t("「重启」等它手上的任务都做完再重启；「立即重启」会中断正在执行的任务。")}
-              </small>
-            </span>
-            {live ? (
-              <>
-                {onOpenTerminal && (
-                  <Button size="sm" onClick={onOpenTerminal}>
-                    {t("在终端打开会话")}
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  disabled={
-                    acting !== undefined || !local.canManage || agent.restartWhenIdle === true
-                  }
-                  onClick={() => void control("restart")}
-                >
-                  {acting === "restart" ? t("重启中…") : t("重启")}
-                </Button>
-                <RestartNowButton
-                  agent={agent}
-                  local={local}
-                  disabled={acting !== undefined || !local.canManage}
-                  onError={setError}
-                />
-                <Button
-                  size="sm"
-                  disabled={acting !== undefined || !local.canManage}
-                  onClick={() => void control("stop")}
-                >
-                  {acting === "stop" ? t("停止中…") : t("停止")}
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={acting !== undefined || !local.canManage}
-                  onClick={() => void control("start")}
-                >
-                  {acting === "start" ? t("启动中…") : t("启动")}
-                </Button>
-                <Button
-                  size="sm"
-                  tone="danger"
-                  disabled={acting !== undefined || !local.canManage}
-                  onClick={() => setConfirmRemove(true)}
-                >
-                  {t("删除")}
-                </Button>
-              </>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-expanded={logsOpen}
-              onClick={() => setLogsOpen(!logsOpen)}
-            >
-              {t("日志")}
-            </Button>
-          </div>
           {agent.status === "crashed" && agent.lastError && (
             <p className="local-agent-error">{agent.lastError}</p>
           )}
@@ -491,32 +497,37 @@ export function AgentSettingsDialog({
           {logsOpen && <LogViewer load={local.logs} agentId={agent.id} />}
           <section className="agent-model" aria-labelledby="agent-model-title">
             <h3 id="agent-model-title">{effortSupported ? t("模型与思考强度") : t("模型")}</h3>
-            <ModelPicker
-              aria-label={t("模型")}
-              data={models}
-              value={model}
-              allowDefault
-              disabled={!local.canManage}
-              onChange={setModel}
-              onCommit={(next) => saveModel(next, effort)}
-              onRefresh={() => void loadModels(true)}
-            />
-            <CurrentModelNote lastModel={lastModel} selected={model} models={models} />
-            {effortSupported && (
-              <>
-                <h4>{t("思考强度")}</h4>
-                <EffortPicker
+            <div className={effortSupported ? "agent-settings-fields" : "agent-settings-field"}>
+              <div className="agent-settings-field">
+                {effortSupported && <h4>{t("模型")}</h4>}
+                <ModelPicker
+                  aria-label={t("模型")}
                   data={models}
-                  model={model}
-                  value={effort}
+                  value={model}
+                  allowDefault
                   disabled={!local.canManage}
-                  onChange={(next) => {
-                    setEffort(next);
-                    saveModel(model, next);
-                  }}
+                  onChange={setModel}
+                  onCommit={(next) => saveModel(next, effort)}
+                  onRefresh={() => void loadModels(true)}
                 />
-              </>
-            )}
+                <CurrentModelNote lastModel={lastModel} selected={model} models={models} />
+              </div>
+              {effortSupported && (
+                <div className="agent-settings-field">
+                  <h4>{t("思考强度")}</h4>
+                  <EffortPicker
+                    data={models}
+                    model={model}
+                    value={effort}
+                    disabled={!local.canManage}
+                    onChange={(next) => {
+                      setEffort(next);
+                      saveModel(model, next);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
             <SaveStatus
               state={modelSave.state}
               hint={
