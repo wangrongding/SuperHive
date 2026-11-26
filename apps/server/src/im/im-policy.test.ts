@@ -39,6 +39,11 @@ describe.each(levels)("IM 降噪：%s", (level) => {
     ).toBe("skip");
   });
 
+  it("房间系统提示（自动设主 Agent 等）一律不推，即使提到房主", () => {
+    expect(decide({ kind: "notice" }, {})).toBe("skip");
+    expect(decide({ kind: "notice" }, { mentionsOwner: true, ownersTask: true })).toBe("skip");
+  });
+
   it("不回显房主自己发的消息，即使提到自己", () => {
     expect(decide({ senderType: "human", senderId: "owner" }, { mentionsOwner: true })).toBe(
       "skip",

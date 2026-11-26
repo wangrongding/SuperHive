@@ -23,6 +23,8 @@ export function decideImDelivery(
     connection.config.crossRoomAll !== "true"
       ? "mine"
       : connection.level;
+  // 房间里的系统提示（例如自动设了主 Agent）只给网页看，不推到 IM
+  if (message.kind === "notice") return "skip";
   if (message.kind === "delegation" || message.kind === "receipt") {
     return context.mentionsOwner ? "now" : "skip";
   }
