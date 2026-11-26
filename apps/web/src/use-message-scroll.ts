@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { ChatMessage } from "@superhive/protocol";
 import { createFrameClock, easeInOutCubic, easeOutQuint } from "./easing";
 import type { TimelineEntry } from "./timeline";
+import type { RoomScrollPosition } from "./room-cache";
 
 /** 自绘滚动动画单帧最多推进的时间：约两帧，主线程卡顿时动画放慢而不是跳跃 */
 const MAX_FRAME_STEP_MS = 32;
@@ -27,6 +28,18 @@ export function useMessageScroll({
   const messageListRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const messageCountRef = useRef(0);
+  const roomScrollRestoreRef = useRef<RoomScrollPosition | undefined>(undefined);
+  const restoreRoomScroll = useCallback((position: RoomScrollPosition | undefined) => {
+    cancelAnimationFrame(bottomAnimationRef.current);
+    bottomAnimationRef.current = 0;
+    detachAnimationCancelRef.current?.();
+    roomScrollRestoreRef.current = position;
+    messageCountRef.current = 0;
+    nearBottomRef.current = position?.nearBottom ?? true;
+    earlierScrollAnchorRef.current = undefined;
+    setPendingNewMessages(0);
+    setShowJumpToBottom(false);
+  }, []);
   // 点「显示更早」把更早的消息插到上方：浏览器在贴顶（scrollTop=0，正是按钮的位置）时
   // 不会做滚动锚定，视口会落到插入内容的最顶部、读的位置被顶走。这里在点击瞬间记下
   // 「视口到内容底部的距离」（新消息只往上方插入，底部不动），渲染完成后按该距离恢复
@@ -107,6 +120,18 @@ export function useMessageScroll({
   useLayoutEffect(() => {
     const previousCount = messageCountRef.current;
     messageCountRef.current = messages.length;
+    const restored = roomScrollRestoreRef.current;
+    if (restored) {
+      const list = messageListRef.current;
+      if (!list || !scrollContentElement?.isConnected) return;
+      roomScrollRestoreRef.current = undefined;
+      list.scrollTo({
+        top: restored.nearBottom ? list.scrollHeight : restored.scrollTop,
+        behavior: "instant",
+      });
+      setShowJumpToBottom(list.scrollHeight - list.scrollTop - list.clientHeight > 320);
+      return;
+    }
     const last = messages.at(-1);
     if (!last) return;
     const own = last.senderName.toLocaleLowerCase() === username.toLocaleLowerCase();
@@ -120,7 +145,7 @@ export function useMessageScroll({
       setPendingNewMessages((current) => current + (messages.length - previousCount));
     }
     return undefined;
-  }, [messages, username, scrollToBottom]);
+  }, [messages, username, scrollToBottom, scrollContentElement]);
 
   const handleMessageListScroll = useCallback(() => {
     // 动画进行中的 scroll 事件是程序驱动的，不代表用户离开了底部
@@ -184,6 +209,7 @@ export function useMessageScroll({
     handleMessageListScroll,
     releaseBottomPin,
     jumpToLatest,
+    restoreRoomScroll,
   };
 }
 

@@ -292,6 +292,16 @@ export const participantJoinEventSchema = z.object({
   workspace: agentWorkspaceSchema.optional().catch(undefined),
 });
 
+export const roomSwitchEventSchema = z.object({
+  type: z.literal("room.switch"),
+  roomId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9_-]+$/),
+});
+
 export const messageSendEventSchema = z.object({
   type: z.literal("message.send"),
   clientMessageId: z.string().min(1).max(100),
@@ -866,6 +876,7 @@ export const scheduleCancelEventSchema = z.object({
 
 export const clientEventSchema = z.discriminatedUnion("type", [
   participantJoinEventSchema,
+  roomSwitchEventSchema,
   messageSendEventSchema,
   heartbeatEventSchema,
   typingEventSchema,
@@ -894,6 +905,7 @@ export const roomSnapshotEventSchema = z.object({
   participants: z.array(participantSchema),
   messages: z.array(chatMessageSchema),
   latestSeq: z.number().int().nonnegative(),
+  firstSeq: z.number().int().nonnegative().optional(),
   invocations: z.array(invocationSchema).default([]),
   whiteboard: z.array(whiteboardEntrySchema).default([]),
   schedules: z.array(scheduleSchema).default([]),

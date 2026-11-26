@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatMessage,
   Invocation,
@@ -10,6 +10,19 @@ import { serverError } from "./server-text";
 import { upsertWhiteboardEntry } from "./whiteboard";
 import { t } from "./i18n";
 import type { LoadingPhase } from "./loading-status";
+import { RoomCache, type RoomScrollPosition } from "./room-cache";
+
+type CachedRoom = {
+  participants: Participant[];
+  messages: ChatMessage[];
+  invocations: ReadonlyMap<string, Invocation>;
+  whiteboard: ReadonlyMap<string, WhiteboardEntry>;
+  pendingApprovals: ReadonlySet<string>;
+  traces: ReadonlyMap<string, TraceStep[]>;
+  endedTraces: Set<string>;
+  latestSeq: number;
+  scroll?: RoomScrollPosition;
+};
 
 /**
  * 当前房间的数据：成员、消息、调用、白板、定时、权限申请和调用过程，以及连接用到的游标。
@@ -28,6 +41,8 @@ export function useRoomData({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // 收到房间快照之前为 false：区分"还在加载"和"房间真的是空的"，避免欢迎页闪现
   const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const hasLoadedRoomRef = useRef(false);
+  if (messagesLoaded) hasLoadedRoomRef.current = true;
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("joining");
   const [invocations, setInvocations] = useState<ReadonlyMap<string, Invocation>>(new Map());
   const [whiteboard, setWhiteboard] = useState<ReadonlyMap<string, WhiteboardEntry>>(new Map());
@@ -46,6 +61,70 @@ export function useRoomData({
   const retryRef = useRef(0);
   const latestSeqRef = useRef(0);
   const participantStatusRef = useRef(new Map<string, Participant["status"]>());
+  const activeRoomIdRef = useRef(currentRoomId);
+  const roomEpochRef = useRef(0);
+  const cacheRef = useRef(new RoomCache<CachedRoom>());
+  const cacheIdentityRef = useRef({ base, authToken });
+  useEffect(() => {
+    if (cacheIdentityRef.current.base === base && cacheIdentityRef.current.authToken === authToken)
+      return;
+    cacheRef.current = new RoomCache();
+    cacheIdentityRef.current = { base, authToken };
+    roomEpochRef.current += 1;
+    whiteboardEpochRef.current += 1;
+    whiteboardChangesRef.current.clear();
+    socketRef.current = undefined;
+    latestSeqRef.current = 0;
+    hasLoadedRoomRef.current = false;
+    setMessagesLoaded(false);
+    setMessages([]);
+    setParticipants([]);
+    setInvocations(new Map());
+    setWhiteboard(new Map());
+    setPendingApprovals(new Set());
+    setTraces(new Map());
+    endedTracesRef.current.clear();
+    participantStatusRef.current.clear();
+  }, [base, authToken]);
+  const currentDataRef = useRef<CachedRoom | undefined>(undefined);
+  currentDataRef.current = messagesLoaded
+    ? {
+        participants,
+        messages,
+        invocations,
+        whiteboard,
+        pendingApprovals,
+        traces,
+        endedTraces: endedTracesRef.current,
+        latestSeq: latestSeqRef.current,
+      }
+    : undefined;
+
+  const activateRoom = useCallback((roomId: string, scroll: RoomScrollPosition) => {
+    if (currentDataRef.current) {
+      cacheRef.current.set(activeRoomIdRef.current, { ...currentDataRef.current, scroll });
+    }
+    const cached = cacheRef.current.get(roomId);
+    activeRoomIdRef.current = roomId;
+    roomEpochRef.current += 1;
+    socketRef.current = undefined;
+    setParticipants(cached?.participants ?? []);
+    setMessages(cached?.messages ?? []);
+    setMessagesLoaded(Boolean(cached));
+    setLoadingPhase("messages");
+    setInvocations(cached?.invocations ?? new Map());
+    setWhiteboard(cached?.whiteboard ?? new Map());
+    whiteboardEpochRef.current += 1;
+    whiteboardChangesRef.current.clear();
+    setPendingApprovals(cached?.pendingApprovals ?? new Set());
+    setTraces(cached?.traces ?? new Map());
+    endedTracesRef.current = cached?.endedTraces ?? new Set();
+    latestSeqRef.current = cached?.latestSeq ?? 0;
+    participantStatusRef.current = new Map(
+      (cached?.participants ?? []).map((participant) => [participant.id, participant.status]),
+    );
+    return cached?.scroll;
+  }, []);
 
   const loadWhiteboardHistory = useCallback(async () => {
     const epoch = whiteboardEpochRef.current;
@@ -120,6 +199,7 @@ export function useRoomData({
     messages,
     setMessages,
     messagesLoaded,
+    hasLoadedRoomRef,
     setMessagesLoaded,
     loadingPhase,
     setLoadingPhase,
@@ -138,6 +218,9 @@ export function useRoomData({
     retryRef,
     latestSeqRef,
     participantStatusRef,
+    activeRoomIdRef,
+    roomEpochRef,
+    activateRoom,
     loadWhiteboardHistory,
     changeWhiteboardArchive,
   };

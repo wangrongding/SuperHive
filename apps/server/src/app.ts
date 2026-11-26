@@ -6186,6 +6186,43 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     };
     connections.add(connection);
 
+    const sendRoomSnapshot = () => {
+      const participant = connection.participant!;
+      const roomId = participant.roomId;
+      send(socket, {
+        type: "room.snapshot",
+        self: withAccess(participant),
+        participants: participantsOf(roomId),
+        messages: database.getRecentMessages(roomId),
+        latestSeq: database.latestSeq(roomId),
+        firstSeq: database.getMessages(roomId, 0, 1)[0]?.seq ?? 0,
+        invocations: database.listInvocations(roomId).map(visibleInvocation),
+        whiteboard: database.listWhiteboard(roomId),
+        schedules: database.listSchedules(roomId),
+        approvals: [...approvals.values()]
+          .filter((item) => item.roomId === roomId)
+          .map((item) => item.questionId),
+        features: ["trace", "approval", "session", "tools", "room.switch"],
+      });
+      if (isLocalOwner(connection)) {
+        send(socket, { type: "slow-op.snapshot", ...slowOps.list() });
+        send(socket, { type: "incidents.changed", attention: incidentAttention() });
+      }
+      if (canSeeTrace(connection, roomId)) {
+        for (const [invocationId, trace] of traces) {
+          if (trace.roomId !== roomId) continue;
+          const invocation = database.getInvocation(invocationId);
+          if (!invocation || database.getMessage(invocation.messageId)?.deletedAt) continue;
+          send(socket, {
+            type: "invocation.trace",
+            roomId,
+            invocationId,
+            steps: [...trace.steps.values()],
+          });
+        }
+      }
+    };
+
     socket.on("message", (raw) => {
       let json: unknown;
       try {
@@ -6346,39 +6383,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           const activeConnections = namedConnections ?? new Set<Connection>();
           activeConnections.add(connection);
           onlineByName.set(key, activeConnections);
-          send(socket, {
-            type: "room.snapshot",
-            self: withAccess(participant),
-            participants: participantsOf(event.roomId),
-            messages: database.getRecentMessages(event.roomId),
-            latestSeq: database.latestSeq(event.roomId),
-            invocations: database.listInvocations(event.roomId).map(visibleInvocation),
-            whiteboard: database.listWhiteboard(event.roomId),
-            schedules: database.listSchedules(event.roomId),
-            approvals: [...approvals.values()]
-              .filter((item) => item.roomId === event.roomId)
-              .map((item) => item.questionId),
-            features: ["trace", "approval", "session", "tools"],
-          });
-          // 这台电脑上的房主：先给慢操作全集，补上断开期间漏掉的推送；沙箱里也一样
-          if (isLocalOwner(connection)) {
-            send(socket, { type: "slow-op.snapshot", ...slowOps.list() });
-            send(socket, { type: "incidents.changed", attention: incidentAttention() });
-          }
-          // 房主（或允许看过程的访客）刚打开或重连：把正在执行的调用的过程补上
-          if (canSeeTrace(connection, event.roomId)) {
-            for (const [invocationId, trace] of traces) {
-              if (trace.roomId !== event.roomId) continue;
-              const invocation = database.getInvocation(invocationId);
-              if (!invocation || database.getMessage(invocation.messageId)?.deletedAt) continue;
-              send(socket, {
-                type: "invocation.trace",
-                roomId: trace.roomId,
-                invocationId,
-                steps: [...trace.steps.values()],
-              });
-            }
-          }
+          sendRoomSnapshot();
           if (participant.type === "agent") {
             for (const invocation of database.listCancellingInvocations(participant.id)) {
               send(socket, { type: "agent.cancel", messageId: invocation.messageId });
@@ -6417,6 +6422,69 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       // 访客每次操作前都复核期限：到期或被移除后，已建立的连接也不能再收发
       if (!ensureActive(connection)) return;
       const guest = connection.principal?.kind === "guest";
+      if (event.type === "room.switch") {
+        if (participant.type !== "human" || (guest && event.roomId !== participant.roomId)) {
+          send(socket, {
+            type: "error",
+            code: "ROOM_FORBIDDEN",
+            ...wsText(serverText("error.guest.ownerActions")),
+          });
+          return;
+        }
+        const room = database.getRoom(event.roomId);
+        if (!room || room.archivedAt) {
+          send(socket, {
+            type: "error",
+            code: room ? "ROOM_ARCHIVED" : "ROOM_NOT_FOUND",
+            ...wsText(serverText(room ? "error.room.archivedJoin" : "error.room.notFound")),
+          });
+          return;
+        }
+        if (event.roomId === participant.roomId) {
+          sendRoomSnapshot();
+          return;
+        }
+        const key = participantKey(event.roomId, participant.username);
+        const namedConnections = onlineByName.get(key);
+        const existingParticipant = namedConnections?.values().next().value?.participant;
+        try {
+          if (existingParticipant && existingParticipant.type !== "human") {
+            throw new HiveError("USERNAME_TAKEN", serverText("error.name.online"));
+          }
+          const next =
+            existingParticipant ??
+            database.upsertParticipant({
+              roomId: event.roomId,
+              username: participant.username,
+              type: "human",
+            });
+          const previousKey = participantKey(participant.roomId, participant.username);
+          const previousConnections = onlineByName.get(previousKey);
+          previousConnections?.delete(connection);
+          if (!previousConnections?.size) {
+            onlineByName.delete(previousKey);
+            setStatus(connection, "offline");
+          }
+          connection.participant = next;
+          connection.lastHeartbeat = Date.now();
+          const activeConnections = namedConnections ?? new Set<Connection>();
+          activeConnections.add(connection);
+          onlineByName.set(key, activeConnections);
+          sendRoomSnapshot();
+          if (!existingParticipant) {
+            broadcast(event.roomId, { type: "presence.changed", participant: withAccess(next) });
+            broadcastRoomActivity(event.roomId);
+          }
+        } catch (error) {
+          const hiveError = error instanceof HiveError ? error : undefined;
+          send(socket, {
+            type: "error",
+            code: hiveError?.code ?? "JOIN_FAILED",
+            ...wsText(hiveError?.text ?? serverText("error.ws.joinFailed")),
+          });
+        }
+        return;
+      }
       const ownerOnly =
         event.type === "topic.start" ||
         event.type === "budget.extend" ||

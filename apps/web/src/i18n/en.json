@@ -2191,6 +2191,7 @@
   "连接中断，正在重试": "Connection interrupted, retrying",
   "暂时无法载入 Hive": "Couldn't load Hive",
   "重新加载": "Reload",
+  "正在读取房间消息": "Loading room messages",
   "与 Hive Server 的连接已中断，正在自动重试。": "The connection to Hive Server was interrupted. Retrying automatically.",
   "等待 Hive Server 响应超时，请确认服务已启动并检查网络。": "Hive Server took too long to respond. Make sure it's running and check your network.",
   "{0} · 已移除": "{0} · Removed",

@@ -2698,15 +2698,33 @@ describe("App mention autocomplete", () => {
       roomId: "frontend",
     });
     expect(localStorage.getItem("superhive.room")).toBe("frontend");
+    const self = {
+      ...participant("00000000-0000-4000-8000-000000000001", "Alice", "human"),
+      roomId: "frontend",
+    };
+    act(() =>
+      frontendSocket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+        features: ["room.switch"],
+      }),
+    );
 
     act(() => {
       window.location.hash = "#design";
     });
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
-    const designSocket = FakeWebSocket.instances[1]!;
-    act(() => designSocket.open());
-    expect(JSON.parse(designSocket.sent[0]!)).toMatchObject({
-      type: "participant.join",
+    await waitFor(() =>
+      expect(frontendSocket.sent.map((event) => JSON.parse(event))).toContainEqual({
+        type: "room.switch",
+        roomId: "design",
+      }),
+    );
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(JSON.parse(frontendSocket.sent.at(-1)!)).toMatchObject({
+      type: "room.switch",
       roomId: "design",
     });
     expect(localStorage.getItem("superhive.room")).toBe("design");
@@ -2715,7 +2733,7 @@ describe("App mention autocomplete", () => {
       window.location.hash = "#not a valid room!";
     });
     await waitFor(() => expect(window.location.hash).toBe("#design"));
-    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it("shows server-written texts in the selected language", async () => {

@@ -8,6 +8,7 @@ import {
   type SetStateAction,
 } from "react";
 import { RoomLoading } from "./room-loading";
+import { RoomTimelineLoading } from "./room-timeline-loading";
 import type { LoadingStatus } from "./loading-status";
 import type {
   Attachment,
@@ -83,6 +84,7 @@ export function MessageList({
   actions,
   messages,
   messagesLoaded,
+  initialLoading = false,
   loadingStatus,
   currentRoomName,
   currentRoomId,
@@ -119,6 +121,7 @@ export function MessageList({
   actions: MessageActions;
   messages: ChatMessage[];
   messagesLoaded: boolean;
+  initialLoading?: boolean;
   loadingStatus?: LoadingStatus;
   currentRoomName: string;
   currentRoomId: string;
@@ -295,9 +298,12 @@ export function MessageList({
     >
       <ShadowContent host={shadowHost}>
         <div className="message-shadow-inner">
-          {!messagesLoaded && (
-            <RoomLoading key={currentRoomId} {...(loadingStatus ?? { phase: "messages" })} />
-          )}
+          {!messagesLoaded &&
+            (initialLoading ? (
+              <RoomLoading key={currentRoomId} {...(loadingStatus ?? { phase: "messages" })} />
+            ) : (
+              <RoomTimelineLoading key={currentRoomId} {...loadingStatus} />
+            ))}
           {messagesLoaded && messages.length === 0 && (
             <div className="empty-state">
               <HiveLogo />

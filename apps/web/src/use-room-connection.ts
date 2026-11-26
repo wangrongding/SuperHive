@@ -114,23 +114,84 @@ export function useRoomConnection({
     retryRef,
     latestSeqRef,
     participantStatusRef,
+    activeRoomIdRef,
+    roomEpochRef,
   } = room;
   const reconnectTimerRef = useRef<number | undefined>(undefined);
   const recalledInvocationsRef = useRef(new Set<string>());
+  const connectionRef = useRef<WebSocket | undefined>(undefined);
+  const switchSocketRef = useRef<(() => void) | undefined>(undefined);
+  const callbacksRef = useRef({ refreshRooms, switchRoom, upsertRoom, onAccessLost });
+  callbacksRef.current = { refreshRooms, switchRoom, upsertRoom, onAccessLost };
+  const messagesLoadedRef = useRef(room.messagesLoaded);
+  messagesLoadedRef.current = room.messagesLoaded;
+  const messagesRef = useRef(room.messages);
+  messagesRef.current = room.messages;
+  const messageChangesRef = useRef(new Map<string, number>());
+  const changesEpochRef = useRef(roomEpochRef.current);
+  if (changesEpochRef.current !== roomEpochRef.current) {
+    changesEpochRef.current = roomEpochRef.current;
+    messageChangesRef.current.clear();
+  }
 
   const catchUp = useCallback(
-    async (afterSeq: number) => {
-      if (!meta || !authToken || afterSeq <= 0) return;
-      const response = await fetch(
-        `${base}/api/rooms/${encodeURIComponent(currentRoomId)}/messages?afterSeq=${afterSeq}`,
-        { headers: { Authorization: `Bearer ${authToken}` } },
-      );
-      if (!response.ok) throw new Error(t("增量消息拉取失败 ({0})", { 0: response.status }));
-      const payload = localizeServerPayload((await response.json()) as MessagesResponse);
-      setMessages((current) => mergeMessages(current, payload.messages));
-      latestSeqRef.current = Math.max(latestSeqRef.current, payload.latestSeq);
+    async (
+      roomId: string,
+      afterSeq: number,
+      epoch: number,
+      cachedMessages: typeof room.messages,
+    ) => {
+      if (!meta || !authToken) return;
+      let cursor = afterSeq;
+      const changes = new Map(messageChangesRef.current);
+      const mergeCaughtUp = (incoming: typeof room.messages) => {
+        setMessages((current) => {
+          if (activeRoomIdRef.current !== roomId || roomEpochRef.current !== epoch) return current;
+          return mergeMessages(
+            current,
+            incoming.filter(
+              (message) => changes.get(message.id) === messageChangesRef.current.get(message.id),
+            ),
+          );
+        });
+      };
+      while (activeRoomIdRef.current === roomId && roomEpochRef.current === epoch) {
+        const response = await fetch(
+          `${base}/api/rooms/${encodeURIComponent(roomId)}/messages?afterSeq=${cursor}&limit=500`,
+          { headers: { Authorization: `Bearer ${authToken}` } },
+        );
+        if (!response.ok) throw new Error(t("增量消息拉取失败 ({0})", { 0: response.status }));
+        const payload = localizeServerPayload((await response.json()) as MessagesResponse);
+        if (activeRoomIdRef.current !== roomId || roomEpochRef.current !== epoch) return;
+        mergeCaughtUp(payload.messages);
+        const next = payload.messages.at(-1)?.seq ?? cursor;
+        latestSeqRef.current = Math.max(latestSeqRef.current, next);
+        if (next <= cursor || next >= payload.latestSeq) break;
+        cursor = next;
+      }
+      if (!cachedMessages.length) return;
+      cursor = Math.max(0, cachedMessages[0]!.seq - 1);
+      while (
+        cursor < afterSeq &&
+        activeRoomIdRef.current === roomId &&
+        roomEpochRef.current === epoch
+      ) {
+        const response = await fetch(
+          `${base}/api/rooms/${encodeURIComponent(roomId)}/messages?afterSeq=${cursor}&limit=500`,
+          {
+            headers: { Authorization: `Bearer ${authToken}` },
+          },
+        );
+        if (!response.ok) throw new Error(t("增量消息拉取失败 ({0})", { 0: response.status }));
+        const payload = localizeServerPayload((await response.json()) as MessagesResponse);
+        if (activeRoomIdRef.current !== roomId || roomEpochRef.current !== epoch) return;
+        mergeCaughtUp(payload.messages);
+        const next = payload.messages.at(-1)?.seq ?? cursor;
+        if (next <= cursor) return;
+        cursor = next;
+      }
     },
-    [authToken, base, currentRoomId, meta],
+    [authToken, base, meta],
   );
 
   useEffect(() => {
@@ -138,6 +199,10 @@ export function useRoomConnection({
     let cancelled = false;
     let reconnectAllowed = true;
     let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+    let supportsSwitch = false;
+    let joinedRoomId: string | undefined;
+    let pendingRoomId: string | undefined;
+    let switchReconnect = false;
 
     const connect = () => {
       if (cancelled) return;
@@ -150,34 +215,76 @@ export function useRoomConnection({
           advertisedUrl: meta.wsUrl,
         }),
       );
-      socketRef.current = socket;
+      connectionRef.current = socket;
+      socketRef.current = undefined;
+      joinedRoomId = undefined;
+      supportsSwitch = false;
+      pendingRoomId = undefined;
+      switchSocketRef.current = () => {
+        if (socket.readyState !== WebSocket.OPEN || !joinedRoomId || pendingRoomId) return;
+        if (joinedRoomId === activeRoomIdRef.current) {
+          socketRef.current = socket;
+          return;
+        }
+        if (!supportsSwitch) {
+          switchReconnect = true;
+          socket.close();
+          return;
+        }
+        clearTimeout(snapshotTimer);
+        snapshotTimer = setTimeout(() => socket.close(), 10_000);
+        pendingRoomId = activeRoomIdRef.current;
+        socket.send(JSON.stringify({ type: "room.switch", roomId: activeRoomIdRef.current }));
+      };
       snapshotTimer = setTimeout(() => socket.close(), 10_000);
       socket.addEventListener("open", () => {
         if (cancelled) return;
         setLoadingPhase("messages");
+        pendingRoomId = activeRoomIdRef.current;
         socket.send(
           JSON.stringify({
             type: "participant.join",
             username,
             participantType: "human",
-            roomId: currentRoomId,
+            roomId: activeRoomIdRef.current,
             token: authToken,
           }),
         );
       });
       socket.addEventListener("message", (rawEvent) => {
+        if (cancelled || connectionRef.current !== socket) return;
+        const currentRoomId = activeRoomIdRef.current;
         const event = localizeServerPayload(JSON.parse(String(rawEvent.data)) as ServerEvent);
         if (event.type === "room.snapshot") {
+          joinedRoomId = event.self.roomId;
+          pendingRoomId = undefined;
+          supportsSwitch = event.features?.includes("room.switch") ?? false;
+          if (event.self.roomId !== currentRoomId) {
+            switchSocketRef.current?.();
+            return;
+          }
           clearTimeout(snapshotTimer);
+          socketRef.current = socket;
           recalledInvocationsRef.current = new Set(
             (event.invocations ?? []).filter((item) => item.messageRecalled).map((item) => item.id),
           );
           const beforeReconnect = latestSeqRef.current;
+          const hadMessages = messagesLoadedRef.current;
+          const cachedMessages = messagesRef.current.filter(
+            (message) => !event.messages.some((incoming) => incoming.id === message.id),
+          );
           participantStatusRef.current = new Map(
             event.participants.map((participant) => [participant.id, participant.status]),
           );
           setParticipants(sortParticipantsByLastSeen(event.participants));
-          setMessages((current) => mergeMessages(current, event.messages));
+          setMessages((current) =>
+            mergeMessages(
+              event.firstSeq === undefined
+                ? current
+                : current.filter((message) => message.seq >= event.firstSeq!),
+              event.messages,
+            ),
+          );
           setMessagesLoaded(true);
           // 快照里的调用与白板是服务端当前全集，直接替换（重连期间的变化也一并对齐）
           setInvocations(
@@ -211,12 +318,20 @@ export function useRoomConnection({
           retryRef.current = 0;
           setConnectionState("online");
           setError(undefined);
-          void refreshRooms().catch(() => undefined);
+          void callbacksRef.current.refreshRooms().catch(() => undefined);
           globalEventsRef.current.onSnapshot();
-          if (beforeReconnect > 0)
-            void catchUp(beforeReconnect).catch((reason: unknown) => setError(String(reason)));
+          if (hadMessages || beforeReconnect > 0)
+            void catchUp(
+              currentRoomId,
+              beforeReconnect,
+              roomEpochRef.current,
+              cachedMessages,
+            ).catch((reason: unknown) => {
+              if (activeRoomIdRef.current === currentRoomId) setError(String(reason));
+            });
         } else if (event.type === "room.cleared") {
           if (event.message.roomId !== currentRoomId) return;
+          roomEpochRef.current += 1;
           if (event.whiteboardArchived) {
             whiteboardEpochRef.current += 1;
             setWhiteboard(
@@ -232,11 +347,19 @@ export function useRoomConnection({
           latestSeqRef.current = Math.max(latestSeqRef.current, event.message.seq);
         } else if (event.type === "message.deleted") {
           if (event.message.roomId !== currentRoomId) return;
+          messageChangesRef.current.set(
+            event.message.id,
+            (messageChangesRef.current.get(event.message.id) ?? 0) + 1,
+          );
           setMessages((current) => mergeMessages(current, [event.message]));
           setArtifactsEpoch((current) => current + 1);
           setRecallCandidateId((current) => (current === event.message.id ? undefined : current));
         } else if (event.type === "message.created") {
           if (event.message.roomId !== currentRoomId) return;
+          messageChangesRef.current.set(
+            event.message.id,
+            (messageChangesRef.current.get(event.message.id) ?? 0) + 1,
+          );
           setMessages((current) => mergeMessages(current, [event.message]));
           if (event.message.attachments?.length) setArtifactsEpoch((current) => current + 1);
           // 新的权限申请：等人批，选项可点
@@ -346,6 +469,7 @@ export function useRoomConnection({
             return next;
           });
         } else if (event.type === "presence.changed") {
+          if (event.participant.roomId !== currentRoomId) return;
           const previousStatus = participantStatusRef.current.get(event.participant.id);
           participantStatusRef.current.set(event.participant.id, event.participant.status);
           setParticipants((current) => {
@@ -367,10 +491,10 @@ export function useRoomConnection({
             );
           }
         } else if (event.type === "rooms.changed") {
-          upsertRoom(event.room);
+          callbacksRef.current.upsertRoom(event.room);
           if (event.room.id === currentRoomId && event.room.archivedAt) {
             setError(t("房间 # {0} 已被归档，已切换回默认房间。", { 0: event.room.name }));
-            switchRoom("general");
+            callbacksRef.current.switchRoom("general");
           }
         } else if (event.type === "room.activity") {
           globalEventsRef.current.onRoomActivity();
@@ -387,11 +511,35 @@ export function useRoomConnection({
             ),
           );
         } else if (event.type === "error") {
+          if (
+            joinedRoomId &&
+            joinedRoomId !== currentRoomId &&
+            [
+              "ROOM_NOT_FOUND",
+              "ROOM_ARCHIVED",
+              "ROOM_FORBIDDEN",
+              "USERNAME_TAKEN",
+              "JOIN_FAILED",
+            ].includes(event.code)
+          ) {
+            const failedRoomId = pendingRoomId;
+            pendingRoomId = undefined;
+            if (failedRoomId !== currentRoomId) {
+              switchSocketRef.current?.();
+              return;
+            }
+            clearTimeout(snapshotTimer);
+            callbacksRef.current.switchRoom(joinedRoomId);
+            setError(event.message);
+            return;
+          }
           if (event.code === "SESSION_EXPIRED" || event.code === "SESSION_REVOKED") {
             // 访问到期或被房主移除：不再重连，回到入口页给出原因
             reconnectAllowed = false;
             socket.close();
-            onAccessLost?.(event.code === "SESSION_EXPIRED" ? "expired" : "revoked");
+            callbacksRef.current.onAccessLost?.(
+              event.code === "SESSION_EXPIRED" ? "expired" : "revoked",
+            );
           } else if (event.code === "USERNAME_TAKEN") {
             reconnectAllowed = false;
             setConnectionState("offline");
@@ -405,7 +553,7 @@ export function useRoomConnection({
             reconnectAllowed = false;
             setError(t("房间 # {0} 已归档，无法加入，已切换回默认房间。", { 0: currentRoomId }));
             socket.close();
-            switchRoom("general");
+            callbacksRef.current.switchRoom("general");
           } else if (event.text) {
             // 新服务端：说明已经是结构化文案、按当前语言显示，比按错误码猜更准确
             if (
@@ -443,7 +591,13 @@ export function useRoomConnection({
       socket.addEventListener("close", () => {
         clearTimeout(snapshotTimer);
         if (cancelled || !reconnectAllowed) return;
-        setConnectionState("offline");
+        socketRef.current = undefined;
+        setConnectionState(switchReconnect ? "connecting" : "offline");
+        if (switchReconnect) {
+          switchReconnect = false;
+          connect();
+          return;
+        }
         const wait = Math.min(10_000, 500 * 2 ** retryRef.current++);
         reconnectTimerRef.current = window.setTimeout(connect, wait);
       });
@@ -452,8 +606,8 @@ export function useRoomConnection({
 
     connect();
     const heartbeat = window.setInterval(() => {
-      if (socketRef.current?.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: "presence.heartbeat" }));
+      if (connectionRef.current?.readyState === WebSocket.OPEN) {
+        connectionRef.current.send(JSON.stringify({ type: "presence.heartbeat" }));
       }
     }, 15_000);
 
@@ -462,7 +616,13 @@ export function useRoomConnection({
       clearTimeout(snapshotTimer);
       window.clearInterval(heartbeat);
       window.clearTimeout(reconnectTimerRef.current);
-      socketRef.current?.close();
+      connectionRef.current?.close();
+      socketRef.current = undefined;
+      switchSocketRef.current = undefined;
     };
-  }, [base, catchUp, currentRoomId, meta, refreshRooms, switchRoom, upsertRoom, username]);
+  }, [authToken, base, catchUp, meta, username]);
+
+  useEffect(() => {
+    switchSocketRef.current?.();
+  }, [currentRoomId]);
 }

@@ -189,21 +189,13 @@ export function App({
   const room = useRoomData({ base, authToken, currentRoomId });
   const {
     participants,
-    setParticipants,
     messages,
     setMessages,
-    setMessagesLoaded,
     invocations,
     setInvocations,
     whiteboard,
-    setWhiteboard,
     whiteboardEpochRef,
-    whiteboardChangesRef,
-    setPendingApprovals,
-    setTraces,
-    retryRef,
     latestSeqRef,
-    participantStatusRef,
     loadWhiteboardHistory,
     changeWhiteboardArchive,
   } = room;
@@ -758,7 +750,7 @@ export function App({
   }, [base, ownerToken]);
 
   const scroll = useMessageScroll({ messages, username, timeline });
-  const { setPendingNewMessages, setShowJumpToBottom, nearBottomRef, messageCountRef } = scroll;
+  const { setPendingNewMessages, setShowJumpToBottom, nearBottomRef } = scroll;
 
   const composer = useComposer({
     username,
@@ -1244,32 +1236,30 @@ export function App({
       // 访客只能待在被邀请的房间
       if (guest && roomId !== guest.roomId) return;
       markRoomRead(currentRoomId);
-      setMessages([]);
-      setMessagesLoaded(false);
-      setConnectionState("connecting");
-      setInvocations(new Map());
-      setWhiteboard(new Map());
-      whiteboardEpochRef.current += 1;
-      whiteboardChangesRef.current.clear();
-      setPendingApprovals(new Set());
-      setTraces(new Map());
+      const cachedScroll = room.activateRoom(roomId, {
+        scrollTop: scroll.messageListRef.current?.scrollTop ?? 0,
+        nearBottom: nearBottomRef.current,
+        visibleLimit,
+      });
+      scroll.restoreRoomScroll(cachedScroll);
       setHighlightedMessageId(undefined);
       setPendingJumpId(undefined);
-      setParticipants([]);
-      participantStatusRef.current = new Map();
-      latestSeqRef.current = 0;
-      retryRef.current = 0;
-      messageCountRef.current = 0;
-      nearBottomRef.current = true;
       setPendingNewMessages(0);
       setError(undefined);
       setMentionContext(undefined);
-      setVisibleLimit(25);
+      setVisibleLimit(cachedScroll?.visibleLimit ?? 25);
       setShowJumpToBottom(false);
       setCurrentRoomId(roomId);
       closeMobilePanel(false);
     },
-    [closeMobilePanel, currentRoomId, markRoomRead],
+    [
+      closeMobilePanel,
+      currentRoomId,
+      markRoomRead,
+      room.activateRoom,
+      scroll.restoreRoomScroll,
+      visibleLimit,
+    ],
   );
 
   // 换房间收起停靠的预览：附件属于原来的房间
@@ -2410,6 +2400,7 @@ export function App({
                 actions={actions}
                 messages={messages}
                 messagesLoaded={room.messagesLoaded}
+                initialLoading={!room.hasLoadedRoomRef.current}
                 loadingStatus={loadingStatus}
                 currentRoomName={currentRoomName}
                 currentRoomId={currentRoomId}
