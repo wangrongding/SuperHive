@@ -2444,5 +2444,9 @@
   "未知错误": "Unknown error",
   "Hive 没有重启 Agent。{0} 要重启后才会加载新的 MCP。": "Hive didn't restart any agents. {0} need a restart to load the new MCP server.",
   "Hive 没有重启 Agent；终端里新开的 CLI 会话会加载新的 MCP。": "Hive didn't restart any agents; new CLI sessions in the terminal will load the new MCP server.",
-  "从清单安装": "Install from catalog"
+  "从清单安装": "Install from catalog",
+  "设主 Agent": "Set lead agent",
+  "这个房间还没有主 Agent：没 @ 任何人的消息没人接": "This room has no lead agent: messages that don't @ anyone go unanswered",
+  "选一个主 Agent": "Pick a lead agent",
+  "切换主 Agent": "Switch lead agent"
 }

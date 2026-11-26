@@ -324,6 +324,8 @@ export type StatusBarProps = {
   meta: MetaResponse | undefined;
   participants: readonly Participant[];
   leadAgentName: string | undefined;
+  /** 房主才有：在状态栏里直接换主 Agent */
+  setLeadAgent?: ((name: string) => void) | undefined;
   isOwner: boolean;
   /** 只给这台电脑上的房主：本机 Agent、代理、熄屏保持在线 */
   local: LocalAgentsState;
@@ -353,6 +355,7 @@ export function StatusBar(props: StatusBarProps) {
     meta,
     participants,
     leadAgentName,
+    setLeadAgent,
     local,
     im,
     incidents,
@@ -545,7 +548,28 @@ export function StatusBar(props: StatusBarProps) {
             onClick={() => openAgentTasks(document.activeElement as HTMLElement | null)}
           />
         )}
-        {lead && <LeadAgentItem lead={lead} />}
+        {lead && (
+          <LeadAgentItem lead={lead} agents={agentsOf(participants)} onSwitch={setLeadAgent} />
+        )}
+        {!lead && setLeadAgent && agentsOf(participants).length > 0 && (
+          <StatusItem
+            className="status-lead"
+            icon={<Icon name="users" size={13} />}
+            label={t("设主 Agent")}
+            tooltip={t("这个房间还没有主 Agent：没 @ 任何人的消息没人接")}
+            popover={(close) => (
+              <PopoverSection title={t("选一个主 Agent")}>
+                <LeadChoices
+                  agents={agentsOf(participants)}
+                  onSwitch={(name) => {
+                    close();
+                    setLeadAgent(name);
+                  }}
+                />
+              </PopoverSection>
+            )}
+          />
+        )}
         {incidents && incidents.count > 0 && (
           <StatusItem
             className="status-incidents"
@@ -847,8 +871,55 @@ export function StatusBar(props: StatusBarProps) {
   );
 }
 
+/** 房间里的 Agent：在线的在前，按名字排 */
+function agentsOf(participants: readonly Participant[]): Participant[] {
+  const rank = (participant: Participant) => (participant.status === "offline" ? 1 : 0);
+  return participants
+    .filter((participant) => participant.type === "agent")
+    .sort((a, b) => rank(a) - rank(b) || a.username.localeCompare(b.username));
+}
+
+function LeadChoices({
+  agents,
+  current,
+  onSwitch,
+}: {
+  agents: readonly Participant[];
+  current?: string;
+  onSwitch: (name: string) => void;
+}) {
+  const statusText = (participant: Participant) =>
+    participant.status === "offline"
+      ? t("离线")
+      : participant.status === "busy"
+        ? t("忙碌")
+        : t("在线");
+  return (
+    <ChoiceGroup
+      label={t("切换主 Agent")}
+      value={current ?? ""}
+      options={agents.map((agent) => ({
+        value: agent.username,
+        label: agent.username,
+        hint: statusText(agent),
+      }))}
+      onChange={(name) => {
+        if (name !== current) onSwitch(name);
+      }}
+    />
+  );
+}
+
 /** 主 Agent：名字、模型和上下文用量；点开看详情 */
-function LeadAgentItem({ lead }: { lead: Participant }) {
+function LeadAgentItem({
+  lead,
+  agents,
+  onSwitch,
+}: {
+  lead: Participant;
+  agents: readonly Participant[];
+  onSwitch?: ((name: string) => void) | undefined;
+}) {
   const percent = contextPercent(lead);
   const model = lead.lastModel ? modelDisplayName(lead.lastModel.id) : undefined;
   const tone =
@@ -877,46 +948,62 @@ function LeadAgentItem({ lead }: { lead: Participant }) {
         </>
       }
       tooltip={t("主 Agent {0}：{1}", { 0: lead.username, 1: statusText })}
-      popover={() => (
-        <PopoverSection>
-          <dl className="status-facts">
-            <dt>{t("状态")}</dt>
-            <dd>
-              <Dot tone={tone} />
-              {statusText}
-            </dd>
-            {model && (
-              <>
-                <dt>{t("模型")}</dt>
-                <dd className="mono">
-                  {model}
-                  {lead.lastModel?.effort ? ` · ${lead.lastModel.effort}` : ""}
-                </dd>
-              </>
+      popover={(close) => (
+        <>
+          <PopoverSection>
+            <dl className="status-facts">
+              <dt>{t("状态")}</dt>
+              <dd>
+                <Dot tone={tone} />
+                {statusText}
+              </dd>
+              {model && (
+                <>
+                  <dt>{t("模型")}</dt>
+                  <dd className="mono">
+                    {model}
+                    {lead.lastModel?.effort ? ` · ${lead.lastModel.effort}` : ""}
+                  </dd>
+                </>
+              )}
+              {percent !== undefined && (
+                <>
+                  <dt>{t("上下文")}</dt>
+                  <dd>
+                    <span
+                      className={`status-meter${percent >= 80 ? " warning" : ""}`}
+                      role="meter"
+                      aria-label={t("上下文用量")}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={percent}
+                    >
+                      <span style={{ width: `${percent}%` }} />
+                    </span>
+                    {percent}%
+                  </dd>
+                </>
+              )}
+            </dl>
+            {lead.context && (
+              <p className="status-popover-note pre">
+                {memberContextHint(lead.context, Date.now())}
+              </p>
             )}
-            {percent !== undefined && (
-              <>
-                <dt>{t("上下文")}</dt>
-                <dd>
-                  <span
-                    className={`status-meter${percent >= 80 ? " warning" : ""}`}
-                    role="meter"
-                    aria-label={t("上下文用量")}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={percent}
-                  >
-                    <span style={{ width: `${percent}%` }} />
-                  </span>
-                  {percent}%
-                </dd>
-              </>
-            )}
-          </dl>
-          {lead.context && (
-            <p className="status-popover-note pre">{memberContextHint(lead.context, Date.now())}</p>
+          </PopoverSection>
+          {onSwitch && agents.length > 1 && (
+            <PopoverSection title={t("切换主 Agent")}>
+              <LeadChoices
+                agents={agents}
+                current={lead.username}
+                onSwitch={(name) => {
+                  close();
+                  onSwitch(name);
+                }}
+              />
+            </PopoverSection>
           )}
-        </PopoverSection>
+        </>
       )}
     />
   );

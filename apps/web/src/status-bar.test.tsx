@@ -145,6 +145,29 @@ describe("StatusBar", () => {
     expect(screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" })).toBeTruthy();
   });
 
+  it("房主点主 Agent 能直接换成房间里别的 Agent；访客没有切换", () => {
+    const setLeadAgent = vi.fn();
+    renderBar({ setLeadAgent });
+    fireEvent.click(screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" }));
+    const group = screen.getByRole("radiogroup", { name: "切换主 Agent" });
+    expect(group).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /rd-codex/ }));
+    expect(setLeadAgent).toHaveBeenCalledWith("rd-codex");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+    renderBar({ setLeadAgent: undefined });
+    fireEvent.click(screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" }));
+    expect(screen.queryByRole("radiogroup", { name: "切换主 Agent" })).toBeNull();
+  });
+
+  it("没有主 Agent 时房主能在状态栏里选一个", () => {
+    const setLeadAgent = vi.fn();
+    renderBar({ setLeadAgent, leadAgentName: undefined });
+    fireEvent.click(screen.getByRole("button", { name: /这个房间还没有主 Agent/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /rd-claude/ }));
+    expect(setLeadAgent).toHaveBeenCalledWith("rd-claude");
+  });
+
   it("改发送方式：弹出单选、写进 localStorage，Esc 关掉并把焦点还给按钮", () => {
     const props = renderBar();
     const trigger = screen.getByRole("button", { name: "发送消息的快捷键" });

@@ -2703,6 +2703,7 @@ export function App({
           meta={meta}
           participants={participants}
           leadAgentName={currentRoom?.leadAgent ?? undefined}
+          setLeadAgent={isOwner ? (name) => void setLeadAgent(name) : undefined}
           isOwner={isOwner}
           local={local}
           im={
