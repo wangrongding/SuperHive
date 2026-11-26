@@ -2,6 +2,9 @@ import {
   putRuntimeMcpServerRequestSchema,
   runtimeCredentialProviderSchema,
   serverText,
+  syncRuntimeItemRequestSchema,
+  toggleRuntimeSkillRequestSchema,
+  type RuntimeOverview,
   updateRuntimeConfigFieldsRequestSchema,
   updateRuntimeConfigFileRequestSchema,
   type RuntimeCredentialProvider,
@@ -11,7 +14,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { HiveError } from "./database.js";
 import type { LocalAgentSupervisor } from "./local-agents.js";
 import { RuntimeConfigStore } from "./runtime-config.js";
-import type { RuntimeCredentialStore } from "./runtime-credentials.js";
+import {
+  RUNTIME_CREDENTIAL_PROVIDERS,
+  type RuntimeCredentialStore,
+} from "./runtime-credentials.js";
+import { RuntimeSkillStore } from "./runtime-skills.js";
 import { errorText, hiveErrorBody } from "./texts.js";
 
 /**
@@ -26,6 +33,8 @@ const ERROR_STATUS: Record<string, number> = {
   RUNTIME_CREDENTIALS_WRITE_FAILED: 500,
   RUNTIME_CONFIG_INVALID: 400,
   RUNTIME_CONFIG_CHANGED: 409,
+  RUNTIME_SKILL_NOT_FOUND: 404,
+  RUNTIME_SKILL_EXISTS: 409,
 };
 
 export function registerRuntimeConfigRoutes(
@@ -39,6 +48,7 @@ export function registerRuntimeConfigRoutes(
 ): void {
   const { credentials, supervisor, authorizeLocal } = options;
   const store = credentials ? new RuntimeConfigStore(credentials) : undefined;
+  const skills = credentials ? new RuntimeSkillStore(credentials) : undefined;
 
   const agentsOf = (provider: RuntimeCredentialProvider) =>
     supervisor
@@ -67,7 +77,7 @@ export function registerRuntimeConfigRoutes(
 
   function audit(
     request: FastifyRequest,
-    action: "view" | "update" | "delete",
+    action: "view" | "update" | "delete" | "sync",
     provider: RuntimeCredentialProvider,
     target: string[],
   ) {
@@ -81,9 +91,11 @@ export function registerRuntimeConfigRoutes(
   function begin(
     request: FastifyRequest<{ Params: { provider: string } }>,
     reply: FastifyReply,
-  ): { store: RuntimeConfigStore; provider: RuntimeCredentialProvider } | undefined {
+  ):
+    | { store: RuntimeConfigStore; skills: RuntimeSkillStore; provider: RuntimeCredentialProvider }
+    | undefined {
     if (!authorizeLocal(request, reply)) return undefined;
-    if (!store) {
+    if (!store || !skills) {
       void reply.code(404).send({ ...errorText(serverText("error.feature.disabled")) });
       return undefined;
     }
@@ -92,7 +104,7 @@ export function registerRuntimeConfigRoutes(
       void badRequest(reply);
       return undefined;
     }
-    return { store, provider: provider.data };
+    return { store, skills, provider: provider.data };
   }
 
   /** 改完返回最新配置，并带上要重启的本机 Agent */
@@ -218,4 +230,178 @@ export function registerRuntimeConfigRoutes(
       }
     },
   );
+
+  /* ---------- 全局 skills ---------- */
+
+  const skillsResult = (skills: RuntimeSkillStore, provider: RuntimeCredentialProvider) => ({
+    skills: skills.list(provider),
+    agents: agentsOf(provider),
+  });
+
+  app.get<{ Params: { provider: string } }>(
+    "/api/local/runtime-skills/:provider",
+    async (request, reply) => {
+      const ok = begin(request, reply);
+      if (!ok) return reply;
+      try {
+        return skillsResult(ok.skills, ok.provider);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { provider: string; id: string } }>(
+    "/api/local/runtime-skills/:provider/:id/read",
+    async (request, reply) => {
+      const ok = begin(request, reply);
+      if (!ok) return reply;
+      try {
+        const file = ok.skills.read(ok.provider, request.params.id);
+        audit(request, "view", ok.provider, [`skill:${request.params.id}`]);
+        void reply.header("Cache-Control", "no-store");
+        return file;
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { provider: string; id: string } }>(
+    "/api/local/runtime-skills/:provider/:id/toggle",
+    async (request, reply) => {
+      const ok = begin(request, reply);
+      if (!ok) return reply;
+      const body = toggleRuntimeSkillRequestSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply);
+      try {
+        ok.skills.toggle(ok.provider, request.params.id, body.data.enabled);
+        audit(request, "update", ok.provider, [`skill:${request.params.id}:enabled`]);
+        return skillsResult(ok.skills, ok.provider);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { provider: string; id: string } }>(
+    "/api/local/runtime-skills/:provider/:id",
+    async (request, reply) => {
+      const ok = begin(request, reply);
+      if (!ok) return reply;
+      try {
+        const { backup } = ok.skills.remove(ok.provider, request.params.id);
+        audit(request, "delete", ok.provider, [`skill:${request.params.id}`]);
+        return { ...skillsResult(ok.skills, ok.provider), backup };
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { provider: string; id: string } }>(
+    "/api/local/runtime-skills/:provider/:id/sync",
+    async (request, reply) => {
+      const ok = begin(request, reply);
+      if (!ok) return reply;
+      const body = syncRuntimeItemRequestSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply);
+      try {
+        ok.skills.sync(ok.provider, request.params.id, body.data.targets);
+        audit(request, "sync", ok.provider, [
+          `skill:${request.params.id}`,
+          ...body.data.targets.map((target) => `to:${target}`),
+        ]);
+        return { overview: runtimeOverview(ok.store, ok.skills) };
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { provider: string; name: string } }>(
+    "/api/local/runtime-config/:provider/mcp/:name/sync",
+    async (request, reply) => {
+      const ok = begin(request, reply);
+      if (!ok) return reply;
+      const body = syncRuntimeItemRequestSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply);
+      try {
+        ok.store.syncMcp(ok.provider, request.params.name, body.data.targets);
+        audit(request, "sync", ok.provider, [
+          `mcp:${request.params.name}`,
+          ...body.data.targets.map((target) => `to:${target}`),
+        ]);
+        return { overview: runtimeOverview(ok.store, ok.skills) };
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  /** 跨运行时总览：同一个 MCP / skill 在哪些运行时里有、是否启用。只列有配置目录的运行时 */
+  app.get("/api/local/runtime-overview", async (request, reply) => {
+    if (!authorizeLocal(request, reply)) return reply;
+    if (!store || !skills) {
+      return reply.code(404).send({ ...errorText(serverText("error.feature.disabled")) });
+    }
+    try {
+      return { overview: runtimeOverview(store, skills) };
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+}
+
+/** 一个运行时读不懂（配置写坏了）不影响别的运行时出现在总览里 */
+export function runtimeOverview(
+  store: RuntimeConfigStore,
+  skills: RuntimeSkillStore,
+): RuntimeOverview {
+  const result: RuntimeOverview = { providers: [], mcp: [], skills: [] };
+  const mcp = new Map<string, RuntimeOverview["mcp"][number]>();
+  const skillMap = new Map<string, RuntimeOverview["skills"][number]>();
+  for (const provider of RUNTIME_CREDENTIAL_PROVIDERS) {
+    if (!skills.installed(provider)) continue;
+    let servers: ReturnType<RuntimeConfigStore["mcpOf"]> | undefined;
+    try {
+      servers = store.mcpOf(provider);
+    } catch {
+      servers = undefined;
+    }
+    result.providers.push({
+      provider,
+      mcpSupported: Boolean(servers?.supported),
+      mcpCanToggle: Boolean(servers?.supported && servers.canToggle),
+    });
+    for (const server of servers?.supported ? servers.servers : []) {
+      const row = mcp.get(server.name) ?? { name: server.name, entries: [] };
+      row.entries.push({ provider, enabled: server.enabled, transport: server.transport });
+      mcp.set(server.name, row);
+    }
+    let list: ReturnType<RuntimeSkillStore["list"]>["skills"] = [];
+    try {
+      list = skills.list(provider).skills;
+    } catch {
+      list = [];
+    }
+    for (const skill of list) {
+      const row = skillMap.get(skill.name) ?? { name: skill.name, entries: [] };
+      // 同一运行时里同名的出现在多个目录时只记第一个（运行时按目录优先级取一个）
+      if (!row.entries.some((entry) => entry.provider === provider)) {
+        row.entries.push({
+          provider,
+          id: skill.id,
+          enabled: skill.enabled,
+          source: skill.source,
+          canSync: skill.canSync,
+        });
+      }
+      skillMap.set(skill.name, row);
+    }
+  }
+  const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+  result.mcp = [...mcp.values()].sort(byName);
+  result.skills = [...skillMap.values()].sort(byName);
+  return result;
 }

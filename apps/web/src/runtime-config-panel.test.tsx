@@ -104,6 +104,10 @@ function api(provider: RuntimeCredentialProvider = "claude") {
     revealRuntimeCredential: vi.fn(async () => SECRET),
     updateRuntimeCredentials: vi.fn(async () => ({ ...config(provider).credentials, agents: [] })),
     act: vi.fn(async () => undefined),
+    runtimeSkills: vi.fn(() => Promise.reject(new Error("unused"))),
+    readRuntimeSkill: vi.fn(() => Promise.reject(new Error("unused"))),
+    toggleRuntimeSkill: vi.fn(() => Promise.reject(new Error("unused"))),
+    deleteRuntimeSkill: vi.fn(() => Promise.reject(new Error("unused"))),
   };
 }
 

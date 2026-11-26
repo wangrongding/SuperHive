@@ -9,7 +9,11 @@ import type {
 import { ConfirmPopover } from "./confirm-popover";
 import { t } from "./i18n";
 import type { AgentCliWithAgents, LocalAgentsState } from "./local-agents";
-import { RuntimeConfigPanel, type RuntimeConfigApi } from "./runtime-config-panel";
+import {
+  RuntimeConfigPanel,
+  type RuntimeConfigApi,
+  type RuntimeConfigSection,
+} from "./runtime-config-panel";
 import { hasRuntimeConfig } from "./runtime-credentials";
 import "./styles/agent-clis.css";
 import { Tooltip } from "./tooltip";
@@ -77,10 +81,16 @@ type Activity = { tool: string; name: string; action: AgentCliAction };
 export function AgentClisGroup({
   api,
   focusTool,
+  focusSection,
+  focusKey,
 }: {
   api: AgentClisApi;
   /** 从接入 Agent 弹窗跳过来时要看的那个 CLI：检测结果出来后滚过去并短暂突出 */
   focusTool?: AgentCliTool | undefined;
+  /** 从总览跳过来：展开配置时直接打开这一组 */
+  focusSection?: RuntimeConfigSection | undefined;
+  /** 每跳一次换一个值，同一个 CLI 再点也会重新滚过去 */
+  focusKey?: number | undefined;
 }) {
   const [tools, setTools] = useState<AgentCliWithAgents[]>();
   const [job, setJob] = useState<AgentCliJob | null>(null);
@@ -143,7 +153,7 @@ export function AgentClisGroup({
     card.focus({ preventScroll: true });
     const timer = window.setTimeout(() => card.classList.remove("focused"), 2_000);
     return () => window.clearTimeout(timer);
-  }, [focusTool, hasTools]);
+  }, [focusTool, hasTools, focusKey]);
 
   // 任务进行中：轮询进度；结束后重新检测一次（服务端已作废检测缓存）
   const jobId = job && pending(job) ? job.id : undefined;
@@ -225,6 +235,8 @@ export function AgentClisGroup({
             (tool.status !== "notInstalled" || configured.has(tool.tool))
           }
           focused={focusTool === tool.tool}
+          focusKey={focusKey}
+          focusSection={focusTool === tool.tool ? focusSection : undefined}
           onStart={(action, command) => start(tool, action, command)}
         />
       ))}
@@ -240,6 +252,8 @@ function AgentCliCard({
   activity,
   configurable,
   focused,
+  focusKey,
+  focusSection,
   onStart,
 }: {
   api: AgentClisApi;
@@ -249,13 +263,15 @@ function AgentCliCard({
   configurable: boolean;
   /** 从接入 Agent 弹窗跳过来看这个 CLI：能配置就直接展开配置面板 */
   focused: boolean;
+  focusKey?: number | undefined;
+  focusSection?: RuntimeConfigSection | undefined;
   onStart: (action: AgentCliAction, command: string) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   useEffect(() => {
     if (focused && configurable) setConfigOpen(true);
-  }, [focused, configurable]);
+  }, [focused, configurable, focusKey]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -420,7 +436,11 @@ function AgentCliCard({
         />
       )}
       {configOpen && hasRuntimeConfig(info.tool) && (
-        <RuntimeConfigPanel api={api} provider={info.tool} />
+        <RuntimeConfigPanel
+          api={api}
+          provider={info.tool}
+          {...(focusSection ? { initialSection: focusSection } : {})}
+        />
       )}
       {error && <p className="settings-note error">{error}</p>}
     </section>

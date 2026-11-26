@@ -40,6 +40,8 @@ import type {
   RuntimeConfig,
   RuntimeCredentials,
   RuntimeMcpServerInput,
+  RuntimeOverview,
+  RuntimeSkills,
   UpdateIncidentSettingsRequest,
   UpdateRuntimeCredentialsRequest,
   WorktreeDiscardPreview,
@@ -271,6 +273,38 @@ export type LocalAgentsState = {
     content: string,
     baseHash: string | null,
   ): Promise<RuntimeConfigResult & { hash: string | null }>;
+  /** 本机：各 CLI 的全局 skills */
+  runtimeSkills(provider: RuntimeCredentialProvider): Promise<RuntimeSkillsResult>;
+  readRuntimeSkill(
+    provider: RuntimeCredentialProvider,
+    id: string,
+  ): Promise<{ content: string; path: string }>;
+  toggleRuntimeSkill(
+    provider: RuntimeCredentialProvider,
+    id: string,
+    enabled: boolean,
+  ): Promise<RuntimeSkillsResult>;
+  deleteRuntimeSkill(
+    provider: RuntimeCredentialProvider,
+    id: string,
+  ): Promise<RuntimeSkillsResult & { backup: string }>;
+  /** 跨运行时总览：同一个 MCP / skill 在哪些 CLI 里有 */
+  runtimeOverview(): Promise<RuntimeOverview>;
+  syncRuntimeSkill(
+    provider: RuntimeCredentialProvider,
+    id: string,
+    targets: RuntimeCredentialProvider[],
+  ): Promise<RuntimeOverview>;
+  syncRuntimeMcp(
+    provider: RuntimeCredentialProvider,
+    name: string,
+    targets: RuntimeCredentialProvider[],
+  ): Promise<RuntimeOverview>;
+};
+
+export type RuntimeSkillsResult = {
+  skills: RuntimeSkills;
+  agents: RuntimeCredentialsWithAgents["agents"];
 };
 
 export type RuntimeCredentialsWithAgents = RuntimeCredentials & {
@@ -1082,6 +1116,74 @@ export function useLocalAgents(
     },
     [request],
   );
+  const skillsRequest = useCallback(
+    async <T,>(path: string, init: RequestInit = {}) => {
+      const response = await request(`/api/local/runtime-skills/${path}`, init);
+      return localizeServerPayload((await response.json()) as T);
+    },
+    [request],
+  );
+  const skillPath = (provider: RuntimeCredentialProvider, id: string) =>
+    `${provider}/${encodeURIComponent(id)}`;
+  const runtimeSkills = useCallback(
+    (provider: RuntimeCredentialProvider) => skillsRequest<RuntimeSkillsResult>(provider),
+    [skillsRequest],
+  );
+  const readRuntimeSkill = useCallback(
+    (provider: RuntimeCredentialProvider, id: string) =>
+      skillsRequest<{ content: string; path: string }>(`${skillPath(provider, id)}/read`, {
+        method: "POST",
+        cache: "no-store",
+      }),
+    [skillsRequest],
+  );
+  const toggleRuntimeSkill = useCallback(
+    (provider: RuntimeCredentialProvider, id: string, enabled: boolean) =>
+      skillsRequest<RuntimeSkillsResult>(`${skillPath(provider, id)}/toggle`, {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      }),
+    [skillsRequest],
+  );
+  const deleteRuntimeSkill = useCallback(
+    (provider: RuntimeCredentialProvider, id: string) =>
+      skillsRequest<RuntimeSkillsResult & { backup: string }>(skillPath(provider, id), {
+        method: "DELETE",
+      }),
+    [skillsRequest],
+  );
+  const runtimeOverview = useCallback(async () => {
+    const response = await request("/api/local/runtime-overview");
+    return localizeServerPayload(
+      ((await response.json()) as { overview: RuntimeOverview }).overview,
+    );
+  }, [request]);
+  const syncRuntimeSkill = useCallback(
+    async (provider: RuntimeCredentialProvider, id: string, targets: RuntimeCredentialProvider[]) =>
+      (
+        await skillsRequest<{ overview: RuntimeOverview }>(`${skillPath(provider, id)}/sync`, {
+          method: "POST",
+          body: JSON.stringify({ targets }),
+        })
+      ).overview,
+    [skillsRequest],
+  );
+  const syncRuntimeMcp = useCallback(
+    async (
+      provider: RuntimeCredentialProvider,
+      name: string,
+      targets: RuntimeCredentialProvider[],
+    ) => {
+      const response = await request(
+        `/api/local/runtime-config/${provider}/mcp/${encodeURIComponent(name)}/sync`,
+        { method: "POST", body: JSON.stringify({ targets }) },
+      );
+      return localizeServerPayload(
+        ((await response.json()) as { overview: RuntimeOverview }).overview,
+      );
+    },
+    [request],
+  );
   const revokeAllOwnerDevices = useCallback(async () => {
     const response = await request("/api/local/owner-devices/revoke-all", { method: "POST" });
     return ((await response.json()) as { revoked: number }).revoked;
@@ -1213,6 +1315,13 @@ export function useLocalAgents(
     toggleRuntimeMcp,
     readRuntimeFile,
     writeRuntimeFile,
+    runtimeSkills,
+    readRuntimeSkill,
+    toggleRuntimeSkill,
+    deleteRuntimeSkill,
+    runtimeOverview,
+    syncRuntimeSkill,
+    syncRuntimeMcp,
     providers,
     agents,
     removedAgents,

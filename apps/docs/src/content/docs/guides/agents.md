@@ -178,6 +178,13 @@ Codex、Claude Code 的额外 MCP 可选择加载；`hive` 始终加载。MCP �
 
 - **已安装的 Agent CLI**：列出每个 CLI 的版本、最新版、安装位置和安装方式。点「升级」或「安装」会先显示要执行的完整命令，确认后才运行，一次只跑一个。
 - **运行时接口地址与密钥**：查看、修改各 CLI 全局配置里的接口地址和密钥，默认打码；改的是 CLI 自己的配置文件，终端里的同一个 CLI 也会受影响。
+- **MCP 与技能总览**：顶上一张表，列出同一个 MCP 服务器或 skill 在这台电脑的哪些 CLI 里有、是否启用。点格子会跳到那个 CLI 的配置里对应的一组；某些 CLI 还没有时，可以点「同步到…」勾选目标后复制过去（MCP 连同环境变量的值一起复制，skill 复制整个目录），已有同名的不会覆盖。
+- **CLI 配置里的「技能」**：列出这个 CLI 会读到的全局 skills（名称、描述、来自用户目录、共用目录、插件还是 CLI 自带），可以查看 SKILL.md、启用或停用、删除。
+  - 启停用的是各 CLI 自己的开关：Claude Code 写 `settings.json` 的 `skillOverrides`，Codex 写 `config.toml` 的 `[[skills.config]]`，opencode 写 `permission.skill`，Copilot CLI 写 `settings.json` 的 `disabledSkills`，OpenClaw 写 `skills.entries`。原文件先备份。
+  - omp 的开关在它自己管理的 `config.yml` 里，网页上只显示状态，要停用请在终端运行 `omp config set skills.ignoredSkills`。
+  - 删除前会确认，并把目录挪进同级的 `.superhive-skill-backups/`，需要时可以挪回来。`~/.agents/skills` 这类几个 CLI 共用的目录，确认时会列出还有哪些 CLI 受影响；软链只挪链接本身。
+  - Hive 自带的 `superhive` skill 和 Claude Code 插件带的 skill 只能查看：前者用 `hive skill install / uninstall` 管理，后者在 Claude Code 里用 `/plugin` 整个启停。
+  - 改动对新开的会话生效，正在运行的 Agent 重启后才读到。
 
 ![「Agent 运行时」里的已安装 Agent CLI：Claude Code、Codex、GitHub Copilot CLI、OpenCode、Oh My Pi、OpenClaw、Gemini CLI、Antigravity CLI 各一行，显示当前版本、是否有新版、安装路径和来源（npm、bun 或官方安装器），有新版的带「升级到 x」按钮，查不到最新版的 Antigravity CLI 带「尝试升级」。](/media/screens/clis.png)
 

@@ -178,6 +178,13 @@ When you open the web app on the computer running Hive Server, "Settings" gains 
 
 - **Installed agent CLIs**: lists each CLI's version, latest version, install location, and install method. Clicking "Update" or "Install" first shows the full command to be run; it runs only after you confirm, one at a time.
 - **Runtime base URLs and keys**: view and change the base URL and key in each CLI's global configuration, masked by default. This edits the CLI's own config file, so the same CLI in your terminal is affected too.
+- **MCP and skills overview**: a table at the top shows which CLIs on this computer have each MCP server or skill, and whether it's on. Select a cell to jump to that part of the CLI's config. When some CLIs don't have it yet, use "Sync to…", check the targets, and confirm to copy it over (MCP servers are copied with their environment variable values, skills as the whole folder). Anything with the same name is never overwritten.
+- **"Skills" in a CLI's config**: lists the global skills that CLI reads (name, description, and whether it comes from the user folder, a shared folder, a plugin, or the CLI itself). You can view SKILL.md, turn a skill on or off, or delete it.
+  - Turning skills on and off uses each CLI's own switch: `skillOverrides` in Claude Code's `settings.json`, `[[skills.config]]` in Codex's `config.toml`, `permission.skill` in opencode, `disabledSkills` in Copilot CLI's `settings.json`, and `skills.entries` in OpenClaw. The original file is backed up first.
+  - omp keeps its switch in a `config.yml` it manages itself, so the web app only shows the state; to turn a skill off, run `omp config set skills.ignoredSkills` in a terminal.
+  - Deleting asks first and moves the folder into `.superhive-skill-backups/` next to it, so you can move it back. For folders several CLIs share, such as `~/.agents/skills`, the confirmation lists the other CLIs affected; for a symlink only the link moves.
+  - The `superhive` skill that ships with Hive and skills from Claude Code plugins are read-only: manage the first with `hive skill install / uninstall`, and turn plugins on or off with `/plugin` in Claude Code.
+  - Changes apply to new sessions; running agents see them after a restart.
 
 ![Installed agent CLIs under "Agent runtimes": one row each for Claude Code, Codex, GitHub Copilot CLI, OpenCode, Oh My Pi, OpenClaw, Gemini CLI, and Antigravity CLI, showing the current version, whether an update is available, the install path, and the source (npm, bun, or the official installer). Rows with an update have an "Update to x" button; Antigravity CLI, whose latest version can't be looked up, has "Try updating".](/media/screens/clis.png)
 

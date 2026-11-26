@@ -1,8 +1,10 @@
-import type { ReactNode } from "react";
-import type { AgentCliTool } from "@superhive/protocol";
+import { useCallback, useState, type ReactNode } from "react";
+import type { AgentCliTool, RuntimeCredentialProvider } from "@superhive/protocol";
 import { t } from "./i18n";
 import type { LocalAgentsState } from "./local-agents";
 import { AgentClisGroup } from "./agent-clis";
+import type { RuntimeConfigSection } from "./runtime-config-panel";
+import { RuntimeOverviewBlock } from "./runtime-overview";
 
 /**
  * 设置里的「Agent 运行时」：管理这台电脑上各 Agent CLI 的设置，只给本机房主（调用方按 local.mode 判断）。
@@ -10,15 +12,34 @@ import { AgentClisGroup } from "./agent-clis";
  * 往 blocks 里加一项即可。
  */
 
+/** 跳到某个 CLI 的配置里某一组：key 每次递增，同一处再点也会重新滚过去 */
+type Focus = {
+  tool: AgentCliTool | undefined;
+  section?: RuntimeConfigSection;
+  key?: number;
+  jump: (provider: RuntimeCredentialProvider, section: RuntimeConfigSection) => void;
+};
+
 type RuntimeBlock = {
   id: string;
-  render: (local: LocalAgentsState, focusTool: AgentCliTool | undefined) => ReactNode;
+  render: (local: LocalAgentsState, focus: Focus) => ReactNode;
 };
 
 const blocks: RuntimeBlock[] = [
   {
+    id: "overview",
+    render: (local, focus) => <RuntimeOverviewBlock api={local} onJump={focus.jump} />,
+  },
+  {
     id: "clis",
-    render: (local, focusTool) => <AgentClisGroup api={local} focusTool={focusTool} />,
+    render: (local, focus) => (
+      <AgentClisGroup
+        api={local}
+        focusTool={focus.tool}
+        focusSection={focus.section}
+        focusKey={focus.key}
+      />
+    ),
   },
 ];
 
@@ -30,6 +51,15 @@ export function AgentRuntimesPanel({
   local: LocalAgentsState;
   focusTool?: AgentCliTool | undefined;
 }) {
+  const [jumped, setJumped] = useState<{
+    tool: AgentCliTool;
+    section: RuntimeConfigSection;
+    key: number;
+  }>();
+  const jump = useCallback((provider: RuntimeCredentialProvider, section: RuntimeConfigSection) => {
+    setJumped((current) => ({ tool: provider, section, key: (current?.key ?? 0) + 1 }));
+  }, []);
+  const focus: Focus = jumped ? { ...jumped, jump } : { tool: focusTool, jump };
   return (
     <section id="settings-panel-runtimes" role="tabpanel" aria-label={t("Agent 运行时")}>
       <div className="settings-panel-heading">
@@ -43,7 +73,7 @@ export function AgentRuntimesPanel({
       <div className="agent-runtime-blocks">
         {blocks.map((block) => (
           <div key={block.id} className="agent-runtime-block">
-            {block.render(local, focusTool)}
+            {block.render(local, focus)}
           </div>
         ))}
       </div>

@@ -12,6 +12,7 @@ import type { LocalAgentsState, RuntimeConfigResult } from "./local-agents";
 import { CredentialRow, RestartNotice, RUNTIME_LABELS } from "./runtime-credentials";
 import "./styles/runtime-config.css";
 import { Button } from "./button";
+import { SkillsSection, type RuntimeSkillsApi } from "./runtime-skills-panel";
 
 /**
  * Agent CLI 卡片上「配置」点开的面板（只给 Server 所在电脑上的本机房主）：分接入、行为、MCP、提示词、
@@ -31,14 +32,17 @@ export type RuntimeConfigApi = Pick<
   | "revealRuntimeCredential"
   | "updateRuntimeCredentials"
   | "act"
->;
+> &
+  RuntimeSkillsApi;
 
-type Section = "access" | "behavior" | "mcp" | "prompt" | "advanced";
+export type RuntimeConfigSection = "access" | "behavior" | "mcp" | "skills" | "prompt" | "advanced";
+type Section = RuntimeConfigSection;
 
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: "access", label: "接入" },
   { id: "behavior", label: "行为" },
   { id: "mcp", label: "MCP" },
+  { id: "skills", label: "技能" },
   { id: "prompt", label: "提示词" },
   { id: "advanced", label: "高级" },
 ];
@@ -67,12 +71,16 @@ const errorMessage = (reason: unknown) =>
 export function RuntimeConfigPanel({
   api,
   provider,
+  initialSection = "access",
 }: {
   api: RuntimeConfigApi;
   provider: RuntimeCredentialProvider;
+  /** 从总览跳过来时直接打开的那一组 */
+  initialSection?: RuntimeConfigSection;
 }) {
   const [result, setResult] = useState<RuntimeConfigResult>();
-  const [section, setSection] = useState<Section>("access");
+  const [section, setSection] = useState<Section>(initialSection);
+  useEffect(() => setSection(initialSection), [initialSection]);
   const [saved, setSaved] = useState(0);
   const [error, setError] = useState<string>();
   const { runtimeConfig } = api;
@@ -123,6 +131,7 @@ export function RuntimeConfigPanel({
         {section === "access" && <AccessSection {...props} />}
         {section === "behavior" && <FieldsSection {...props} group="behavior" />}
         {section === "mcp" && <McpSection {...props} />}
+        {section === "skills" && <SkillsSection api={api} provider={provider} />}
         {section === "prompt" && <PromptSection {...props} />}
         {section === "advanced" && <AdvancedSection {...props} />}
       </div>

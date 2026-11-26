@@ -1267,6 +1267,42 @@ export const serverTexts = {
     zh: "这个 CLI 的全局配置没有单独停用的开关，不用了就删掉",
     en: "This CLI's global config has no switch to disable a single server; delete it instead",
   },
+  "runtimeSkills.note.plugin": {
+    zh: "跟着插件 {plugin} 一起启停，请在 Claude Code 里用 /plugin 管理",
+    en: "Turns on and off with the {plugin} plugin; manage it with /plugin in Claude Code",
+  },
+  "runtimeSkills.note.superhive": {
+    zh: "Hive 自带的 superhive skill，Agent 靠它加入房间，只能查看；用 hive skill install / uninstall 管理",
+    en: "The superhive skill ships with Hive and agents use it to join rooms, so it's read-only here; manage it with hive skill install / uninstall",
+  },
+  "runtimeSkills.note.system": {
+    zh: "{name} 自带的系统 skill，可以停用，不能删除",
+    en: "A system skill that ships with {name}; you can turn it off but not delete it",
+  },
+  "runtimeSkills.note.ompOwned": {
+    zh: "omp 自己管理 config.yml（带锁文件），要停用请在终端运行 omp config set skills.ignoredSkills，或在 omp 里用 /settings",
+    en: "omp manages config.yml itself (with a lock file); to turn a skill off, run omp config set skills.ignoredSkills in a terminal or use /settings inside omp",
+  },
+  "runtimeSkills.note.unreadable": {
+    zh: "{file} 的写法认不出，为免改坏不在网页上启停，请手动修改",
+    en: "{file} uses a layout Hive can't read safely; change it by hand so nothing breaks",
+  },
+  "runtimeSkills.note.unverified": {
+    zh: "按 {name} 的文档实现，还没在真机上核对过",
+    en: "Implemented from the {name} docs and not yet checked on a real install",
+  },
+  "error.runtimeSkills.notFound": {
+    zh: "找不到这个 skill，可能已在别处被删掉，请刷新后再试。",
+    en: "This skill wasn't found. It may have been deleted elsewhere; refresh and try again.",
+  },
+  "error.runtimeSkills.exists": {
+    zh: "{target} 里已经有 {name}，没有覆盖。",
+    en: "{target} already has {name}, so nothing was overwritten.",
+  },
+  "error.runtimeSkills.moveFailed": {
+    zh: "没能处理 {path}：{reason}",
+    en: "Couldn't process {path}: {reason}",
+  },
   "runtimeConfig.note.ompOwned": {
     zh: "omp 自己管理 config.yml（带锁文件），请在 omp 里用 /model 切换",
     en: "omp manages config.yml itself (with a lock file); switch models with /model inside omp",

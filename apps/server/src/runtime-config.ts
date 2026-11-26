@@ -26,6 +26,7 @@ import {
 } from "./config-edit.js";
 import { HiveError } from "./database.js";
 import type { RuntimeCredentialContext, RuntimeCredentialStore } from "./runtime-credentials.js";
+import { RUNTIME_LABELS } from "./runtime-skills.js";
 
 /**
  * Agent CLI 的配置面板（只限本机房主）：接入地址与密钥仍由 RuntimeCredentialStore 负责，这里补上
@@ -580,6 +581,61 @@ export class RuntimeConfigStore {
       envKeys: keys(entry.env),
       enabled,
     };
+  }
+
+  /** 总览用：只读 MCP 列表，不碰密钥 */
+  mcpOf(provider: RuntimeCredentialProvider): RuntimeConfig["mcp"] {
+    return this.readMcp(this.spec(provider));
+  }
+
+  /** 把一个 MCP 原样（含环境变量的值）复制到别的运行时；目标里已有同名的就整体拒绝，不覆盖 */
+  syncMcp(
+    provider: RuntimeCredentialProvider,
+    name: string,
+    targets: RuntimeCredentialProvider[],
+  ): RuntimeCredentialProvider[] {
+    const spec = this.requireMcp(provider);
+    const data = parseFormat(spec.format, readText(spec.file) ?? "");
+    if (!data) throw this.mcpUnreadable(spec.file, spec.format);
+    const entry = record(record(data[this.mcpRoot(spec.kind)])?.[name]);
+    if (!entry) throw invalid(name);
+    const server = this.toServer(spec.kind, name, entry, spec);
+    const env = record(entry[spec.kind === "opencode" ? "environment" : "env"]) ?? {};
+    const input: RuntimeMcpServerInput = {
+      transport: server.transport,
+      ...(server.transport === "stdio"
+        ? { command: server.command ?? "", args: server.args ?? [] }
+        : { url: server.url ?? "" }),
+      env: Object.fromEntries(
+        Object.entries(env).flatMap(([key, value]) =>
+          typeof value === "string" ? [[key, value]] : [],
+        ),
+      ),
+      enabled: true,
+    };
+    if (input.transport === "stdio" ? !input.command : !input.url) throw invalid(name);
+    const list = [...new Set(targets)].filter((target) => target !== provider);
+    if (!list.length) throw invalid("targets");
+    for (const target of list) {
+      const mcp = this.readMcp(this.spec(target));
+      if (!mcp.supported) {
+        throw new HiveError(
+          "RUNTIME_CREDENTIALS_NOT_EDITABLE",
+          serverText("error.runtimeCredentials.notEditable", {
+            field: "MCP",
+            reason: mcp.noteText ?? serverText("runtimeCredentials.note.complex"),
+          }),
+        );
+      }
+      if (mcp.servers.some((item) => item.name === name)) {
+        throw new HiveError(
+          "RUNTIME_SKILL_EXISTS",
+          serverText("error.runtimeSkills.exists", { target: RUNTIME_LABELS[target], name }),
+        );
+      }
+    }
+    for (const target of list) this.putMcp(target, name, input);
+    return list;
   }
 
   /** 新增或修改一个 MCP；改名时先删旧的。没写的字段（例如 headers、timeout）保留原值 */

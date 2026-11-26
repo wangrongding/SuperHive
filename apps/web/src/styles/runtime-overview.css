@@ -1,0 +1,190 @@
+/* 「Agent 运行时」顶上的 MCP 与技能总览 */
+.runtime-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runtime-overview-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.runtime-overview h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.runtime-overview .runtime-config-tabs {
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.runtime-skills-filter {
+  min-width: 0;
+  flex: 0 1 220px;
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.runtime-skills .runtime-skills-filter {
+  margin-left: 0;
+  flex: none;
+  max-width: 320px;
+}
+
+.runtime-overview-scroll {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.runtime-overview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.runtime-overview-table th,
+.runtime-overview-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-light);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.runtime-overview-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel, var(--bg-main));
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.runtime-overview-table th[scope="row"],
+.runtime-overview-table thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  max-width: 240px;
+  background: var(--bg-panel, var(--bg-main));
+  text-align: left;
+}
+
+.runtime-overview-table thead th:first-child {
+  z-index: 2;
+}
+
+.runtime-overview-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.runtime-overview-table th[scope="row"] small.error {
+  display: block;
+  white-space: normal;
+  color: var(--danger);
+}
+
+.runtime-overview-status {
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.runtime-overview-status.on {
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+
+.runtime-overview-status.off {
+  border-color: var(--border);
+  color: var(--text-tertiary);
+}
+
+.runtime-overview-status:hover,
+.runtime-overview-status:focus-visible {
+  border-color: var(--accent);
+}
+
+.runtime-overview-cell.missing {
+  color: var(--text-tertiary);
+}
+
+.runtime-overview-actions {
+  text-align: right;
+}
+
+.runtime-overview-sync {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.runtime-overview-sync p {
+  margin: 0;
+}
+
+.runtime-overview-sync label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* 配置面板里的「技能」 */
+.runtime-skill-desc {
+  flex-basis: 100%;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: normal;
+}
+
+.runtime-skill-viewer {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.runtime-skill-viewer pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle, var(--bg-main));
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.runtime-skill-dirs {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.runtime-skill-dirs ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.runtime-skill-viewer small {
+  flex-basis: auto;
+}

@@ -1910,6 +1910,89 @@ export type RuntimeMcpServerInput = z.infer<typeof runtimeMcpServerInputSchema>;
 export type RuntimeConfigFile = z.infer<typeof runtimeConfigFileSchema>;
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
 
+/**
+ * 全局 skills（只限本机房主）：按运行时列出它会读取的全局 skills 目录里的 SKILL.md，
+ * 按各运行时原生的开关启停（Claude Code 的 skillOverrides、Codex 的 [[skills.config]]…），
+ * 删除是把目录挪进同级的 .superhive-skill-backups/，可以手动还原。
+ */
+export const runtimeSkillSourceSchema = z.enum(["user", "shared", "plugin", "system", "superhive"]);
+export const runtimeSkillSchema = z.object({
+  /** 在这个运行时里唯一：<目录来源>/<目录名> */
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  /** user：运行时自己的目录；shared：几个运行时共用的目录；plugin：插件带的；system：CLI 自带；superhive：Hive 装的 */
+  source: runtimeSkillSourceSchema,
+  plugin: z.string().optional(),
+  /** skill 目录（家目录写成 ~） */
+  path: z.string(),
+  /** 目录是软链时指向哪里 */
+  linkTarget: z.string().optional(),
+  enabled: z.boolean(),
+  canToggle: z.boolean(),
+  canDelete: z.boolean(),
+  canSync: z.boolean(),
+  /** 这个目录还会被哪些运行时读到（删除时一起受影响） */
+  sharedWith: z.array(runtimeCredentialProviderSchema),
+  note: z.string().optional(),
+  noteText: serverTextSchema.optional(),
+});
+export const runtimeSkillsSchema = z.object({
+  provider: runtimeCredentialProviderSchema,
+  /** 启停写在哪里；不能在这里启停时为空，note 说明原因 */
+  toggleLocation: z.string().optional(),
+  dirs: z.array(
+    z.object({ path: z.string(), exists: z.boolean(), source: runtimeSkillSourceSchema }),
+  ),
+  skills: z.array(runtimeSkillSchema),
+  note: z.string().optional(),
+  noteText: serverTextSchema.optional(),
+});
+export const runtimeOverviewSchema = z.object({
+  /** 这台电脑上有配置目录的运行时 */
+  providers: z.array(
+    z.object({
+      provider: runtimeCredentialProviderSchema,
+      mcpSupported: z.boolean(),
+      mcpCanToggle: z.boolean(),
+    }),
+  ),
+  mcp: z.array(
+    z.object({
+      name: z.string(),
+      entries: z.array(
+        z.object({
+          provider: runtimeCredentialProviderSchema,
+          enabled: z.boolean(),
+          transport: z.enum(["stdio", "http", "sse"]),
+        }),
+      ),
+    }),
+  ),
+  skills: z.array(
+    z.object({
+      name: z.string(),
+      entries: z.array(
+        z.object({
+          provider: runtimeCredentialProviderSchema,
+          id: z.string(),
+          enabled: z.boolean(),
+          source: runtimeSkillSourceSchema,
+          canSync: z.boolean(),
+        }),
+      ),
+    }),
+  ),
+});
+export const toggleRuntimeSkillRequestSchema = z.object({ enabled: z.boolean() });
+export const syncRuntimeItemRequestSchema = z.object({
+  targets: z.array(runtimeCredentialProviderSchema).min(1).max(6),
+});
+export type RuntimeSkillSource = z.infer<typeof runtimeSkillSourceSchema>;
+export type RuntimeSkill = z.infer<typeof runtimeSkillSchema>;
+export type RuntimeSkills = z.infer<typeof runtimeSkillsSchema>;
+export type RuntimeOverview = z.infer<typeof runtimeOverviewSchema>;
+
 export const keepAwakeSettingsSchema = z.object({
   whenIm: z.boolean(),
   whenTasks: z.boolean(),

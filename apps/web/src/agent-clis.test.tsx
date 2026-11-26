@@ -101,6 +101,10 @@ const unusedConfigApi = {
   writeRuntimeFile: unused(),
   revealRuntimeCredential: unused(),
   updateRuntimeCredentials: unused(),
+  runtimeSkills: unused(),
+  readRuntimeSkill: unused(),
+  toggleRuntimeSkill: unused(),
+  deleteRuntimeSkill: unused(),
 };
 
 describe("AgentClisGroup", () => {
