@@ -11,7 +11,36 @@ import {
   whiteboardArchiveRequestSchema,
   whiteboardRemovedEventSchema,
   roomClearRequestSchema,
+  metaResponseSchema,
 } from "./index.js";
+
+describe("feedback metadata wire compatibility", () => {
+  const meta = {
+    name: "SuperHive",
+    roomId: "general",
+    httpUrl: "https://example.com",
+    wsUrl: "wss://example.com/ws",
+    mcpUrl: "https://example.com/mcp",
+  };
+  it("accepts older metadata and strips unexpected diagnostic fields", () => {
+    expect(metaResponseSchema.parse(meta)).toEqual(meta);
+    expect(
+      metaResponseSchema.parse({
+        ...meta,
+        feedback: {
+          version: "0.4.8",
+          commit: "abcdef0123456789",
+          runMode: "source",
+          token: "private",
+        },
+      }).feedback,
+    ).toEqual({ version: "0.4.8", commit: "abcdef0123456789", runMode: "source" });
+    expect(
+      metaResponseSchema.safeParse({ ...meta, feedback: { version: "0.4.8", runMode: "unknown" } })
+        .success,
+    ).toBe(false);
+  });
+});
 
 describe("whiteboard lifecycle wire compatibility", () => {
   const entry = { id: "00000000-0000-4000-8000-000000000001", updatedAt: "2026-11-16T00:00:00Z" };

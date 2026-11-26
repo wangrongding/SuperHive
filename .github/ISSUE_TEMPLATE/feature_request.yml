@@ -1,0 +1,28 @@
+name: Feature request / 建议功能
+description: Suggest an improvement to SuperHive / 提出新功能或改进
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first. Describe the problem, desired workflow and alternatives. Do not include credentials or room messages.
+        请先搜索已有 issue，说明问题、期望的工作方式和备选方案，不附凭据或房间消息。
+        Long reports copied from SuperHive can be pasted in full into Description.
+        从 SuperHive 复制的长正文可全部粘贴到「描述」。
+  - type: textarea
+    id: description
+    attributes:
+      label: Description / 描述
+      description: What would you like to achieve, and why? / 你想实现什么，为什么？
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics / 诊断信息
+      description: Optional version, commit, distribution, OS, browser and Agent CLI versions.
+  - type: textarea
+    id: incident
+    attributes:
+      label: Incident summary / 故障单摘要
+      description: Optional source, status, count and code location only.

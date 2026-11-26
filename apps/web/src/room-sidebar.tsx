@@ -35,6 +35,7 @@ export function RoomSidebar({
   openActivity,
   openOwnerDevices,
   openRoomDialog,
+  openFeedback,
   panelWidths,
   renderRoomItem,
   resizePanel,
@@ -79,6 +80,7 @@ export function RoomSidebar({
   openActivity: (view: ActivityView, trigger?: HTMLElement | null) => void;
   /** 用户菜单「在其他设备登录」：只在这台电脑（或已登录的设备）上给房主 */
   openOwnerDevices?: (() => void) | undefined;
+  openFeedback?: (() => void) | undefined;
   openRoomDialog: (
     dialog: { mode: "create" } | { mode: "manage"; room: RoomSummary },
     trigger: HTMLButtonElement,
@@ -403,6 +405,19 @@ export function RoomSidebar({
               <span>{t("帮助与文档")}</span>
               <Icon name="external" size={13} />
             </a>
+            {openFeedback && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  openFeedback();
+                }}
+              >
+                <Icon name="message" size={15} />
+                <span>{t("反馈问题 / 建议功能")}</span>
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"
@@ -418,24 +433,35 @@ export function RoomSidebar({
             </button>
           </div>
         )}
-        <button
-          ref={settingsTriggerRef}
-          type="button"
-          className="sidebar-user-chip"
-          aria-label={t("用户菜单")}
-          aria-haspopup="menu"
-          aria-expanded={userMenuOpen}
-          onClick={() => setUserMenuOpen((current) => !current)}
-        >
-          <span className="identity-avatar" style={avatarHueStyle(username)} aria-hidden="true">
-            {username.slice(0, 1).toUpperCase()}
-          </span>
-          <span className="identity-copy">
-            <strong>{username}</strong>
-            <small>{t("当前身份")}</small>
-          </span>
-          <Icon name="more" size={16} />
-        </button>
+        <div className="sidebar-identity-row">
+          <button
+            ref={settingsTriggerRef}
+            type="button"
+            className="sidebar-user-chip"
+            aria-label={t("用户菜单")}
+            aria-haspopup="menu"
+            aria-expanded={userMenuOpen}
+            onClick={() => setUserMenuOpen((current) => !current)}
+          >
+            <span className="identity-avatar" style={avatarHueStyle(username)} aria-hidden="true">
+              {username.slice(0, 1).toUpperCase()}
+            </span>
+            <span className="identity-copy">
+              <strong>{username}</strong>
+              <small>{t("当前身份")}</small>
+            </span>
+          </button>
+          {openFeedback && (
+            <IconButton
+              className="sidebar-feedback"
+              label={t("反馈问题 / 建议功能")}
+              aria-haspopup="dialog"
+              onClick={openFeedback}
+            >
+              <Icon name="message" size={18} />
+            </IconButton>
+          )}
+        </div>
       </div>
     </aside>
   );

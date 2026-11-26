@@ -476,12 +476,14 @@ export function IncidentsPanel({
   focusId,
   onAction,
   onDecide,
+  onFeedback,
 }: {
   data: IncidentsResponse;
   /** 从「需要你处理」点进来的那一条：滚到它、展开现场 */
   focusId?: string;
   onAction: (id: string, action: "ignore" | "reopen" | "resolve" | "dispatch") => void;
   onDecide: (id: string, decision: "approve" | "reject" | "retire") => void;
+  onFeedback?: (incident: Incident, contribute?: boolean) => void;
 }) {
   const groups = groupIncidents(data.incidents);
   const pending = data.proposals.filter((proposal) => proposal.status === "pending");
@@ -507,6 +509,7 @@ export function IncidentsPanel({
         title={t("我们的问题")}
         empty={t("没有待处理的故障单。")}
         incidents={groups.active}
+        onFeedback={onFeedback}
         focusId={focusId}
         onAction={onAction}
       />
@@ -559,6 +562,7 @@ export function IncidentsPanel({
           collapsed
           title={t("已解决、已忽略（{0}）", { 0: groups.closed.length })}
           incidents={groups.closed}
+          onFeedback={onFeedback}
           onAction={onAction}
         />
       )}
@@ -568,6 +572,7 @@ export function IncidentsPanel({
           title={t("外部原因（{0}）", { 0: groups.external.length })}
           note={t("模型服务、网络、凭证或 Agent 自己的 CLI：只重试和提示，不派修。")}
           incidents={groups.external}
+          onFeedback={onFeedback}
           onAction={onAction}
         />
       )}
@@ -579,6 +584,7 @@ export function IncidentsPanel({
             "旧版 Agent 没给出结构化原因，或是新的失败类型：只记下来，不自动派修，可以手动派。",
           )}
           incidents={groups.unknown}
+          onFeedback={onFeedback}
           onAction={onAction}
         />
       )}
@@ -594,6 +600,7 @@ function IncidentSection({
   collapsed = false,
   focusId,
   onAction,
+  onFeedback,
 }: {
   title: string;
   note?: string;
@@ -602,6 +609,7 @@ function IncidentSection({
   collapsed?: boolean;
   focusId?: string;
   onAction: (id: string, action: "ignore" | "reopen" | "resolve" | "dispatch") => void;
+  onFeedback?: (incident: Incident, contribute?: boolean) => void;
 }) {
   const list =
     incidents.length > 0 ? (
@@ -612,6 +620,7 @@ function IncidentSection({
             incident={incident}
             focused={incident.id === focusId}
             onAction={onAction}
+            onFeedback={onFeedback}
           />
         ))}
       </ul>
@@ -640,10 +649,12 @@ function IncidentRow({
   incident,
   focused = false,
   onAction,
+  onFeedback,
 }: {
   incident: Incident;
   focused?: boolean;
   onAction: (id: string, action: "ignore" | "reopen" | "resolve" | "dispatch") => void;
+  onFeedback?: (incident: Incident, contribute?: boolean) => void;
 }) {
   const note = serverString(incident.noteText);
   const sample = incident.samples[0];
@@ -744,6 +755,16 @@ function IncidentRow({
         )}
       </details>
       <div className="incident-actions">
+        {onFeedback && (
+          <>
+            <Button size="sm" onClick={() => onFeedback(incident)}>
+              {t("反馈给 SuperHive")}
+            </Button>
+            <Button size="sm" onClick={() => onFeedback(incident, true)}>
+              {t("让我的 Agent 来修")}
+            </Button>
+          </>
+        )}
         {canDispatch && (
           <Button variant="primary" size="sm" onClick={() => onAction(incident.id, "dispatch")}>
             {t("派修")}

@@ -12,6 +12,9 @@ import { TerminalDock, useDesktopTerminal } from "./terminal-dock";
 import { useSlowOps } from "./slow-ops";
 import { incidentsAvailable, useIncidents } from "./incidents-panel";
 import { IncidentsDialog, type IncidentsTab } from "./incidents-dialog";
+import { FeedbackDialog } from "./feedback-dialog";
+import { contributionAgents } from "./feedback";
+import { sendContribution } from "./contribution-send";
 import { WorktreePanel } from "./worktree-panel";
 import { installErrorReporter } from "./error-report";
 import { WorkspacePanel, workspaceApi, type WorkspaceFocus } from "./workspace-panel";
@@ -20,6 +23,7 @@ import type {
   Attachment,
   ChatMessage,
   Invocation,
+  Incident,
   LocalAgent,
   MetaResponse,
   Participant,
@@ -406,6 +410,7 @@ export function App({
     [authToken, base],
   );
   const [incidentsView, setIncidentsView] = useState<{ tab: IncidentsTab; focusId?: string }>();
+  const [feedbackView, setFeedbackView] = useState<{ incident?: Incident; contribute?: boolean }>();
   // 左侧「定时任务」面板：和「Agent 任务」「故障」同一时间只开一个
   const [schedulesOpen, setSchedulesOpen] = useState(false);
   const schedulesTriggerRef = useRef<HTMLElement | null>(null);
@@ -2145,6 +2150,11 @@ export function App({
           openSchedules={openSchedules}
           openActivity={openActivity}
           openRoomDialog={openRoomDialog}
+          openFeedback={() => {
+            setUserMenuOpen(false);
+            closeMobilePanel(false);
+            setFeedbackView({});
+          }}
           panelWidths={panelWidths}
           renderRoomItem={renderRoomItem}
           resizePanel={resizePanel}
@@ -2485,7 +2495,7 @@ export function App({
         />
       )}
 
-      {incidentsView && incidents.enabled && (
+      {incidentsView && !feedbackView && incidents.enabled && (
         <IncidentsDialog
           tab={incidentsView.tab}
           focusId={incidentsView.focusId}
@@ -2495,11 +2505,45 @@ export function App({
           currentRoomId={currentRoomId}
           username={username}
           loadAgents={loadRoomAgents}
+          onFeedback={(incident, contribute) => {
+            setFeedbackView({ incident, contribute });
+          }}
           onTab={(tab) => setIncidentsView({ tab })}
           onClose={() => {
             setIncidentsView(undefined);
             incidentsTriggerRef.current?.focus();
           }}
+        />
+      )}
+
+      {feedbackView && (
+        <FeedbackDialog
+          local={local}
+          meta={meta}
+          participants={participants}
+          recentIncident={
+            feedbackView.incident ??
+            incidents.data?.incidents
+              .slice()
+              .sort(
+                (first, second) => Date.parse(second.lastSeenAt) - Date.parse(first.lastSeenAt),
+              )[0]
+          }
+          startContributing={feedbackView.contribute}
+          prefillIncident={Boolean(feedbackView.incident)}
+          canContribute={isOwner && local.enabled === true && local.mode === "local"}
+          onContribute={(agent, task) => {
+            if (
+              !isOwner ||
+              !local.enabled ||
+              local.mode !== "local" ||
+              !contributionAgents(local.agents, participants).some((item) => item.name === agent)
+            ) {
+              return Promise.reject(new Error(t("当前 Agent 不可用于本机贡献任务。")));
+            }
+            return sendContribution(room.socketRef.current, agent, task);
+          }}
+          onClose={() => setFeedbackView(undefined)}
         />
       )}
 

@@ -115,6 +115,20 @@ describe("IncidentsPanel", () => {
     expect(screen.queryByLabelText("修的 Agent")).toBeNull();
   });
 
+  it("hands the chosen incident to feedback or contribution without dispatching a repair", () => {
+    const item = incident();
+    const onFeedback = vi.fn();
+    const calls = handlers();
+    render(
+      <IncidentsPanel data={response({ incidents: [item] })} {...calls} onFeedback={onFeedback} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "反馈给 SuperHive" }));
+    expect(onFeedback).toHaveBeenCalledWith(item);
+    fireEvent.click(screen.getByRole("button", { name: "让我的 Agent 来修" }));
+    expect(onFeedback).toHaveBeenCalledWith(item, true);
+    expect(calls.onAction).not.toHaveBeenCalled();
+  });
+
   it("lets the owner approve or reject rule proposals", () => {
     const calls = handlers();
     render(<IncidentsPanel data={response({ proposals: [proposal()] })} {...calls} />);

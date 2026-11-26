@@ -10,6 +10,7 @@ import { AppDialog } from "./app-dialog";
 import { t } from "./i18n";
 import { DocsLink } from "./docs-link";
 import { Button } from "./button";
+import type { Incident } from "@superhive/protocol";
 
 export type IncidentsTab = "incidents" | "slow-ops";
 
@@ -29,6 +30,7 @@ export function IncidentsDialog({
   loadAgents,
   onTab,
   onClose,
+  onFeedback,
 }: {
   tab: IncidentsTab;
   /** 从「需要你处理」点进来的故障单或规则提议 */
@@ -42,6 +44,7 @@ export function IncidentsDialog({
   loadAgents: (roomId: string) => Promise<RoomAgent[]>;
   onTab: (tab: IncidentsTab) => void;
   onClose: () => void;
+  onFeedback?: (incident: Incident, contribute?: boolean) => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const { data, error, refresh } = incidents;
@@ -139,6 +142,7 @@ export function IncidentsDialog({
               focusId={focusId}
               onAction={incidents.act}
               onDecide={incidents.decide}
+              onFeedback={onFeedback}
             />
           ) : (
             !error && <p className="activity-empty">{t("正在加载…")}</p>

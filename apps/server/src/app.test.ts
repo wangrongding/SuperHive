@@ -181,6 +181,31 @@ describe("Hive WebSocket protocol", () => {
     );
   });
 
+  it("exposes only allowlisted feedback build metadata to remote visitors", async () => {
+    const app = await buildApp({
+      databasePath: ":memory:",
+      token: "private-test-token",
+      incidentRepo: false,
+      staticDir: "/definitely-not-present",
+    });
+    closeApp = () => app.close();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/meta",
+      remoteAddress: "203.0.113.25",
+    });
+    const metadata = response.json();
+    expect(metadata.feedback).toEqual({
+      version: expect.stringMatching(/^\d+\.\d+\.\d+/),
+      runMode: "source",
+    });
+    expect(metadata).not.toHaveProperty("joinToken");
+    expect(metadata).not.toHaveProperty("agentCommand");
+    expect(JSON.stringify(metadata.feedback)).not.toMatch(
+      /private-test-token|Users|home|203\.0\.113/,
+    );
+  });
+
   it("exposes authenticated Hive MCP tools for an online Agent", async () => {
     const app = await buildApp({
       databasePath: ":memory:",

@@ -1,0 +1,41 @@
+name: Bug report / 报告问题
+description: Report a reproducible SuperHive problem / 反馈可复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first. This is a public repository: remove credentials, invite links, room messages, hostnames, IPs and private paths before submitting.
+        请先搜索已有 issue。这是公开仓库，请去掉凭据、邀请链接、房间消息、主机名、IP 与私人路径。
+        For a long report copied from SuperHive, paste the full Markdown into Description; the remaining fields are optional.
+        从 SuperHive 复制的长正文可全部粘贴到「描述」，其余字段可留空。
+  - type: textarea
+    id: description
+    attributes:
+      label: Description / 描述
+      description: What happened? Include the affected SuperHive behavior, not private conversation content.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      placeholder: "1. Open…\n2. Click…\n3. Observe…"
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result / 期望结果
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result / 实际结果
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics / 诊断信息
+      description: Optional version, commit, distribution, OS, browser and Agent CLI versions. No raw logs or settings.
+  - type: textarea
+    id: incident
+    attributes:
+      label: Incident summary / 故障单摘要
+      description: Optional source, status, count and code location only. Never paste room content or raw incident logs.

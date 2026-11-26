@@ -14,6 +14,7 @@ import {
 import { errorText, hiveErrorBody, wsText } from "./texts.js";
 import { resolveRoom, roomsNamedLike } from "./room-lookup.js";
 import { observeRuntime } from "./runtime-observation.js";
+import { feedbackInfo } from "./feedback-info.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { open, readFile, realpath } from "node:fs/promises";
@@ -500,6 +501,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       ? undefined
       : (options.incidentRepo ?? sourceRepository());
   const runningCommit = incidentRepo ? await currentCommit(incidentRepo) : undefined;
+  const feedback = await feedbackInfo(runningCommit);
   const incidentDesk = new IncidentDesk({
     store: new IncidentStore(database.connection(), () => clock()),
     readSetting: (key) => database.getSetting(key),
@@ -4552,6 +4554,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       httpUrl,
       wsUrl,
       mcpUrl: `${httpUrl}/mcp`,
+      ...(feedback ? { feedback } : {}),
       ...(sandbox ? { sandbox: true } : {}),
       ...(isOwnerRequest(request)
         ? (() => {

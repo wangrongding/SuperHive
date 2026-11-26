@@ -1,0 +1,136 @@
+.sidebar-identity-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-identity-row .sidebar-user-chip {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-feedback {
+  flex-shrink: 0;
+}
+
+.feedback-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-weight: 500;
+}
+
+.feedback-dialog input:not([type="checkbox"]),
+.feedback-dialog textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.feedback-dialog textarea {
+  resize: vertical;
+}
+
+.feedback-intro {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.feedback-privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.feedback-privacy .icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.feedback-type {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.feedback-result-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.feedback-diagnostics,
+.feedback-contribute {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.feedback-dialog label.feedback-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.feedback-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.feedback-diagnostics small,
+.feedback-search {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.feedback-contribute-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feedback-contribute-heading h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.feedback-task {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.feedback-notice {
+  color: var(--accent);
+}
+
+.feedback-search {
+  display: inline-block;
+  margin-top: 20px;
+}
+
+@media (max-width: 600px) {
+  .feedback-result-fields {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}

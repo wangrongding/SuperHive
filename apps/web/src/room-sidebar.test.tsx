@@ -60,6 +60,23 @@ function props(patch: Partial<Props> = {}): Props {
 }
 
 describe("sidebar incident entry", () => {
+  it("keeps the identity menu and feedback as independent accessible buttons", () => {
+    const openFeedback = vi.fn();
+    const setUserMenuOpen = vi.fn();
+    const { rerender } = render(<RoomSidebar {...props({ openFeedback, setUserMenuOpen })} />);
+    const menu = screen.getByRole("button", { name: "用户菜单" });
+    const feedback = screen.getByRole("button", { name: "反馈问题 / 建议功能" });
+    expect(menu.contains(feedback)).toBe(false);
+    expect(menu.querySelector(".icon")).toBeNull();
+    fireEvent.click(feedback);
+    expect(openFeedback).toHaveBeenCalledTimes(1);
+    expect(setUserMenuOpen).not.toHaveBeenCalled();
+    fireEvent.click(menu);
+    expect(setUserMenuOpen).toHaveBeenCalled();
+    rerender(<RoomSidebar {...props({ openFeedback, userMenuOpen: true })} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "反馈问题 / 建议功能" }));
+    expect(openFeedback).toHaveBeenCalledTimes(2);
+  });
   it("isn't there unless the page is the owner's on this computer", () => {
     render(<RoomSidebar {...props()} />);
     expect(screen.getByRole("button", { name: "Agent 任务" })).toBeTruthy();

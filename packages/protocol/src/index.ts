@@ -1192,6 +1192,13 @@ export const metaResponseSchema = z.object({
   httpUrl: z.string().url(),
   wsUrl: z.string().url(),
   mcpUrl: z.string().url(),
+  feedback: z
+    .object({
+      version: z.string(),
+      commit: z.string().optional(),
+      runMode: z.enum(["source", "npm"]),
+    })
+    .optional(),
   /** 只返回给 Server 所在电脑上的房主；远程访问者凭邀请兑换的会话访问 */
   joinToken: z.string().optional(),
   agentCommand: z.string().optional(),
