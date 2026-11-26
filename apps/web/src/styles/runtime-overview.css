@@ -123,6 +123,8 @@
 }
 
 .runtime-overview-add {
+  display: inline-flex;
+  gap: 6px;
   margin-left: auto;
 }
 
@@ -203,4 +205,239 @@
 
 .runtime-skill-viewer small {
   flex-basis: auto;
+}
+
+/* MCP 快速安装向导 */
+.runtime-install {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle, var(--bg-main));
+}
+
+.runtime-install-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+}
+
+.runtime-install-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  max-height: 360px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.runtime-install-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.runtime-install-card:hover {
+  border-color: var(--accent);
+}
+
+.runtime-install-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.runtime-install-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  align-items: baseline;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.runtime-install-title small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.runtime-install-desc {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.runtime-install-tags span {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--text-sm);
+}
+
+.runtime-install-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.runtime-install-form > label > span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-form > label em {
+  color: var(--danger);
+  font-style: normal;
+}
+
+.runtime-install-form input[type="text"],
+.runtime-install-form input[type="password"],
+.runtime-install-form input:not([type]),
+.runtime-install-form textarea {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-form > label small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-launch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-launch > span {
+  color: var(--text-secondary);
+}
+
+.runtime-install-launch ol,
+.runtime-install-plan ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-install code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.runtime-overview-targets label.disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.runtime-install-blocked {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.runtime-install-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.runtime-install-plan dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.runtime-install-plan dt {
+  color: var(--text-secondary);
+}
+
+.runtime-install-plan dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.runtime-install-plan dd ul,
+.runtime-install-result ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.runtime-install-result {
+  font-size: var(--text-sm);
+}
+
+.runtime-install-result li.ok strong {
+  color: var(--success, var(--text));
+}
+
+.runtime-install-result li.error {
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .runtime-install-plan dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-install-plan dd {
+    margin-bottom: 4px;
+  }
 }

@@ -1871,6 +1871,8 @@ const mcpNameSchema = z
   .min(1)
   .max(64)
   .regex(/^[A-Za-z0-9_.-]+$/);
+/** MCP 名字：字母、数字和 _ . - */
+export const runtimeMcpNameSchema = mcpNameSchema;
 export const runtimeMcpServerInputSchema = z
   .object({
     transport: z.enum(["stdio", "http", "sse"]),
@@ -2001,6 +2003,110 @@ export const toggleRuntimeSkillRequestSchema = z.object({ enabled: z.boolean() }
 export const syncRuntimeItemRequestSchema = z.object({
   targets: z.array(runtimeCredentialProviderSchema).min(1).max(6),
 });
+/**
+ * MCP 快速安装（只限本机房主）：仓库里维护的精选清单只描述「配方」（固定版本的启动命令或远程地址、
+ * 要填的参数），不存密钥，也不是另一份 MCP 主列表——装完照旧从各 CLI 自己的配置文件读回来。
+ * 流程：选配方、填参数 → 预览冻结的计划（预览不写文件）→ 确认后按同一份计划写；计划过期、
+ * 参数或目标文件变了就拒绝，要重新预览。
+ */
+const localizedTextSchema = z.object({ zh: z.string(), en: z.string() });
+export const mcpCatalogParamSchema = z.object({
+  id: z.string().regex(/^[a-z][a-zA-Z0-9]*$/),
+  label: localizedTextSchema,
+  help: localizedTextSchema.optional(),
+  /** secret 只能出现在 env / 请求头里，绝不进命令行参数；paths 一行一个绝对路径 */
+  kind: z.enum(["text", "path", "paths", "secret"]),
+  required: z.boolean(),
+  placeholder: z.string().optional(),
+});
+/** 模板里的 {参数 id} 换成填的值；可选参数没填时，含它的那一项（参数 / 环境变量 / 请求头）整项去掉 */
+export const mcpCatalogEntrySchema = z.object({
+  id: z.string().regex(/^[a-z0-9-]+$/),
+  /** 写进 CLI 配置时默认用的 MCP 名字 */
+  name: z.string(),
+  title: z.string(),
+  publisher: z.string(),
+  description: localizedTextSchema,
+  /** 发布者的文档 */
+  docs: z.string().url(),
+  transport: z.enum(["stdio", "http", "sse"]),
+  /** stdio：固定版本的启动命令，逐项 argv */
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  /** 远程：地址和写死值的请求头 */
+  url: z.string().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  params: z.array(mcpCatalogParamSchema),
+  /** 能装进哪些 CLI */
+  runtimes: z.array(runtimeCredentialProviderSchema),
+  /** 装之前要知道的：需要 Node / uv、要先开 Figma 桌面版等 */
+  requires: localizedTextSchema.optional(),
+});
+export const mcpCatalogSchema = z.object({
+  /** 清单版本：改了任何配方都要升 */
+  version: z.string(),
+  entries: z.array(mcpCatalogEntrySchema),
+});
+export const runtimeInstallRequestSchema = z.object({
+  recipeId: z.string().max(64),
+  name: mcpNameSchema,
+  /** 参数值（含密钥）只在请求里，不进日志、审计和响应 */
+  params: z.record(z.string().max(64), z.string().max(8192)),
+  targets: z.array(runtimeCredentialProviderSchema).min(1).max(6),
+});
+export const runtimeInstallApplyRequestSchema = runtimeInstallRequestSchema.extend({
+  planId: z.string().max(64),
+});
+const planValueSchema = z.object({
+  key: z.string(),
+  /** 含密钥的值打码成 •••••• */
+  value: z.string(),
+  secret: z.boolean(),
+});
+export const runtimeInstallPlanSchema = z.object({
+  id: z.string(),
+  /** 毫秒时间戳；过了就要重新预览 */
+  expiresAt: z.number(),
+  recipeId: z.string(),
+  catalogVersion: z.string(),
+  name: z.string(),
+  transport: z.enum(["stdio", "http", "sse"]),
+  /** 以后 CLI 启动这个 MCP 时会执行的命令，逐项 argv（这一步不执行） */
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  url: z.string().optional(),
+  env: z.array(planValueSchema),
+  headers: z.array(planValueSchema),
+  targets: z.array(
+    z.object({
+      provider: runtimeCredentialProviderSchema,
+      /** 会改的配置文件（家目录写成 ~） */
+      file: z.string(),
+      /** 用这个 CLI 的本机 Agent：要重启才会加载 */
+      agents: z.array(z.object({ id: z.string(), name: z.string(), status: z.string() })),
+    }),
+  ),
+});
+export const runtimeInstallResultSchema = z.object({
+  results: z.array(
+    z.object({
+      provider: runtimeCredentialProviderSchema,
+      ok: z.boolean(),
+      file: z.string().optional(),
+      error: z.string().optional(),
+      /** error 的结构化文案，网页按语言渲染 */
+      text: serverTextSchema.optional(),
+    }),
+  ),
+  overview: runtimeOverviewSchema,
+});
+export type McpCatalogParam = z.infer<typeof mcpCatalogParamSchema>;
+export type McpCatalogEntry = z.infer<typeof mcpCatalogEntrySchema>;
+export type McpCatalog = z.infer<typeof mcpCatalogSchema>;
+export type RuntimeInstallRequest = z.infer<typeof runtimeInstallRequestSchema>;
+export type RuntimeInstallPlan = z.infer<typeof runtimeInstallPlanSchema>;
+export type RuntimeInstallResult = z.infer<typeof runtimeInstallResultSchema>;
 export type RuntimeSkillSource = z.infer<typeof runtimeSkillSourceSchema>;
 export type RuntimeSkill = z.infer<typeof runtimeSkillSchema>;
 export type RuntimeSkills = z.infer<typeof runtimeSkillsSchema>;

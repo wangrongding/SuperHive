@@ -1,10 +1,15 @@
 import {
   addRuntimeMcpRequestSchema,
   putRuntimeMcpServerRequestSchema,
+  runtimeInstallApplyRequestSchema,
+  runtimeInstallRequestSchema,
   runtimeCredentialProviderSchema,
   serverText,
   syncRuntimeItemRequestSchema,
   toggleRuntimeSkillRequestSchema,
+  type RuntimeInstallPlan,
+  type RuntimeInstallRequest,
+  type RuntimeInstallResult,
   type RuntimeOverview,
   type ServerText,
   zhText,
@@ -21,6 +26,14 @@ import {
   RUNTIME_CREDENTIAL_PROVIDERS,
   type RuntimeCredentialStore,
 } from "./runtime-credentials.js";
+import { catalogEntry, MCP_CATALOG, MCP_CATALOG_VERSION } from "./mcp-catalog.js";
+import {
+  checkRuntime,
+  InstallPlans,
+  resolveRecipe,
+  stalePlan,
+  unknownRecipe,
+} from "./runtime-install.js";
 import { RuntimeSkillStore } from "./runtime-skills.js";
 import { errorText, hiveErrorBody } from "./texts.js";
 
@@ -38,6 +51,8 @@ const ERROR_STATUS: Record<string, number> = {
   RUNTIME_CONFIG_CHANGED: 409,
   RUNTIME_SKILL_NOT_FOUND: 404,
   RUNTIME_SKILL_EXISTS: 409,
+  RUNTIME_INSTALL_UNKNOWN: 404,
+  RUNTIME_INSTALL_PLAN_STALE: 409,
 };
 
 export function registerRuntimeConfigRoutes(
@@ -50,6 +65,7 @@ export function registerRuntimeConfigRoutes(
   },
 ): void {
   const { credentials, supervisor, authorizeLocal } = options;
+  const plans = new InstallPlans();
   const store = credentials ? new RuntimeConfigStore(credentials) : undefined;
   const skills = credentials ? new RuntimeSkillStore(credentials) : undefined;
 
@@ -80,7 +96,7 @@ export function registerRuntimeConfigRoutes(
 
   function audit(
     request: FastifyRequest,
-    action: "view" | "update" | "delete" | "sync",
+    action: "view" | "update" | "delete" | "sync" | "install-preview" | "install",
     provider: RuntimeCredentialProvider,
     target: string[],
   ) {
@@ -356,6 +372,137 @@ export function registerRuntimeConfigRoutes(
         audit(request, "update", provider, [`mcp:${body.data.name}`]);
       }
       return { overview: runtimeOverview(store, skills) };
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  /* ---------- MCP 快速安装：精选清单 → 预览冻结计划 → 按计划写 ---------- */
+
+  /** 只给本机房主、功能开着时取出存储；不通过时已经发出响应 */
+  const beginInstall = (request: FastifyRequest, reply: FastifyReply) => {
+    if (!authorizeLocal(request, reply)) return undefined;
+    if (!store || !skills) {
+      void reply.code(404).send({ ...errorText(serverText("error.feature.disabled")) });
+      return undefined;
+    }
+    return { store, skills };
+  };
+
+  /** 解析配方和参数，检查每个目标能装（配方声明了、CLI 支持全局 MCP、没有同名） */
+  const prepare = (body: RuntimeInstallRequest) => {
+    const entry = catalogEntry(body.recipeId);
+    if (!entry) throw unknownRecipe();
+    const resolved = resolveRecipe(entry, body.params);
+    const targets = [...new Set(body.targets)];
+    for (const target of targets) checkRuntime(entry, target);
+    return { entry, resolved, targets, digest: plans.digest(body, targets) };
+  };
+
+  app.get("/api/local/runtime-install/catalog", async (request, reply) => {
+    if (!beginInstall(request, reply)) return reply;
+    return MCP_CATALOG;
+  });
+
+  app.post("/api/local/runtime-install/preview", async (request, reply) => {
+    const ok = beginInstall(request, reply);
+    if (!ok) return reply;
+    const body = runtimeInstallRequestSchema.safeParse(request.body);
+    if (!body.success) return badRequest(reply);
+    try {
+      const { entry, resolved, targets, digest } = prepare(body.data);
+      const files = targets.map((target) => ({
+        provider: target,
+        ...ok.store.preflightMcp(target, body.data.name),
+      }));
+      const { id, expiresAt } = plans.create(
+        digest,
+        Object.fromEntries(files.map((item) => [item.provider, item.hash])),
+      );
+      for (const target of targets) {
+        audit(request, "install-preview", target, [`mcp:${body.data.name}`, `recipe:${entry.id}`]);
+      }
+      const plan: RuntimeInstallPlan = {
+        id,
+        expiresAt,
+        recipeId: entry.id,
+        catalogVersion: MCP_CATALOG_VERSION,
+        name: body.data.name,
+        transport: resolved.input.transport,
+        ...(resolved.display.command
+          ? { command: resolved.display.command, args: resolved.display.args ?? [] }
+          : { url: resolved.display.url ?? "" }),
+        env: resolved.display.env,
+        headers: resolved.display.headers,
+        targets: files.map((item) => ({
+          provider: item.provider,
+          file: item.file,
+          agents: agentsOf(item.provider),
+        })),
+      };
+      void reply.header("Cache-Control", "no-store");
+      return { plan };
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  /**
+   * 按预览过的计划写：参数摘要和各目标文件哈希都对得上、没过期才动手，否则什么都不写。
+   * 再逐个目标检查并写入，某个目标失败不影响已写好的，结果分目标报回去；不重启 Agent
+   */
+  app.post("/api/local/runtime-install/apply", async (request, reply) => {
+    const ok = beginInstall(request, reply);
+    if (!ok) return reply;
+    const body = runtimeInstallApplyRequestSchema.safeParse(request.body);
+    if (!body.success) return badRequest(reply);
+    try {
+      const { entry, resolved, targets, digest } = prepare(body.data);
+      const hashes = Object.fromEntries(
+        targets.map((target) => [target, ok.store.mcpFileHash(target)]),
+      );
+      if (!plans.take(body.data.planId, digest, hashes)) throw stalePlan();
+      const results: RuntimeInstallResult["results"] = [];
+      for (const target of targets) {
+        let file: string | undefined;
+        try {
+          file = ok.store.preflightMcp(target, body.data.name).file;
+          ok.store.putMcp(target, body.data.name, resolved.input, undefined, resolved.headers);
+          audit(request, "install", target, [`mcp:${body.data.name}`, `recipe:${entry.id}`]);
+          results.push({ provider: target, ok: true, file });
+        } catch (error) {
+          // 只回报错误码和文案，不带原始异常（里面可能有路径以外的内容）
+          const text =
+            error instanceof HiveError && error.text
+              ? error.text
+              : serverText("error.runtimeCredentials.writeFailed", {
+                  file: file ?? target,
+                  reason: (error as NodeJS.ErrnoException).code ?? "write error",
+                });
+          request.log.warn(
+            {
+              runtimeInstall: {
+                provider: target,
+                recipe: entry.id,
+                code: (error as HiveError).code,
+              },
+            },
+            "runtime install target failed",
+          );
+          results.push({
+            provider: target,
+            ok: false,
+            ...(file ? { file } : {}),
+            error: zhText(text),
+            text,
+          });
+        }
+      }
+      const result: RuntimeInstallResult = {
+        results,
+        overview: runtimeOverview(ok.store, ok.skills),
+      };
+      return result;
     } catch (error) {
       return fail(reply, error);
     }

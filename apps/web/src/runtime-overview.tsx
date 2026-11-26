@@ -12,6 +12,7 @@ import {
   type McpDraft,
   type RuntimeConfigSection,
 } from "./runtime-config-panel";
+import { InstallMcp, type RuntimeInstallApi } from "./runtime-install";
 import "./styles/runtime-overview.css";
 
 /**
@@ -30,7 +31,8 @@ export type RuntimeOverviewApi = Pick<
   | "toggleRuntimeMcp"
   | "deleteRuntimeMcp"
   | "toggleRuntimeSkill"
->;
+> &
+  RuntimeInstallApi;
 
 export type OverviewKind = "mcp" | "skills";
 
@@ -98,6 +100,7 @@ export function RuntimeOverviewBlock({
   const [kind, setKind] = useState<OverviewKind>(initialKind);
   const [filter, setFilter] = useState("");
   const [adding, setAdding] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const { runtimeOverview } = api;
@@ -171,6 +174,7 @@ export function RuntimeOverviewBlock({
             onClick={() => {
               setKind(item);
               setAdding(false);
+              setInstalling(false);
             }}
           >
             {item === "mcp"
@@ -188,17 +192,34 @@ export function RuntimeOverviewBlock({
             onChange={(event) => setFilter(event.target.value)}
           />
         )}
-        {kind === "mcp" && !adding && (
-          <Button
-            size="sm"
-            className="runtime-overview-add"
-            disabled={busy || !providers.some((item) => item.mcpSupported)}
-            onClick={() => setAdding(true)}
-          >
-            {t("添加 MCP")}
-          </Button>
+        {kind === "mcp" && !adding && !installing && (
+          <span className="runtime-overview-add">
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy || !providers.some((item) => item.mcpSupported)}
+              onClick={() => setInstalling(true)}
+            >
+              {t("从清单安装")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={busy || !providers.some((item) => item.mcpSupported)}
+              onClick={() => setAdding(true)}
+            >
+              {t("添加 MCP")}
+            </Button>
+          </span>
         )}
       </div>
+      {installing && kind === "mcp" && (
+        <InstallMcp
+          api={api}
+          overview={overview}
+          onClose={() => setInstalling(false)}
+          onInstalled={setOverview}
+        />
+      )}
       {adding && kind === "mcp" && (
         <AddMcp
           providers={providers.filter((item) => item.mcpSupported).map((item) => item.provider)}

@@ -165,6 +165,8 @@ export async function launchChrome(executable) {
       "--remote-debugging-port=0",
       `--user-data-dir=${profile}`,
       "--no-first-run",
+      // 通知、定位等权限请求一律直接拒绝，不弹框卡住截图
+      "--deny-permission-prompts",
       "--no-default-browser-check",
       "--disable-extensions",
       "--disable-background-networking",

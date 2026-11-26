@@ -1303,6 +1303,35 @@ export const serverTexts = {
     zh: "{name} 里的 {fields} 没法原样转成 {target} 的写法，没有复制。带请求头引用环境变量、令牌或 cwd、超时等专属字段的 MCP，请在 {target} 里手动添加。",
     en: "{fields} in {name} can't be carried over to {target} as is, so nothing was copied. Add MCP servers that use env-referencing headers, tokens or CLI-specific fields such as cwd or timeouts in {target} by hand.",
   },
+  "error.runtimeInstall.unknown": {
+    zh: "精选清单里没有这个 MCP，请刷新后再选。",
+    en: "This MCP server isn't in the catalog. Refresh and pick again.",
+  },
+  "error.runtimeInstall.param": {
+    zh: "「{field}」{reason}",
+    en: '"{field}" {reason}',
+  },
+  "error.runtimeInstall.param.required": { zh: "没有填。", en: "is required." },
+  "error.runtimeInstall.param.format": {
+    zh: "格式不对：不能换行或含控制字符，长度也有上限。",
+    en: "is malformed: no line breaks or control characters, and keep it short.",
+  },
+  "error.runtimeInstall.param.absolute": {
+    zh: "要写绝对路径，一行一个。",
+    en: "must be absolute paths, one per line.",
+  },
+  "error.runtimeInstall.param.unknown": {
+    zh: "不是这个 MCP 的参数。",
+    en: "isn't a parameter of this MCP server.",
+  },
+  "error.runtimeInstall.runtime": {
+    zh: "{name} 不能装进 {target}。",
+    en: "{name} can't be installed into {target}.",
+  },
+  "error.runtimeInstall.stale": {
+    zh: "安装计划已过期，或者预览之后参数、目标或配置文件变了，什么都没写。请重新预览。",
+    en: "The install plan expired, or the parameters, targets or config files changed after the preview. Nothing was written; preview again.",
+  },
   "error.runtimeSkills.moveFailed": {
     zh: "没能处理 {path}：{reason}",
     en: "Couldn't process {path}: {reason}",

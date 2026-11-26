@@ -687,25 +687,42 @@ export class RuntimeConfigStore {
     headers?: Record<string, string>,
   ) {
     const list = [...new Set(targets)];
-    for (const target of list) {
-      const mcp = this.readMcp(this.spec(target));
-      if (!mcp.supported) {
-        throw new HiveError(
-          "RUNTIME_CREDENTIALS_NOT_EDITABLE",
-          serverText("error.runtimeCredentials.notEditable", {
-            field: "MCP",
-            reason: mcp.noteText ?? serverText("runtimeCredentials.note.complex"),
-          }),
-        );
-      }
-      if (mcp.servers.some((item) => item.name === name)) {
-        throw new HiveError(
-          "RUNTIME_SKILL_EXISTS",
-          serverText("error.runtimeSkills.exists", { target: RUNTIME_LABELS[target], name }),
-        );
-      }
-    }
+    for (const target of list) this.preflightMcp(target, name);
     for (const target of list) this.putMcp(target, name, input, undefined, headers);
+  }
+
+  /**
+   * 新增前的检查：支持全局 MCP、读得懂、没有同名。不通过就抛错；通过时返回配置文件（家目录写成 ~）
+   * 和当前内容的哈希，安装计划靠它判断预览之后文件有没有被改过
+   */
+  preflightMcp(
+    target: RuntimeCredentialProvider,
+    name: string,
+  ): { file: string; hash: string | null } {
+    const spec = this.spec(target);
+    const mcp = this.readMcp(spec);
+    if (!mcp.supported || !spec.mcp) {
+      throw new HiveError(
+        "RUNTIME_CREDENTIALS_NOT_EDITABLE",
+        serverText("error.runtimeCredentials.notEditable", {
+          field: "MCP",
+          reason: mcp.noteText ?? serverText("runtimeCredentials.note.complex"),
+        }),
+      );
+    }
+    if (mcp.servers.some((item) => item.name === name)) {
+      throw new HiveError(
+        "RUNTIME_SKILL_EXISTS",
+        serverText("error.runtimeSkills.exists", { target: RUNTIME_LABELS[target], name }),
+      );
+    }
+    return { file: mcp.file, hash: this.mcpFileHash(target) };
+  }
+
+  /** MCP 配置文件当前内容的哈希；文件还不存在时为 null */
+  mcpFileHash(target: RuntimeCredentialProvider): string | null {
+    const spec = this.spec(target).mcp;
+    return spec ? contentHash(readText(spec.file)) : null;
   }
 
   /**

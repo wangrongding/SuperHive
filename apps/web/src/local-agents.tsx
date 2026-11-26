@@ -39,6 +39,10 @@ import type {
   RuntimeCredentialProvider,
   RuntimeConfig,
   RuntimeCredentials,
+  McpCatalog,
+  RuntimeInstallPlan,
+  RuntimeInstallRequest,
+  RuntimeInstallResult,
   RuntimeMcpServerInput,
   RuntimeOverview,
   RuntimeSkills,
@@ -306,6 +310,12 @@ export type LocalAgentsState = {
     server: RuntimeMcpServerInput,
     targets: RuntimeCredentialProvider[],
   ): Promise<RuntimeOverview>;
+  /** MCP 快速安装：精选清单、预览冻结的计划、按计划写（参数里的密钥只在请求里） */
+  runtimeInstallCatalog(): Promise<McpCatalog>;
+  previewRuntimeInstall(request: RuntimeInstallRequest): Promise<RuntimeInstallPlan>;
+  applyRuntimeInstall(
+    request: RuntimeInstallRequest & { planId: string },
+  ): Promise<RuntimeInstallResult>;
 };
 
 export type RuntimeSkillsResult = {
@@ -1202,6 +1212,30 @@ export function useLocalAgents(
     },
     [request],
   );
+  const runtimeInstallCatalog = useCallback(async () => {
+    const response = await request("/api/local/runtime-install/catalog");
+    return (await response.json()) as McpCatalog;
+  }, [request]);
+  const previewRuntimeInstall = useCallback(
+    async (body: RuntimeInstallRequest) => {
+      const response = await request("/api/local/runtime-install/preview", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return ((await response.json()) as { plan: RuntimeInstallPlan }).plan;
+    },
+    [request],
+  );
+  const applyRuntimeInstall = useCallback(
+    async (body: RuntimeInstallRequest & { planId: string }) => {
+      const response = await request("/api/local/runtime-install/apply", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return localizeServerPayload((await response.json()) as RuntimeInstallResult);
+    },
+    [request],
+  );
   const revokeAllOwnerDevices = useCallback(async () => {
     const response = await request("/api/local/owner-devices/revoke-all", { method: "POST" });
     return ((await response.json()) as { revoked: number }).revoked;
@@ -1341,6 +1375,9 @@ export function useLocalAgents(
     syncRuntimeSkill,
     syncRuntimeMcp,
     addRuntimeMcp,
+    runtimeInstallCatalog,
+    previewRuntimeInstall,
+    applyRuntimeInstall,
     providers,
     agents,
     removedAgents,

@@ -175,6 +175,9 @@ function overviewApi() {
     toggleRuntimeMcp: vi.fn(() => Promise.resolve(undefined as never)),
     deleteRuntimeMcp: vi.fn(() => Promise.resolve(undefined as never)),
     toggleRuntimeSkill: vi.fn(() => Promise.resolve(undefined as never)),
+    runtimeInstallCatalog: vi.fn(() => new Promise<never>(() => {})),
+    previewRuntimeInstall: vi.fn(() => Promise.resolve(undefined as never)),
+    applyRuntimeInstall: vi.fn(() => Promise.resolve(undefined as never)),
   };
 }
 
