@@ -65,6 +65,40 @@ describe("resolveCommand（Windows）", () => {
     );
   });
 
+  it("uses node.exe from PATH for Electron when the .cmd shim has no adjacent Node", () => {
+    const nodeDir = "D:\\nvm\\nodejs";
+    const electronEnv = { ...env, Path: `${nodeDir};${env.Path}` };
+    const files = fs({
+      [`${npm}\\codex.cmd`]: jsShim,
+      [`${nodeDir}\\node.exe`]: "",
+    });
+
+    expect(
+      resolveCommand("codex", {
+        platform: "win32",
+        env: electronEnv,
+        isElectron: true,
+        ...files,
+      }),
+    ).toEqual({
+      command: `${nodeDir}\\node.exe`,
+      args: [`${npm}\\node_modules\\@openai\\codex\\bin\\codex.js`],
+    });
+  });
+
+  it("fails clearly instead of trying to run a JavaScript shim with Electron", () => {
+    const files = fs({ [`${npm}\\codex.cmd`]: jsShim });
+
+    expect(() =>
+      resolveCommand("codex", {
+        platform: "win32",
+        env,
+        isElectron: true,
+        ...files,
+      }),
+    ).toThrow(/没有在启动器目录或 PATH 中找到 node.exe/);
+  });
+
   it("prefers a real .exe on PATH and refuses unknown batch files", () => {
     const files = fs({
       [`${npm}\\tool.exe`]: "",

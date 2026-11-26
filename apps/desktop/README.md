@@ -93,6 +93,6 @@ SUPERHIVE_DESKTOP_APP=out/SuperHive-darwin-arm64/SuperHive.app/Contents/MacOS/Su
 - 安装 Agent CLI（`npm i -g @anthropic-ai/claude-code` 之类）仍然需要系统里有 Node.js；桌面端本身不需要。
 - Windows 上 Electron 遇到「像网址的参数后面还跟着 `--` 开关」会直接退出（防协议处理器注入），所以 Server 拉起 CLI 时字符串选项一律写成 `--key=value`（`apps/server/src/local-agents.ts` 的 `cliOption`）。
 - 命令行模式（`--superhive-cli`）下除了常驻的 `join`，命令做完主动退出（Electron 的消息循环不会自己停）；Chromium 缓存按 Agent 分目录放在 `<userData>/cli/` 下，不和桌面端、别的 Agent 抢。
-- Windows：npm 全局装的 Agent CLI 如果是 `.cmd` 包装、旁边又没有 `node.exe`，Hive 会退回用 `process.execPath` 运行它，在桌面端里这会是 Electron 本身。用 nvm 装的 node（`node.exe` 和 `.cmd` 在同一目录）实测正常，其它装法还没测。
+- Windows：npm 全局 Agent CLI 的 `.cmd` JavaScript 启动器优先使用旁边的 `node.exe`；桌面端旁边没有时会从 `PATH` 查找 `node.exe`，避免把 Electron 本身误当作 Node。两处都找不到时会明确报错，请安装 Node.js 后重启 Agent。
 - Windows 安装包未签名，从网上下载后打开时 SmartScreen 一般会提示「已保护你的电脑」，需要点「更多信息 → 仍要运行」。
 - Linux 只配好了 maker，没有实际打包和运行过。
