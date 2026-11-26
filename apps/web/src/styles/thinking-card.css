@@ -141,7 +141,7 @@
   overflow-y: auto;
   font-size: var(--text-sm);
   line-height: 1.6;
-  overscroll-behavior: contain;
+  /* 不要 overscroll-behavior: contain：叙述框一直贴着底部，鼠标停在卡片上往下滚会被它吞掉，整个对话流滚不动 */
   mask-image: linear-gradient(to bottom, transparent 0, #000 1.6em);
 }
 
@@ -300,7 +300,6 @@
   max-height: 40vh;
   margin-top: 6px;
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 /* 结束后的一行回顾：挂在回复上方，点开看这一轮的过程 */
