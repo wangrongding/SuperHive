@@ -10,6 +10,17 @@
   margin-top: 8px;
 }
 
+.invocation-recalled {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.invocation-recalled-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .message.agent .invocation-row {
   margin-top: 10px;
 }

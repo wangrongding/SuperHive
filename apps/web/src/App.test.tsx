@@ -1822,6 +1822,99 @@ describe("App mention autocomplete", () => {
     expect(screen.getByRole("alert").textContent).toContain("只能撤回自己发送的消息");
   });
 
+  it("purges recalled traces from state and ignores any later steps", async () => {
+    localStorage.setItem("superhive.username", "Alice");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const agent = participant("00000000-0000-4000-8000-000000000002", "worker", "agent");
+    const now = new Date().toISOString();
+    const message: ChatMessage = {
+      id: "00000000-0000-4000-8000-000000000010",
+      roomId: "general",
+      seq: 1,
+      senderId: self.id,
+      senderName: self.username,
+      senderType: "human",
+      content: "@worker task",
+      mentions: ["worker"],
+      traceId: "00000000-0000-4000-8000-000000000011",
+      hopCount: 0,
+      createdAt: now,
+    };
+    const task: Invocation = {
+      id: "00000000-0000-4000-8000-000000000020",
+      roomId: "general",
+      messageId: message.id,
+      agentId: agent.id,
+      agentName: agent.username,
+      requesterName: self.username,
+      requesterType: "human",
+      status: "running",
+      attempts: 1,
+      createdAt: now,
+      updatedAt: now,
+      startedAt: now,
+    };
+    const step = {
+      id: "step",
+      kind: "text" as const,
+      text: "Secret execution narrative",
+      startedAt: now,
+    };
+    act(() => {
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, agent],
+        messages: [message],
+        latestSeq: 1,
+        invocations: [task],
+        features: ["trace"],
+      });
+      socket.serverEvent({
+        type: "invocation.trace",
+        roomId: "general",
+        invocationId: task.id,
+        steps: [step],
+      });
+    });
+    const root = document.querySelector(".message-list")!.shadowRoot!;
+    await waitFor(() => expect(root.textContent).toContain(step.text));
+    act(() => {
+      socket.serverEvent({
+        type: "message.deleted",
+        message: { ...message, content: "", mentions: [], deletedAt: now },
+      });
+      socket.serverEvent({
+        type: "invocation.updated",
+        invocation: { ...task, messageRecalled: true },
+      });
+      socket.serverEvent({
+        type: "invocation.trace",
+        roomId: "general",
+        invocationId: task.id,
+        steps: [step],
+      });
+    });
+    expect(root.textContent).not.toContain(step.text);
+    expect(root.textContent).toContain("任务仍在继续");
+    act(() => {
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, agent],
+        messages: [message],
+        latestSeq: 1,
+        invocations: [task],
+        features: ["trace"],
+      });
+    });
+    expect(root.textContent).not.toContain(step.text);
+  });
+
   it("collapses earlier topics, starts a new topic, and follows a cleared room", async () => {
     const user = userEvent.setup();
     localStorage.setItem("superhive.username", "Alice");

@@ -3,7 +3,9 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Invocation } from "@superhive/protocol";
-import { InvocationChips, guestCanStopTurn, turnSiblings } from "./invocations";
+import { InvocationChips, canRetryInvocation, guestCanStopTurn, turnSiblings } from "./invocations";
+import { attentionKind, isCompleted, needsDecision } from "./attention";
+import { setLocalePreference } from "./i18n";
 
 const at = "2026-11-24T07:00:00.000Z";
 const make = (id: number, overrides: Partial<Invocation> = {}): Invocation => ({
@@ -31,6 +33,98 @@ const props = {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  setLocalePreference("zh-CN");
+});
+
+describe("撤回消息的任务", () => {
+  it("服务端标记撤回的调用不能重试，也不再要求处理或报完成未看", () => {
+    const failed = make(1, { status: "failed", messageRecalled: true });
+    expect(canRetryInvocation(failed)).toBe(false);
+    expect(attentionKind(failed)).toBeUndefined();
+    expect(needsDecision(failed)).toBe(false);
+    expect(isCompleted({ ...failed, status: "completed" })).toBe(false);
+  });
+
+  it("英文紧凑状态也不展示详情", () => {
+    setLocalePreference("en");
+    render(
+      <InvocationChips
+        {...props}
+        invocations={[make(1, { messageRecalled: true })]}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("@worker · Task is still running")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop @worker's current run" })).toBeTruthy();
+  });
+
+  it.each(["completed", "cancelled", "failed", "blocked", "timed_out", "waiting_human"] as const)(
+    "已结束的 %s 不再显示卡片、详情或重试",
+    (status) => {
+      const invocation = make(1, { status, finishedAt: at, detail: "secret" });
+      const { container } = render(
+        <InvocationChips {...props} recalled invocations={[invocation]} onCancel={vi.fn()} />,
+      );
+      expect(container.textContent).toBe("");
+    },
+  );
+
+  it("只撤回时显示紧凑状态和停止，停止后收起", async () => {
+    const onCancel = vi.fn();
+    const invocation = make(1, { detail: "secret detail", progress: "secret progress" });
+    const view = render(
+      <InvocationChips {...props} recalled invocations={[invocation]} onCancel={onCancel} />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("@worker · 任务仍在继续");
+    expect(view.container.textContent).not.toContain("secret");
+    expect(screen.queryByRole("button", { name: /详情|重试|继续/ })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "停止 @worker 这一轮" }));
+    expect(onCancel).toHaveBeenCalledWith(invocation);
+    view.rerender(
+      <InvocationChips
+        {...props}
+        recalled
+        invocations={[{ ...invocation, status: "cancelling" }]}
+        onCancel={onCancel}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("停止中…");
+    expect(screen.queryByRole("button")).toBeNull();
+    view.rerender(
+      <InvocationChips
+        {...props}
+        recalled
+        invocations={[{ ...invocation, status: "completed" }]}
+        onCancel={onCancel}
+      />,
+    );
+    expect(view.container.textContent).toBe("");
+  });
+
+  it("访客不能停别人的任务，断线时停止按钮不可用", () => {
+    const invocation = make(1);
+    const view = render(
+      <InvocationChips
+        {...props}
+        recalled
+        isOwner={false}
+        selfName="visitor"
+        invocations={[invocation]}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    view.rerender(
+      <InvocationChips
+        {...props}
+        recalled
+        connectionState="offline"
+        invocations={[invocation]}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button").hasAttribute("disabled")).toBe(true);
+  });
 });
 
 describe("合在一轮里处理的几条消息", () => {

@@ -167,14 +167,23 @@ export function MessageList({
   const isMachine = (message: ChatMessage) =>
     isMachineMessage(message, (name) => agentNames.has(name.toLocaleLowerCase()));
   const invocationsByMessage = useMemo(() => groupInvocationsByMessage(invocations), [invocations]);
+  const recalledMessageIds = useMemo(
+    () => new Set(messages.filter((message) => message.deletedAt).map((message) => message.id)),
+    [messages],
+  );
   /** 回复消息 → 产生它的那次调用：回复上方显示这一轮过程的回顾 */
   const invocationByReply = useMemo(() => {
     const byReply = new Map<string, Invocation>();
     for (const invocation of invocations.values()) {
-      if (invocation.replyMessageId) byReply.set(invocation.replyMessageId, invocation);
+      if (
+        invocation.replyMessageId &&
+        !invocation.messageRecalled &&
+        !recalledMessageIds.has(invocation.messageId)
+      )
+        byReply.set(invocation.replyMessageId, invocation);
     }
     return byReply;
-  }, [invocations]);
+  }, [invocations, recalledMessageIds]);
   // 点选提交的答案按提问归档，用来在提问上高亮所选；先到的一条生效
   const choiceAnswers = useMemo(() => {
     const answers = new Map<string, QuestionAnswer>();
@@ -332,6 +341,8 @@ export function MessageList({
                 [...invocations.values()].filter(
                   (invocation) =>
                     invocation.roomId === currentRoomId &&
+                    !invocation.messageRecalled &&
+                    !recalledMessageIds.has(invocation.messageId) &&
                     (showsLiveCard(invocation) ||
                       (cardAttention(invocation) === "decide" ? isOwner : showsCard(invocation))),
                 ),
@@ -773,6 +784,7 @@ function MessageItem({
           )}
         {invocationsByMessage.has(message.id) && (
           <InvocationChips
+            recalled={Boolean(message.deletedAt)}
             connectionState={connectionState}
             invocations={invocationsByMessage.get(message.id) ?? []}
             allInvocations={invocations}
@@ -813,6 +825,8 @@ function MessageItem({
         {(invocationsByMessage.get(message.id) ?? [])
           .filter(
             (invocation) =>
+              !message.deletedAt &&
+              !invocation.messageRecalled &&
               !invocation.replyMessageId &&
               !showsLiveCard(invocation) &&
               invocation.status !== "queued" &&

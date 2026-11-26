@@ -32,7 +32,7 @@ export function isUpstreamInterrupted(invocation: Invocation): boolean {
  * 「继续」还要求 Agent 在线（与服务端 retryInvocation 一致），由显示按钮的地方判断
  */
 export function needsDecision(invocation: Invocation): boolean {
-  if (invocation.resolution) return false;
+  if (invocation.resolution || invocation.messageRecalled) return false;
   return isResumableUnknown(invocation) || isUpstreamInterrupted(invocation);
 }
 
@@ -92,6 +92,7 @@ export const attentionLabels = localized((): Record<AttentionKind, string> => ({
 
 /** 仍在进行或需要处理的调用（不含完成未看）属于哪一类；不需要处理时返回 undefined */
 export function attentionKind(invocation: Invocation): AttentionKind | undefined {
+  if (invocation.messageRecalled) return undefined;
   if (invocation.status === "waiting_human") return "question";
   if (invocation.resolution) return undefined;
   if (needsDecision(invocation)) return "decide";
@@ -109,7 +110,7 @@ export function attentionKind(invocation: Invocation): AttentionKind | undefined
 
 /** 做完了：完成未看只算正常完成的 */
 export function isCompleted(invocation: Invocation): boolean {
-  return invocation.status === "completed";
+  return !invocation.messageRecalled && invocation.status === "completed";
 }
 
 /**

@@ -23,6 +23,7 @@ export const BUDGET_EXTEND_TURNS = 10;
 /** 被预算拦下、可以由人点「继续」恢复的调用：三种预算都随追加的轮数一起放宽 */
 export function isExtendableBlock(invocation: Invocation): boolean {
   return (
+    !invocation.messageRecalled &&
     invocation.status === "blocked" &&
     (invocation.blockReason === "hop_limit" ||
       invocation.blockReason === "consecutive_limit" ||
@@ -58,6 +59,7 @@ function retryLabel(invocation: Invocation): string {
 }
 
 export function canRetryInvocation(invocation: Invocation, agentOnline = true): boolean {
+  if (invocation.messageRecalled) return false;
   return (
     // 结果未知要 Agent 在线才能继续：离线时派发会丢掉「接着原会话」的提示
     (invocation.status === "timed_out" && needsDecision(invocation) && agentOnline) ||
@@ -485,7 +487,9 @@ export function InvocationChips({
   onViewChanges,
   onRetryWithModel,
   onOpenProxySettings,
+  recalled = false,
 }: {
+  recalled?: boolean;
   /** 连不上模型服务（网络错误）时的「网络代理设置」：本机 Agent、房主才返回处理函数 */
   onOpenProxySettings?: ((invocation: Invocation) => (() => void) | undefined) | undefined;
   /** 「看改动」：打开「代码」面板并切到这个 Agent 的任务线 */
@@ -521,6 +525,50 @@ export function InvocationChips({
 }) {
   const [selectedId, setSelectedId] = useState<string>();
   const selected = invocations.find((invocation) => invocation.id === selectedId);
+  if (recalled || (invocations.length > 0 && invocations.every((item) => item.messageRecalled))) {
+    const active = invocations.filter(
+      (invocation) =>
+        invocation.status === "queued" ||
+        invocation.status === "running" ||
+        invocation.status === "cancelling" ||
+        (invocation.status === "waiting_human" && !invocation.finishedAt),
+    );
+    if (!active.length) return null;
+    return (
+      <div className="invocation-row invocation-recalled" role="status">
+        {active.map((invocation) => {
+          const stopping = invocation.status === "cancelling";
+          const canStop =
+            canCancelInvocation(invocation) &&
+            (isOwner ||
+              (selfName !== undefined &&
+                guestCanStopTurn(invocation, allInvocations?.values() ?? invocations, selfName)));
+          return (
+            <span key={invocation.id} className="invocation-recalled-status">
+              <span>
+                {t("@{0} · {1}", {
+                  0: invocation.agentName,
+                  1: stopping ? t("停止中…") : t("任务仍在继续"),
+                })}
+              </span>
+              {canStop && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  tone="danger"
+                  aria-label={t("停止 @{0} 这一轮", { 0: invocation.agentName })}
+                  disabled={connectionState !== undefined && connectionState !== "online"}
+                  onClick={() => onCancel(invocation)}
+                >
+                  {t("停止")}
+                </Button>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <>
       <div className="invocation-row" role="list" aria-label={t("Agent 调用状态")}>

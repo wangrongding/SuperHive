@@ -638,6 +638,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       localAgents?.checkSoon();
     }
     const roomId = eventRoomId(event);
+    const visibleEvent =
+      event.type === "invocation.updated"
+        ? { ...event, invocation: visibleInvocation(event.invocation) }
+        : event;
     for (const connection of connections) {
       if (!connection.participant) continue;
       if (
@@ -646,7 +650,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       ) {
         continue;
       }
-      send(connection.socket, event);
+      send(connection.socket, visibleEvent);
     }
   }
 
@@ -1314,6 +1318,23 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const traces = new Map<string, { roomId: string; steps: Map<string, TraceStep> }>();
   const TRACE_LIVE_STATUSES: readonly Invocation["status"][] = ["running", "cancelling"];
 
+  function visibleInvocation(invocation: Invocation): Invocation {
+    if (!database.getMessage(invocation.messageId)?.deletedAt) return invocation;
+    return {
+      ...invocation,
+      messageRecalled: true,
+      detail: undefined,
+      detailText: undefined,
+      progress: undefined,
+      progressText: undefined,
+      runtime: undefined,
+      usage: undefined,
+      resolution: invocation.resolution
+        ? { ...invocation.resolution, note: undefined, noteText: undefined }
+        : undefined,
+    };
+  }
+
   /**
    * 这台电脑上的房主页面：用总令牌（不是登录设备、不是访客）、从本机连进来的人。
    * 慢操作带着仓库路径和调用来源，只给他们看。不要求本机凭证（x-hive-owner）：它随本机 Agent
@@ -1355,7 +1376,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   function recordTrace(agent: Participant, messageId: string, steps: TraceStep[]): void {
     const invocation = database.getInvocationFor(messageId, agent.id);
-    if (!invocation || !TRACE_LIVE_STATUSES.includes(invocation.status)) return;
+    if (
+      !invocation ||
+      database.getMessage(messageId)?.deletedAt ||
+      !TRACE_LIVE_STATUSES.includes(invocation.status)
+    )
+      return;
     let trace = traces.get(invocation.id);
     if (!trace) {
       trace = { roomId: invocation.roomId, steps: new Map() };
@@ -1378,7 +1404,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }
 
   function endTrace(invocation: Invocation): void {
-    if (TRACE_LIVE_STATUSES.includes(invocation.status) || !traces.delete(invocation.id)) return;
+    if (
+      (!database.getMessage(invocation.messageId)?.deletedAt &&
+        TRACE_LIVE_STATUSES.includes(invocation.status)) ||
+      !traces.delete(invocation.id)
+    )
+      return;
     sendToTraceViewers(invocation.roomId, {
       type: "invocation.trace",
       roomId: invocation.roomId,
@@ -3373,6 +3404,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     effort?: string,
   ): void {
     const invocation = invocationInRoom(actor, invocationId);
+    const message = database.getMessage(invocation.messageId);
+    if (message?.deletedAt) {
+      throw new HiveError(
+        "INVOCATION_MESSAGE_RECALLED",
+        serverText("error.invocation.messageRecalled"),
+      );
+    }
     // 停止未确认、或结果未知且 Agent 可能还在跑：此时重试会让同一任务并行跑两份。
     // Agent 自己报了结果未知（它已经不在跑这一轮），或者它已离线，就可以让人决定「继续」
     // Agent 还得在线：离线时派发会丢掉 resume，等它上线补派就成了从头重做
@@ -3394,7 +3432,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!retryable) {
       throw new HiveError("INVOCATION_NOT_RETRYABLE", serverText("error.invocation.notRetryable"));
     }
-    const message = database.getMessage(invocation.messageId);
     const agent = database.getParticipant(invocation.agentId);
     if (!message || message.deletedAt || !agent) {
       throw new HiveError("INVOCATION_NOT_RETRYABLE", serverText("error.invocation.triggerGone"));
@@ -5741,7 +5778,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (!params.success)
         return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
       if (!guard(request, reply, params.data.roomId)) return reply;
-      return { invocations: database.listInvocations(params.data.roomId) };
+      return { invocations: database.listInvocations(params.data.roomId).map(visibleInvocation) };
     },
   );
 
@@ -6169,7 +6206,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             participants: participantsOf(event.roomId),
             messages: database.getRecentMessages(event.roomId),
             latestSeq: database.latestSeq(event.roomId),
-            invocations: database.listInvocations(event.roomId),
+            invocations: database.listInvocations(event.roomId).map(visibleInvocation),
             whiteboard: database.listWhiteboard(event.roomId),
             schedules: database.listSchedules(event.roomId),
             approvals: [...approvals.values()]
@@ -6186,6 +6223,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           if (canSeeTrace(connection, event.roomId)) {
             for (const [invocationId, trace] of traces) {
               if (trace.roomId !== event.roomId) continue;
+              const invocation = database.getInvocation(invocationId);
+              if (!invocation || database.getMessage(invocation.messageId)?.deletedAt) continue;
               send(socket, {
                 type: "invocation.trace",
                 roomId: trace.roomId,
@@ -6452,6 +6491,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           const message = database.deleteMessage(participant, event.messageId);
           attachments.revokeForMessage(message.id);
           broadcast(participant.roomId, { type: "message.deleted", message });
+          for (const invocation of database.invocationsForMessage(message.id)) {
+            broadcastAll({ type: "invocation.updated", invocation });
+            endTrace(invocation);
+            if (
+              !event.stop &&
+              ((invocation.status === "queued" && !invocation.receivedAt) ||
+                invocation.status === "blocked")
+            ) {
+              stopRecalledTask(participant, message, invocation);
+            }
+          }
           if (event.stop) stopRecalledTasks(participant, message);
         } catch (error) {
           const hiveError = error instanceof HiveError ? error : undefined;

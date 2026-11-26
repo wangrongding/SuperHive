@@ -605,6 +605,7 @@ export const invocationSchema = z.object({
    */
   laneKey: z.string().min(1).max(64).optional(),
   status: invocationStatusSchema,
+  messageRecalled: z.boolean().optional(),
   blockReason: invocationBlockReasonSchema.optional(),
   detail: z.string().max(500).optional(),
   /** detail 的结构化版本：网页按用户语言渲染；没有时显示 detail 原文 */

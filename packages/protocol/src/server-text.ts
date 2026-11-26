@@ -1094,6 +1094,10 @@ export const serverTexts = {
     zh: "触发这个任务的消息已经不在了。",
     en: "The message that started this task no longer exists.",
   },
+  "error.invocation.messageRecalled": {
+    zh: "消息已撤回，不能重试它派出的任务。",
+    en: "This message was unsent. Its tasks can't be retried.",
+  },
   "error.networkProxy.disabled": {
     zh: "这个服务没有启用本机 Agent，不能设置网络代理。",
     en: "Local agents aren't enabled on this server, so there's no network proxy to set.",

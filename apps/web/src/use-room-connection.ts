@@ -115,6 +115,7 @@ export function useRoomConnection({
     participantStatusRef,
   } = room;
   const reconnectTimerRef = useRef<number | undefined>(undefined);
+  const recalledInvocationsRef = useRef(new Set<string>());
 
   const catchUp = useCallback(
     async (afterSeq: number) => {
@@ -161,6 +162,9 @@ export function useRoomConnection({
       socket.addEventListener("message", (rawEvent) => {
         const event = localizeServerPayload(JSON.parse(String(rawEvent.data)) as ServerEvent);
         if (event.type === "room.snapshot") {
+          recalledInvocationsRef.current = new Set(
+            (event.invocations ?? []).filter((item) => item.messageRecalled).map((item) => item.id),
+          );
           const beforeReconnect = latestSeqRef.current;
           participantStatusRef.current = new Map(
             event.participants.map((participant) => [participant.id, participant.status]),
@@ -183,11 +187,17 @@ export function useRoomConnection({
             const live = new Set(
               (event.invocations ?? [])
                 .filter((invocation) => isLiveInvocation(invocation))
+                .filter((invocation) => !invocation.messageRecalled)
                 .map((invocation) => invocation.id),
             );
             setTraces(
               (current) =>
-                new Map([...current].filter(([invocationId]) => !live.has(invocationId))),
+                new Map(
+                  [...current].filter(
+                    ([invocationId]) =>
+                      !live.has(invocationId) && !recalledInvocationsRef.current.has(invocationId),
+                  ),
+                ),
             );
           }
           latestSeqRef.current = Math.max(latestSeqRef.current, event.latestSeq);
@@ -269,6 +279,15 @@ export function useRoomConnection({
           attentionRef.current?.observe(event.invocation);
           globalEventsRef.current.onInvocation(event.invocation);
           if (event.invocation.roomId !== currentRoomId) return;
+          if (event.invocation.messageRecalled) {
+            recalledInvocationsRef.current.add(event.invocation.id);
+            endedTracesRef.current.delete(event.invocation.id);
+            setTraces((current) => {
+              const next = new Map(current);
+              next.delete(event.invocation.id);
+              return next;
+            });
+          }
           setInvocations((current) => upsertInvocation(current, event.invocation));
         } else if (event.type === "whiteboard.updated") {
           if (event.entry.roomId !== currentRoomId) return;
@@ -279,6 +298,7 @@ export function useRoomConnection({
           setWhiteboard((current) => upsertWhiteboardEntry(current, event.entry));
         } else if (event.type === "invocation.trace") {
           if (event.roomId !== currentRoomId) return;
+          if (recalledInvocationsRef.current.has(event.invocationId)) return;
           const ended = endedTracesRef.current;
           const restarted = !event.ended && ended.delete(event.invocationId);
           if (event.ended) ended.add(event.invocationId);
