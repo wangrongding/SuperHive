@@ -28,7 +28,8 @@
   height: min(720px, calc(100dvh - 48px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
+  /* clip 而不是 hidden：hidden 仍能被 scrollIntoView 滚动，跳到某个 CLI 时会把标题和关闭按钮滚出框外 */
+  overflow: clip;
   border-radius: var(--radius-2xl);
   background: var(--bg-elevated);
   color: var(--text);
@@ -61,7 +62,7 @@
   min-height: 0;
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
-  overflow: hidden;
+  overflow: clip;
 }
 
 .settings-tabs {
