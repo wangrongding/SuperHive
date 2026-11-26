@@ -63,6 +63,7 @@ import type { RuntimeCredentialStore } from "./runtime-credentials.js";
 import { registerRuntimeConfigRoutes } from "./runtime-config-routes.js";
 import type { AgentCliManager } from "./agent-clis.js";
 import { registerAgentCliRoutes } from "./agent-cli-routes.js";
+import { registerRemoteJoinRoutes, type RunJoinCli } from "./remote-join-routes.js";
 
 /**
  * 本机 Agent 的 HTTP 接口（管理 Hive Server 所在电脑）。请求方必须是下面两种之一：
@@ -228,6 +229,8 @@ export type LocalRoomActions = {
     state(): NetworkProxyState;
     update(patch: Partial<NetworkProxySettings>): NetworkProxyState;
   };
+  /** 带到别人房间的 Agent 清单 */
+  remoteJoins?: { dir: string; runJoinCli?: RunJoinCli };
   /** 熄屏后保持在线 */
   keepAwake?: {
     state(): KeepAwakeState | undefined;
@@ -809,6 +812,14 @@ export function registerLocalAgentRoutes(
       supervisor,
       authorizeLocal: (request, reply) => Boolean(authorize(request, reply, "local")),
     });
+    if (rooms.remoteJoins) {
+      registerRemoteJoinRoutes(app, {
+        supervisor,
+        authorize: (request, reply, level) => authorize(request, reply, level),
+        dir: rooms.remoteJoins.dir,
+        ...(rooms.remoteJoins.runJoinCli ? { runJoinCli: rooms.remoteJoins.runJoinCli } : {}),
+      });
+    }
   }
 
   // 慢操作里有仓库路径、房间和调用来源：和运行时配置一样只给本机看

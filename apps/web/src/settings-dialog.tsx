@@ -36,6 +36,7 @@ import { playNotificationTone, type BrowserNotificationPermission } from "./brow
 import { HostManageNotice, KeepAwakeSettingsGroup } from "./host-settings";
 import { LocalAgentUpdatesGroup } from "./local-agent-updates";
 import { NetworkProxySettingsGroup } from "./network-proxy-settings";
+import { RemoteJoinsGroup } from "./remote-joins-settings";
 import { AgentRuntimesPanel } from "./agent-runtimes-panel";
 import type { RefObject, Dispatch, SetStateAction } from "react";
 import type { LocalAgentsState } from "./local-agents";
@@ -486,6 +487,7 @@ export function SettingsDialog({
                 </div>
                 <HostManageNotice local={local} />
                 <LocalAgentUpdatesGroup local={local} />
+                <RemoteJoinsGroup local={local} />
                 <NetworkProxySettingsGroup local={local} />
                 <KeepAwakeSettingsGroup local={local} />
               </section>

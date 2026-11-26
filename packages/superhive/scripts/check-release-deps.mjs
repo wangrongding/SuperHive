@@ -32,7 +32,11 @@ const importPattern = /(?:from\s*|import\s*\(?\s*|require\s*\(\s*)["']([^"']+)["
 const builtins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
 
 const pkg = JSON.parse(await readFile(path.join(pkgRoot, "package.json"), "utf8"));
-const dependencies = new Set(Object.keys(pkg.dependencies ?? {}));
+// better-sqlite3 是可选依赖：只有 Server 用，npx superhive join 在装不上它（下载预编译超时、本机编译失败）时也能跑
+const dependencies = new Set([
+  ...Object.keys(pkg.dependencies ?? {}),
+  ...Object.keys(pkg.optionalDependencies ?? {}),
+]);
 
 const files = await collectJsFiles(distDir);
 if (files.length === 0) {
@@ -60,7 +64,7 @@ for (const file of files) {
 
 if (missing.size > 0) {
   console.error(
-    "[check-release-deps] dist 中引用了未声明的外部包（补进 dependencies，版本对齐 apps/server）：",
+    "[check-release-deps] dist 中引用了未声明的外部包（补进 dependencies 或 optionalDependencies，版本对齐 apps/server）：",
   );
   for (const [name, refs] of missing) {
     console.error(`  ${name}`);

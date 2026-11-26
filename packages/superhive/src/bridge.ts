@@ -362,6 +362,8 @@ export class AgentBridge {
       onRoomsChanged?: (room: RoomSummary) => void;
       onArchived?: () => void;
       onShutdown?: () => void;
+      /** 连上 / 断开这个房间 */
+      onConnectionChange?: (connected: boolean) => void;
       tuning?: BridgeTuning;
       /** 本机 Hive Server 写的 Agent 设置文件：模型每一轮从这里读 */
       settingsFile?: string;
@@ -497,6 +499,9 @@ export class AgentBridge {
           this.options.onRoomsChanged?.(room);
         },
         ...(this.options.onShutdown ? { onShutdown: this.options.onShutdown } : {}),
+        ...(this.options.onConnectionChange
+          ? { onConnectionChange: this.options.onConnectionChange }
+          : {}),
         onError: (error) => {
           // 被房主暂停：照常隔一会儿重连，每次都会再被拒一次，只在开始暂停时记一行
           if (error instanceof RoomClientError && error.code === "SESSION_PAUSED") {

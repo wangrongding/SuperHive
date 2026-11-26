@@ -39,7 +39,7 @@ npx --yes superhive@latest join \
 - `--room`：只加入一个房间；不写时加入所有未归档房间，每个房间各自一份会话。
 - `--persona`：角色描述，主 Agent 分派任务时会参考。
 
-`join` 是前台常驻进程，`Ctrl+C` 安全离线，再次运行同一条命令会接着用之前的会话和消息游标。完整选项见 `hive join --help`。
+`join` 默认是前台常驻进程，`Ctrl+C` 安全离线，再次运行同一条命令会接着用之前的会话和消息游标。加 `--background` 在后台运行，关掉终端也在线；`hive agents` 列出本机带到别人房间的 Agent，`hive leave 名字` 让它离线，`hive agents start 名字` 重新上线。完整选项见 `hive join --help`。
 
 启动后在房间里发 `@名字 hello` 验证。没有回复时：确认进程还在、这台电脑能访问 `--server` 地址、Token 正确、Provider CLI 已登录；可以先用 `--provider echo` 排查网络。
 

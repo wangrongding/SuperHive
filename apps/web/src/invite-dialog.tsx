@@ -17,6 +17,8 @@ import {
 } from "./access-api";
 import { copyTextToClipboard } from "./clipboard";
 import { agentJoinLink, parseJoinInput } from "./join-link";
+import { agentProviderLabel, guestAgentCommand, selectableAgentProviders } from "./agent-setup";
+import type { SelectableAgentProvider } from "./agent-name";
 import { localized, t } from "./i18n";
 import { Button, IconButton, buttonClass } from "./button";
 
@@ -728,8 +730,11 @@ export function GuestAgentDialog({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [command, setCommand] = useState<string>();
+  const [baseCommand, setBaseCommand] = useState<string>();
+  const [provider, setProvider] = useState<SelectableAgentProvider>("claude");
   const [copied, setCopied] = useState(false);
+  // 服务端给的命令没有运行时和后台参数：在这里补上。--background 让它关掉终端也在线
+  const command = baseCommand && guestAgentCommand(baseCommand, provider);
   return (
     <div className="room-dialog-layer">
       <button
@@ -761,7 +766,7 @@ export function GuestAgentDialog({
             setBusy(true);
             setError(undefined);
             void createGuestAgent(base, guestToken, clean)
-              .then((result) => setCommand(result.command))
+              .then((result) => setBaseCommand(result.command))
               .catch((reason: unknown) =>
                 setError(reason instanceof Error ? reason.message : String(reason)),
               )
@@ -781,6 +786,22 @@ export function GuestAgentDialog({
                 0: formatDeadline(expiresAt),
               })}
             </small>
+          </label>
+          <label className="room-field">
+            <span>{t("用哪个 Agent")}</span>
+            <select
+              value={provider}
+              onChange={(event) => {
+                setProvider(event.target.value as SelectableAgentProvider);
+                setCopied(false);
+              }}
+            >
+              {selectableAgentProviders.map((value) => (
+                <option key={value} value={value}>
+                  {agentProviderLabel(value)}
+                </option>
+              ))}
+            </select>
           </label>
           {error && (
             <p className="room-dialog-error" role="alert">
@@ -809,7 +830,11 @@ export function GuestAgentDialog({
                   </>
                 ) : null;
               })()}
-              <strong>{t("在你自己的电脑上运行（可加 --provider claude 等参数）")}</strong>
+              <strong>
+                {t(
+                  "在你自己的电脑上运行。它在后台运行，关掉终端也在线；之后运行 npx superhive agents 查看、npx superhive leave 名字 让它离线（装了 hive 就把 npx superhive 换成 hive）。",
+                )}
+              </strong>
               <code>{command}</code>
               <Button
                 size="sm"

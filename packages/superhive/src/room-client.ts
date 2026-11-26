@@ -80,6 +80,8 @@ export type RoomClientHandlers = {
   onShutdown?: () => void;
   onMessageDeleted?: (message: ChatMessage) => void;
   onRoomsChanged?: (room: RoomSummary) => void;
+  /** 加入房间成功（收到快照）/ 连接断开：本机「带到别处的 Agent」清单据此显示是否在线 */
+  onConnectionChange?: (connected: boolean) => void;
   onError: (error: Error) => void;
 };
 
@@ -324,7 +326,9 @@ export class RoomClient {
     socket.on("message", (raw) => this.handleEvent(JSON.parse(raw.toString()) as ServerEvent));
     socket.on("error", (error) => this.handlers.onError(error));
     socket.on("close", () => {
+      const wasJoined = this.joined;
       this.joined = false;
+      if (wasJoined) this.handlers.onConnectionChange?.(false);
       if (this.stopped) return;
       for (const [clientMessageId, pending] of this.pending) {
         clearTimeout(pending.timer);
@@ -343,6 +347,7 @@ export class RoomClient {
     if (event.type === "room.snapshot") {
       this.retry = 0;
       this.paused = false;
+      if (!this.joined) this.handlers.onConnectionChange?.(true);
       this.joined = true;
       this.serverTracksInvocations = Array.isArray(event.invocations);
       this.serverAcceptsTrace = event.features?.includes("trace") === true;

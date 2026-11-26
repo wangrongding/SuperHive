@@ -99,6 +99,37 @@ describe("spawnBackground", () => {
     expect(WINDOWS_LAUNCH_SCRIPT).toMatch(/Remove-Item Env:HIVE_BG_FILE.*\$p = Start-Process/);
   });
 
+  it("on Windows can run in its own hidden console so callers waiting on pipes aren't held up", async () => {
+    const { impl, calls } = fakeSpawn((call, child) => {
+      setImmediate(() => {
+        writeFileSync(String((call.options.env as NodeJS.ProcessEnv).HIVE_BG_PID_FILE), "4040");
+        child.emit("close", 0);
+      });
+    });
+    const launched = spawnBackground(
+      "node.exe",
+      ["cli.js"],
+      { env: {}, logFd: 7, windowsOwnConsole: true },
+      "win32",
+      impl,
+    );
+    await expect(launched.pid).resolves.toBe(4040);
+    expect(calls[0]!.options.env).toMatchObject({ HIVE_BG_OWN_CONSOLE: "1" });
+    expect(WINDOWS_LAUNCH_SCRIPT).toContain(
+      "if ($env:HIVE_BG_OWN_CONSOLE) { $launch.WindowStyle = 'Hidden' } else { $launch.NoNewWindow = $true }",
+    );
+    expect(WINDOWS_LAUNCH_SCRIPT).toMatch(/Remove-Item [^;]*Env:HIVE_BG_OWN_CONSOLE/);
+    // 默认不变：共用 PowerShell 的隐藏控制台
+    const plain = fakeSpawn((call, child) => {
+      setImmediate(() => {
+        writeFileSync(String((call.options.env as NodeJS.ProcessEnv).HIVE_BG_PID_FILE), "4041");
+        child.emit("close", 0);
+      });
+    });
+    await spawnBackground("node.exe", [], { env: {}, logFd: 7 }, "win32", plain.impl).pid;
+    expect(plain.calls[0]!.options.env).not.toHaveProperty("HIVE_BG_OWN_CONSOLE");
+  });
+
   it("on Windows rejects when PowerShell could not start the process", async () => {
     const { impl } = fakeSpawn((_call, child) => setImmediate(() => child.emit("close", 1)));
     const launched = spawnBackground("missing.exe", [], { logFd: 3, env: {} }, "win32", impl);

@@ -125,11 +125,13 @@ function installedVersion(name, fromDir) {
   throw new Error(`cannot find installed version of ${name}`);
 }
 const dependencies = {};
-for (const name of Object.keys(superhivePkg.dependencies ?? {}).sort()) {
+// npm 包里 better-sqlite3 是可选依赖（npx superhive join 用不到它）；桌面端自带 Server，必须装上
+const superhiveDeps = { ...superhivePkg.optionalDependencies, ...superhivePkg.dependencies };
+for (const name of Object.keys(superhiveDeps).sort()) {
   try {
     dependencies[name] = installedVersion(name, path.join(repoRoot, "apps/server"));
   } catch {
-    dependencies[name] = superhivePkg.dependencies[name];
+    dependencies[name] = superhiveDeps[name];
   }
 }
 dependencies["node-pty"] = desktopPkg.dependencies["node-pty"];

@@ -25,6 +25,13 @@ export type BackgroundOptions = {
   env?: NodeJS.ProcessEnv | undefined;
   /** 标准输出和标准错误写到这个已打开的文件描述符；调用方在本函数返回后即可关闭 */
   logFd: number;
+  /**
+   * 只对 Windows 生效：在自己的隐藏控制台里运行（Start-Process -WindowStyle Hidden，走 ShellExecute），
+   * 不继承父进程的任何句柄。默认的 -NoNewWindow 会把父进程继承来的管道句柄一并带给后台进程：
+   * 从 ssh、或被 execFile 这类等管道关闭的调用方拉起时，调用方要一直等到后台进程退出才返回。
+   * 代价是输出不进 logFd（新控制台看不见），由进程自己写日志。
+   */
+  windowsOwnConsole?: boolean | undefined;
 };
 
 export type BackgroundProcess = {
@@ -65,11 +72,12 @@ export function windowsCommandLineArgs(args: readonly string[]): string {
  */
 export const WINDOWS_LAUNCH_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
-  "$launch = @{ FilePath = $env:HIVE_BG_FILE; NoNewWindow = $true; PassThru = $true }",
+  "$launch = @{ FilePath = $env:HIVE_BG_FILE; PassThru = $true }",
+  "if ($env:HIVE_BG_OWN_CONSOLE) { $launch.WindowStyle = 'Hidden' } else { $launch.NoNewWindow = $true }",
   "if ($env:HIVE_BG_ARGS) { $launch.ArgumentList = $env:HIVE_BG_ARGS }",
   "if ($env:HIVE_BG_CWD) { $launch.WorkingDirectory = $env:HIVE_BG_CWD }",
   "$pidFile = $env:HIVE_BG_PID_FILE",
-  "Remove-Item Env:HIVE_BG_FILE, Env:HIVE_BG_ARGS, Env:HIVE_BG_CWD, Env:HIVE_BG_PID_FILE -ErrorAction SilentlyContinue",
+  "Remove-Item Env:HIVE_BG_FILE, Env:HIVE_BG_ARGS, Env:HIVE_BG_CWD, Env:HIVE_BG_PID_FILE, Env:HIVE_BG_OWN_CONSOLE -ErrorAction SilentlyContinue",
   "$p = Start-Process @launch",
   "[IO.File]::WriteAllText($pidFile, [string]$p.Id)",
 ].join("; ");
@@ -125,6 +133,7 @@ export function spawnBackground(
         HIVE_BG_ARGS: windowsCommandLineArgs(args),
         HIVE_BG_CWD: options.cwd ?? "",
         HIVE_BG_PID_FILE: pidFile,
+        ...(options.windowsOwnConsole ? { HIVE_BG_OWN_CONSOLE: "1" } : {}),
       },
       // 不 detached、带 windowsHide：PowerShell 得到一个看不见的控制台，真正的进程共用它
       detached: false,

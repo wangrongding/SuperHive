@@ -105,6 +105,7 @@ import {
   type LocalAgentSupervisorOptions,
 } from "./local-agents.js";
 import { MANAGE_GRANT_MS, registerLocalAgentRoutes } from "./local-routes.js";
+import type { RunJoinCli } from "./remote-join-routes.js";
 import type { RuntimeCredentialStore } from "./runtime-credentials.js";
 import type { AgentCliManager } from "./agent-clis.js";
 import { KeepAwake } from "./keep-awake.js";
@@ -206,6 +207,11 @@ export type BuildAppOptions = {
    * 传对象打开并注入系统代理和环境
    */
   networkProxy?: false | { readSystem?: SystemProxyReader; env?: () => NodeJS.ProcessEnv };
+  /**
+   * 带到别人房间的 Agent 清单（~/.superhive/remote-joins）；省略即不提供（测试默认关闭，免得读写真实的清单），
+   * 由 index.ts 注入
+   */
+  remoteJoins?: { dir: string; runJoinCli?: RunJoinCli };
   /** 运行时全局配置里的地址和密钥；省略即不提供（测试默认关闭，免得读写真实的 ~/.claude、~/.codex），由 index.ts 注入 */
   runtimeCredentials?: RuntimeCredentialStore;
   /** 本机 Agent CLI 的检测与升级；省略即不提供（测试默认关闭，免得真的跑登录 shell、查 npm），由 index.ts 注入 */
@@ -1061,6 +1067,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       update: (patch) => keepAwake?.update(patch),
     },
     ...(networkProxy ? { networkProxy } : {}),
+    ...(options.remoteJoins && !sandbox ? { remoteJoins: options.remoteJoins } : {}),
   });
 
   /* ---------- 访问控制：房主（join token）与限时访客 ---------- */
@@ -4815,6 +4822,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       command: guestAgentCommand(request, session, token),
       ...sessionView(access.resolve(session, clock())),
     });
+  });
+
+  /**
+   * 访客带入的 Agent 自己退出房间（本机「带到别处的 Agent」里点「退出房间」、hive leave --leave-room）：
+   * 用它自己的凭证撤销自己的访客 Agent 会话，断开连接，之后这个凭证不能再用；历史消息保留。
+   */
+  app.post("/api/guest-agents/leave", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    if (principal.kind !== "guest" || principal.resolved.session.kind !== "agent") {
+      return reply
+        .code(403)
+        .send({ ...errorText(serverText("error.guest.agentLeaveOnly")), code: "GUEST_AGENT_ONLY" });
+    }
+    const session = principal.resolved.session;
+    access.revoke(session.id);
+    const family = access.familyOf(session.id);
+    endSessionConnections(family, "revoked");
+    refreshAccessPresence(family);
+    return { left: true, roomId: session.roomId, username: session.username };
   });
 
   function connectedMcpAgent(request: {

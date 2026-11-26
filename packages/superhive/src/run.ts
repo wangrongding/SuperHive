@@ -51,6 +51,17 @@ import {
   type AgentResponder,
 } from "./responder.js";
 import { StateStore, agentWorkspaceDir } from "./state-store.js";
+import { addServerToNoProxy } from "./no-proxy.js";
+import { RemoteJoinTracker, relaunchArgs } from "./remote-join-tracker.js";
+import {
+  launchInBackground,
+  logTail,
+  readRecord,
+  recordRunning,
+  remoteJoinId,
+  remoteJoinsDir,
+  waitForOnline,
+} from "./remote-joins.js";
 
 /**
  * 文件工具只能碰工作区和显式放行目录的运行时（实测）：Copilot 要 --add-dir、Gemini 要 --include-directories、
@@ -73,6 +84,8 @@ SuperHive Agent
   --provider NAME   codex、claude、copilot、openclaw、opencode、omp、gemini 或 agy（默认 codex）
   --access MODE     read-only、workspace 或 full（默认 read-only）
   --persona TEXT    Agent 的角色描述
+  --background      在后台运行：关掉终端也在线，日志写到 ~/.superhive/remote-joins/。
+                    用 hive agents 查看、hive leave NAME 让它离线
   --allow-root PATH 允许跟随房间工作区切换到的目录（可重复）；默认只有 --cwd 及其上一级
   --trust-room-workspace
                     房间工作区一律跟随（由本机 Hive Server 拉起的 Agent 使用：
@@ -204,6 +217,7 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       agy: { type: "string", default: "agy" },
       model: { type: "string" },
       "agent-settings": { type: "string" },
+      background: { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -223,6 +237,9 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     throw new Error(`缺少 --server、--name 或 --token。\n${usage}`);
   sweepStaleHiveMcpConfigs();
   new URL(serverUrl);
+  if (addServerToNoProxy(process.env, serverUrl)) {
+    console.log(`[hive] 已设代理：${new URL(serverUrl).hostname} 加进 NO_PROXY，连 Hive 不走代理`);
+  }
   if (roomId !== undefined && !/^[A-Za-z0-9_-]+$/.test(roomId)) {
     throw new Error("room 含有不支持的字符。");
   }
@@ -417,6 +434,52 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     }
   }
 
+  // 带到别人房间的 Agent（不是本机 Hive Server 拉起的）：登记进本机清单，hive agents / 网页里看得到、停得掉
+  const supervised = Boolean(process.env.HIVE_SUPERVISOR_PID);
+  const joinsDir = remoteJoinsDir();
+  const launch = {
+    command: process.execPath,
+    args: [...process.execArgv, process.argv[1] ?? "", ...relaunchArgs(process.argv.slice(2))],
+    cwd: process.cwd(),
+  };
+  if (parsed.values.background && !supervised) {
+    await startInBackground({
+      dir: joinsDir,
+      id: remoteJoinId(serverUrl, roomId ?? null, username),
+      name: username,
+      launch,
+      token,
+    });
+    return;
+  }
+  const background = process.env.HIVE_REMOTE_JOIN_BACKGROUND === "1";
+  const tracker = supervised
+    ? undefined
+    : new RemoteJoinTracker({
+        dir: joinsDir,
+        server: serverUrl,
+        roomId: roomId ?? null,
+        name: username,
+        runtime: provider,
+        access,
+        cwd: parsed.values.cwd ? cwd : null,
+        model: parsed.values.model ?? null,
+        token,
+        background,
+        logFile: process.env.HIVE_REMOTE_JOIN_LOG ?? null,
+        launch,
+      });
+  delete process.env.HIVE_REMOTE_JOIN_BACKGROUND;
+  delete process.env.HIVE_REMOTE_JOIN_LOG;
+  if (tracker) {
+    const other = tracker.runningElsewhere();
+    if (other) {
+      throw new Error(
+        `${username} 已经在运行（进程 ${other.pid}${other.background ? "，后台" : ""}），同一个名字再连一次会把它顶掉。先运行 hive leave ${username} 让它离线，或者用 hive agents 查看。`,
+      );
+    }
+  }
+
   const allowedRoots = allowedWorkspaceRoots(cwd, parsed.values["allow-root"] ?? []);
 
   function buildStack(room: RoomSummary, hooks?: Partial<StackHooks>): AgentBridge {
@@ -490,7 +553,17 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
           ? { noSandbox: true }
           : {}),
         ...(hooks?.onRoomsChanged ? { onRoomsChanged: hooks.onRoomsChanged } : {}),
-        ...(hooks?.onArchived ? { onArchived: hooks.onArchived } : {}),
+        ...(hooks?.onArchived || tracker
+          ? {
+              onArchived: () => {
+                tracker?.removeRoom(stackRoomId);
+                hooks?.onArchived?.();
+              },
+            }
+          : {}),
+        ...(tracker
+          ? { onConnectionChange: (connected: boolean) => tracker.setRoom(stackRoomId, connected) }
+          : {}),
         ...(process.env.HIVE_SUPERVISOR_PID ? { onShutdown: () => shutdownOnRequest() } : {}),
         ...(settingsFile ? { settingsFile } : {}),
         ...(settingsFile &&
@@ -521,7 +594,8 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
   console.log(
     `[hive] 代码版本：${codeVersion.package}${codeVersion.commit ? `（${codeVersion.commit.slice(0, 7)}）` : ""}`,
   );
-  let stopAll: () => Promise<void>;
+  // 加入过程中就收到停止请求时，还没有可停的连接，直接退出
+  let stopAll: () => Promise<void> = async () => undefined;
   let shuttingDown = false;
   /**
    * 拉起本进程的本机 Hive Server 请它退出：正常离线后退出。只有由本机 Server 拉起的 Agent
@@ -532,6 +606,22 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
     shuttingDown = true;
     console.log("[hive] 本机 Hive Server 请求停止，正常离线后退出。");
     void stopAll().finally(() => process.exit(0));
+  }
+  if (tracker) {
+    tracker.start(() => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log("[hive] 收到停止请求（hive leave 或网页上点了离线），正常离线后退出。");
+      void stopAll().finally(() => process.exit(0));
+    });
+    process.once("exit", (code) => tracker.markStopped(code !== 0));
+    const originalError = console.error.bind(console);
+    console.error = (...args: unknown[]) => {
+      tracker.noteError(
+        args.map((arg) => (arg instanceof Error ? arg.message : String(arg))).join(" "),
+      );
+      originalError(...args);
+    };
   }
   if (roomId !== undefined) {
     // 单房间模式：房间改了工作区，和多房间一样等空闲后换到新目录重新加入
@@ -611,7 +701,15 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
       );
     }
   }
-  console.log("[hive] 按 Ctrl+C 停止 Agent 并离线；再次运行同一命令可恢复连接。");
+  if (tracker && background) {
+    console.log(`[hive] 在后台运行：hive agents 查看，hive leave ${username} 让它离线。`);
+  } else if (tracker) {
+    console.log(
+      "[hive] 按 Ctrl+C 停止 Agent 并离线；关掉这个终端 Agent 也会离线。想关掉终端后继续在线，加 --background 在后台运行。",
+    );
+  } else {
+    console.log("[hive] 按 Ctrl+C 停止 Agent 并离线；再次运行同一命令可恢复连接。");
+  }
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => {
@@ -645,4 +743,48 @@ export async function run(defaultProvider: "codex" | "echo"): Promise<void> {
 export function claudeKeepAliveMs(value: string | undefined): number {
   const parsed = value === undefined || value.trim() === "" ? NaN : Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 10 * 60_000;
+}
+
+/**
+ * hive join --background：同样的参数（去掉 token）在后台再起一个 join 进程，关掉终端也在线。
+ * 等它连上房间再返回；没连上就把日志最后几行打出来。
+ */
+async function startInBackground(input: {
+  dir: string;
+  id: string;
+  name: string;
+  launch: { command: string; args: string[]; cwd: string };
+  token: string;
+}): Promise<void> {
+  const existing = readRecord(input.dir, input.id);
+  if (existing?.pid && !existing.stoppedAt) {
+    if (recordRunning(existing)) {
+      throw new Error(
+        `${input.name} 已经在运行（进程 ${existing.pid}）。先运行 hive leave ${input.name} 让它离线，或者用 hive agents 查看。`,
+      );
+    }
+  }
+  const pid = await launchInBackground(input.dir, {
+    ...input.launch,
+    id: input.id,
+    token: input.token,
+  });
+  const logFile = path.join(input.dir, `${input.id}.log`);
+  const result = await waitForOnline(input.dir, input.id, pid, backgroundWaitMs());
+  if (result === "exited") {
+    const tail = logTail(logFile);
+    throw new Error(`${input.name} 在后台启动后退出了。日志：${logFile}${tail ? `\n${tail}` : ""}`);
+  }
+  console.log(
+    result === "online"
+      ? `[hive] ${input.name} 已在后台运行并连上房间（进程 ${pid}）。关掉这个终端也不会离线。`
+      : `[hive] ${input.name} 已在后台启动（进程 ${pid}），还在连接，稍后用 hive agents 查看是否在线。`,
+  );
+  console.log(`[hive] 日志：${logFile}`);
+  console.log(`[hive] 查看：hive agents；让它离线：hive leave ${input.name}`);
+}
+
+function backgroundWaitMs(): number {
+  const value = Number.parseInt(process.env.HIVE_BACKGROUND_WAIT_MS ?? "", 10);
+  return Number.isInteger(value) && value >= 0 ? value : 30_000;
 }

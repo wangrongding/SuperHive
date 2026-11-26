@@ -8,8 +8,10 @@ export function shouldExitAfterCommand(options: {
   command: string | undefined;
   failed: boolean;
   electron: boolean;
+  /** hive join --background：拉起后台进程后这个进程就该退出了 */
+  background?: boolean;
 }): boolean {
   if (!options.electron) return false;
   if (options.failed) return true;
-  return options.command !== "join";
+  return options.command !== "join" || options.background === true;
 }

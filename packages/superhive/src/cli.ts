@@ -8,7 +8,9 @@ import { DOCS_URL } from "./docs-url.js";
 import { shouldExitAfterCommand } from "./electron-exit.js";
 import { mcpCommand } from "./mcp-command.js";
 import { modelsCommand } from "./models-command.js";
+import { agentsCommand, leaveCommand } from "./remote-join-command.js";
 import { run } from "./run.js";
+import { redirectOutputToLog } from "./self-log.js";
 import { restartService, serviceRunning, startService, stopService } from "./service.js";
 import { readSkill } from "./skill.js";
 import { skillInstallCommand, skillStatusCommand, skillUninstallCommand } from "./skill-command.js";
@@ -41,7 +43,9 @@ SuperHive（命令：hive；未全局安装时用 npx superhive 代替 hive）
   hive restart [选项] 重启 Server，并沿用原有启动配置
   hive update [--check]  更新到最新版；Server 在运行就用新版本自动重启
   hive autostart on|off|status  登录这台电脑后自动启动 Server
-  hive join [选项]    将本机 Agent 加入 Hive（默认加入所有未归档房间）
+  hive join [选项]    将本机 Agent 加入 Hive（默认加入所有未归档房间；加 --background 在后台运行）
+  hive agents         列出本机带到别人房间的 Agent，以及是否在线
+  hive leave NAME     让带到别人房间的 Agent 离线（加 --leave-room 同时退出对方房间）
   hive mcp list [选项] 列出 Agent 会加载的本机 MCP 及其开局 token 估算
   hive models --provider NAME  列出这个 Agent CLI 能用的模型
   hive --skill        打印给 Agent 用的协作说明（SKILL.md，与当前版本对应）
@@ -63,6 +67,8 @@ const packageRoot = packageRootOf(fileURLToPath(import.meta.url));
  */
 const QUIET_COMMANDS = new Set([
   "join",
+  "agents",
+  "leave",
   "mcp",
   "models",
   "--skill",
@@ -119,7 +125,12 @@ async function main(): Promise<void> {
   if (command === "stop" || command === "off") return stopService();
   if (command === "restart") return restartService();
   if (command === "autostart") return autostartCommand(process.argv.slice(3));
-  if (command === "join") return run("codex");
+  if (command === "join") {
+    redirectOutputToLog();
+    return run("codex");
+  }
+  if (command === "agents") return agentsCommand(process.argv.slice(3));
+  if (command === "leave") return leaveCommand(process.argv.slice(3));
   if (command === "mcp") return mcpCommand(process.argv.slice(3));
   if (command === "models") return modelsCommand(process.argv.slice(3));
   if (command === "update" || command === "upgrade") {
@@ -146,7 +157,8 @@ main()
     const latest = await updateCheck;
     if (latest) console.log(updateNotice(version, latest, detectInstall(packageRoot)));
     const electron = Boolean(process.versions.electron);
-    if (shouldExitAfterCommand({ command: process.argv[2], failed, electron })) {
+    const background = process.argv.includes("--background");
+    if (shouldExitAfterCommand({ command: process.argv[2], failed, electron, background })) {
       // macOS / Linux 上管道写是异步的：等前面的输出都写出去再退，不然 Server 拿到的 JSON 可能被截断
       const code = process.exitCode ?? 0;
       process.stderr.write("", () => process.stdout.write("", () => process.exit(code)));

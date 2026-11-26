@@ -18,3 +18,11 @@ describe("shouldExitAfterCommand", () => {
     expect(shouldExitAfterCommand({ command: "join", failed: true, electron: true })).toBe(true);
   });
 });
+
+describe("shouldExitAfterCommand with --background", () => {
+  it("exits once join has handed off to the background process", () => {
+    expect(
+      shouldExitAfterCommand({ command: "join", failed: false, electron: true, background: true }),
+    ).toBe(true);
+  });
+});

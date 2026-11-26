@@ -91,3 +91,16 @@ export function agentCommandFor(
     .concat(` --access ${access}${access === "read-only" ? "" : " --cwd ."}`)
     .concat(provider === "openclaw" ? " --openclaw-configure-mcp" : "");
 }
+
+/**
+ * 访客「带入我的 Agent」的命令：服务端给的命令没有运行时；补上 --provider，再加 --background，
+ * 关掉终端也在线（Windows 用户常常跑完就把终端关了，Agent 随之离线）。
+ */
+export function guestAgentCommand(command: string, provider: SelectableAgentProvider): string {
+  const withProvider = / --provider /.test(command)
+    ? command
+    : command.replace(" join ", ` join --provider ${provider} `);
+  return withProvider
+    .concat(provider === "openclaw" ? " --openclaw-configure-mcp" : "")
+    .concat(/ --background\b/.test(withProvider) ? "" : " --background");
+}

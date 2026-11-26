@@ -1013,6 +1013,33 @@ export class LocalAgentSupervisor {
     return this.restart(id, guard);
   }
 
+  /**
+   * 把 Agent 带进别人的房间（hive join --server 别人的 Hive --background）用的命令和环境：
+   * 和本机 Agent 同一份 CLI、同样的网络代理设置；不带 HIVE_SUPERVISOR_PID（它不归本机 Server 管）。
+   */
+  remoteJoinLauncher(): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
+    let proxy: ProxyEnvPatch | undefined;
+    try {
+      proxy = this.options.proxyEnv?.();
+    } catch {
+      proxy = undefined;
+    }
+    const env = applyProxyEnv({ ...process.env }, proxy) as NodeJS.ProcessEnv;
+    delete env.HIVE_SUPERVISOR_PID;
+    delete env.HIVE_AGENT_TOKEN;
+    return { command: this.options.cli.command, args: [...this.options.cli.args], env };
+  }
+
+  /** 本机 Agent 的配置（带 Agent 进别人房间时沿用它的运行时、模型、工作目录和权限档） */
+  configOf(
+    id: string,
+  ): Pick<LocalAgentConfig, "provider" | "model" | "cwd" | "access"> | undefined {
+    const runtime = this.runtimes.get(id);
+    if (!runtime) return undefined;
+    const { provider, model, cwd, access } = runtime.config;
+    return { provider, model, cwd, access };
+  }
+
   /** 自动更新开关：本机 Agent 落后于当前代码时，在空闲后自动重启（默认开） */
   autoUpdateEnabled(): boolean {
     return this.options.database.getSetting(AUTO_UPDATE_SETTING) !== "0";

@@ -1,5 +1,6 @@
 // 必须最先加载：给 Node 24 自带 fetch 的 setTypeOfService 崩溃打补丁
 import "./socket-tos-guard.js";
+import { remoteJoinsDir } from "./remote-joins.js";
 import { serverText } from "@superhive/protocol";
 import { errorText } from "./texts.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -112,7 +113,11 @@ const app = await buildApp({
   imDrivers,
   ...(sandbox
     ? { sandbox: true }
-    : { runtimeCredentials: new RuntimeCredentialStore(), agentClis: new AgentCliManager() }),
+    : {
+        runtimeCredentials: new RuntimeCredentialStore(),
+        agentClis: new AgentCliManager(),
+        remoteJoins: { dir: remoteJoinsDir() },
+      }),
   imKeyPath: path.join(path.dirname(databasePath), "im-secret.key"),
   publicUrl,
   webUrl,

@@ -372,6 +372,37 @@ describe("限时邀请与访客会话", () => {
     );
   });
 
+  it("访客带入的 Agent 能用自己的凭证退出房间，房主和访客本人不能用这个接口", async () => {
+    const { invite, redeem, join, api, guestHeaders } = await start();
+    const owner = await join("rd", "human");
+    await owner.next((event) => event.type === "room.snapshot");
+    const guestToken = (await redeem((await invite(null)).token, "alice")).body.token as string;
+    const agentToken = (
+      await api("POST", "/api/guest-agents", { username: "alice-bot" }, guestHeaders(guestToken))
+    ).body.token as string;
+    const bot = await join("alice-bot", "agent", agentToken);
+    await bot.next((event) => event.type === "room.snapshot");
+
+    expect((await api("POST", "/api/guest-agents/leave", {})).status).toBe(403);
+    expect(
+      (await api("POST", "/api/guest-agents/leave", {}, guestHeaders(guestToken))).status,
+    ).toBe(403);
+    const left = await api("POST", "/api/guest-agents/leave", {}, guestHeaders(agentToken));
+    expect(left).toEqual({
+      status: 200,
+      body: { left: true, roomId: "general", username: "alice-bot" },
+    });
+    // 凭证随之作废，连接被断开；访客本人不受影响
+    expect(
+      (await api("POST", "/api/guest-agents/leave", {}, guestHeaders(agentToken))).status,
+    ).toBe(401);
+    await bot.waitClosed();
+    expect(
+      (await api("POST", "/api/guest-agents", { username: "alice-bot2" }, guestHeaders(guestToken)))
+        .status,
+    ).toBe(201);
+  });
+
   it("访客带入的 Agent 随访客一起被移除，访客凭证不能冒充 Agent 调工具", async () => {
     const { invite, redeem, join, api, guestHeaders, base } = await start();
     const owner = await join("rd", "human");

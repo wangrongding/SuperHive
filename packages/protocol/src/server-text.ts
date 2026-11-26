@@ -1106,6 +1106,34 @@ export const serverTexts = {
     zh: "消息已撤回，不能重试它派出的任务。",
     en: "This message was unsent. Its tasks can't be retried.",
   },
+  "error.remoteJoin.notFound": {
+    zh: "清单里没有这个 Agent，可能已经被删掉了。",
+    en: "This agent isn't in the list anymore. It may have been removed.",
+  },
+  "error.remoteJoin.running": {
+    zh: "{name} 已经在运行了。同一个名字再连一次会把它顶掉，要重新加入请先让它离线。",
+    en: "{name} is already running. Joining again with the same name would kick it out, so take it offline first.",
+  },
+  "error.remoteJoin.failed": {
+    zh: "没能把 Agent 带进去：{reason}",
+    en: "Couldn't bring the agent in: {reason}",
+  },
+  "error.remoteJoin.restartFailed": {
+    zh: "没能重新上线：{reason}",
+    en: "Couldn't bring it back online: {reason}",
+  },
+  "error.remoteJoin.cwdRequired": {
+    zh: "工作区读写和完全访问都要指定本机的工作目录。",
+    en: "Workspace and full access both need a working folder on this computer.",
+  },
+  "error.remoteJoin.fullLocalOnly": {
+    zh: "完全访问只能在这台电脑上设置。",
+    en: "Full access can only be set on this computer.",
+  },
+  "error.guest.agentLeaveOnly": {
+    zh: "只有访客带入的 Agent 能用自己的凭证退出房间。",
+    en: "Only an agent brought in by a guest can leave the room with its own credentials.",
+  },
   "error.networkProxy.disabled": {
     zh: "这个服务没有启用本机 Agent，不能设置网络代理。",
     en: "Local agents aren't enabled on this server, so there's no network proxy to set.",

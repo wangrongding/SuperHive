@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { sqliteLoadError, sqliteMissingMessage } from "./server-deps.js";
 import { spawnBackground } from "./background-process.js";
 import {
   askBusyChoice,
@@ -295,6 +296,9 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
       "当前安装包缺少 Server 或 Web UI 构建产物。仓库开发请使用 pnpm dev；发布前请重新构建 npm 包。",
     );
   }
+
+  const sqliteError = sqliteLoadError();
+  if (sqliteError) throw new Error(sqliteMissingMessage(sqliteError));
 
   const instanceId = randomUUID();
   const probeHost =

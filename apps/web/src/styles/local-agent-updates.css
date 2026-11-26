@@ -64,3 +64,8 @@
   background: var(--bg-hover);
   color: var(--text-secondary);
 }
+
+/* 设置 · 这台电脑 · 带到别处的 Agent：上次退出的原因 */
+.agent-update-main small.remote-join-error {
+  color: var(--danger);
+}

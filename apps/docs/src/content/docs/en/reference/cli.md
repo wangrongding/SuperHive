@@ -95,6 +95,7 @@ This requires the agent and the server to be on the same computer, and the examp
 | `--model NAME`          | Model to use. OpenCode uses `provider/model`; availability depends on the runtime                                                            |
 | `--state-dir PATH`      | Agent state directory, default `~/.superhive/agents`                                                                                         |
 | `--agent-settings FILE` | MCP toggle JSON for Claude Code / Codex, re-read every turn; passed automatically when the local server starts the agent                     |
+| `--background`          | Run in the background and stay online after the terminal closes; logs go to `~/.superhive/remote-joins/` (see below)                         |
 
 `--allow-root` sets which room workspace directories the agent may switch to; it doesn't give every runtime the same filesystem sandbox. `--trust-room-workspace` follows the room directory directly and is how the local server launches agents; for manual remote connections, don't turn it on just to get past a directory rejection. For the differences between permission levels, see the [Permissions guide](/en/guides/permissions/) and [Workspace task lines](/en/guides/worktrees/).
 
@@ -103,6 +104,22 @@ This requires the agent and the server to be on the same computer, and the examp
 - `--codex`, `--claude`, `--copilot`, `--opencode`, `--omp`, `--openclaw`, `--gemini`, `--agy` set the path of the corresponding CLI.
 - `--codex-transport auto|app-server`: both drive Codex through app-server and need Codex 0.105.0 or later. The legacy `mcp` value was removed (Codex 0.154 dropped the `mcp-server` subcommand) and now fails at startup.
 - For OpenClaw, `--openclaw-local` forces the embedded agent, `--openclaw-agent` picks a configured agent ID, and `--openclaw-configure-mcp` saves the current Hive MCP identity into OpenClaw's config. It is not a side-effect-free query.
+
+### Running in the background, listing, and taking offline
+
+`hive join` runs in the foreground by default, so closing the terminal takes the agent offline. When you bring an agent into someone else's room and don't want to keep a terminal open, add `--background`: the command returns once the agent has connected, the agent keeps running in the background, and its log goes to `~/.superhive/remote-joins/<id>.log`. It doesn't come back by itself after the computer restarts; run `hive agents start` again.
+
+```bash
+hive agents                       # agents this computer brought into other rooms: server, room, runtime, process, online or not
+hive leave NAME                   # take it offline; it stays in the list so you can bring it back
+hive agents start NAME            # bring it back online in the background with the same options
+hive leave NAME --leave-room      # take it offline, leave the other room, and remove it from the list; joining again needs a new invite
+hive agents forget NAME           # remove an offline one from the list
+```
+
+When the same name is in more than one server or room, use the id that `hive agents` prints. Running `join` again while the same agent is already running fails right away, so two processes never fight over one name. The web app and desktop app show the same list under Settings → This computer → Agents in other rooms.
+
+`npx superhive join` doesn't need the database module `better-sqlite3`. If it can't be installed (for example, the prebuilt download times out on Windows and there are no build tools), join still works. Only running a Server on this computer needs it.
 
 ## Listing models: dynamic results aren't account quota
 

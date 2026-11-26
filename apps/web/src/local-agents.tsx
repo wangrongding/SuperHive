@@ -14,6 +14,11 @@ import type {
   KeepAwakeState,
   NetworkProxySettings,
   NetworkProxyState,
+  CreateRemoteJoinRequest,
+  RemoteJoin,
+  RemoteJoinListResponse,
+  RemoteJoinRemoveResponse,
+  RemoteJoinResponse,
   LocalAgent,
   LocalAgentsResponse,
   LocalAgentMcpResponse,
@@ -197,6 +202,12 @@ export type LocalAgentsState = {
   /** 网络代理：本机 Agent 子进程走不走代理（设置 → 这台电脑） */
   networkProxy(): Promise<NetworkProxyState>;
   updateNetworkProxy(patch: Partial<NetworkProxySettings>): Promise<NetworkProxyState>;
+  /** 带到别人房间的 Agent（设置 → 这台电脑 → 带到别处的 Agent）；旧版 Server 没有这个接口时抛 404 */
+  remoteJoins(): Promise<RemoteJoin[]>;
+  createRemoteJoin(body: CreateRemoteJoinRequest): Promise<RemoteJoin>;
+  remoteJoinAction(id: string, action: "stop" | "start"): Promise<RemoteJoin>;
+  /** 从清单里删掉；leave 时先请对方 Server 把它移出房间 */
+  removeRemoteJoin(id: string, leave: boolean): Promise<RemoteJoinRemoveResponse>;
   /** 本机：故障单、经验库、规则提议与派修设置 */
   incidents(): Promise<IncidentsResponse>;
   updateIncidentSettings(patch: UpdateIncidentSettingsRequest): Promise<IncidentSettings>;
@@ -767,6 +778,43 @@ export function useLocalAgents(
     [request],
   );
 
+  /* ---------- 带到别人房间的 Agent ---------- */
+
+  const remoteJoins = useCallback(async () => {
+    const response = await request("/api/local/remote-joins");
+    return ((await response.json()) as RemoteJoinListResponse).joins;
+  }, [request]);
+  const createRemoteJoin = useCallback(
+    async (body: CreateRemoteJoinRequest) => {
+      const response = await request("/api/local/remote-joins", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return ((await response.json()) as RemoteJoinResponse).join;
+    },
+    [request],
+  );
+  const remoteJoinAction = useCallback(
+    async (id: string, action: "stop" | "start") => {
+      const response = await request(
+        `/api/local/remote-joins/${encodeURIComponent(id)}/${action}`,
+        { method: "POST" },
+      );
+      return ((await response.json()) as RemoteJoinResponse).join;
+    },
+    [request],
+  );
+  const removeRemoteJoin = useCallback(
+    async (id: string, leave: boolean) => {
+      const response = await request(
+        `/api/local/remote-joins/${encodeURIComponent(id)}${leave ? "?leave=1" : ""}`,
+        { method: "DELETE" },
+      );
+      return (await response.json()) as RemoteJoinRemoveResponse;
+    },
+    [request],
+  );
+
   /* ---------- 故障单（只限本机） ---------- */
 
   const incidents = useCallback(async () => {
@@ -1066,6 +1114,10 @@ export function useLocalAgents(
     updateKeepAwake,
     networkProxy,
     updateNetworkProxy,
+    remoteJoins,
+    createRemoteJoin,
+    remoteJoinAction,
+    removeRemoteJoin,
     incidents,
     updateIncidentSettings,
     incidentAction,

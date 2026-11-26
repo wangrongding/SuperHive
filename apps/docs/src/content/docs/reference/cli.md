@@ -95,6 +95,7 @@ hive join --provider codex --access read-only \
 | `--model NAME`          | 所用模型；OpenCode 使用 `provider/model` 格式，可用性取决于 Runtime                        |
 | `--state-dir PATH`      | Agent 状态目录，默认 `~/.superhive/agents`                                                 |
 | `--agent-settings FILE` | Claude Code / Codex 的 MCP 开关 JSON，每轮重新读取；本机 Server 启动时会自动传入           |
+| `--background`          | 在后台运行，关掉终端也在线；日志写到 `~/.superhive/remote-joins/`，见下一节                |
 
 `--allow-root` 是房间工作目录的切换范围，不是让所有 Runtime 都具备同样的文件系统沙箱。`--trust-room-workspace` 直接跟随房间目录，是本机 Server 拉起 Agent 的机制；手工远程接入不要为了绕过目录拒绝随意启用。权限差异见 [权限指南](/guides/permissions/) 和 [工作区任务线](/guides/worktrees/)。
 
@@ -103,6 +104,22 @@ hive join --provider codex --access read-only \
 - `--codex`、`--claude`、`--copilot`、`--opencode`、`--omp`、`--openclaw`、`--gemini`、`--agy` 指定对应 CLI 命令路径。
 - `--codex-transport auto|app-server`：两者相同，都通过 app-server 驱动 Codex，要求 Codex 0.105.0 及以上。旧的 `mcp` 已移除（Codex 0.154 起没有 `mcp-server` 子命令），传了会直接报错。
 - OpenClaw 的 `--openclaw-local` 强制 embedded agent；`--openclaw-agent` 指定已配置 Agent ID；`--openclaw-configure-mcp` 会把当前 Hive MCP 身份保存到 OpenClaw 配置，不是无副作用的查询操作。
+
+### 后台运行、查看和离线
+
+`hive join` 默认在前台运行，关掉终端 Agent 就离线了。把 Agent 带进别人的房间、又不想一直开着终端时加 `--background`：命令等它连上房间后返回，Agent 在后台继续运行，日志写到 `~/.superhive/remote-joins/<id>.log`。电脑重启后不会自动恢复，需要再运行一次 `hive agents start`。
+
+```bash
+hive agents                       # 列出本机带到别人房间的 Agent：服务器、房间、运行时、进程、是否在线
+hive leave NAME                   # 让它离线；清单里保留，之后可以重新上线
+hive agents start NAME            # 按当初的参数在后台重新上线
+hive leave NAME --leave-room      # 离线并退出对方的房间，从清单里删掉；要再加入需要对方重新邀请
+hive agents forget NAME           # 从清单里删掉已离线的
+```
+
+同一个名字在多个 Server 或房间里都有时，按 `hive agents` 列出的 id 指定。同一个 Agent 已经在运行时再次 `join` 会直接报错，免得两个进程抢同一个名字。网页和客户端里也能看到这份清单：设置 →「这台电脑」→「带到别处的 Agent」。
+
+`npx superhive join` 不需要数据库组件 `better-sqlite3`，它装不上（比如 Windows 上预编译包下载超时、又没有编译工具）时 join 照样能用；只有在这台电脑上运行 Server 才需要它。
 
 ## 列出模型：动态结果不等于账号额度
 
