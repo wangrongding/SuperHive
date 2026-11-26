@@ -117,6 +117,7 @@ function renderBar(overrides: Partial<StatusBarProps> = {}) {
     local: { enabled: false } as unknown as LocalAgentsState,
     openAgentTasks: vi.fn(),
     openSettings: vi.fn(),
+    openRuntimeHub: vi.fn(),
     openProxySettings: vi.fn(),
     settingsOpen: false,
     messageNotifications: "mentions",
@@ -215,7 +216,7 @@ describe("StatusBar", () => {
     expect(local.updateNetworkProxy).toHaveBeenCalledWith({ mode: "none" });
   });
 
-  it("Server 这台电脑上的房主才看到「MCP · 技能」，点开进统一管理", async () => {
+  it("Server 这台电脑上的房主才看到「MCP · 技能」，点开直接是 MCP 与技能大面板", async () => {
     const runtimeOverview = vi.fn(async () => ({
       providers: [],
       mcp: [{ name: "docs", entries: [] }],
@@ -226,11 +227,12 @@ describe("StatusBar", () => {
     }));
     const props = renderBar({ local: fakeLocal({ mode: "local", runtimeOverview }) });
     const item = await screen.findByRole("button", {
-      name: "管理这台电脑上各 CLI 的全局 MCP 和技能",
+      name: "给这台电脑上的各个 CLI 装 MCP、管理技能",
     });
     expect(item.textContent).toContain("MCP 1 · 技能 2");
     fireEvent.click(item);
-    expect(props.openSettings).toHaveBeenCalledWith("runtimes");
+    expect(props.openRuntimeHub).toHaveBeenCalled();
+    expect(props.openSettings).not.toHaveBeenCalled();
     cleanup();
 
     // 房主的其他设备：没有这一项，也不去读

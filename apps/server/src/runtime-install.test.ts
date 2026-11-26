@@ -62,6 +62,18 @@ describe("MCP catalog", () => {
       }
     }
   });
+
+  it("gives every entry what the store shows: a one-line tagline, a category, where to get each key", () => {
+    for (const entry of MCP_CATALOG.entries) {
+      expect(entry.tagline?.zh, entry.id).toBeTruthy();
+      expect(entry.tagline?.en, entry.id).toBeTruthy();
+      expect(entry.category, entry.id).toBeDefined();
+      for (const param of entry.params) {
+        if (param.kind === "secret")
+          expect(param.getUrl, `${entry.id}:${param.id}`).toMatch(/^https:\/\//);
+      }
+    }
+  });
 });
 
 describe("resolveRecipe", () => {

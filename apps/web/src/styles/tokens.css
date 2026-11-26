@@ -82,8 +82,8 @@
   /* 消息区宽度：设置 → 外观里三档，默认「宽」；各处都用 min(100% - 边距, 它) 居中 */
   --thread-width: 1040px;
   /* 弹窗尺寸统一三档：表单类（房间、邀请、接入 Agent）、宽内容（IM 连接、设置）；高度跟窗口走，上限防止大屏上过高 */
-  --dialog-width: 720px;
-  --dialog-width-wide: 880px;
+  --dialog-width: 800px;
+  --dialog-width-wide: 1040px;
   --dialog-max-height: min(880px, calc(100dvh - 48px));
   --header-height: 52px;
 

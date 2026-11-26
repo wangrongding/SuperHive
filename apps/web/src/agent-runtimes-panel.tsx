@@ -4,7 +4,7 @@ import { t } from "./i18n";
 import type { LocalAgentsState } from "./local-agents";
 import { AgentClisGroup } from "./agent-clis";
 import type { RuntimeConfigSection } from "./runtime-config-panel";
-import { RuntimeOverviewBlock } from "./runtime-overview";
+import { Button } from "./button";
 
 /**
  * 设置里的「Agent 运行时」：管理这台电脑上各 Agent CLI 的设置，只给本机房主（调用方按 local.mode 判断）。
@@ -22,13 +22,25 @@ type Focus = {
 
 type RuntimeBlock = {
   id: string;
-  render: (local: LocalAgentsState, focus: Focus) => ReactNode;
+  render: (local: LocalAgentsState, focus: Focus, openHub?: () => void) => ReactNode;
 };
 
 const blocks: RuntimeBlock[] = [
   {
-    id: "overview",
-    render: (local, focus) => <RuntimeOverviewBlock api={local} onJump={focus.jump} />,
+    id: "hub",
+    // MCP 与技能有自己的大面板，这里只留入口
+    render: (_local, _focus, openHub) =>
+      openHub && (
+        <div className="agent-runtime-hub">
+          <div>
+            <h4>{t("MCP 与技能")}</h4>
+            <p>{t("给各 CLI 装 MCP、管理技能，在单独的大面板里做。")}</p>
+          </div>
+          <Button variant="primary" onClick={openHub}>
+            {t("打开 MCP 与技能管理")}
+          </Button>
+        </div>
+      ),
   },
   {
     id: "clis",
@@ -47,9 +59,12 @@ const blocks: RuntimeBlock[] = [
 export function AgentRuntimesPanel({
   local,
   focusTool,
+  openHub,
 }: {
   local: LocalAgentsState;
   focusTool?: AgentCliTool | undefined;
+  /** 打开「MCP 与技能」大面板 */
+  openHub?: () => void;
 }) {
   const [jumped, setJumped] = useState<{
     tool: AgentCliTool;
@@ -73,7 +88,7 @@ export function AgentRuntimesPanel({
       <div className="agent-runtime-blocks">
         {blocks.map((block) => (
           <div key={block.id} className="agent-runtime-block">
-            {block.render(local, focus)}
+            {block.render(local, focus, openHub)}
           </div>
         ))}
       </div>

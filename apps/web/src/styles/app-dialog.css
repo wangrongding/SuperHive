@@ -57,7 +57,8 @@
  * 四档宽度，按内容选：
  * sm 命令面板（搜索、跳转、快捷键）；md 消息列表（提及我）；
  * lg 带筛选和多行明细的列表（定时任务）；xl 信息最密的（Agent 任务的用量表、故障单）。
- * lg、xl 固定高度，切换筛选、标签时弹窗不跳；sm、md 随内容高矮。
+ * full 接近全屏，给像独立工作区的面板（MCP 与技能）。
+ * lg、xl、full 固定高度，切换筛选、标签时弹窗不跳；sm、md 随内容高矮。
  */
 .app-dialog.sm {
   --app-dialog-width: 640px;
@@ -75,6 +76,14 @@
 
 .app-dialog.xl {
   --app-dialog-width: 1040px;
+
+  height: var(--app-dialog-max-height);
+}
+
+/* full：像一个独立的工作区（MCP 与技能），接近全屏 */
+.app-dialog.full {
+  --app-dialog-width: min(1200px, 96vw);
+  --app-dialog-max-height: min(900px, 92dvh, calc(100dvh - 48px - var(--titlebar-safe-top, 0px)));
 
   height: var(--app-dialog-max-height);
 }
@@ -186,5 +195,9 @@
     padding-top: env(safe-area-inset-top);
     border-radius: 0;
     animation-name: sheet-in;
+  }
+
+  .app-dialog.full {
+    --app-dialog-max-height: 100dvh;
   }
 }

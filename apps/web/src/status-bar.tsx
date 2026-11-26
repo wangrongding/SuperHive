@@ -334,6 +334,9 @@ export type StatusBarProps = {
   incidents?: { count: number; open: (trigger: HTMLElement | null) => void } | undefined;
   openAgentTasks: (trigger: HTMLElement | null) => void;
   openSettings: (tab: SettingsTab) => void;
+  /** 打开「MCP 与技能」大面板 */
+  openRuntimeHub: () => void;
+  runtimeHubOpen?: boolean;
   openProxySettings: () => void;
   /** 设置弹窗关上时重新拉一遍代理设置（在设置页里改过也能同步过来） */
   settingsOpen: boolean;
@@ -361,6 +364,8 @@ export function StatusBar(props: StatusBarProps) {
     incidents,
     openAgentTasks,
     openSettings,
+    openRuntimeHub,
+    runtimeHubOpen,
     openProxySettings,
     settingsOpen,
   } = props;
@@ -433,12 +438,12 @@ export function StatusBar(props: StatusBarProps) {
 
   const keepAwake = manageLocal && local.keepAwake?.supported ? local.keepAwake : undefined;
 
-  // MCP 与技能：只给 Server 所在电脑上的本机房主（和运行时配置同一权限），设置弹窗关上时重新数一遍
+  // MCP 与技能：只给 Server 所在电脑上的本机房主（和运行时配置同一权限），大面板、设置弹窗关上时重新数一遍
   const runtimeOwner = manageLocal && local.mode === "local";
   const [runtimeCounts, setRuntimeCounts] = useState<{ mcp: number; skills: number }>();
   const { runtimeOverview } = local;
   useEffect(() => {
-    if (!runtimeOwner || settingsOpen || !runtimeOverview) return;
+    if (!runtimeOwner || settingsOpen || runtimeHubOpen || !runtimeOverview) return;
     let cancelled = false;
     runtimeOverview().then(
       (overview) => {
@@ -451,7 +456,7 @@ export function StatusBar(props: StatusBarProps) {
     return () => {
       cancelled = true;
     };
-  }, [runtimeOwner, runtimeOverview, settingsOpen]);
+  }, [runtimeOwner, runtimeOverview, runtimeHubOpen, settingsOpen]);
   const [keepAwakeError, setKeepAwakeError] = useState<string>();
 
   return (
@@ -647,8 +652,8 @@ export function StatusBar(props: StatusBarProps) {
             align="end"
             icon={<Icon name="board" size={13} />}
             label={t("MCP {0} · 技能 {1}", { 0: runtimeCounts.mcp, 1: runtimeCounts.skills })}
-            tooltip={t("管理这台电脑上各 CLI 的全局 MCP 和技能")}
-            onClick={() => openSettings("runtimes")}
+            tooltip={t("给这台电脑上的各个 CLI 装 MCP、管理技能")}
+            onClick={openRuntimeHub}
           />
         )}
         {keepAwake && (

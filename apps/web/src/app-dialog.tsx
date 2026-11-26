@@ -1,7 +1,7 @@
 /*
  * 统一的居中弹窗外壳：遮罩、标题栏、关闭按钮、Esc / 点遮罩关闭、焦点进出、内容区内边距、底部操作区都在这里。
  *
- * - 尺寸四档（sm / md / lg / xl），由面板按内容选；高度跟窗口走，内容超出在内容区里滚动。
+ * - 尺寸五档（sm / md / lg / xl / full），由面板按内容选；高度跟窗口走，内容超出在内容区里滚动。
  * - 内容区的左右内边距只由外壳给（--dialog-inset，见 styles/app-dialog.css），面板不能改，
  *   app-dialog.test.ts 会扫描全部样式表拦住覆盖，避免某个面板内容贴边、和别的面板不一样。
  * - 桌面端整体让到窗口按钮那一行下面（--titlebar-safe-top）；窄屏接近全屏。
@@ -18,7 +18,7 @@ import {
 import { t } from "./i18n";
 import { IconButton } from "./button";
 
-export type AppDialogSize = "sm" | "md" | "lg" | "xl";
+export type AppDialogSize = "sm" | "md" | "lg" | "xl" | "full";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';

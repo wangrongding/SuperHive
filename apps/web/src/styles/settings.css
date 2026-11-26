@@ -25,7 +25,7 @@
 .settings-dialog {
   position: relative;
   width: min(var(--dialog-width-wide), 100%);
-  height: min(720px, calc(100dvh - 48px));
+  height: min(820px, calc(100dvh - 48px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   /* clip 而不是 hidden：hidden 仍能被 scrollIntoView 滚动，跳到某个 CLI 时会把标题和关闭按钮滚出框外 */
@@ -971,4 +971,27 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* Agent 运行时顶上「MCP 与技能」的入口 */
+.agent-runtime-hub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+.agent-runtime-hub h4 {
+  margin: 0 0 2px;
+  font-size: var(--text-base);
+}
+
+.agent-runtime-hub p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
 }

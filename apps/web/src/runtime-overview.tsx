@@ -12,7 +12,6 @@ import {
   type McpDraft,
   type RuntimeConfigSection,
 } from "./runtime-config-panel";
-import { InstallMcp, type RuntimeInstallApi } from "./runtime-install";
 import "./styles/runtime-overview.css";
 
 /**
@@ -31,8 +30,7 @@ export type RuntimeOverviewApi = Pick<
   | "toggleRuntimeMcp"
   | "deleteRuntimeMcp"
   | "toggleRuntimeSkill"
-> &
-  RuntimeInstallApi;
+>;
 
 export type OverviewKind = "mcp" | "skills";
 
@@ -62,7 +60,7 @@ export function cellAction(kindOf: OverviewKind, row: Row, info: Provider): Cell
   const entry = row.entries.find((item) => item.provider === info.provider);
   if (kindOf === "mcp") {
     if (!info.mcpSupported) {
-      return { kind: "none", reason: info.mcpNote ?? t("{0} 不支持全局 MCP", { 0: where }) };
+      return { kind: "none", reason: info.mcpNote ?? t("{0} 用不了 MCP", { 0: where }) };
     }
     if (!entry) return { kind: "copy", confirm: true, source: row.entries[0]! };
     if (!entry.enabled) return { kind: "enable" };
@@ -71,7 +69,7 @@ export function cellAction(kindOf: OverviewKind, row: Row, info: Provider): Cell
       ? { kind: "remove", confirm: true }
       : {
           kind: "none",
-          reason: t("{0} 的 MCP 没有停用开关，这是最后一份；要删请到 {0} 的配置里删", {
+          reason: t("{0} 没法只停用不删除，而且这是最后一份；要删请到 {0} 的设置里删", {
             0: where,
           }),
         };
@@ -89,18 +87,20 @@ export function cellAction(kindOf: OverviewKind, row: Row, info: Provider): Cell
 export function RuntimeOverviewBlock({
   api,
   onJump,
+  onDiscover,
   initialKind = "mcp",
 }: {
   api: RuntimeOverviewApi;
   /** 点列头跳到那个 CLI 的配置；不给就不显示跳转 */
   onJump?: (provider: RuntimeCredentialProvider, section: RuntimeConfigSection) => void;
+  /** 去「发现 / 安装」 */
+  onDiscover?: () => void;
   initialKind?: OverviewKind;
 }) {
   const [overview, setOverview] = useState<RuntimeOverview>();
   const [kind, setKind] = useState<OverviewKind>(initialKind);
   const [filter, setFilter] = useState("");
   const [adding, setAdding] = useState(false);
-  const [installing, setInstalling] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const { runtimeOverview } = api;
@@ -135,7 +135,6 @@ export function RuntimeOverviewBlock({
   if (!overview) {
     return (
       <div className="runtime-overview">
-        <h4>{t("MCP 与技能")}</h4>
         {error ? (
           <p className="settings-note error">{error}</p>
         ) : (
@@ -152,15 +151,9 @@ export function RuntimeOverviewBlock({
 
   return (
     <div className="runtime-overview">
-      <div className="runtime-overview-head">
-        <h4>{t("MCP 与技能")}</h4>
-        <Button size="sm" disabled={busy} onClick={load}>
-          {t("刷新")}
-        </Button>
-      </div>
-      <p className="settings-note">
+      <p className="runtime-overview-intro">
         {t(
-          "一处管理这台电脑上各 CLI 的全局 MCP 和技能。勾上就写进那个 CLI 的全局配置（原文件先备份），取消就停用；终端里的 CLI 也一起变。每次都从各 CLI 的配置文件读，在 Hive 外手改的也会显示。",
+          "这台电脑上每个 CLI 装了哪些 MCP 和技能，一张表看清。勾上就给那个 CLI 用，取消就停用；终端里直接用的 CLI 也一起变。改之前会先备份原来的设置。",
         )}
       </p>
       <div className="runtime-config-tabs" role="tablist" aria-label={t("MCP 与技能")}>
@@ -174,7 +167,6 @@ export function RuntimeOverviewBlock({
             onClick={() => {
               setKind(item);
               setAdding(false);
-              setInstalling(false);
             }}
           >
             {item === "mcp"
@@ -192,34 +184,26 @@ export function RuntimeOverviewBlock({
             onChange={(event) => setFilter(event.target.value)}
           />
         )}
-        {kind === "mcp" && !adding && !installing && (
-          <span className="runtime-overview-add">
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={busy || !providers.some((item) => item.mcpSupported)}
-              onClick={() => setInstalling(true)}
-            >
-              {t("从清单安装")}
-            </Button>
+        <span className="runtime-overview-add">
+          <Button size="sm" variant="ghost" disabled={busy} onClick={load}>
+            {t("刷新")}
+          </Button>
+          {kind === "mcp" && !adding && (
             <Button
               size="sm"
               disabled={busy || !providers.some((item) => item.mcpSupported)}
               onClick={() => setAdding(true)}
             >
-              {t("添加 MCP")}
+              {t("手动添加")}
             </Button>
-          </span>
-        )}
+          )}
+          {kind === "mcp" && onDiscover && (
+            <Button size="sm" variant="primary" onClick={onDiscover}>
+              {t("发现更多 MCP")}
+            </Button>
+          )}
+        </span>
       </div>
-      {installing && kind === "mcp" && (
-        <InstallMcp
-          api={api}
-          overview={overview}
-          onClose={() => setInstalling(false)}
-          onInstalled={setOverview}
-        />
-      )}
       {adding && kind === "mcp" && (
         <AddMcp
           providers={providers.filter((item) => item.mcpSupported).map((item) => item.provider)}
@@ -234,10 +218,18 @@ export function RuntimeOverviewBlock({
         />
       )}
       {providers.length === 0 ? (
-        <p className="settings-note">{t("这台电脑上还没有找到可以管理的 CLI 配置目录。")}</p>
+        <p className="settings-note">{t("这台电脑上还没找到装好的 CLI。")}</p>
       ) : rows.length === 0 ? (
         <p className="settings-note">
-          {kind === "mcp" ? t("还没有全局 MCP 服务器。") : t("这些目录里还没有 skill。")}
+          {kind === "mcp" ? t("还没有装任何 MCP。") : t("还没有技能。")}
+          {kind === "mcp" && onDiscover && (
+            <>
+              {" "}
+              <Button size="sm" variant="link" onClick={onDiscover}>
+                {t("去「发现 / 安装」挑一个")}
+              </Button>
+            </>
+          )}
         </p>
       ) : (
         <div className="runtime-overview-scroll" role="tabpanel">
@@ -334,22 +326,19 @@ function OverviewRow({
   const message = (where: string, action: CellAction) => {
     if (action.kind === "remove") {
       return t(
-        "{0} 的全局配置没有单独停用的开关，取消就从里面删掉 {1}（原文件先备份），别的 CLI 里的保留。",
+        "{0} 没法只停用不删除，取消就会把 {1} 从 {0} 里删掉（原来的设置先备份），别的 CLI 里的不受影响。",
         { 0: where, 1: row.name },
       );
     }
     if (action.kind !== "copy") return "";
     const from = RUNTIME_LABELS[action.source.provider];
     return kind === "mcp"
-      ? t(
-          "从 {0} 复制 {1} 的配置（包括环境变量和请求头的值），写进 {2} 的全局配置，原文件先备份。",
-          {
-            0: from,
-            1: row.name,
-            2: where,
-          },
-        )
-      : t("把 {0} 里的 {1} 整个目录复制到 {2} 自己的 skills 目录。", {
+      ? t("把 {1} 在 {0} 里的设置（包括密钥）复制一份给 {2}，{2} 原来的设置先备份。", {
+          0: from,
+          1: row.name,
+          2: where,
+        })
+      : t("把 {0} 里的技能 {1} 复制一份给 {2}。", {
           0: from,
           1: row.name,
           2: where,
@@ -376,7 +365,7 @@ function OverviewRow({
             title={reason}
           >
             {unsupported ? (
-              <span className="runtime-overview-na">{t("不支持")}</span>
+              <span className="runtime-overview-na">{t("用不了")}</span>
             ) : (
               <label
                 className="runtime-overview-toggle"
@@ -385,8 +374,8 @@ function OverviewRow({
                   (entry
                     ? entry.enabled
                       ? t("已启用")
-                      : t("已停用，配置还在")
-                    : t("还没有，勾上会从别的 CLI 复制过来"))
+                      : t("已停用，设置还留着")
+                    : t("还没有，勾上就从别的 CLI 复制一份"))
                 }
               >
                 <input
@@ -457,7 +446,7 @@ function AddMcp({
   return (
     <div className="runtime-overview-add-form">
       <fieldset className="runtime-overview-targets">
-        <legend>{t("写进这些 CLI")}</legend>
+        <legend>{t("装到哪些 CLI")}</legend>
         {providers.map((provider) => (
           <label key={provider}>
             <input
@@ -477,7 +466,7 @@ function AddMcp({
       </fieldset>
       {taken && (
         <p className="settings-note error">
-          {t("已经有叫 {0} 的 MCP 了，在表格里勾选要加到哪些 CLI。", { 0: name })}
+          {t("已经有叫 {0} 的 MCP 了，直接在表格里勾选要给哪些 CLI 用。", { 0: name })}
         </p>
       )}
       <McpForm
@@ -488,7 +477,7 @@ function AddMcp({
         onSave={() => onSave(name, mcpInput(draft, true), targets)}
       />
       <p className="settings-note">
-        {t("会写进勾选的 CLI 的全局配置（原文件先备份），终端里的这些 CLI 也一起变。")}
+        {t("会加到勾选的 CLI 里（原来的设置先备份），终端里直接用的这些 CLI 也一起变。")}
       </p>
     </div>
   );

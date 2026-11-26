@@ -50,6 +50,7 @@ export function SettingsDialog({
   attentionSound,
   autoSaveDraft,
   closeSettings,
+  openRuntimeHub,
   currentRoomId,
   draft,
   ensureNotificationPermission,
@@ -98,6 +99,8 @@ export function SettingsDialog({
   attentionSound: boolean;
   autoSaveDraft: boolean;
   closeSettings: () => void;
+  /** 打开「MCP 与技能」大面板（会先关掉设置） */
+  openRuntimeHub?: () => void;
   currentRoomId: string;
   draft: string;
   ensureNotificationPermission: () => Promise<boolean>;
@@ -498,7 +501,11 @@ export function SettingsDialog({
               </section>
             )}
             {settingsTab === "runtimes" && local.mode === "local" && (
-              <AgentRuntimesPanel local={local} focusTool={runtimesFocus} />
+              <AgentRuntimesPanel
+                local={local}
+                focusTool={runtimesFocus}
+                openHub={openRuntimeHub}
+              />
             )}
             {settingsTab === "plugins" && local.mode === "local" && (
               <PluginsSettingsPanel api={local} />

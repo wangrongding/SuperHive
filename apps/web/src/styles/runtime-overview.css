@@ -40,7 +40,9 @@
   max-width: 320px;
 }
 
+/* position: relative 让格子里的 sr-only 说明以它为定位框，不把外面的弹窗撑出横向滚动 */
 .runtime-overview-scroll {
+  position: relative;
   max-height: 360px;
   overflow: auto;
   border: 1px solid var(--border-light);
@@ -207,237 +209,589 @@
   flex-basis: auto;
 }
 
-/* MCP 快速安装向导 */
-.runtime-install {
+/* 「MCP 与技能」大面板（runtime-hub.tsx） */
+.runtime-hub-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.runtime-hub-tabs button {
+  padding: 6px var(--dialog-row-pad);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.runtime-hub-tabs button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.runtime-hub-tabs button.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.runtime-hub-body {
+  padding-top: 16px;
+  font-size: var(--text-base);
+}
+
+.runtime-hub .runtime-overview {
+  gap: 12px;
+}
+
+.runtime-hub .runtime-overview-intro {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  line-height: 1.6;
+}
+
+.runtime-hub .runtime-config-tabs button {
+  padding: 5px 14px;
+  font-size: var(--text-sm);
+}
+
+.runtime-hub .runtime-overview-scroll {
+  max-height: none;
+}
+
+.runtime-hub .runtime-overview-table {
+  font-size: var(--text-base);
+}
+
+.runtime-hub .runtime-overview-table th,
+.runtime-hub .runtime-overview-table td {
+  padding: 10px 12px;
+}
+
+.runtime-hub .settings-note {
+  font-size: var(--text-base);
+}
+
+/* 发现 / 安装：卡片商店 */
+.runtime-store {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.runtime-store-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+}
+
+.runtime-store-search {
+  min-width: 0;
+  flex: 1 1 280px;
+  max-width: 420px;
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: var(--text-base);
+}
+
+.runtime-store-search:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.runtime-store-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.runtime-store-categories button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.runtime-store-categories button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.runtime-store-categories button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.runtime-store-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-store-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 10px 12px;
+  min-width: 0;
+  padding: 18px;
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-subtle, var(--bg-main));
+  border-radius: var(--radius-xl);
+  background: var(--bg-main);
+  transition: border-color var(--duration-fast) ease-out;
 }
 
-.runtime-install-head {
+.runtime-store-card:hover {
+  border-color: var(--border);
+}
+
+.runtime-store-card-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.runtime-store-card-head > div,
+.runtime-drawer-head > div {
+  min-width: 0;
+}
+
+.runtime-store-card h4,
+.runtime-drawer-head h3 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-store-card small,
+.runtime-drawer-head small {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.runtime-store-card p {
+  flex: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.runtime-store-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: hsl(var(--store-hue) 62% 46%);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.runtime-store-icon.large {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  font-size: 21px;
+}
+
+.runtime-store-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.runtime-store-tags span {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.runtime-store-card-foot {
   display: flex;
   gap: 8px;
   align-items: center;
   justify-content: space-between;
+  min-height: 32px;
+}
+
+.runtime-store-installed {
+  color: var(--success);
   font-size: var(--text-sm);
 }
 
-.runtime-install-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
-  max-height: 360px;
+.runtime-store-empty,
+.runtime-store-foot {
   margin: 0;
-  padding: 0;
-  overflow: auto;
-  list-style: none;
-}
-
-.runtime-install-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  height: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-main);
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.runtime-install-card:hover {
-  border-color: var(--accent);
-}
-
-.runtime-install-card:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.runtime-install-title {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 6px;
-  align-items: baseline;
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-
-.runtime-install-title small {
   color: var(--text-tertiary);
-  font-size: var(--text-xs);
-  font-weight: 400;
-}
-
-.runtime-install-desc {
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-}
-
-.runtime-install-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: auto;
-}
-
-.runtime-install-tags span {
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
-}
-
-.runtime-install-form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   font-size: var(--text-sm);
 }
 
-.runtime-install-form > label {
+/* 安装抽屉：从大面板右边滑出，只盖住面板 */
+.runtime-drawer-layer {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.runtime-drawer-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: var(--bg-scrim);
+  cursor: default;
+  animation: fade-in var(--duration) ease-out;
+}
+
+.runtime-drawer {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  width: min(480px, 100%);
+  height: 100%;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-dialog);
+  outline: none;
+  animation: runtime-drawer-in var(--duration) var(--ease-out);
 }
 
-.runtime-install-form > label > span {
+@keyframes runtime-drawer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+.runtime-drawer-head {
+  display: flex;
+  flex: none;
+  gap: 14px;
+  align-items: center;
+  padding: 18px 14px 16px 24px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.runtime-drawer-head > div {
+  flex: 1;
+}
+
+.runtime-drawer-close svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.runtime-drawer-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  padding: 18px 24px 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: var(--text-base);
+  line-height: 1.6;
+}
+
+.runtime-drawer-desc,
+.runtime-drawer-requires {
+  margin: 0;
   color: var(--text-secondary);
-  font-size: var(--text-xs);
 }
 
-.runtime-install-form > label em {
+.runtime-drawer-requires {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  color: var(--text);
+}
+
+.runtime-drawer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.runtime-drawer-form section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.runtime-drawer-form h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.runtime-drawer-nothing {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.runtime-drawer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.runtime-drawer-field > span {
+  color: var(--text);
+}
+
+.runtime-drawer-field em {
   color: var(--danger);
   font-style: normal;
 }
 
-.runtime-install-form input[type="text"],
-.runtime-install-form input[type="password"],
-.runtime-install-form input:not([type]),
-.runtime-install-form textarea {
-  min-width: 0;
-  padding: 5px 8px;
+.runtime-drawer-field input,
+.runtime-drawer-field textarea {
+  width: 100%;
+  padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-main);
   color: var(--text);
   font: inherit;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--text-xs);
 }
 
-.runtime-install-form > label small {
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
+.runtime-drawer-field input:focus-visible,
+.runtime-drawer-field textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
-.runtime-install-meta {
-  margin: 0;
+.runtime-drawer-field small {
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
 }
 
-.runtime-install-launch {
+.runtime-drawer-field a,
+.runtime-drawer-details a {
+  width: fit-content;
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.runtime-drawer-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-drawer-targets button {
+  padding: 7px 14px 7px 34px;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  cursor: pointer;
+}
+
+/* 左边的小圆点表示开关：开着是实心勾 */
+.runtime-drawer-targets button::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-heavy);
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+.runtime-drawer-targets button[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.runtime-drawer-targets button[aria-checked="true"]::before {
+  border-color: var(--accent);
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m4 8.2 2.6 2.6L12 5.4' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
+}
+
+.runtime-drawer-why,
+.runtime-drawer-details {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.runtime-drawer-why summary,
+.runtime-drawer-details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.runtime-drawer-why ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.runtime-drawer-details {
+  padding-top: 4px;
+  border-top: 1px solid var(--border-light);
+}
+
+.runtime-drawer-details dl {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 6px 8px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-main);
-  font-size: var(--text-xs);
+  margin: 10px 0 0;
 }
 
-.runtime-install-launch > span {
-  color: var(--text-secondary);
+.runtime-drawer-details dt {
+  margin-top: 6px;
+  color: var(--text);
 }
 
-.runtime-install-launch ol,
-.runtime-install-plan ol {
+.runtime-drawer-details dd {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  gap: 2px;
   margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
-.runtime-install code {
-  padding: 0 4px;
-  border-radius: 4px;
-  background: var(--bg-subtle);
+.runtime-drawer-details code {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
 
-.runtime-overview-targets label.disabled {
-  color: var(--text-tertiary);
-  cursor: not-allowed;
-}
-
-.runtime-install-blocked {
+.runtime-drawer-error {
   margin: 0;
-  padding-left: 16px;
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
-}
-
-.runtime-install-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.runtime-install-plan dl {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 6px 12px;
-  margin: 0;
-  font-size: var(--text-xs);
-}
-
-.runtime-install-plan dt {
-  color: var(--text-secondary);
-}
-
-.runtime-install-plan dd {
-  margin: 0;
-  min-width: 0;
-}
-
-.runtime-install-plan dd ul,
-.runtime-install-result ul {
-  margin: 0;
-  padding-left: 16px;
-}
-
-.runtime-install-result {
-  font-size: var(--text-sm);
-}
-
-.runtime-install-result li.ok strong {
-  color: var(--success, var(--text));
-}
-
-.runtime-install-result li.error {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
-@media (max-width: 640px) {
-  .runtime-install-plan dl {
+.runtime-drawer-foot {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 14px 24px;
+  border-top: 1px solid var(--border-light);
+}
+
+.runtime-drawer-note {
+  flex: 1 1 200px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.runtime-drawer-done {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.runtime-drawer-success,
+.runtime-drawer-failed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+}
+
+.runtime-drawer-success {
+  background: var(--success-soft);
+}
+
+.runtime-drawer-success strong {
+  color: var(--success);
+}
+
+.runtime-drawer-failed {
+  background: var(--danger-soft);
+}
+
+.runtime-drawer-failed strong {
+  color: var(--danger);
+}
+
+.runtime-drawer-success p,
+.runtime-drawer-failed p {
+  margin: 0;
+  color: var(--text);
+}
+
+.runtime-drawer-restarts {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.runtime-drawer-restarts li.ok strong {
+  color: var(--success);
+}
+
+.runtime-drawer-restarts li.skip strong {
+  color: var(--warning);
+}
+
+.runtime-drawer-restarts li.error {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .runtime-store-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .runtime-install-plan dd {
-    margin-bottom: 4px;
+  .runtime-store-search {
+    max-width: none;
+  }
+
+  .runtime-drawer-head {
+    padding-left: 16px;
+  }
+
+  .runtime-drawer-body,
+  .runtime-drawer-foot {
+    padding-right: 16px;
+    padding-left: 16px;
   }
 }

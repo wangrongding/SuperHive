@@ -189,13 +189,13 @@ describe("RuntimeOverviewBlock", () => {
     const onJump = vi.fn();
     render(<RuntimeOverviewBlock api={client} onJump={onJump} />);
     await screen.findByText("docs");
-    expect(screen.getByText(/勾上就写进那个 CLI 的全局配置/).textContent).toContain(
-      "终端里的 CLI 也一起变",
+    expect(screen.getByText(/勾上就给那个 CLI 用/).textContent).toContain(
+      "终端里直接用的 CLI 也一起变",
     );
 
     // OpenClaw 不支持 MCP：格子标灰并说明原因
     const table = screen.getByRole("table");
-    expect(within(table).getAllByText("不支持")).toHaveLength(2);
+    expect(within(table).getAllByText("用不了")).toHaveLength(2);
     expect(within(table).getAllByText("OpenClaw 还不支持在配置文件里管理 MCP")).toHaveLength(2);
     // Claude Code 的 MCP 没有停用开关，又是最后一份：不能取消
     expect(cell("在 Claude Code 里启用 docs").disabled).toBe(true);
@@ -211,7 +211,7 @@ describe("RuntimeOverviewBlock", () => {
     fireEvent.click(cell("在 Codex 里启用 docs"));
     expect(client.syncRuntimeMcp).not.toHaveBeenCalled();
     const dialog = screen.getByRole("dialog", { name: "确认把 docs 加到 Codex" });
-    expect(dialog.textContent).toContain("包括环境变量和请求头的值");
+    expect(dialog.textContent).toContain("包括密钥");
     expect(dialog.textContent).toContain("会同时影响终端里的 Codex");
     await act(async () => {
       fireEvent.click(dialog.querySelector<HTMLButtonElement>("button:last-child")!);
@@ -252,7 +252,7 @@ describe("RuntimeOverviewBlock", () => {
     const client = overviewApi();
     render(<RuntimeOverviewBlock api={client} />);
     await screen.findByText("docs");
-    fireEvent.click(screen.getByText("添加 MCP"));
+    fireEvent.click(screen.getByText("手动添加"));
     // 只列支持 MCP 的 CLI，默认全勾
     expect(screen.queryByRole("checkbox", { name: "OpenClaw" })).toBeNull();
     fireEvent.click(screen.getByRole("checkbox", { name: "Claude Code" }));

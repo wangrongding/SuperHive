@@ -16,8 +16,8 @@ import { describe, expect, it } from "vitest";
 
 /** 允许写裸 <button> 的 className（第一个词）：不是操作按钮，而是可点的区域或复合控件的一部分 */
 const RAW_BUTTON_CLASSES = new Set([
-  // MCP 快速安装里的清单卡片：整张卡片是一块可点区域，选中进入下一步
-  "runtime-install-card",
+  // MCP 安装抽屉的遮罩：点空白处收起抽屉
+  "runtime-drawer-scrim",
   // 文档预览右侧目录里的一行：像链接一样点了滚到对应标题
   "doc-toc-item",
   // 遮罩：点空白处关闭

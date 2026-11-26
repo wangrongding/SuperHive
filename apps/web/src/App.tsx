@@ -121,6 +121,7 @@ import { HostApprovalsBanner, HostApprovalWaiting } from "./host-settings";
 import { LoginDialog } from "./login-dialog";
 import { RoomDialog } from "./room-dialog";
 import { SettingsDialog } from "./settings-dialog";
+import { RuntimeHubDialog } from "./runtime-hub";
 import { AgentSetupDialog } from "./agent-setup-dialog";
 import { SidePanel } from "./side-panel";
 import {
@@ -316,6 +317,8 @@ export function App({
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("chat");
   /** 从接入 Agent 弹窗跳到「Agent 运行时」时要看的 CLI；关掉设置后回到接入弹窗 */
   const [runtimesFocus, setRuntimesFocus] = useState<SelectableAgentProvider>();
+  /** 「MCP 与技能」大面板：状态栏入口、设置里的按钮打开 */
+  const [runtimeHubOpen, setRuntimeHubOpen] = useState(false);
   const returnToAgentDialogRef = useRef(false);
   const [sendShortcut, setSendShortcut] = useState<SendShortcut>(storedSendShortcut);
   const [autoSaveDraft, setAutoSaveDraft] = useState(() =>
@@ -1195,6 +1198,22 @@ export function App({
     setAgentDialogOpen(false);
     setFullAccessConfirmationOpen(false);
     returnToAgentDialogRef.current = true;
+    setRuntimesFocus(provider);
+    setSettingsTab("runtimes");
+    setSettingsOpen(true);
+  }, []);
+
+  /** 设置里的「打开 MCP 与技能管理」：关掉设置，打开大面板 */
+  const openRuntimeHub = useCallback(() => {
+    returnToAgentDialogRef.current = false;
+    setSettingsOpen(false);
+    setRuntimesFocus(undefined);
+    setRuntimeHubOpen(true);
+  }, []);
+
+  /** 大面板里点 CLI 名字：去设置「Agent 运行时」里那个 CLI 的配置 */
+  const jumpFromRuntimeHub = useCallback((provider: SelectableAgentProvider) => {
+    setRuntimeHubOpen(false);
     setRuntimesFocus(provider);
     setSettingsTab("runtimes");
     setSettingsOpen(true);
@@ -2734,6 +2753,8 @@ export function App({
             setSettingsTab(tab);
             setSettingsOpen(true);
           }}
+          openRuntimeHub={() => setRuntimeHubOpen(true)}
+          runtimeHubOpen={runtimeHubOpen}
           openProxySettings={openProxySettings}
           settingsOpen={settingsOpen}
           messageNotifications={messageNotifications}
@@ -3043,6 +3064,14 @@ export function App({
         />
       )}
 
+      {runtimeHubOpen && local.mode === "local" && (
+        <RuntimeHubDialog
+          api={local}
+          onJump={jumpFromRuntimeHub}
+          onClose={() => setRuntimeHubOpen(false)}
+        />
+      )}
+
       {settingsOpen && (
         <SettingsDialog
           attentionDelivery={attentionDelivery}
@@ -3050,6 +3079,7 @@ export function App({
           attentionSound={attentionSound}
           autoSaveDraft={autoSaveDraft}
           closeSettings={closeSettings}
+          openRuntimeHub={openRuntimeHub}
           currentRoomId={currentRoomId}
           draft={draft}
           ensureNotificationPermission={ensureNotificationPermission}

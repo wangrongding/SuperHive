@@ -2018,7 +2018,11 @@ export const mcpCatalogParamSchema = z.object({
   kind: z.enum(["text", "path", "paths", "secret"]),
   required: z.boolean(),
   placeholder: z.string().optional(),
+  /** 去哪拿这个密钥：发布者申请页面的具体地址（网页上显示成「去哪拿这个密钥」） */
+  getUrl: z.string().url().optional(),
 });
+/** 商店里的分类 */
+export const mcpCatalogCategorySchema = z.enum(["browser", "code", "docs", "design", "other"]);
 /** 模板里的 {参数 id} 换成填的值；可选参数没填时，含它的那一项（参数 / 环境变量 / 请求头）整项去掉 */
 export const mcpCatalogEntrySchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
@@ -2027,6 +2031,11 @@ export const mcpCatalogEntrySchema = z.object({
   title: z.string(),
   publisher: z.string(),
   description: localizedTextSchema,
+  /** 卡片上的一句话：它能帮 Agent 干什么（不写术语） */
+  tagline: localizedTextSchema.optional(),
+  category: mcpCatalogCategorySchema.optional(),
+  /** 卡片上额外的标签，例如「需要 Figma 桌面版」 */
+  badge: localizedTextSchema.optional(),
   /** 发布者的文档 */
   docs: z.string().url(),
   transport: z.enum(["stdio", "http", "sse"]),
@@ -2102,6 +2111,7 @@ export const runtimeInstallResultSchema = z.object({
   overview: runtimeOverviewSchema,
 });
 export type McpCatalogParam = z.infer<typeof mcpCatalogParamSchema>;
+export type McpCatalogCategory = z.infer<typeof mcpCatalogCategorySchema>;
 export type McpCatalogEntry = z.infer<typeof mcpCatalogEntrySchema>;
 export type McpCatalog = z.infer<typeof mcpCatalogSchema>;
 export type RuntimeInstallRequest = z.infer<typeof runtimeInstallRequestSchema>;
