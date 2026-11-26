@@ -82,6 +82,7 @@ const snapshot = (
   features,
 });
 const noOp = () => undefined;
+const pluginsChanged = vi.fn();
 
 function useHarness() {
   const [currentRoomId, setRoomId] = useState("general");
@@ -119,6 +120,7 @@ function useHarness() {
     }),
     slowOpsRef: useRef(undefined),
     setIncidentAttention: noOp,
+    onPluginsChanged: pluginsChanged,
     attentionRef: useRef(undefined),
     globalEventsRef: useRef({
       onInvocation: noOp,
@@ -176,6 +178,18 @@ describe("single connection room navigation", () => {
     );
     expect(result.current.room.messages.map((item) => item.seq)).toEqual([1, 2]);
     expect(socket.sent.filter((event) => event.type === "participant.join")).toHaveLength(1);
+  });
+
+  it("still delivers plugins.changed after switching rooms on the same connection", () => {
+    pluginsChanged.mockClear();
+    const { result, socket } = start();
+    act(() => result.current.switchRoom("second"));
+    // 切换中（新房间快照还没到）也要收：插件列表按房间取，版本号只负责触发重取
+    act(() => socket.receive({ type: "plugins.changed" }));
+    act(() => socket.receive(snapshot("second", [message("second", 1)])));
+    act(() => socket.receive({ type: "plugins.changed" }));
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(pluginsChanged).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to reconnecting when the snapshot advertises no switch support", () => {

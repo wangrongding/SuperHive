@@ -42,18 +42,23 @@ superhive.call("room.members").then(
   (error) => ($("who").textContent = `读不到成员：${error.code}`),
 );
 
-// 演示隔离：没申请的权限会被拒绝；也拿不到宿主的 localStorage、联不了网
+// 隔离自检（默认折叠，给插件作者看）：没申请的权限会被拒绝；也拿不到宿主的 localStorage、联不了网
+function probe(text) {
+  const item = document.createElement("li");
+  item.textContent = text;
+  $("probe").append(item);
+}
 superhive.call("room.messages").then(
-  () => ($("probe").textContent += " · room.messages：意外放行"),
-  (error) => ($("probe").textContent += ` · room.messages：${error.code}（没申请 room:read）`),
+  () => probe("room.messages：意外放行"),
+  (error) => probe(`room.messages：${error.code}（没申请 room:read）`),
 );
 try {
   localStorage.getItem("x");
-  $("probe").textContent += " · localStorage 可用";
+  probe("localStorage：可用（不应该）");
 } catch {
-  $("probe").textContent += " · localStorage 不可用（不透明源）";
+  probe("localStorage：不可用（不透明源）");
 }
 fetch("https://example.com").then(
-  () => ($("probe").textContent += " · 联网成功（不应该）"),
-  () => ($("probe").textContent += " · 联网被 CSP 拦下"),
+  () => probe("联网：成功（不应该）"),
+  () => probe("联网：被 CSP 拦下"),
 );

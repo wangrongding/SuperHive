@@ -28,9 +28,16 @@ h1 {
   font-size: 16px;
 }
 #who,
-#probe {
+#selftest {
   color: var(--muted);
   font-size: 12px;
+}
+#selftest summary {
+  cursor: pointer;
+}
+#probe {
+  margin: 4px 0 0;
+  padding-left: 18px;
 }
 form {
   display: flex;
