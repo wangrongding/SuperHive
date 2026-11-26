@@ -1,0 +1,271 @@
+/* 插件：右侧栏「插件」标签页和设置 · 插件 */
+.plugin-side-scroll {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 4px 8px 12px;
+}
+
+.plugin-side {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plugin-side-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.plugin-side-switch button {
+  padding: 2px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.plugin-side-switch button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.plugin-side-meta {
+  display: grid;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+.plugin-side-meta strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.plugin-side-meta small {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* 面板是第三方页面：给它一块有边框的白底区域，和宿主界面分清 */
+.plugin-frame {
+  width: 100%;
+  min-height: 240px;
+  flex: 1;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+}
+
+.plugin-side-loading {
+  min-height: 240px;
+  flex: 1;
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.plugin-side-error,
+.plugin-side-empty {
+  margin: 12px 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.plugin-side-error {
+  color: var(--danger);
+}
+
+/* ---------- 设置 · 插件 ---------- */
+.plugin-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+.plugin-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plugin-row-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.plugin-row-title strong {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.plugin-row-title small,
+.plugin-row-desc {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.plugin-row-desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.plugin-state {
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 20px;
+}
+
+.plugin-state.enabled,
+.plugin-state.confirmed {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.plugin-state.needs-approval,
+.plugin-state.changed {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.plugin-state.invalid {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.plugin-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.plugin-facts dt {
+  color: var(--text-tertiary);
+}
+
+.plugin-facts dd {
+  margin: 0;
+}
+
+.plugin-permissions {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-permissions li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: 6px;
+}
+
+.plugin-permissions small {
+  grid-column: 1 / -1;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.plugin-permissions strong {
+  font-weight: var(--weight-medium);
+}
+
+.plugin-added {
+  justify-self: start;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.plugin-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.plugin-mcp {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.plugin-mcp h5 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.plugin-mcp-row {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.plugin-mcp-row legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.plugin-mcp-command {
+  overflow-x: auto;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.plugin-mcp-providers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: var(--text-sm);
+}
+
+.plugin-mcp-providers label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-note.warning {
+  color: var(--warning);
+}

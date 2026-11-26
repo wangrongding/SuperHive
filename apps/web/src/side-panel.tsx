@@ -81,8 +81,11 @@ export function SidePanel({
   sidePanelTab,
   whiteboard,
   whiteboardEpochRef,
+  pluginPanel,
 }: {
   accessNow: number;
+  /** 当前房间有已批准的插件面板时传入：多出一个「插件」标签页 */
+  pluginPanel?: ReactNode;
   agentDialogOpen: boolean;
   agentSettingsButton: (name: string) => ReactNode;
   /** Agent 手上在办的事：有的话点成员行跳过去，而不是 @ 它 */
@@ -178,15 +181,17 @@ export function SidePanel({
               onKeyDown={(event) => {
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                 event.preventDefault();
-                const index = sidePanelTabs.indexOf(sidePanelTab);
+                const tabs: SidePanelTab[] = pluginPanel
+                  ? [...sidePanelTabs, "plugins"]
+                  : sidePanelTabs;
+                const index = tabs.indexOf(sidePanelTab);
                 const next: SidePanelTab =
                   event.key === "Home"
-                    ? sidePanelTabs[0]!
+                    ? tabs[0]!
                     : event.key === "End"
-                      ? sidePanelTabs.at(-1)!
-                      : sidePanelTabs[
-                          (index + (event.key === "ArrowLeft" ? -1 : 1) + sidePanelTabs.length) %
-                            sidePanelTabs.length
+                      ? tabs.at(-1)!
+                      : tabs[
+                          (index + (event.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length
                         ]!;
                 setSidePanelTab(next);
                 event.currentTarget.querySelector<HTMLButtonElement>(`#side-tab-${next}`)?.focus();
@@ -245,6 +250,23 @@ export function SidePanel({
                   )}
                 </button>
               </Tooltip>
+              {pluginPanel && (
+                <Tooltip content={t("插件")}>
+                  <button
+                    type="button"
+                    role="tab"
+                    id="side-tab-plugins"
+                    aria-selected={sidePanelTab === "plugins"}
+                    aria-controls="side-panel-plugins"
+                    tabIndex={sidePanelTab === "plugins" ? 0 : -1}
+                    className={sidePanelTab === "plugins" ? "active" : ""}
+                    onClick={() => setSidePanelTab("plugins")}
+                  >
+                    <Icon name="plug" size={15} />
+                    <span className="side-tab-label">{t("插件")}</span>
+                  </button>
+                </Tooltip>
+              )}
             </div>
             <IconButton
               ref={membersCloseRef}
@@ -255,7 +277,16 @@ export function SidePanel({
               <Icon name="close" />
             </IconButton>
           </div>
-          {sidePanelTab === "whiteboard" ? (
+          {sidePanelTab === "plugins" && pluginPanel ? (
+            <div
+              className="plugin-side-scroll"
+              role="tabpanel"
+              id="side-panel-plugins"
+              aria-labelledby="side-tab-plugins"
+            >
+              {pluginPanel}
+            </div>
+          ) : sidePanelTab === "whiteboard" ? (
             <div
               className="whiteboard-scroll"
               role="tabpanel"

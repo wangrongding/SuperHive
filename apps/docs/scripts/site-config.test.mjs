@@ -63,9 +63,9 @@ test("local illustrations receive dimensions and lazy loading", () => {
   assert.equal(image.properties.src, "/handbook/media/workroom.svg");
 });
 
-test("navigation requires twenty-one unique documentation routes in each language", () => {
-  assert.equal(expectedRoutes.length, 42);
-  assert.equal(new Set(expectedRoutes).size, 42);
+test("navigation requires twenty-two unique documentation routes in each language", () => {
+  assert.equal(expectedRoutes.length, 44);
+  assert.equal(new Set(expectedRoutes).size, 44);
   assert.ok(expectedRoutes.includes("reference/documentation/"));
   assert.ok(expectedRoutes.includes("en/reference/documentation/"));
   assert.ok(expectedRoutes.includes("en/"));
@@ -73,6 +73,8 @@ test("navigation requires twenty-one unique documentation routes in each languag
   assert.ok(expectedRoutes.includes("en/guides/contributing/"));
   assert.ok(expectedRoutes.includes("guides/cloud-deployment/"));
   assert.ok(expectedRoutes.includes("en/guides/cloud-deployment/"));
+  assert.ok(expectedRoutes.includes("guides/plugins/"));
+  assert.ok(expectedRoutes.includes("en/guides/plugins/"));
 });
 
 test("interface screenshots expand into themed 2x image pairs", () => {

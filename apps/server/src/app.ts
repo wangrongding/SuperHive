@@ -460,9 +460,10 @@ function incidentGit(repo: string | undefined, running: string | undefined): Inc
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const sandbox = options.sandbox === true;
-  // 网页面板、本机管理共用一份，批准、撤销立即对两边生效
-  const pluginRegistry =
-    options.plugins && !sandbox ? new PluginRegistry(options.plugins) : undefined;
+  // 网页面板、本机管理共用一份，批准、撤销立即对两边生效；沙箱用自己的临时目录，照样能演示
+  const pluginRegistry = options.plugins
+    ? new PluginRegistry({ ...options.plugins, onChange: () => pushPluginsChanged() })
+    : undefined;
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: LIMITS.maxClientPayloadBytes,
@@ -1693,6 +1694,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (isLocalOwner(connection)) {
         send(connection.socket, { type: "incidents.changed", attention });
       }
+    }
+  }
+
+  /** 插件批准状态变了：通知所有人类成员的页面重新取能用的插件（Agent 不需要） */
+  function pushPluginsChanged(): void {
+    for (const connection of connections) {
+      if (connection.participant?.type === "human")
+        send(connection.socket, { type: "plugins.changed" });
     }
   }
 

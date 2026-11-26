@@ -72,7 +72,7 @@ import { RetryModelDialog } from "./model-picker";
 import { AttachmentLocalOpenContext, FilePreview } from "./attachments";
 import { listImConnections } from "./im-api";
 import { resolveShareBase } from "./server-url";
-import { getLocalePreference, t, useLocale } from "./i18n";
+import { getLocale, getLocalePreference, t, useLocale } from "./i18n";
 import { usePanelWidths } from "./panel-resizer";
 import {
   storedUsernameKey,
@@ -123,6 +123,14 @@ import { RoomDialog } from "./room-dialog";
 import { SettingsDialog } from "./settings-dialog";
 import { AgentSetupDialog } from "./agent-setup-dialog";
 import { SidePanel } from "./side-panel";
+import {
+  PluginSidePanel,
+  pluginPanelKey,
+  useRoomPlugins,
+  type PluginCommandDispatch,
+  type PluginPanelKey,
+} from "./plugins";
+import { matchPluginCommand } from "./plugin-host";
 import { RoomSidebar } from "./room-sidebar";
 import { useRoomData } from "./use-room-data";
 import { useRoomList } from "./use-room-list";
@@ -433,7 +441,7 @@ export function App({
   }, [base, authToken, isOwner]);
   // 「Agent 运行时」只给页面开在 Server 所在电脑上的本机房主
   const visibleSettingsTabs = settingsTabs.filter(
-    (tab) => tab.id !== "runtimes" || local.mode === "local",
+    (tab) => (tab.id !== "runtimes" && tab.id !== "plugins") || local.mode === "local",
   );
   useEffect(() => {
     if (!isOwner || !local.enabled) return;
@@ -753,6 +761,44 @@ export function App({
   const scroll = useMessageScroll({ messages, username, timeline });
   const { setPendingNewMessages, setShowJumpToBottom, nearBottomRef } = scroll;
 
+  // 插件：当前房间能用的面板和 / 命令；批准、撤销后 Server 推 plugins.changed，重新取并卸掉失效的面板
+  const [pluginsVersion, setPluginsVersion] = useState(0);
+  const onPluginsChanged = useCallback(() => setPluginsVersion((value) => value + 1), []);
+  const plugins = useRoomPlugins({
+    base,
+    authToken,
+    roomId: currentRoomId,
+    version: pluginsVersion,
+  });
+  const pluginsRef = useRef(plugins);
+  pluginsRef.current = plugins;
+  const hasPluginPanels = plugins.some((plugin) => plugin.panels.length > 0);
+  const [activePluginPanel, setActivePluginPanel] = useState<PluginPanelKey>();
+  const [pluginCommand, setPluginCommand] = useState<PluginCommandDispatch>();
+  const pluginCommandNonce = useRef(0);
+  useEffect(() => {
+    // 插件被撤销：「插件」标签页跟着消失，退回成员
+    if (!hasPluginPanels && sidePanelTab === "plugins") setSidePanelTab("members");
+  }, [hasPluginPanels, sidePanelTab]);
+  /** 输入框里的 /命令：认出是插件声明的就交给它的面板，不当消息发出去 */
+  const interceptPluginCommand = useCallback((content: string) => {
+    const match = matchPluginCommand(content, pluginsRef.current);
+    if (!match) return false;
+    const key = pluginPanelKey(match.plugin.id, match.panel);
+    pluginCommandNonce.current += 1;
+    setActivePluginPanel(key);
+    setPluginCommand({
+      key,
+      name: match.name,
+      args: match.args,
+      nonce: pluginCommandNonce.current,
+    });
+    setSidePanelTab("plugins");
+    setMembersCollapsed(false);
+    if (window.matchMedia?.("(max-width: 1100px)").matches) setMobilePanel("members");
+    return true;
+  }, []);
+
   const composer = useComposer({
     username,
     currentRoomId,
@@ -766,8 +812,18 @@ export function App({
     base,
     authToken,
     socketRef: room.socketRef,
+    interceptCommand: interceptPluginCommand,
   });
   const { draft, setMentionContext, setComposerPreview, appendMention } = composer;
+  /** 插件的 composer.insert：接在已有草稿后面另起一行，不替人发送 */
+  const { setDraft: setComposerDraft, textareaRef: composerTextareaRef } = composer;
+  const insertPluginText = useCallback(
+    (text: string) => {
+      setComposerDraft((current) => (current.trim() ? `${current.trimEnd()}\n${text}` : text));
+      window.requestAnimationFrame(() => composerTextareaRef.current?.focus());
+    },
+    [setComposerDraft, composerTextareaRef],
+  );
 
   const closeMobilePanel = useCallback((restoreFocus = true) => {
     setMobilePanel(undefined);
@@ -1327,6 +1383,7 @@ export function App({
     notificationPreferencesRef,
     slowOpsRef,
     setIncidentAttention,
+    onPluginsChanged,
     attentionRef,
     globalEventsRef,
   });
@@ -2559,6 +2616,44 @@ export function App({
           sidePanelTab={sidePanelTab}
           whiteboard={whiteboard}
           whiteboardEpochRef={whiteboardEpochRef}
+          pluginPanel={
+            hasPluginPanels ? (
+              <PluginSidePanel
+                plugins={plugins}
+                active={activePluginPanel}
+                setActive={setActivePluginPanel}
+                command={pluginCommand}
+                base={base}
+                authToken={authToken}
+                roomId={currentRoomId}
+                context={{
+                  roomId: currentRoomId,
+                  locale: getLocale(),
+                  theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
+                  viewer: isOwner ? "owner" : "guest",
+                }}
+                api={{
+                  messages: (limit) =>
+                    messages
+                      .filter((message) => !message.deletedAt)
+                      .slice(-limit)
+                      .map((message) => ({
+                        seq: message.seq,
+                        sender: message.senderName,
+                        content: message.content,
+                        createdAt: message.createdAt,
+                      })),
+                  members: () =>
+                    participants.map((participant) => ({
+                      name: participant.username,
+                      type: participant.type,
+                      online: participant.status !== "offline",
+                    })),
+                  insertIntoComposer: insertPluginText,
+                }}
+              />
+            ) : undefined
+          }
         />
       </section>
       {statusBarVisible && (

@@ -26,6 +26,7 @@ export const navigation = [
       item("飞书与微信", "Feishu (Lark) and WeChat", "guides/im"),
       item("用量与费用", "Usage and cost", "guides/usage"),
       item("反馈与贡献", "Feedback and contributing", "guides/contributing"),
+      item("插件开发", "Building plugins", "guides/plugins"),
     ],
   },
   {

@@ -34,7 +34,12 @@ export function createPluginHost(options: {
   api: PluginHostApi;
   /** 测试替换；默认挂在 window 上 */
   target?: Pick<Window, "addEventListener" | "removeEventListener">;
-}): { dispatchCommand: (name: string, args: string) => void; dispose: () => void } {
+}): {
+  dispatchCommand: (name: string, args: string) => void;
+  /** 主题、语言、房间变了时告诉面板 */
+  dispatchContext: (context: PluginContext) => void;
+  dispose: () => void;
+} {
   const target = options.target ?? window;
   const granted = new Set(options.plugin.permissions);
   // 面板是不透明源，postMessage 只能发 "*"；只发给这个 iframe 自己的 window
@@ -99,6 +104,8 @@ export function createPluginHost(options: {
   return {
     dispatchCommand: (name, args) =>
       post({ superhive: 1, kind: "event", event: "command", data: { name, args } }),
+    dispatchContext: (context) =>
+      post({ superhive: 1, kind: "event", event: "context", data: context }),
     dispose: () => target.removeEventListener("message", listener as EventListener),
   };
 }

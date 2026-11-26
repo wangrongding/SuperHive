@@ -172,3 +172,39 @@ describe("pickedToFiles", () => {
     expect(pickedToFiles([]).notice).toBeUndefined();
   });
 });
+
+describe("插件的 / 命令", () => {
+  it("插件认领的命令不发出去、清空输入框；没认领的照常发", () => {
+    const send = vi.fn();
+    const socket = { readyState: WebSocket.OPEN, send } as unknown as WebSocket;
+    const intercept = vi.fn((content: string) => content.startsWith("/roll"));
+    const { result } = renderHook(() =>
+      useComposer({
+        username: "rd",
+        currentRoomId: "build",
+        participants: [],
+        messages: [],
+        invocations: new Map(),
+        autoSaveDraft: false,
+        sendShortcut: "enter",
+        richComposer: false,
+        currentLeadAgent: undefined,
+        base: "http://hive",
+        authToken: "t",
+        socketRef: { current: socket },
+        interceptCommand: intercept,
+      }),
+    );
+    act(() => result.current.setDraft("/roll 2d6"));
+    act(() => result.current.sendMessage());
+    expect(intercept).toHaveBeenCalledWith("/roll 2d6");
+    expect(send).not.toHaveBeenCalled();
+    expect(result.current.draft).toBe("");
+    act(() => result.current.setDraft("/unknown 你好"));
+    act(() => result.current.sendMessage());
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0]![0] as string)).toMatchObject({
+      content: "/unknown 你好",
+    });
+  });
+});

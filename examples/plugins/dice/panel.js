@@ -33,6 +33,10 @@ superhive.on("command", ({ name, args }) => {
   void rollAndInsert($("spec").value);
 });
 
+// 宿主发来主题、语言：面板加载完和切换主题时各一次
+superhive.on("context", ({ theme }) => (document.documentElement.dataset.theme = theme));
+superhive.call("context.get").then(({ theme }) => (document.documentElement.dataset.theme = theme));
+
 superhive.call("room.members").then(
   (members) => ($("who").textContent = `房间里 ${members.length} 位成员`),
   (error) => ($("who").textContent = `读不到成员：${error.code}`),

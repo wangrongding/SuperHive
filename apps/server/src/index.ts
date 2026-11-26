@@ -6,6 +6,7 @@ import { errorText } from "./texts.js";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
+import { feedbackInfo } from "./feedback-info.js";
 import { timingSafeEqual } from "node:crypto";
 import { buildApp, resolveUrl } from "./app.js";
 import { RuntimeCredentialStore } from "./runtime-credentials.js";
@@ -123,16 +124,19 @@ const app = await buildApp({
   webUrl,
   agentCommandPrefix,
   ...(staticDir ? { staticDir } : {}),
-  // 插件原型（docs/research/plugin-system.md）：默认关闭，设了 HIVE_PLUGINS_DIR 才开放；
-  // 正式版改成数据目录下的 plugins/，版本号从包版本取
-  ...(process.env.HIVE_PLUGINS_DIR
-    ? {
+  // 插件（docs/research/plugin-system.md）：默认在数据目录的 plugins/ 下，HIVE_PLUGINS_DIR 可换位置；
+  // HIVE_PLUGINS=0 整个关掉。清单的 engines.superhive 按 superhive 包版本核对
+  ...(process.env.HIVE_PLUGINS === "0"
+    ? {}
+    : {
         plugins: {
-          dir: path.resolve(process.env.HIVE_PLUGINS_DIR),
-          hostVersion: process.env.HIVE_PLUGIN_HOST_VERSION ?? "0.4.8",
+          dir: path.resolve(
+            process.env.HIVE_PLUGINS_DIR ?? path.join(path.dirname(databasePath), "plugins"),
+          ),
+          hostVersion:
+            process.env.HIVE_PLUGIN_HOST_VERSION ?? (await feedbackInfo())?.version ?? "0.0.0",
         },
-      }
-    : {}),
+      }),
   ...(instanceId ? { instanceId } : {}),
   ...(agentCli
     ? {

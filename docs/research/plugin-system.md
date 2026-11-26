@@ -97,7 +97,7 @@
 
 ## 四、分阶段路线
 
-### 第一阶段：最小可用（本次原型覆盖了核心链路）
+### 第一阶段：最小可用（已实现，见第六节）
 
 - 清单 `superhive-plugin.json`：`id / name / version / engines.superhive / permissions / guests / contributes.{panels, commands, mcpServers}`。
 - 本机管理：列出、批准、撤销（接口已有，**网页管理界面待做**：设置里加「插件」页）。
@@ -146,6 +146,20 @@
 浏览器实测用的是临时端口、临时数据目录和一个最小宿主页，**没有接进真正的网页侧栏和输入框**，这是第一阶段剩下的工作。
 
 ![原型实测](./plugin-system-prototype.png)
+
+## 六、第一阶段实现（rd-claude #6480）
+
+原型之上补齐了网页三处接线、管理页、MCP 扩展点和文档，默认开启（`HIVE_PLUGINS=0` 关闭）：
+
+- **插件目录**：默认在数据目录的 `plugins/`，`HIVE_PLUGINS_DIR` 可换；`engines.superhive` 按 superhive 包版本核对。批准记录按文件修改时间缓存，房主手动删改 `.grants.json` 也随即生效。
+- **侧栏**：当前房间有已批准的面板时，右侧栏多出「插件」标签页（没有就不出现，撤销后自动退回「成员」）；多个面板时上面一排切换。iframe 双保险：`sandbox="allow-scripts allow-forms"` 属性 + 响应头 CSP sandbox，`connect-src 'none'`。
+- **斜杠命令**：`useComposer` 发送前问一下插件，认领了就清空输入框、不发出去，切到对应面板并在面板加载完后把 `{ name, args }` 发过去；没认领的、带附件的照常发。结果只能经 `composer.insert` 填进输入框。
+- **即时撤销**：批准、撤销、MCP 确认后 Server 给人类成员的连接推 `plugins.changed`，网页重新取插件列表，失效的面板立即卸掉；已发出的面板地址本来就每次现查批准状态。
+- **设置 · 插件**：只给 Server 所在电脑上的本机房主（和「Agent 运行时」同一条件，接口也是 local 级）。列出插件、每条权限的中英文说明、提供的面板和命令、访客是否可见；升级多申请的权限标「新增」并要求重新批准；撤销要二次确认。
+- **MCP 扩展点**：`PUT /api/local/plugins/:id/mcp/:name { providers }`。命令和参数按插件目录解析（`./` 开头的换成绝对路径、不能跳出插件目录，其余当 PATH 上的程序名，不经过 shell），经 `RuntimeConfigStore.putMcp` 写进所选运行时的全局 MCP 配置，名字 `plugin-<id>-<name>`；部分运行时写失败时撤回这次写入的；清单改了命令标「要重新确认」；撤销插件时一并 `deleteMcp`。示例插件带了一个零依赖的 stdio MCP（`roll_dice`）。
+- **文档**：文档站「使用指南 · 插件开发」中英文两页。
+
+尚未做的（留给第二阶段）：输入 `/` 时的命令补全提示；面板里的 `storage` / `network` 权限；插件分发与签名。
 
 ## 参考链接
 

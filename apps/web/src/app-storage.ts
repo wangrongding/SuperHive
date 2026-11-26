@@ -24,7 +24,8 @@ export const storedAttentionGroupKey = "superhive.attention-group";
 export const storedStatusBarKey = "superhive.status-bar";
 export type MessageNotificationMode = "off" | "mentions" | "all";
 export type SendShortcut = "modifier-enter" | "enter";
-export type SettingsTab = "chat" | "notifications" | "appearance" | "computer" | "runtimes";
+export type SettingsTab =
+  "chat" | "notifications" | "appearance" | "computer" | "runtimes" | "plugins";
 export type TimeFormat = "system" | "24h" | "12h";
 export type ThemePreference = "system" | "dark" | "light";
 export type InterfaceDensity = "comfortable" | "compact";
@@ -34,7 +35,8 @@ export type ThreadWidth = "standard" | "wide" | "full";
 
 export type MessageSize = "small" | "standard" | "large";
 export type MobilePanel = "members" | "rooms";
-export type SidePanelTab = "members" | "whiteboard";
+/** plugins 只在当前房间有可用插件面板时出现 */
+export type SidePanelTab = "members" | "whiteboard" | "plugins";
 export const sidePanelTabs: SidePanelTab[] = ["members", "whiteboard"];
 export const messageNotificationModes = ["off", "mentions", "all"] as const;
 
@@ -59,6 +61,7 @@ export const settingsTabs: Array<{ id: SettingsTab; label: string; description: 
       description: t("本机 Agent、网络代理、熄屏后保持在线"),
     },
     { id: "runtimes", label: t("Agent 运行时"), description: t("CLI 升级与配置") },
+    { id: "plugins", label: t("插件"), description: t("面板、/ 命令与 MCP 工具") },
   ]);
 
 export function storedSendShortcut(): SendShortcut {

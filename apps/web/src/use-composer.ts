@@ -44,6 +44,7 @@ export function useComposer({
   base,
   authToken,
   socketRef,
+  interceptCommand,
 }: {
   username: string;
   currentRoomId: string;
@@ -57,6 +58,8 @@ export function useComposer({
   base: string;
   authToken: string | undefined;
   socketRef: RefObject<WebSocket | undefined>;
+  /** 发送前先问一下：插件认领了这条 /命令就返回 true，清空输入框但不发出去 */
+  interceptCommand?: (content: string) => boolean;
 }) {
   // 正在回答的 Agent 提问；发送时作为 replyToMessageId
   const [answering, setAnswering] = useState<ChatMessage>();
@@ -252,6 +255,14 @@ export function useComposer({
     const attachmentIds = attachmentQueue.readyIds;
     if (!content && attachmentIds.length === 0) return;
     if (content.length > MAX_MESSAGE_LENGTH || attachmentsBlocking) return;
+    // 带附件的不算命令；插件命令不经过 Server，断线时也能用
+    if (attachmentIds.length === 0 && !steer && interceptCommand?.(content)) {
+      setDraft("");
+      setComposerPreview(false);
+      setComposerExpanded(false);
+      setMentionContext(undefined);
+      return;
+    }
     if (socket?.readyState !== WebSocket.OPEN) return;
     // 回答提问时带上回复关系：服务端据此把答案交回提问的 Agent，不必再 @ 它
     const replyTo = answering && answering.roomId === currentRoomId ? answering.id : undefined;

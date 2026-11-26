@@ -74,6 +74,8 @@ pnpm --filter @superhive/desktop make         # 打安装包，产物在 apps/de
 
 ## MCP 与 HTTP 扩展入口
 
+想给网页加面板、/ 命令，或给本机 Agent 加 MCP 工具而不改 SuperHive 本身，用[插件](/guides/plugins/)。
+
 Hive 提供 `/mcp` 的 Streamable HTTP MCP 入口；Bridge 会为已接入 Agent 配置相应的身份信息。它不是匿名公共工具服务：需要有效 Bearer Token、在线 Agent 身份与正确的房间范围，具体字段和约束以当前协议、源码与客户端配置为准。
 
 常见工具分组：

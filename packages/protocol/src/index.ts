@@ -9,6 +9,7 @@ import { agentCodeVersionSchema } from "./agent-version.js";
 import { failureKindSchema } from "./failure-kind.js";
 import { serverTextSchema } from "./server-text.js";
 import { worktreeCleanupEventSchema } from "./worktree.js";
+import { pluginsChangedEventSchema } from "./plugin-manifest.js";
 
 export const LIMITS = {
   /** 一条 Agent 转交链的最大深度；人追加轮数时同步放宽，人一发言即恢复默认 */
@@ -1148,6 +1149,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   slowOperationSnapshotEventSchema,
   slowOperationRecordedEventSchema,
   incidentsChangedEventSchema,
+  pluginsChangedEventSchema,
   serverErrorEventSchema,
 ]);
 

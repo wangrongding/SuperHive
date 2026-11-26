@@ -96,12 +96,29 @@ export const pluginManifestSchema = z
   });
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;
 
+/** 可以写入 MCP 配置的运行时（和 runtimeCredentialProviderSchema 一致，openclaw 不支持 MCP） */
+export const pluginMcpProviders = ["claude", "codex", "opencode", "omp", "copilot"] as const;
+export type PluginMcpProvider = (typeof pluginMcpProviders)[number];
+
+/** 房主确认过的一个 MCP：写进了哪些运行时、写的是什么（清单后来改了命令要重新确认） */
+export const pluginMcpGrantSchema = z.object({
+  providers: z.array(z.enum(pluginMcpProviders)),
+  command: z.string(),
+  args: z.array(z.string()),
+  /** 写进运行时配置时用的名字 */
+  entry: z.string(),
+  grantedAt: z.string(),
+});
+export type PluginMcpGrant = z.infer<typeof pluginMcpGrantSchema>;
+
 /** 房主批准过的状态：只放行批准时清单里申请的那些，清单后来多申请的不会自动生效 */
 export const pluginGrantSchema = z.object({
   permissions: z.array(z.enum(pluginPermissions)),
   /** 批准的是哪个版本；升级后申请的权限变多要重新批准 */
   version: semverSchema,
   grantedAt: z.string(),
+  /** 逐个确认过的 MCP，按清单里的 name */
+  mcp: z.record(pluginMcpGrantSchema).optional(),
 });
 export type PluginGrant = z.infer<typeof pluginGrantSchema>;
 
@@ -118,19 +135,36 @@ export const pluginSummarySchema = z.object({
 export type PluginSummary = z.infer<typeof pluginSummarySchema>;
 
 /** 房主在本机管理时看到的条目：申请了什么、批准了什么、为什么不能用 */
+export const localPluginMcpSchema = mcpServerSchema.extend({
+  /** 已写进这些运行时的配置 */
+  providers: z.array(z.enum(pluginMcpProviders)),
+  /** confirmed：已确认且清单没改；changed：确认后清单改了命令或参数，要重新确认；pending：还没确认 */
+  state: z.enum(["pending", "confirmed", "changed"]),
+});
+export type LocalPluginMcp = z.infer<typeof localPluginMcpSchema>;
+
 export const localPluginSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
   version: z.string().optional(),
+  description: z.string().optional(),
+  author: z.string().optional(),
   dir: z.string(),
   requested: z.array(z.enum(pluginPermissions)),
-  mcpServers: z.array(mcpServerSchema),
+  /** 访客能不能看到 */
+  guests: z.boolean().optional(),
+  panels: z.array(panelSchema).optional(),
+  commands: z.array(commandSchema).optional(),
+  mcpServers: z.array(localPluginMcpSchema),
   grant: pluginGrantSchema.optional(),
   /** enabled：已批准且清单没多申请；needs-approval：没批准或升级后多申请了；invalid：清单不合法或版本不兼容 */
   state: z.enum(["enabled", "needs-approval", "invalid"]),
   problem: z.string().optional(),
 });
 export type LocalPlugin = z.infer<typeof localPluginSchema>;
+
+/** 插件的批准状态变了（批准、撤销、MCP 确认）：网页收到后重新取能用的插件，撤销的面板立即卸掉 */
+export const pluginsChangedEventSchema = z.object({ type: z.literal("plugins.changed") });
 
 /* ---------------- 插件和宿主之间的 postMessage 协议 ---------------- */
 

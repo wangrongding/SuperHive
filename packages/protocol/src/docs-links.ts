@@ -38,6 +38,7 @@ export const DOCS_LINKS = {
   },
   worktrees: { path: "guides/worktrees/" },
   contributing: { path: "guides/contributing/" },
+  plugins: { path: "guides/plugins/" },
 } satisfies Record<string, DocsLink>;
 
 export type DocsLinkKey = keyof typeof DOCS_LINKS;

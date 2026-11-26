@@ -65,6 +65,7 @@ export function useRoomConnection({
   notificationPreferencesRef,
   slowOpsRef,
   setIncidentAttention,
+  onPluginsChanged,
   attentionRef,
   globalEventsRef,
 }: {
@@ -95,6 +96,8 @@ export function useRoomConnection({
   slowOpsRef: RefObject<ReturnType<typeof useSlowOps> | undefined>;
   /** 需要房主处理的故障单和规则提议数（只推给这台电脑上的房主页面） */
   setIncidentAttention: (attention: number) => void;
+  /** 插件批准状态变了：重新取当前房间能用的插件 */
+  onPluginsChanged?: () => void;
   attentionRef: RefObject<ReturnType<typeof useAttention> | undefined>;
   globalEventsRef: RefObject<GlobalEvents>;
 }) {
@@ -396,6 +399,8 @@ export function useRoomConnection({
           slowOpsRef.current?.receive(event.operation);
         } else if (event.type === "incidents.changed") {
           setIncidentAttention(event.attention);
+        } else if (event.type === "plugins.changed") {
+          onPluginsChanged?.();
         } else if (event.type === "worktree.cleanup") {
           worktreeNoticeVersion.current++;
           setWorktreeNotices((current) => {

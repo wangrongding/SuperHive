@@ -74,6 +74,8 @@ The app is assembled in `apps/desktop/.stage/app` with its own npm-installed run
 
 ## MCP and HTTP extension points
 
+To add a panel or / commands to the web app, or MCP tools for local agents, without changing SuperHive itself, write a [plugin](/en/guides/plugins/).
+
 Hive provides a Streamable HTTP MCP endpoint at `/mcp`; the Bridge configures the corresponding identity for connected agents. It's not an anonymous public tool service: it requires a valid Bearer token, an online agent identity, and the correct room scope. For exact fields and constraints, go by the current protocol, source code, and client configuration.
 
 Common tool groups:

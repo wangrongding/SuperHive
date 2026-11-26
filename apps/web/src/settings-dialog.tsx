@@ -37,6 +37,7 @@ import { HostManageNotice, KeepAwakeSettingsGroup } from "./host-settings";
 import { LocalAgentUpdatesGroup } from "./local-agent-updates";
 import { NetworkProxySettingsGroup } from "./network-proxy-settings";
 import { RemoteJoinsGroup } from "./remote-joins-settings";
+import { PluginsSettingsPanel } from "./plugins";
 import { AgentRuntimesPanel } from "./agent-runtimes-panel";
 import type { RefObject, Dispatch, SetStateAction } from "react";
 import type { LocalAgentsState } from "./local-agents";
@@ -498,6 +499,9 @@ export function SettingsDialog({
             )}
             {settingsTab === "runtimes" && local.mode === "local" && (
               <AgentRuntimesPanel local={local} focusTool={runtimesFocus} />
+            )}
+            {settingsTab === "plugins" && local.mode === "local" && (
+              <PluginsSettingsPanel api={local} />
             )}
             {settingsTab === "appearance" && (
               <section id="settings-panel-appearance" role="tabpanel" aria-label={t("外观")}>

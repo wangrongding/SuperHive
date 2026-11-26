@@ -62,6 +62,7 @@ import { placeNamedCopy } from "./attachment-open.js";
 import type { LocalAgentSupervisor } from "./local-agents.js";
 import type { RuntimeCredentialStore } from "./runtime-credentials.js";
 import { registerRuntimeConfigRoutes } from "./runtime-config-routes.js";
+import { RuntimeConfigStore } from "./runtime-config.js";
 import type { AgentCliManager } from "./agent-clis.js";
 import { registerAgentCliRoutes } from "./agent-cli-routes.js";
 import { registerRemoteJoinRoutes, type RunJoinCli } from "./remote-join-routes.js";
@@ -830,13 +831,27 @@ export function registerLocalAgentRoutes(
     }
   }
 
-  if (rooms.plugins)
+  if (rooms.plugins) {
+    // 插件的 MCP 写进本机运行时的全局配置：和「Agent 运行时」设置页同一套读写（备份、原子替换）
+    const runtimeConfig = rooms.runtimeCredentials
+      ? new RuntimeConfigStore(rooms.runtimeCredentials)
+      : undefined;
+    rooms.plugins.setMcpWriter(
+      runtimeConfig
+        ? {
+            put: (provider, entry, server) =>
+              runtimeConfig.putMcp(provider, entry, { transport: "stdio", ...server }),
+            remove: (provider, entry) => runtimeConfig.deleteMcp(provider, entry),
+          }
+        : undefined,
+    );
     registerPluginLocalRoutes(app, {
       registry: rooms.plugins,
       authorizeLocal: (request, reply) => Boolean(authorize(request, reply, "local")),
-      audit: (action, id, permissions) =>
-        app.log.info({ plugin: id, action, permissions }, "plugin grant changed"),
+      audit: (action, id, detail) =>
+        app.log.info({ plugin: id, action, detail }, "plugin grant changed"),
     });
+  }
 
   // 慢操作里有仓库路径、房间和调用来源：和运行时配置一样只给本机看
   app.get("/api/local/slow-ops", async (request, reply) => {

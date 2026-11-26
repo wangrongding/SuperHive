@@ -10,6 +10,7 @@ import type {
   ChatMessage,
   Invocation,
   Participant,
+  PluginSummary,
   Schedule,
   ServerEvent,
   WhiteboardEntry,
@@ -161,6 +162,9 @@ const artifactsApi: { artifacts: Artifact[]; history: ChatMessage[]; requests: s
   requests: [],
 };
 
+/** 当前房间能用的插件（GET /api/rooms/:id/plugins）和换面板地址的请求 */
+const pluginsApi: { plugins: PluginSummary[]; frames: string[] } = { plugins: [], frames: [] };
+
 /** 房主的置顶房间（服务端存的那份）和收到的 PUT /api/room-pins */
 const roomPins: { ids: string[]; requests: string[][] } = { ids: [], requests: [] };
 const pinnedSummary = (id: string) => {
@@ -225,6 +229,8 @@ describe("App mention autocomplete", () => {
     localApi.cleanupBatch = null;
     roomPins.ids = [];
     roomPins.requests = [];
+    pluginsApi.plugins = [];
+    pluginsApi.frames = [];
     artifactsApi.artifacts = [];
     artifactsApi.history = [];
     artifactsApi.requests = [];
@@ -238,6 +244,12 @@ describe("App mention autocomplete", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (/\/api\/rooms\/[^/]+\/plugins$/.test(url))
+          return jsonResponse({ plugins: pluginsApi.plugins });
+        if (/\/api\/rooms\/[^/]+\/plugins\/.+\/frame$/.test(url)) {
+          pluginsApi.frames.push(url);
+          return jsonResponse({ url: "/api/plugin-frames/tok/panel.html" });
+        }
         if (url.includes("/api/meta")) {
           return jsonResponse({
             name: "SuperHive",
@@ -486,6 +498,60 @@ describe("App mention autocomplete", () => {
       }),
     );
     expect(document.querySelector(".connection")?.classList.contains("online")).toBe(true);
+  });
+
+  it("已批准插件的面板出现在右侧栏，/ 命令交给面板不发消息，撤销后标签页消失", async () => {
+    pluginsApi.plugins = [
+      {
+        id: "dice",
+        name: "骰子",
+        version: "0.1.0",
+        description: "",
+        permissions: ["composer:write"],
+        panels: [{ id: "main", title: "骰子", entry: "panel.html" }],
+        commands: [{ name: "roll", description: "掷骰子", panel: "main" }],
+      },
+    ];
+    localStorage.setItem("superhive.username", "Alice");
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    const tab = await screen.findByRole("tab", { name: "插件" });
+    expect(tab.getAttribute("aria-selected")).toBe("false");
+
+    const composer = screen.getByPlaceholderText("发送消息，输入 @ 选择成员…");
+    const sentBefore = socket.sent.length;
+    fireEvent.change(composer, { target: { value: "/roll 2d6" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(socket.sent).toHaveLength(sentBefore);
+    expect((composer as HTMLTextAreaElement).value).toBe("");
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "插件" }).getAttribute("aria-selected")).toBe("true"),
+    );
+    await waitFor(() => expect(document.querySelector("iframe.plugin-frame")).not.toBeNull());
+    expect(pluginsApi.frames[0]).toContain("/api/rooms/general/plugins/dice/panels/main/frame");
+
+    // 没被插件认领的 / 开头照常当消息发
+    fireEvent.change(composer, { target: { value: "/notaplugin hi" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter", ctrlKey: true });
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ content: "/notaplugin hi" });
+
+    pluginsApi.plugins = [];
+    act(() => socket.serverEvent({ type: "plugins.changed" }));
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "插件" })).toBeNull());
+    expect(document.querySelector("iframe.plugin-frame")).toBeNull();
+    expect(screen.getByRole("tab", { name: /成员/ }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("shows actual room loading phases, retries a missing snapshot and removes the loader once messages arrive", async () => {

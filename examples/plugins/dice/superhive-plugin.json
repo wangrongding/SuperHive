@@ -8,6 +8,14 @@
   "guests": false,
   "contributes": {
     "panels": [{ "id": "main", "title": "骰子", "entry": "panel.html" }],
-    "commands": [{ "name": "roll", "description": "掷骰子，例如 /roll 2d6", "panel": "main" }]
+    "commands": [{ "name": "roll", "description": "掷骰子，例如 /roll 2d6", "panel": "main" }],
+    "mcpServers": [
+      {
+        "name": "dice",
+        "command": "node",
+        "args": ["./mcp.mjs"],
+        "description": "给 Agent 一个 roll_dice 工具：掷骰子并返回点数"
+      }
+    ]
   }
 }

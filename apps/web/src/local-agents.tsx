@@ -10,6 +10,8 @@ import type {
   IncidentActionRequest,
   IncidentSettings,
   IncidentsResponse,
+  LocalPlugin,
+  PluginMcpProvider,
   KeepAwakeSettings,
   KeepAwakeState,
   NetworkProxySettings,
@@ -211,6 +213,11 @@ export type LocalAgentsState = {
   remoteJoinAction(id: string, action: "stop" | "start"): Promise<RemoteJoin>;
   /** 从清单里删掉；leave 时先请对方 Server 把它移出房间 */
   removeRemoteJoin(id: string, leave: boolean): Promise<RemoteJoinRemoveResponse>;
+  /** 本机：插件列表、批准、撤销、MCP 确认（设置 → 插件）；旧版 Server 没有时抛 404 */
+  plugins(): Promise<{ dir: string; mcpProviders: PluginMcpProvider[]; plugins: LocalPlugin[] }>;
+  grantPlugin(id: string): Promise<LocalPlugin>;
+  revokePlugin(id: string): Promise<void>;
+  setPluginMcp(id: string, name: string, providers: PluginMcpProvider[]): Promise<LocalPlugin>;
   /** 本机：故障单、经验库、规则提议与派修设置 */
   incidents(): Promise<IncidentsResponse>;
   updateIncidentSettings(patch: UpdateIncidentSettingsRequest): Promise<IncidentSettings>;
@@ -804,6 +811,46 @@ export function useLocalAgents(
     [request],
   );
 
+  /* ---------- 插件 ---------- */
+
+  const plugins = useCallback(async () => {
+    const response = await request("/api/local/plugins");
+    return (await response.json()) as {
+      dir: string;
+      mcpProviders?: PluginMcpProvider[];
+      plugins: LocalPlugin[];
+    };
+  }, [request]);
+  const pluginsWithProviders = useCallback(async () => {
+    const result = await plugins();
+    return { ...result, mcpProviders: result.mcpProviders ?? [] };
+  }, [plugins]);
+  const grantPlugin = useCallback(
+    async (id: string) => {
+      const response = await request(`/api/local/plugins/${encodeURIComponent(id)}/grant`, {
+        method: "POST",
+      });
+      return ((await response.json()) as { plugin: LocalPlugin }).plugin;
+    },
+    [request],
+  );
+  const revokePlugin = useCallback(
+    async (id: string) => {
+      await request(`/api/local/plugins/${encodeURIComponent(id)}/grant`, { method: "DELETE" });
+    },
+    [request],
+  );
+  const setPluginMcp = useCallback(
+    async (id: string, name: string, providers: PluginMcpProvider[]) => {
+      const response = await request(
+        `/api/local/plugins/${encodeURIComponent(id)}/mcp/${encodeURIComponent(name)}`,
+        { method: "PUT", body: JSON.stringify({ providers }) },
+      );
+      return ((await response.json()) as { plugin: LocalPlugin }).plugin;
+    },
+    [request],
+  );
+
   /* ---------- 带到别人房间的 Agent ---------- */
 
   const remoteJoins = useCallback(async () => {
@@ -1141,6 +1188,10 @@ export function useLocalAgents(
     networkProxy,
     updateNetworkProxy,
     remoteJoins,
+    plugins: pluginsWithProviders,
+    grantPlugin,
+    revokePlugin,
+    setPluginMcp,
     createRemoteJoin,
     remoteJoinAction,
     removeRemoteJoin,
