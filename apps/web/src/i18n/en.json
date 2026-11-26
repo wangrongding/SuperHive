@@ -2245,5 +2245,12 @@
   "源码运行": "From source",
   "主 Agent {0}：{1}": "Lead Agent {0}: {1}",
   "状态栏": "Status bar",
-  "字号、消息区宽度等更多外观设置": "Font size, message width and more"
+  "字号、消息区宽度等更多外观设置": "Font size, message width and more",
+  "跳到原消息 #{0}：{1}": "Go to original message #{0}: {1}",
+  "跳到它回应的那条消息": "Go to the message it replied to",
+  "回应原消息": "Replying to original",
+  "还在排队，先看 @{0} 正在做的": "Still queued — see what @{0} is working on now",
+  "跳到对话流里这一轮的过程": "Go to this run's progress in the chat",
+  "{0}，跳到执行过程": "{0}, go to progress",
+  "查看过程": "View progress"
 }

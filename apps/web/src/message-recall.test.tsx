@@ -74,7 +74,13 @@ function props(messages: ChatMessage[], task: Invocation): ComponentProps<typeof
       earlierTopicCount: 0,
       timeline: messages.map((message) => ({ message, grouped: true, newDay: false })),
     } as Props["win"],
-    jump: { jumpToMessage: vi.fn() } as unknown as Props["jump"],
+    jump: {
+      jumpToMessage: vi.fn(),
+      jumpToProcess: vi.fn(),
+      locateMessage: vi.fn(),
+      flashOrigin: vi.fn(),
+      flash: { messageIds: new Set(), invocationIds: new Set() },
+    } as unknown as Props["jump"],
     share: {
       shareMode: false,
       selectedMessageIds: new Set(),

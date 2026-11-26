@@ -487,9 +487,18 @@ export function InvocationChips({
   onViewChanges,
   onRetryWithModel,
   onOpenProxySettings,
+  onViewProcess,
+  flashedIds,
   recalled = false,
 }: {
   recalled?: boolean;
+  /**
+   * 「查看过程」：进行中、等你回答、排队时跳到对话流里那张过程卡。
+   * 对话流里有对应卡片时才返回处理函数，没有就不出按钮
+   */
+  onViewProcess?: ((invocation: Invocation) => (() => void) | undefined) | undefined;
+  /** 刚从另一头跳过来（或从这里跳走）的调用：状态条短暂高亮 */
+  flashedIds?: ReadonlySet<string>;
   /** 连不上模型服务（网络错误）时的「网络代理设置」：本机 Agent、房主才返回处理函数 */
   onOpenProxySettings?: ((invocation: Invocation) => (() => void) | undefined) | undefined;
   /** 「看改动」：打开「代码」面板并切到这个 Agent 的任务线 */
@@ -517,7 +526,8 @@ export function InvocationChips({
   allInvocations?: ReadonlyMap<string, Invocation>;
   participants: Participant[];
   canJumpTo: (messageId: string) => boolean;
-  onJump: (messageId: string) => void;
+  /** origin：从哪条调用跳过去的，跳转时它也闪一下 */
+  onJump: (messageId: string, origin?: Invocation) => void;
   onRetry: (invocation: Invocation) => void;
   onCancel: (invocation: Invocation) => void;
   onExtend: () => void;
@@ -602,6 +612,7 @@ export function InvocationChips({
             canJumpTo(invocation.replyMessageId)
               ? invocation.replyMessageId
               : undefined;
+          const viewProcess = jumpTarget ? undefined : onViewProcess?.(invocation);
           const summary = (
             <>
               <span className="invocation-indicator" aria-hidden="true">
@@ -670,7 +681,7 @@ export function InvocationChips({
               key={invocation.id}
               role="listitem"
               data-invocation-id={invocation.id}
-              className={`invocation-chip ${invocation.status}${invocation.resolution ? " resolved" : ""}${consequence ? " has-consequence" : ""}`}
+              className={`invocation-chip ${invocation.status}${invocation.resolution ? " resolved" : ""}${consequence ? " has-consequence" : ""}${flashedIds?.has(invocation.id) ? " jump-flash" : ""}`}
               title={hint}
               onClick={(event) => event.stopPropagation()}
             >
@@ -701,10 +712,28 @@ export function InvocationChips({
                   size="sm"
                   variant="ghost"
                   aria-label={t("{0}，跳到回复", { 0: ariaSummary })}
-                  onClick={() => onJump(jumpTarget)}
+                  onClick={() => onJump(jumpTarget, invocation)}
                 >
                   {t("查看回复")}
                 </Button>
+              )}
+              {viewProcess && (
+                <Tooltip
+                  content={
+                    invocation.status === "queued"
+                      ? t("还在排队，先看 @{0} 正在做的", { 0: invocation.agentName })
+                      : t("跳到对话流里这一轮的过程")
+                  }
+                >
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={t("{0}，跳到执行过程", { 0: ariaSummary })}
+                    onClick={viewProcess}
+                  >
+                    {t("查看过程")}
+                  </Button>
+                </Tooltip>
               )}
               {isExtendableBlock(invocation) ? (
                 <Button
@@ -923,7 +952,7 @@ export function InvocationChips({
             ? {
                 onJump: () => {
                   setSelectedId(undefined);
-                  onJump(selected.replyMessageId!);
+                  onJump(selected.replyMessageId!, selected);
                 },
               }
             : {})}

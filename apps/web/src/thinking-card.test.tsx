@@ -205,7 +205,7 @@ describe("thinking card", () => {
     expect(within(card).queryByText("做到一半")).toBeNull();
     expect(card.querySelector(".thinking-card-elapsed")).toBeNull();
     fireEvent.click(within(card).getByRole("button", { name: "去处理" }));
-    fireEvent.click(within(card).getByRole("button", { name: "#42" }));
+    fireEvent.click(within(card).getByRole("button", { name: /^跳到原消息 #42：/ }));
     expect(jumps).toEqual([42, 42]);
   });
 
@@ -385,7 +385,7 @@ describe("groupLiveCards", () => {
       />,
     );
     const chip = screen.getByRole("button", {
-      name: "#1899",
+      name: "跳到原消息 #1899：为什么不能每 5 分钟定时一次",
       description: "回应 #1899：为什么不能每 5 分钟定时一次",
     });
     fireEvent.click(chip);

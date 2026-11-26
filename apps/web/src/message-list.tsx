@@ -62,6 +62,15 @@ type SenderMenuOpener = (
   event: ReactMouseEvent<HTMLElement>,
   sender: { id?: string; name: string },
 ) => void;
+/** Agent 回复所回应的那条消息；没载入时没有序号和预览，点了再按 seq 往前补拉 */
+type ReplyTarget = {
+  messageId: string;
+  seq?: number;
+  preview?: string;
+  /** 产生这条回复的那次调用：跳回去时原消息下它的状态条也闪一下 */
+  invocationId?: string;
+};
+
 type DockPreview = (attachment: Attachment, origin: { senderId: string; seq: number }) => void;
 
 /** 对话流：消息、日期与话题分隔、Agent 的「思考中」卡片和「正在处理」一行 */
@@ -188,6 +197,67 @@ export function MessageList({
     }
     return byReply;
   }, [invocations, recalledMessageIds]);
+  // 对话流底部的「思考中」过程卡：执行中的每人一张（合批的几条算一张），等你回答、等你决定的各一张
+  const liveCards = useMemo(
+    () =>
+      groupLiveCards(
+        sortCards(
+          [...invocations.values()].filter(
+            (invocation) =>
+              invocation.roomId === currentRoomId &&
+              !invocation.messageRecalled &&
+              !recalledMessageIds.has(invocation.messageId) &&
+              (showsLiveCard(invocation) ||
+                (cardAttention(invocation) === "decide" ? isOwner : showsCard(invocation))),
+          ),
+        ),
+      ),
+    [invocations, currentRoomId, recalledMessageIds, isOwner],
+  );
+  /**
+   * 调用 → 对话流里展示它过程的那张卡：合批的几条指向同一张；排队中的还没开工，
+   * 指向同一个 Agent 正在做的那张，看看它在忙什么
+   */
+  const processCardOf = useMemo(() => {
+    const cardOf = new Map<string, string>();
+    const liveByAgent = new Map<string, string>();
+    for (const { invocation, batch } of liveCards) {
+      for (const item of batch) cardOf.set(item.id, invocation.id);
+      if (!cardAttention(invocation) && !liveByAgent.has(invocation.agentId))
+        liveByAgent.set(invocation.agentId, invocation.id);
+    }
+    for (const invocation of invocations.values()) {
+      if (invocation.status !== "queued" || cardOf.has(invocation.id)) continue;
+      const card = liveByAgent.get(invocation.agentId);
+      if (card) cardOf.set(invocation.id, card);
+    }
+    return cardOf;
+  }, [liveCards, invocations]);
+  const messageById = useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages],
+  );
+  /**
+   * Agent 的回复在回应哪条消息：产生它的那次调用的触发消息，没有调用记录（刷新后）时按 parentMessageId。
+   * 进度、提问、委派、回执这些中间消息不算；原消息撤回了不给入口
+   */
+  const replyTargetOf = useCallback(
+    (message: ChatMessage): ReplyTarget | undefined => {
+      if (message.deletedAt || message.senderType !== "agent" || message.kind) return undefined;
+      const source = invocationByReply.get(message.id);
+      const messageId = source?.messageId ?? message.parentMessageId;
+      if (!messageId || recalledMessageIds.has(messageId)) return undefined;
+      const trigger = messageById.get(messageId);
+      return {
+        messageId,
+        ...(trigger
+          ? { seq: trigger.seq, preview: plainPreview(trigger.content).slice(0, 120) }
+          : {}),
+        ...(source ? { invocationId: source.id } : {}),
+      };
+    },
+    [invocationByReply, recalledMessageIds, messageById],
+  );
   // 点选提交的答案按提问归档，用来在提问上高亮所选；先到的一条生效
   const choiceAnswers = useMemo(() => {
     const answers = new Map<string, QuestionAnswer>();
@@ -310,6 +380,8 @@ export function MessageList({
                     invocationsByMessage={invocationsByMessage}
                     choiceAnswers={choiceAnswers}
                     loadedMessageIds={loadedMessageIds}
+                    processCardOf={processCardOf}
+                    replyTarget={replyTargetOf(message)}
                     jump={jump}
                     share={share}
                     composer={composer}
@@ -344,21 +416,10 @@ export function MessageList({
             {(() => {
               // 正在干活的 Agent：每人一张「思考中」卡片，出现在回复将来出现的位置；同时超过 3 张时只展开最新的。
               // 等你回答、等你决定（只给房主，按钮在房主这边）的也各一张，置顶并标醒目
-              const live = sortCards(
-                [...invocations.values()].filter(
-                  (invocation) =>
-                    invocation.roomId === currentRoomId &&
-                    !invocation.messageRecalled &&
-                    !recalledMessageIds.has(invocation.messageId) &&
-                    (showsLiveCard(invocation) ||
-                      (cardAttention(invocation) === "decide" ? isOwner : showsCard(invocation))),
-                ),
-              );
-              const cards = groupLiveCards(live);
+              const cards = liveCards;
               const working = cards.filter((card) => !cardAttention(card.invocation));
               const latestWorking = working.at(-1);
               const seqOf = new Map(messages.map((message) => [message.id, message.seq]));
-              const messageById = new Map(messages.map((message) => [message.id, message]));
               return cards.map(({ invocation, batch }) => (
                 <ThinkingCard
                   key={`card-${invocation.id}`}
@@ -396,6 +457,7 @@ export function MessageList({
                   defaultCollapsed={
                     working.length > 3 && latestWorking?.invocation.id !== invocation.id
                   }
+                  flashed={jump.flash.invocationIds.has(invocation.id)}
                   {...(() => {
                     // 卡片上写明在处理哪条消息；合批时引用最早的一条
                     const first = [...batch]
@@ -408,7 +470,12 @@ export function MessageList({
                         seq: first.seq,
                         preview: plainPreview(first.content).slice(0, 120),
                       },
-                      onJumpToTrigger: () => jumpToMessage(first.id),
+                      onJumpToTrigger: () => {
+                        jumpToMessage(first.id);
+                        // 原消息下的状态条和这张卡一起闪，看得出是哪一条对应这张卡
+                        // batch 里包括这张卡自己那一条
+                        jump.flashOrigin({ invocationIds: batch.map((item) => item.id) });
+                      },
                     };
                   })()}
                   avatar={
@@ -496,6 +563,8 @@ function MessageItem({
   invocationsByMessage,
   choiceAnswers,
   loadedMessageIds,
+  processCardOf,
+  replyTarget,
   jump,
   share,
   composer,
@@ -531,6 +600,8 @@ function MessageItem({
   invocationsByMessage: ReadonlyMap<string, Invocation[]>;
   choiceAnswers: ReadonlyMap<string, QuestionAnswer>;
   loadedMessageIds: ReadonlySet<string>;
+  processCardOf: ReadonlyMap<string, string>;
+  replyTarget: ReplyTarget | undefined;
   jump: ReturnType<typeof useMessageJump>;
   share: ShareSelection;
   composer: ComposerState;
@@ -560,7 +631,15 @@ function MessageItem({
   canViewWorkspace: boolean;
   openWorkspaceFor: (agent: string) => void;
 }) {
-  const { highlightedMessageId, pendingJumpId, jumpToMessage } = jump;
+  const {
+    highlightedMessageId,
+    pendingJumpId,
+    jumpToMessage,
+    jumpToProcess,
+    locateMessage,
+    flash,
+    flashOrigin,
+  } = jump;
   const { shareMode, selectedMessageIds, toggleMessageSelected } = share;
   const { answering, answerQuestion, appendMention } = composer;
   const {
@@ -580,6 +659,42 @@ function MessageItem({
     preemptInvocation,
   } = actions;
   const bodyContent = messageBodyContent(message);
+  const replyLink = replyTarget && !shareMode && (
+    <Tooltip
+      content={
+        replyTarget.seq !== undefined
+          ? t("回应 #{0}：{1}", { 0: replyTarget.seq, 1: replyTarget.preview ?? "" })
+          : t("跳到它回应的那条消息")
+      }
+    >
+      <button
+        type="button"
+        className="message-reply-to"
+        aria-label={
+          replyTarget.seq !== undefined
+            ? t("跳到原消息 #{0}：{1}", { 0: replyTarget.seq, 1: replyTarget.preview ?? "" })
+            : t("跳到它回应的那条消息")
+        }
+        onClick={(event) => {
+          event.stopPropagation();
+          if (loadedMessageIds.has(replyTarget.messageId)) jumpToMessage(replyTarget.messageId);
+          else
+            // 不在已加载范围：原消息一定比回复早，从回复往前一段按 seq 补拉再定位
+            void locateMessage({
+              messageId: replyTarget.messageId,
+              messageSeq: Math.max(1, message.seq - 5000),
+            });
+          flashOrigin({
+            messageIds: [message.id],
+            invocationIds: replyTarget.invocationId ? [replyTarget.invocationId] : [],
+          });
+        }}
+      >
+        <Icon name="arrow-up" size={11} />
+        {replyTarget.seq !== undefined ? t("回应 #{0}", { 0: replyTarget.seq }) : t("回应原消息")}
+      </button>
+    </Tooltip>
+  );
   return (
     <article
       className={`message ${message.senderType} ${
@@ -591,7 +706,7 @@ function MessageItem({
         shareMode && !message.deletedAt ? "selectable" : ""
       } ${selectedMessageIds.has(message.id) ? "selected" : ""} ${
         message.deletedAt ? "deleted" : ""
-      } ${highlightedMessageId === message.id ? "highlighted" : ""} ${
+      } ${highlightedMessageId === message.id || flash.messageIds.has(message.id) ? "highlighted" : ""} ${
         message.kind === "question" ? "question" : ""
       } ${message.kind === "progress" ? "progress-update" : ""} ${isMachine(message) ? "machine" : ""}`}
       data-message-id={message.id}
@@ -675,8 +790,10 @@ function MessageItem({
                 {copiedMessageId === `seq:${message.id}` ? t("已复制") : `#${message.seq}`}
               </button>
             </Tooltip>
+            {replyLink}
           </header>
         )}
+        {grouped && replyLink && <div className="message-reply-to-row">{replyLink}</div>}
         {message.deletedAt ? (
           <p className="message-recalled">
             {message.senderName.toLocaleLowerCase() === username.toLocaleLowerCase()
@@ -804,7 +921,17 @@ function MessageItem({
             allInvocations={invocations}
             participants={participants}
             canJumpTo={(messageId) => loadedMessageIds.has(messageId)}
-            onJump={jumpToMessage}
+            onJump={(messageId, origin) => {
+              jumpToMessage(messageId);
+              if (origin) flashOrigin({ invocationIds: [origin.id] });
+            }}
+            onViewProcess={(invocation) => {
+              const card = processCardOf.get(invocation.id);
+              return card
+                ? () => jumpToProcess(card, { invocationIds: [invocation.id] })
+                : undefined;
+            }}
+            flashedIds={flash.invocationIds}
             onRetry={(invocation) => retryInvocation(invocation)}
             onRetryWithModel={isOwner ? setRetryModelFor : undefined}
             onOpenProxySettings={

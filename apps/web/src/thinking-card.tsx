@@ -309,7 +309,10 @@ export function ThinkingCard({
   onJumpToTrigger,
   onAvatarContextMenu,
   onStop,
+  flashed = false,
 }: {
+  /** 刚从原消息的状态条跳过来、或从这里跳到原消息：短暂高亮，便于两头对上 */
+  flashed?: boolean;
   /**
    * 「停止」：只停这一轮，和触发消息下面的「停止」是同一个操作。
    * 没权限停的人（访客停别人发起的）不传，按钮就不出现
@@ -359,7 +362,7 @@ export function ThinkingCard({
             : undefined;
   return (
     <article
-      className={`thinking-card ${detail}${attention ? ` attention ${attention}` : ""}`}
+      className={`thinking-card ${detail}${attention ? ` attention ${attention}` : ""}${flashed ? " jump-flash" : ""}`}
       data-invocation-id={invocation.id}
       aria-label={
         attention === "question"
@@ -398,6 +401,7 @@ export function ThinkingCard({
               <button
                 type="button"
                 className="thinking-card-trigger-chip"
+                aria-label={t("跳到原消息 #{0}：{1}", { 0: trigger.seq, 1: trigger.preview })}
                 disabled={!onJumpToTrigger}
                 onClick={onJumpToTrigger}
               >

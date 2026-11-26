@@ -15,6 +15,13 @@ import { t } from "./i18n";
 import { mergeMessages, buildTimeline, type TimelineEntry } from "./timeline";
 import type { MessageScroll } from "./use-message-scroll";
 
+/** 跳转时短暂高亮的「另一头」：消息和调用（状态条、过程卡）各一组 */
+export type FlashTargets = {
+  messageIds: ReadonlySet<string>;
+  invocationIds: ReadonlySet<string>;
+};
+const EMPTY_FLASH: FlashTargets = { messageIds: new Set(), invocationIds: new Set() };
+
 /** 消息列表的渲染窗口：只挂载当前话题里最近的一段，更早的按需展开 */
 export function useMessageWindow({ messages }: { messages: ChatMessage[] }) {
   // 渲染窗口：只挂载最近的一段消息，重房间切换时的同步提交成本与内存尖峰被限定为常量；
@@ -202,6 +209,21 @@ export function useMessageJump({
       cancelled = true;
     };
   }, [attentionJump, currentRoomId, messagesLoaded, meta, authToken]);
+  /**
+   * 跳转时另一头也闪一下：从过程卡跳到原消息时闪卡片，从状态条跳到过程卡时闪状态条，
+   * 从回复跳回原问题时闪回复。和目标的高亮同时开始、同样 2.2 秒
+   */
+  const [flash, setFlash] = useState<FlashTargets>(EMPTY_FLASH);
+  const flashTimerRef = useRef(0);
+  function flashOrigin(targets: { messageIds?: string[]; invocationIds?: string[] }) {
+    window.clearTimeout(flashTimerRef.current);
+    setFlash({
+      messageIds: new Set(targets.messageIds),
+      invocationIds: new Set(targets.invocationIds),
+    });
+    flashTimerRef.current = window.setTimeout(() => setFlash(EMPTY_FLASH), 2200);
+  }
+  useEffect(() => () => window.clearTimeout(flashTimerRef.current), []);
 
   // 点击已完成的调用跳到 Agent 回复：等目标消息挂载（可能需要先扩大渲染窗口）后再滚动并短暂高亮
   useEffect(() => {
@@ -296,6 +318,28 @@ export function useMessageJump({
   }
 
   /**
+   * 跳到对话流底部某次调用的「思考中」过程卡：卡片一直挂在列表末尾，不受渲染窗口影响。
+   * 找不到卡片（已经结束收起）时返回 false，由调用方决定退回到哪里
+   */
+  function jumpToProcess(invocationId: string, origin?: { invocationIds?: string[] }): boolean {
+    const list = messageListRef.current;
+    const root = list?.shadowRoot ?? list;
+    const card = root?.querySelector<HTMLElement>(
+      `.thinking-card[data-invocation-id="${invocationId}"]`,
+    );
+    if (!card) return false;
+    cancelAnimationFrame(bottomAnimationRef.current);
+    bottomAnimationRef.current = 0;
+    detachAnimationCancelRef.current?.();
+    const reduce =
+      document.documentElement.dataset.reduceMotion === "true" ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    card.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    flashOrigin({ invocationIds: [invocationId, ...(origin?.invocationIds ?? [])] });
+    return true;
+  }
+
+  /**
    * 定位到产物所在的消息：已经载入的直接跳；更早的先从这条起往后补拉到已载入的最早一条，再跳。
    * 窄屏下先收起抽屉，让聊天流露出来。
    */
@@ -363,6 +407,9 @@ export function useMessageJump({
     setCrossRoomJumpId,
     setCrossRoomJump,
     jumpToMessage,
+    jumpToProcess,
+    flash,
+    flashOrigin,
     locateProgress,
     locateAttention,
     locateMessage,

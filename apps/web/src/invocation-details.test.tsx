@@ -118,7 +118,10 @@ describe("clickable invocation details", () => {
     expect(within(dialog).getByText(/已收到恢复证据/)).toBeTruthy();
     expect(within(dialog).getByText("已完成")).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "查看回复" }));
-    expect(props.onJump).toHaveBeenCalledWith("reply");
+    expect(props.onJump).toHaveBeenCalledWith(
+      "reply",
+      expect.objectContaining({ replyMessageId: "reply" }),
+    );
     expect(screen.queryByRole("dialog")).toBeNull();
   });
   it("does not increase completed duration and does not offer retry for an uncertain execution", () => {

@@ -92,6 +92,7 @@ const RAW_BUTTON_CLASSES = new Set([
   "message-seq",
   "message-expand",
   "message-receipt-link",
+  "message-reply-to",
   "message-machine-collapse",
   "md-ref-link",
   "code-block-copy",
