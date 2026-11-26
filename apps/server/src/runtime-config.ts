@@ -588,7 +588,13 @@ export class RuntimeConfigStore {
     return this.readMcp(this.spec(provider));
   }
 
-  /** 把一个 MCP 原样（含环境变量的值）复制到别的运行时；目标里已有同名的就整体拒绝，不覆盖 */
+  /**
+   * 把一个 MCP 原样（含环境变量的值、远程的请求头）复制到别的运行时；目标里已有同名的就整体拒绝，不覆盖。
+   * 只搬各 CLI 都能表达的字段：stdio 的 command/args/env，远程的 url 和写死值的请求头
+   * （Claude/Copilot/omp/opencode 写 headers，Codex 写 http_headers）。其余字段（Codex 的
+   * bearer_token_env_var、cwd、超时，Copilot 限定的 tools 等）以及引用环境变量的值（`${X}`、
+   * `{env:X}`，各 CLI 写法不同）转不过去，整体拒绝并列出字段，免得复制出一份少了认证、连不上的配置
+   */
   syncMcp(
     provider: RuntimeCredentialProvider,
     name: string,
@@ -599,29 +605,87 @@ export class RuntimeConfigStore {
     if (!data) throw this.mcpUnreadable(spec.file, spec.format);
     const entry = record(record(data[this.mcpRoot(spec.kind)])?.[name]);
     if (!entry) throw invalid(name);
-    const server = this.toServer(spec.kind, name, entry, spec);
-    const env = record(entry[spec.kind === "opencode" ? "environment" : "env"]) ?? {};
-    const input: RuntimeMcpServerInput = {
-      transport: server.transport,
-      ...(server.transport === "stdio"
-        ? { command: server.command ?? "", args: server.args ?? [] }
-        : { url: server.url ?? "" }),
-      env: Object.fromEntries(
-        Object.entries(env).flatMap(([key, value]) =>
-          typeof value === "string" ? [[key, value]] : [],
-        ),
-      ),
-      enabled: true,
-    };
-    if (input.transport === "stdio" ? !input.command : !input.url) throw invalid(name);
     const list = [...new Set(targets)].filter((target) => target !== provider);
     if (!list.length) throw invalid("targets");
-    this.addMcp(list, name, input);
+    const server = this.toServer(spec.kind, name, entry, spec);
+    const stdio = server.transport === "stdio";
+    const envKey = spec.kind === "opencode" ? "environment" : "env";
+    const headerKey = spec.kind === "codex" ? "http_headers" : "headers";
+    const blocked: string[] = [];
+    const known = new Set([
+      "command",
+      "args",
+      "url",
+      "enabled",
+      envKey,
+      headerKey,
+      ...(spec.kind === "codex" ? [] : ["type"]),
+    ]);
+    for (const key of Object.keys(entry)) {
+      // Copilot 新建条目默认写 tools: ["*"]（全部工具），这个值各 CLI 都等于不写
+      const allTools =
+        key === "tools" &&
+        Array.isArray(entry.tools) &&
+        entry.tools.length === 1 &&
+        entry.tools[0] === "*";
+      if (!known.has(key) && !allTools) blocked.push(key);
+    }
+    const strings = (key: string) => {
+      const value = entry[key];
+      if (value === undefined) return {};
+      const map = record(value);
+      if (!map || Object.values(map).some((item) => typeof item !== "string")) {
+        blocked.push(key);
+        return {};
+      }
+      return map as Record<string, string>;
+    };
+    const env = strings(envKey);
+    const headers = stdio ? {} : strings(headerKey);
+    if (stdio && entry[headerKey] !== undefined) blocked.push(headerKey);
+    // 引用环境变量的写法各家不同（Claude `${X}`、opencode `{env:X}`、Codex 不展开），原样搬过去会变成字面量
+    const refers = (value: string) => /\$\{|\{env:|^\$[A-Za-z_]/.test(value);
+    const values: [string, string][] = [
+      ["url", server.url ?? ""],
+      ["command", server.command ?? ""],
+      ...(server.args ?? []).map((arg, index): [string, string] => [`args[${index}]`, arg]),
+      ...Object.entries(env).map(([key, value]): [string, string] => [`${envKey}.${key}`, value]),
+      ...Object.entries(headers).map(([key, value]): [string, string] => [
+        `${headerKey}.${key}`,
+        value,
+      ]),
+    ];
+    for (const [field, value] of values) if (refers(value)) blocked.push(field);
+    if (blocked.length) {
+      throw new HiveError(
+        "RUNTIME_CREDENTIALS_NOT_EDITABLE",
+        serverText("error.runtimeSkills.mcpNotPortable", {
+          name,
+          fields: [...new Set(blocked)].join("、"),
+          target: list.map((target) => RUNTIME_LABELS[target]).join("、"),
+        }),
+      );
+    }
+    const input: RuntimeMcpServerInput = {
+      transport: server.transport,
+      ...(stdio
+        ? { command: server.command ?? "", args: server.args ?? [] }
+        : { url: server.url ?? "" }),
+      env,
+      enabled: true,
+    };
+    if (stdio ? !input.command : !input.url) throw invalid(name);
+    this.addMcp(list, name, input, Object.keys(headers).length ? headers : undefined);
     return list;
   }
 
   /** 一次写进多个运行时：先全部检查（支持 MCP、没有同名），再逐个写 */
-  addMcp(targets: RuntimeCredentialProvider[], name: string, input: RuntimeMcpServerInput) {
+  addMcp(
+    targets: RuntimeCredentialProvider[],
+    name: string,
+    input: RuntimeMcpServerInput,
+    headers?: Record<string, string>,
+  ) {
     const list = [...new Set(targets)];
     for (const target of list) {
       const mcp = this.readMcp(this.spec(target));
@@ -641,15 +705,19 @@ export class RuntimeConfigStore {
         );
       }
     }
-    for (const target of list) this.putMcp(target, name, input);
+    for (const target of list) this.putMcp(target, name, input, undefined, headers);
   }
 
-  /** 新增或修改一个 MCP；改名时先删旧的。没写的字段（例如 headers、timeout）保留原值 */
+  /**
+   * 新增或修改一个 MCP；改名时先删旧的。没写的字段（例如 headers、timeout）保留原值。
+   * headers 只给远程的用，按目标的写法落盘（Codex 是 http_headers，其余是 headers）
+   */
   putMcp(
     provider: RuntimeCredentialProvider,
     name: string,
     server: RuntimeMcpServerInput,
     previousName?: string,
+    headers?: Record<string, string>,
   ) {
     const spec = this.requireMcp(provider);
     const { file, format, kind } = spec;
@@ -661,6 +729,9 @@ export class RuntimeConfigStore {
     if (previousName && previousName !== name && servers[name]) throw invalid(name);
     const existing = record(servers[oldName]) ?? {};
     const entry = this.toEntry(kind, server, existing, spec);
+    if (headers && server.transport !== "stdio") {
+      entry[kind === "codex" ? "http_headers" : "headers"] = headers;
+    }
     try {
       if (kind === "codex") {
         if (servers[oldName]) content = removeTomlTable(content, ["mcp_servers", oldName]);

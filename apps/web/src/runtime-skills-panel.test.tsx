@@ -208,7 +208,7 @@ describe("RuntimeOverviewBlock", () => {
     fireEvent.click(cell("在 Codex 里启用 docs"));
     expect(client.syncRuntimeMcp).not.toHaveBeenCalled();
     const dialog = screen.getByRole("dialog", { name: "确认把 docs 加到 Codex" });
-    expect(dialog.textContent).toContain("包括环境变量的值");
+    expect(dialog.textContent).toContain("包括环境变量和请求头的值");
     expect(dialog.textContent).toContain("会同时影响终端里的 Codex");
     await act(async () => {
       fireEvent.click(dialog.querySelector<HTMLButtonElement>("button:last-child")!);

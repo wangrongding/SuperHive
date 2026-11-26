@@ -13,6 +13,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
 import type { SpawnAgent } from "./local-agents.js";
+import { parseToml } from "./config-edit.js";
 import { RuntimeConfigStore } from "./runtime-config.js";
 import { RuntimeCredentialStore } from "./runtime-credentials.js";
 import {
@@ -297,6 +298,94 @@ describe("sync", () => {
     expect(toml).toContain("[mcp_servers.docs]");
     expect(toml).toContain('TOKEN = "t-1"');
     expect(() => config.syncMcp("claude", "docs", ["codex"])).toThrow(/已经有/);
+  });
+
+  it("carries remote headers over in each CLI's own format, round trip", () => {
+    const { home, codexHome, config } = setup();
+    const claudeFile = path.join(home, ".claude.json");
+    const opencodeFile = path.join(home, ".config", "opencode", "opencode.json");
+    const headers = { Authorization: "Bearer sk-1", "X-Team": "hive" };
+    writeFileSync(
+      claudeFile,
+      JSON.stringify({
+        mcpServers: { remote: { type: "http", url: "https://mcp.example.com/mcp", headers } },
+      }),
+    );
+    // Claude → Codex：写成 http_headers
+    config.syncMcp("claude", "remote", ["codex"]);
+    const codex = parseToml(read(path.join(codexHome, "config.toml")));
+    expect((codex?.mcp_servers as Record<string, unknown>).remote).toEqual({
+      url: "https://mcp.example.com/mcp",
+      http_headers: headers,
+    });
+    // Codex → opencode：写成 remote + headers
+    config.syncMcp("codex", "remote", ["opencode"]);
+    const opencode = JSON.parse(read(opencodeFile)) as { mcp: Record<string, unknown> };
+    expect(opencode.mcp.remote).toMatchObject({
+      type: "remote",
+      url: "https://mcp.example.com/mcp",
+      headers,
+    });
+    // opencode → Claude：回到 headers，和最初一样
+    config.deleteMcp("claude", "remote");
+    config.syncMcp("opencode", "remote", ["claude"]);
+    const claude = JSON.parse(read(claudeFile)) as { mcpServers: Record<string, unknown> };
+    expect(claude.mcpServers.remote).toEqual({
+      url: "https://mcp.example.com/mcp",
+      type: "http",
+      headers,
+    });
+    // Codex → Claude 也一样（先删掉再同步）
+    config.deleteMcp("claude", "remote");
+    config.syncMcp("codex", "remote", ["claude"]);
+    expect(
+      (JSON.parse(read(claudeFile)) as { mcpServers: Record<string, { headers?: unknown }> })
+        .mcpServers.remote?.headers,
+    ).toEqual(headers);
+    // 删掉 Codex 里的这一项时，http_headers 子表也一起删掉
+    config.deleteMcp("codex", "remote");
+    expect(read(path.join(codexHome, "config.toml"))).not.toMatch(/remote|sk-1/);
+  });
+
+  it("refuses fields another CLI can't express instead of copying a broken entry", () => {
+    const { home, codexHome, config } = setup();
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        "[mcp_servers.token]",
+        'url = "https://mcp.example.com/mcp"',
+        'bearer_token_env_var = "MCP_TOKEN"',
+        "",
+        "[mcp_servers.local]",
+        'command = "node"',
+        'args = ["server.js"]',
+        'cwd = "/srv/mcp"',
+        "startup_timeout_sec = 30",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      path.join(home, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          envref: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+            headers: { Authorization: "Bearer ${MCP_TOKEN}" },
+          },
+        },
+      }),
+    );
+    expect(() => config.syncMcp("codex", "token", ["claude"])).toThrow(/bearer_token_env_var/);
+    expect(() => config.syncMcp("codex", "local", ["claude"])).toThrow(
+      /cwd、startup_timeout_sec.*手动添加/,
+    );
+    expect(() => config.syncMcp("claude", "envref", ["opencode"])).toThrow(
+      /headers\.Authorization/,
+    );
+    // 一个都没写进去
+    expect(JSON.parse(read(path.join(home, ".claude.json"))).mcpServers.token).toBeUndefined();
+    expect(existsSync(path.join(home, ".config", "opencode", "opencode.json"))).toBe(false);
   });
 });
 

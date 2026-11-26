@@ -178,7 +178,7 @@ Codex、Claude Code 的额外 MCP 可选择加载；`hive` 始终加载。MCP �
 
 - **已安装的 Agent CLI**：列出每个 CLI 的版本、最新版、安装位置和安装方式。点「升级」或「安装」会先显示要执行的完整命令，确认后才运行，一次只跑一个。
 - **运行时接口地址与密钥**：查看、修改各 CLI 全局配置里的接口地址和密钥，默认打码；改的是 CLI 自己的配置文件，终端里的同一个 CLI 也会受影响。
-- **MCP 与技能（统一管理）**：顶上一张表，一行一个 MCP 服务器或 skill，每列一个 CLI。勾上就写进那个 CLI 的全局配置，取消就停用；CLI 不支持停用的（Claude Code 的 MCP）取消时从它的配置里删掉，只剩最后一份时不让删。还没有的 CLI 勾上会先确认，再从已有的那个复制过去（MCP 连同环境变量的值，skill 复制整个目录）。「添加 MCP」可以一次写进多个 CLI。不支持的格子标灰，悬停看原因；点列头跳到那个 CLI 的配置。没有另外的存储，每次都从各 CLI 自己的配置文件读，在 Hive 外手改的也会显示。底部状态栏右侧的「MCP · 技能」显示数量，点开直接进这里；和这一页一样，只有 Server 那台电脑上能看到。
+- **MCP 与技能（统一管理）**：顶上一张表，一行一个 MCP 服务器或 skill，每列一个 CLI。勾上就写进那个 CLI 的全局配置，取消就停用；CLI 不支持停用的（Claude Code 的 MCP）取消时从它的配置里删掉，只剩最后一份时不让删。还没有的 CLI 勾上会先确认，再从已有的那个复制过去（MCP 连同环境变量和请求头的值，skill 复制整个目录；cwd、超时、引用环境变量的令牌这类各 CLI 写法对不上的不复制，会提示到目标 CLI 里手动添加）。「添加 MCP」可以一次写进多个 CLI。不支持的格子标灰，悬停看原因；点列头跳到那个 CLI 的配置。没有另外的存储，每次都从各 CLI 自己的配置文件读，在 Hive 外手改的也会显示。底部状态栏右侧的「MCP · 技能」显示数量，点开直接进这里；和这一页一样，只有 Server 那台电脑上能看到。
 - **CLI 配置里的「技能」**：列出这个 CLI 会读到的全局 skills（名称、描述、来自用户目录、共用目录、插件还是 CLI 自带），可以查看 SKILL.md、启用或停用、删除。
   - 启停用的是各 CLI 自己的开关：Claude Code 写 `settings.json` 的 `skillOverrides`，Codex 写 `config.toml` 的 `[[skills.config]]`，opencode 写 `permission.skill`，Copilot CLI 写 `settings.json` 的 `disabledSkills`，OpenClaw 写 `skills.entries`。原文件先备份。
   - omp 的开关在它自己管理的 `config.yml` 里，网页上只显示状态，要停用请在终端运行 `omp config set skills.ignoredSkills`。

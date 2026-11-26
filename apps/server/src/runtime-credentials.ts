@@ -3,6 +3,7 @@ import {
   chmodSync,
   closeSync,
   fsyncSync,
+  mkdirSync,
   lstatSync,
   openSync,
   readdirSync,
@@ -819,6 +820,8 @@ export class RuntimeCredentialStore {
     const temp = `${target}.superhive-tmp-${randomBytes(6).toString("hex")}`;
     let fd: number | undefined;
     try {
+      // 目标 CLI 还没建过配置目录（例如从没打开过 opencode）时先建上，目录权限和 CLI 自己建的一样只给本人
+      mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       fd = openSync(temp, "wx", mode);
       this.writeContent(fd, content);
       fsyncSync(fd);

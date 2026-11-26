@@ -320,11 +320,14 @@ function OverviewRow({
     if (action.kind !== "copy") return "";
     const from = RUNTIME_LABELS[action.source.provider];
     return kind === "mcp"
-      ? t("从 {0} 复制 {1} 的配置（包括环境变量的值），写进 {2} 的全局配置，原文件先备份。", {
-          0: from,
-          1: row.name,
-          2: where,
-        })
+      ? t(
+          "从 {0} 复制 {1} 的配置（包括环境变量和请求头的值），写进 {2} 的全局配置，原文件先备份。",
+          {
+            0: from,
+            1: row.name,
+            2: where,
+          },
+        )
       : t("把 {0} 里的 {1} 整个目录复制到 {2} 自己的 skills 目录。", {
           0: from,
           1: row.name,

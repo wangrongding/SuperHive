@@ -1299,6 +1299,10 @@ export const serverTexts = {
     zh: "{target} 里已经有 {name}，没有覆盖。",
     en: "{target} already has {name}, so nothing was overwritten.",
   },
+  "error.runtimeSkills.mcpNotPortable": {
+    zh: "{name} 里的 {fields} 没法原样转成 {target} 的写法，没有复制。带请求头引用环境变量、令牌或 cwd、超时等专属字段的 MCP，请在 {target} 里手动添加。",
+    en: "{fields} in {name} can't be carried over to {target} as is, so nothing was copied. Add MCP servers that use env-referencing headers, tokens or CLI-specific fields such as cwd or timeouts in {target} by hand.",
+  },
   "error.runtimeSkills.moveFailed": {
     zh: "没能处理 {path}：{reason}",
     en: "Couldn't process {path}: {reason}",

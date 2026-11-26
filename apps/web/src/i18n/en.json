@@ -2400,7 +2400,7 @@
   "添加 MCP": "Add MCP server",
   "去 {0} 的配置": "Go to {0}'s config",
   "{0} 的全局配置没有单独停用的开关，取消就从里面删掉 {1}（原文件先备份），别的 CLI 里的保留。": "{0}'s global config has no switch to turn a server off, so unchecking deletes {1} from it (the original file is backed up first). Other CLIs keep theirs.",
-  "从 {0} 复制 {1} 的配置（包括环境变量的值），写进 {2} 的全局配置，原文件先备份。": "Copies the {1} config from {0}, including environment variable values, into {2}'s global config. The original file is backed up first.",
+  "从 {0} 复制 {1} 的配置（包括环境变量和请求头的值），写进 {2} 的全局配置，原文件先备份。": "Copies the {1} config from {0}, including environment variable and header values, into {2}'s global config. The original file is backed up first.",
   "把 {0} 里的 {1} 整个目录复制到 {2} 自己的 skills 目录。": "Copies the whole {1} folder from {0} into {2}'s own skills folder.",
   "不支持": "Not supported",
   "在 {0} 里启用 {1}": "Turn on {1} in {0}",

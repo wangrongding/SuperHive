@@ -288,6 +288,19 @@ export function removeTomlTable(content: string, prefix: string[]): string {
   let target: Record<string, unknown> = before;
   for (const part of prefix.slice(0, -1)) target = target[part] as Record<string, unknown>;
   delete target[prefix.at(-1)!];
+  // 删的是最后一个子表（例如唯一的 [mcp_servers.x]）时，隐式的父表 mcp_servers 也随之消失
+  for (let depth = prefix.length - 1; depth > 0; depth--) {
+    let parent: Record<string, unknown> = before;
+    let child: Record<string, unknown> | undefined = after;
+    for (const part of prefix.slice(0, depth - 1)) {
+      parent = parent[part] as Record<string, unknown>;
+      child = child?.[part] as Record<string, unknown> | undefined;
+    }
+    const key = prefix[depth - 1]!;
+    const empty = Object.keys((parent[key] as Record<string, unknown>) ?? {}).length === 0;
+    if (empty && !(child && key in child)) delete parent[key];
+    else break;
+  }
   if (JSON.stringify(sortKeys(after)) !== JSON.stringify(sortKeys(before))) {
     throw new Error("edit mismatch");
   }
