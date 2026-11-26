@@ -58,7 +58,7 @@ const AGENTS = {
 /** 房间：名字、在线成员（人和 Agent）、离线的人；pinned 置顶 */
 const ROOMS = [
   {
-    id: "shop-web",
+    id: "web",
     workspace: true,
     lead: "claude",
     pinned: true,
@@ -80,8 +80,8 @@ const ROOMS = [
   },
   { id: "design", pinned: true, humans: ["周屿"], agents: ["claude"] },
   // 还没有聊天记录的房间：截「提及成员」弹窗用，弹窗背后是空白
-  { id: "mobile", humans: ["周屿"], agents: ["codex", "omp", "opencode", "claude"] },
-  { id: "ops", humans: [], agents: ["omp"] },
+  { id: "api", humans: ["周屿"], agents: ["codex", "omp", "opencode", "claude"] },
+  { id: "infra", humans: [], agents: ["omp"] },
   { id: "release", humans: ["陈默"], agents: [] },
   { id: "general", humans: ["周屿"], agents: ["claude"] },
 ];
@@ -177,11 +177,11 @@ function write(file, content) {
 }
 
 function createRepository() {
-  const repo = path.join(HOME, "work/shop-web");
+  const repo = path.join(HOME, "work/web");
   fs.mkdirSync(repo, { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   git(repo, "config", "commit.gpgsign", "false");
-  write(path.join(repo, "README.md"), "# shop-web\n\n演示仓库。\n");
+  write(path.join(repo, "README.md"), "# web\n\n演示仓库。\n");
   write(
     path.join(repo, "src/checkout/price.ts"),
     "export const formatPrice = (cents: number) => `¥${(cents / 100).toFixed(2)}`;\n",
@@ -226,7 +226,7 @@ function createFakeClis() {
 
 /** 已合入可清理的任务目录；还在做的那条由 codex 在对话里经 MCP 建（见 playScenario），才会显示「有任务占用」 */
 async function seedWorktrees(database, repo) {
-  const room = "shop-web";
+  const room = "web";
   const codex = database.upsertParticipant({ roomId: room, username: "codex", type: "agent" });
   const manager = new WorktreeManager({ database, activeInvocations: () => [] });
   const merged = await manager.create(repo, codex, OWNER, [], { slug: "coupon-negative" });
@@ -256,7 +256,7 @@ async function seedWorktrees(database, repo) {
  * 时间在写完后统一改到过去（见 backdate），界面显示「N 分钟前」。
  */
 function seedWhiteboard(database, repo, worktrees) {
-  const room = "shop-web";
+  const room = "web";
   const author = (name) =>
     database.upsertParticipant({ roomId: room, username: name, type: "agent" });
   const entries = [
@@ -267,7 +267,7 @@ function seedWhiteboard(database, repo, worktrees) {
         key: "price-rounding",
         slot: "blocked",
         summary: "结算页舍入口径等荣顶三选一，确认后 30 分钟内可提测",
-        repo: "shop-web",
+        repo: "web",
         branch: "feat/codex-price-rounding",
       },
     },
@@ -287,7 +287,7 @@ function seedWhiteboard(database, repo, worktrees) {
         key: "login-rate-limit",
         slot: "ready",
         summary: "登录接口限流做完了，等 review",
-        repo: "shop-web",
+        repo: "web",
         branch: "feat/claude-login-rate-limit",
       },
     },
@@ -307,7 +307,7 @@ function seedWhiteboard(database, repo, worktrees) {
         key: "coupon-negative",
         slot: "ready",
         summary: "优惠券叠加后金额变负的问题修好了",
-        repo: "shop-web",
+        repo: "web",
         branch: worktrees.merged.branch,
       },
     },
@@ -370,7 +370,7 @@ function seedIncidents(database) {
     const item = store.addDispatch({
       incidentId: incident.id,
       attempt,
-      roomId: "shop-web",
+      roomId: "web",
       agentName,
     });
     if (outcome !== "pending") {
@@ -386,7 +386,7 @@ function seedIncidents(database) {
       fingerprint: "invocation:invocation.stale:codex",
       title: "codex · Bridge 报告这一轮已结束，Server 还在等它的结果",
       sample: {
-        roomId: "shop-web",
+        roomId: "web",
         agentName: "codex",
         provider: "codex",
         detail:
@@ -411,7 +411,7 @@ function seedIncidents(database) {
       fingerprint: "server:TypeError:worktrees.ts:listWorktrees",
       title: "TypeError: Cannot read properties of undefined (reading 'branch')",
       sample: {
-        roomId: "shop-web",
+        roomId: "web",
         route: "GET /api/local/worktrees/:roomId",
         detail: "Cannot read properties of undefined (reading 'branch')",
         stack:
@@ -428,7 +428,7 @@ function seedIncidents(database) {
       fingerprint: "web:error:TypeError:message-list.tsx",
       title: "TypeError: Cannot read properties of null (reading 'scrollTop')",
       sample: {
-        roomId: "shop-web",
+        roomId: "web",
         detail: "Cannot read properties of null (reading 'scrollTop')",
         stack:
           "TypeError: Cannot read properties of null (reading 'scrollTop')\n    at onScroll (message-list.tsx)",
@@ -446,7 +446,7 @@ function seedIncidents(database) {
       fingerprint: "server:RangeError:schedules.ts:nextRun",
       title: "RangeError: Invalid time value",
       sample: {
-        roomId: "ops",
+        roomId: "infra",
         route: "POST /api/rooms/:roomId/schedules",
         detail: "Invalid time value",
       },
@@ -463,7 +463,7 @@ function seedIncidents(database) {
       fingerprint: "invocation:bridge.upstreamExhausted:omp",
       title: "omp · 上游模型服务出错：503 Service Unavailable",
       sample: {
-        roomId: "ops",
+        roomId: "infra",
         agentName: "omp",
         provider: "omp",
         detail: "上游模型服务出错：503 Service Unavailable（已自动重试 3 次）",
@@ -474,7 +474,7 @@ function seedIncidents(database) {
 
   at(30 * MINUTE);
   store.addProposal({
-    roomId: "shop-web",
+    roomId: "web",
     agentName: "claude",
     text: "改动 WebSocket 事件的格式前，先跑 protocol 和 web 的全量测试",
     reason: "上次只跑了 server 测试，网页收到新事件后报协议校验失败",
@@ -668,14 +668,14 @@ async function playScenario(url, token) {
     for (const name of room.agents)
       online[`${room.id}:${name}`] = await join(room.id, name, "agent");
   }
-  const lin = await join("shop-web", OWNER, "human");
-  const linOps = await join("ops", OWNER, "human");
-  const zhou = online["shop-web:周屿"];
-  const codex = online["shop-web:codex"];
-  const claude = online["shop-web:claude"];
-  const omp = online["ops:omp"];
+  const lin = await join("web", OWNER, "human");
+  const linOps = await join("infra", OWNER, "human");
+  const zhou = online["web:周屿"];
+  const codex = online["web:codex"];
+  const claude = online["web:claude"];
+  const omp = online["infra:omp"];
 
-  // shop-web：claude 做完一件事的回复，作为聊天开头
+  // web：claude 做完一件事的回复，作为聊天开头
   const kickoff = await lin.say("登录接口加个限流，同一个手机号 1 分钟最多 5 次。");
   at(kickoff, 95 * MINUTE);
   const kickoffTask = await claude.mentioned((message) => message.id === kickoff.id);
@@ -736,7 +736,7 @@ async function playScenario(url, token) {
   const formatTask = await codex.mentioned((message) => message.id === format.id);
   codex.report(formatTask.id, "running");
   codex.send({ type: "agent.typing", active: true });
-  online["mobile:codex"].send({ type: "agent.typing", active: true });
+  online["api:codex"].send({ type: "agent.typing", active: true });
   const started = Date.now() - 36 * MINUTE;
   const step = (offset) => new Date(started + offset * 1000).toISOString();
   codex.send({
@@ -814,7 +814,7 @@ async function playScenario(url, token) {
     ],
   });
 
-  // ops：omp 上游出错中断，等你决定
+  // infra：omp 上游出错中断，等你决定
   const restart = await linOps.say("@omp 重启预发环境的订单队列 worker，确认积压清空后告诉我。");
   at(restart, 18 * MINUTE);
   const restartTask = await omp.mentioned((message) => message.id === restart.id);
@@ -901,7 +901,7 @@ async function waitForCleanupNotice(url) {
   const headers = { "X-Hive-Owner": session.ownerToken ?? "" };
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    const response = await fetch(`${url}/api/local/worktrees/shop-web`, { headers });
+    const response = await fetch(`${url}/api/local/worktrees/web`, { headers });
     if (!response.ok) throw new Error(`读任务目录失败：${await response.text()}`);
     if ((await response.json()).cleanupBatch) return;
     await sleep(1000);

@@ -125,9 +125,8 @@ export const landingText: Record<Lang, Copy> = {
       copied: "已复制",
       windowTitle: "SuperHive",
       live: "可交互 · 演示数据",
-      alt: "SuperHive 客户端全貌：左侧是房间列表和「需要你处理」，中间是 #shop-web 房间里 Agent 的提问卡片、正在执行的任务和输入框，下方是内置终端刚跑完的测试，右侧成员列表里有荣顶、周屿两位成员和十几个 Agent。",
-      demoHint:
-        "这是能直接点的演示：回答提问、停止执行、@ Agent 发消息、打开终端、去 #design 看成果",
+      alt: "SuperHive 客户端全貌：左侧是房间列表和「需要你处理」，中间是 #web 房间里 Agent 的提问卡片、正在执行的任务和输入框，下方是内置终端刚跑完的测试，右侧成员列表里有荣顶、周屿两位成员和十几个 Agent。",
+      demoHint: "这是能直接点的演示：回答提问、停止执行、@ Agent 发消息、打开终端、去 #web 看成果",
     },
     statement: {
       label: "一句话说清",
@@ -219,7 +218,7 @@ export const landingText: Record<Lang, Copy> = {
         head: { lead: "离开电脑，", rest: "也能在飞书和微信里派活。" },
         intro:
           "连上 IM 后，在手机上选房间、@ Agent、收结果、回答提问。IM 只是消息通道，任务照旧在接入 Hive 的电脑上跑。",
-        phoneTitle: "SuperHive · #shop-web",
+        phoneTitle: "SuperHive · #web",
         inputHint: "发消息，@ 选择 Agent",
         chat: {
           me: "@claude 把今天合入的改动整理成发版说明",
@@ -337,9 +336,9 @@ export const landingText: Record<Lang, Copy> = {
       copied: "Copied",
       windowTitle: "SuperHive",
       live: "Interactive · demo data",
-      alt: "The SuperHive desktop app: rooms and Needs you on the left; an agent's question card, a running task and the message box in the #shop-web room in the middle; the built-in terminal below with a test run that just passed; and two people plus a dozen agents in the member list on the right.",
+      alt: "The SuperHive desktop app: rooms and Needs you on the left; an agent's question card, a running task and the message box in the #web room in the middle; the built-in terminal below with a test run that just passed; and two people plus a dozen agents in the member list on the right.",
       demoHint:
-        "This demo is live: answer a question, stop a run, @ an agent, open the terminal, or check results in #design",
+        "This demo is live: answer a question, stop a run, @ an agent, open the terminal, or check results in #web",
     },
     statement: {
       label: "In one sentence",
@@ -435,7 +434,7 @@ export const landingText: Record<Lang, Copy> = {
         head: { lead: "Away from your desk?", rest: "Assign work from Feishu or WeChat." },
         intro:
           "Once IM is connected, pick a room, mention an agent, get results and answer questions from your phone. IM is only a message channel; tasks still run on the computers connected to Hive.",
-        phoneTitle: "SuperHive · #shop-web",
+        phoneTitle: "SuperHive · #web",
         inputHint: "Message, @ to pick an agent",
         chat: {
           me: "@claude Turn today's merged changes into release notes",

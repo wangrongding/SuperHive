@@ -56,11 +56,11 @@ const AGENTS = {
 
 const ALL_AGENTS = Object.keys(AGENTS);
 
-/** 8 个房间；shop-web 是主舞台 */
+/** 8 个房间；web 是主舞台 */
 const ROOMS = [
   {
-    id: "shop-web",
-    name: "shop-web",
+    id: "web",
+    name: "web",
     workspace: true,
     lead: "claude-1",
     pinned: true,
@@ -76,7 +76,7 @@ const ROOMS = [
   },
   { id: "payment", humans: ["周屿"], agents: ["claude-3", "codex-2", "copilot-2"] },
   { id: "mobile-app", humans: ["周屿"], agents: ["codex-1", "claude-2", "opencode-2"] },
-  { id: "ops", humans: [], agents: ["omp-1", "omp-2"] },
+  { id: "infra", humans: [], agents: ["omp-1", "omp-2"] },
   { id: "data-report", humans: ["陈默"], agents: ["codex-3"] },
   { id: "release", humans: ["陈默"], agents: ["opencode-2", "copilot-1"] },
   { id: "general", humans: ["周屿", "许棠"], agents: ["claude-1"] },
@@ -196,11 +196,11 @@ export function Total({ items, discount = 0 }) {
 `;
 
 function createRepository() {
-  const repo = path.join(HOME, "work/shop-web");
+  const repo = path.join(HOME, "work/web");
   fs.mkdirSync(repo, { recursive: true });
   git(repo, "init", "-q", "-b", "main");
   git(repo, "config", "commit.gpgsign", "false");
-  write(path.join(repo, "README.md"), "# shop-web\n\n演示仓库。\n");
+  write(path.join(repo, "README.md"), "# web\n\n演示仓库。\n");
   write(path.join(repo, "src/checkout/price.ts"), PRICE_BEFORE);
   write(path.join(repo, "src/mobile/checkout/Total.tsx"), TOTAL_BEFORE);
   write(path.join(repo, "src/checkout/Coupon.tsx"), "export const Coupon = () => null;\n");
@@ -477,7 +477,7 @@ async function seedConversation(url, token, repo, images) {
     { age: 3 * HOUR },
   );
   await exchange(
-    "ops",
+    "infra",
     OWNER,
     "omp-1",
     "@omp-1 看一下预发环境的磁盘和队列积压。",
@@ -489,7 +489,7 @@ async function seedConversation(url, token, repo, images) {
     "周屿",
     "codex-1",
     "@codex-1 iOS 结算页的金额也对齐一下 PC。",
-    "收到，和 shop-web 那边共用 formatPrice，改完一起提测。",
+    "收到，和 web 那边共用 formatPrice，改完一起提测。",
     { age: 70 * MINUTE },
   );
   await exchange(
@@ -527,8 +527,8 @@ async function seedConversation(url, token, repo, images) {
   );
   await owners.general.say("下午 4 点结算页改版评审，大家把进展更新到白板上。");
 
-  // shop-web：主舞台的历史（按时间先后）
-  const shop = "shop-web";
+  // web：主舞台的历史（按时间先后）
+  const shop = "web";
   const board = (input) => async (bot) => bot.tool("hive_board_update", input);
 
   // 定时任务：经真实的 hive_schedule_create 建
@@ -644,7 +644,7 @@ async function seedConversation(url, token, repo, images) {
           key: "price-format",
           slot: "in_progress",
           summary: "结算页金额统一用 formatPrice，优惠分摊做完，测试在补",
-          repo: "shop-web",
+          repo: "web",
           branch: "feat/codex-1-price-format",
         });
       },
@@ -669,7 +669,7 @@ async function seedConversation(url, token, repo, images) {
       ["command", "Bash", "pnpm vitest run src/split"],
     ],
     [
-      "ops",
+      "infra",
       OWNER,
       "omp-2",
       "@omp-2 盯一下预发的结算接口，压测期间看监控。",
@@ -727,7 +727,7 @@ function backdate(databasePath, seeded) {
 /* ---------------- 现场戏 ---------------- */
 
 export function scenes(members) {
-  const m = (name, room = "shop-web") => members.get(`${room}:${name}`);
+  const m = (name, room = "web") => members.get(`${room}:${name}`);
 
   /** 委派：林夏的消息由网页发出；这里只演 Agent 这边 */
   async function delegate() {
@@ -965,7 +965,7 @@ export async function startPromoServer({ images }) {
   const databasePath = path.join(dataDir, "hive.sqlite");
   fs.mkdirSync(dataDir, { recursive: true });
   const repo = createRepository();
-  // 「接入 Agent」的默认工作目录取 Server 进程的当前目录：切到演示仓库，界面上显示成 ~/work/shop-web
+  // 「接入 Agent」的默认工作目录取 Server 进程的当前目录：切到演示仓库，界面上显示成 ~/work/web
   process.chdir(repo);
   seedDatabase(databasePath, repo).close();
   const cliDirs = createFakeClis();

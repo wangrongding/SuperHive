@@ -16,7 +16,7 @@ A room's workspace tells local agents which directory to work in, but the room i
 3. Choose an agent in the room as the "Lead agent". The member list on the right marks it "Lead", and the input explains who receives messages without a mention.
 4. Rename or archive rooms as needed. Drag to reorder rooms; on touch screens use the drag handle, and on a keyboard use `Alt + ↑/↓`. The order is saved in the current browser and isn't shared with everyone.
 
-![The left sidebar: at the top are New room, Search, Mentions, Agent tasks, Incidents, and Connect IM ("Incidents" only appears for the room owner on the computer running the Server); in the middle, "Needs you" lists items waiting for your answer or decision, plus incidents escalated to you and rule proposals awaiting approval; below, the room list shows pinned #shop-web and #design above a divider, with online counts, task counts, and unread markers.](/media/screens/sidebar.png)
+![The left sidebar: at the top are New room, Search, Mentions, Agent tasks, Incidents, and Connect IM ("Incidents" only appears for the room owner on the computer running the Server); in the middle, "Needs you" lists items waiting for your answer or decision, plus incidents escalated to you and rule proposals awaiting approval; below, the room list shows pinned #web and #design above a divider, with online counts, task counts, and unread markers.](/media/screens/sidebar.png)
 
 Screenshot of the demo environment: names, rooms, and repos are sample data, and the image follows the docs' light/dark theme.
 

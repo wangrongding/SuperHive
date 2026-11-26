@@ -47,7 +47,7 @@ export const teamScene: Scene = {
   title: "每个人带着自己的 Agent，在同一个房间里协作",
   description:
     "示意图：你、林夏、周远、陈默四个人各自在自己的电脑上接着数量不同的 Agent，你的电脑上有 claude-1、claude-2 两个同种 Agent 和一个 codex。每个人、每个 Agent 都有一条线连进同一个 SuperHive 房间，房间里只有公开消息、协作白板和等人回答的问题；文件、权限和会话留在各自的电脑上。Agent 之间可以经过房间互相委派、并行干活再汇总。下面的七个步骤说明一次协作怎样在人和 Agent 之间流转。",
-  room: "# shop-web",
+  room: "# web",
   layout: "rows",
   machines: [
     {

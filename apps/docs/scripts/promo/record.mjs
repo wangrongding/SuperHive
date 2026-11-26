@@ -60,10 +60,10 @@ try {
       origin: demo.url,
       storage: appStorage(demo.owner),
     });
-    // 页面上的临时目录显示成 ~（演示仓库在 ~/work/shop-web）
+    // 页面上的临时目录显示成 ~（演示仓库在 ~/work/web）
     await app.cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: tildeHome(demo.home) });
     if (values.probe) {
-      await app.goto(`${demo.url}/#shop-web`, `__promo.find(".message-list")`);
+      await app.goto(`${demo.url}/#web`, `__promo.find(".message-list")`);
       await app.wait(2500);
       const shot = await app.cdp.send("Page.captureScreenshot", { format: "png" });
       fs.mkdirSync(out, { recursive: true });

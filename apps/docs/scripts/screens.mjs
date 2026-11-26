@@ -31,7 +31,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const SHOTS = [
   {
     name: "overview",
-    room: "shop-web",
+    room: "web",
     // 合入可清理的提示条要等任务目录状态算完
     prepare: [`__shot.find(".worktree-batch")`],
   },
@@ -39,7 +39,7 @@ export const SHOTS = [
     // 首页首屏的大图（和 README 顶部的图）：和 overview 同一个房间，但按桌面端打开，底部开着终端面板。
     // 首页在大屏上会换成可以点的演示（home/hero-demo.ts），这张图是首屏先显示的画面、手机上的展示和搜索引擎看到的图
     name: "studio",
-    room: "shop-web",
+    room: "web",
     desktop: true,
     prepare: [
       `__shot.find(".worktree-batch")`,
@@ -51,13 +51,13 @@ export const SHOTS = [
   },
   {
     name: "sidebar",
-    room: "shop-web",
+    room: "web",
     clip: `__shot.rect(".rooms-panel")`,
   },
   {
     name: "mention",
     // 没有聊天记录的房间：弹窗背后是空白，不压在消息上
-    room: "mobile",
+    room: "api",
     // 视口高一些：空房间居中的「开始第一条消息」离输入框远，不进截图
     height: 1400,
     prepare: [
@@ -69,28 +69,28 @@ export const SHOTS = [
   },
   {
     name: "running",
-    room: "shop-web",
+    room: "web",
     clip: `__shot.rect("article.thinking-card", { x: 12, y: 12 }, true)`,
   },
   {
     name: "ask",
-    room: "shop-web",
+    room: "web",
     clip: `__shot.rect("article.message.question", { x: 12, y: 12 }, true)`,
   },
   {
     name: "decide",
-    room: "ops",
+    room: "infra",
     clip: `__shot.rect("article.message:has(.invocation-chip.failed)", { x: 12, y: 12 }, true)`,
   },
   {
     name: "progress",
-    room: "shop-web",
+    room: "web",
     prepare: [`__shot.click("#side-tab-whiteboard")`],
     clip: `__shot.until(".members-panel", ".progress-board", 12)`,
   },
   {
     name: "worktrees",
-    room: "shop-web",
+    room: "web",
     // 顶栏「⎇ 分支」下拉底部「管理任务目录」打开的大面板，默认是右侧抽屉
     prepare: [
       `__shot.click(".worktree-switcher-toggle")`,
@@ -101,7 +101,7 @@ export const SHOTS = [
   },
   {
     name: "incidents",
-    room: "shop-web",
+    room: "web",
     // 左侧「故障」入口打开的弹出面板：升级给人的排在最前
     prepare: [
       `__shot.click(".sidebar-action[aria-haspopup=dialog]", (el) => /^(故障|Incidents)/.test(el.textContent.trim()))`,
@@ -122,13 +122,13 @@ export const SHOTS = [
   },
   {
     name: "onboard",
-    room: "shop-web",
+    room: "web",
     prepare: [`__shot.click(".sidebar-agent-entry")`, `__shot.find("[role=dialog]")`],
     clip: `__shot.rect("[role=dialog]")`,
   },
   {
     name: "clis",
-    room: "shop-web",
+    room: "web",
     // 设置弹窗最高 720px，放不下八个 CLI：截图时视口加高、弹窗放开到视口高，一屏看到全部
     height: 1200,
     prepare: [
@@ -382,7 +382,7 @@ async function evaluate(cdp, script, label, returnValue = false) {
  */
 const FAKE_DESKTOP = (cwd) => {
   const esc = "\\u001b";
-  const prompt = `${esc}[1;36mshop-web${esc}[0m ${esc}[2mon${esc}[0m ${esc}[1;35mmain${esc}[0m\\r\\n${esc}[1;32m❯${esc}[0m `;
+  const prompt = `${esc}[1;36mweb${esc}[0m ${esc}[2mon${esc}[0m ${esc}[1;35mmain${esc}[0m\\r\\n${esc}[1;32m❯${esc}[0m `;
   const replay = [
     prompt + "pnpm vitest run src/mobile/checkout\\r\\n\\r\\n",
     ` ${esc}[32m✓${esc}[0m src/mobile/checkout/price.test.ts ${esc}[2m(6 tests)${esc}[0m ${esc}[33m41ms${esc}[0m\\r\\n`,

@@ -1,5 +1,5 @@
 // 真实界面的镜头：每个镜头一段脚本，驱动网页并录屏。
-// 每个镜头先（不录）打开 shop-web 等页面稳定，再开始录；鼠标移动、点击都放慢，录下来看得清。
+// 每个镜头先（不录）打开 web 等页面稳定，再开始录；鼠标移动、点击都放慢，录下来看得清。
 export const APP_VIEWPORT = { width: 1440, height: 810, scale: 1920 / 1440 };
 
 export const appStorage = (owner) => ({
@@ -8,7 +8,7 @@ export const appStorage = (owner) => ({
   "superhive.onboarding": "done",
   "superhive.notify-prompt-dismissed": "true",
   "superhive.reduce-motion": "false",
-  "superhive.room": "shop-web",
+  "superhive.room": "web",
   // 每个镜头都从中文界面开始（「中英文切换」镜头会切到英文）
   "superhive.locale": "zh-CN",
 });
@@ -42,8 +42,8 @@ export const tildeHome = (home) => `
 /** 按文字匹配元素（在页面里执行的函数源码） */
 const text = (pattern) => `(el) => ${pattern}.test(el.textContent)`;
 
-/** 打开 shop-web，等消息列表出来、滚到底 */
-async function open(d, demo, room = "shop-web") {
+/** 打开 web，等消息列表出来、滚到底 */
+async function open(d, demo, room = "web") {
   await d.goto(`${demo.url}/#${room}`, `__promo.find(".message-list")`);
   await d.eval("document.fonts.ready");
   await d.wait(1800);
@@ -85,7 +85,7 @@ export const APP_SHOTS = [
       const rooms = await d.highlight(".room-scroll", "8 个房间");
       await d.hover(".room-item", { match: text(/design/), ms: 900 });
       await d.hover(".room-item", { match: text(/payment/), ms: 700 });
-      await d.hover(".room-item", { match: text(/ops/), ms: 700 });
+      await d.hover(".room-item", { match: text(/infra/), ms: 700 });
       await d.wait(500);
       await d.unhighlight(rooms);
       const members = await d.highlight(".member-list", "12 个 Agent · 4 个人");

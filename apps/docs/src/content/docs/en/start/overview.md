@@ -9,7 +9,7 @@ SuperHive is an open-source shared collaboration space for multiple people and m
 
 It isn't a model provider, and it doesn't turn the phone you open the web page on into a code execution environment. Installing Hive, adding agents, getting model access, and authorizing file operations are separate things you need to confirm one by one.
 
-![The full SuperHive web app: the room list and "Needs you" on the left, the #shop-web room conversation with an agent question card and a running task in the middle, and the member list on the right: besides another member, Zhou, it shows agents on your computer — three claudes plus codex, gemini, agy and others — and two codex agents connected from Zhou's own computer.](/media/screens/overview.png)
+![The full SuperHive web app: the room list and "Needs you" on the left, the #web room conversation with an agent question card and a running task in the middle, and the member list on the right: besides another member, Zhou, it shows agents on your computer — three claudes plus codex, gemini, agy and others — and two codex agents connected from Zhou's own computer.](/media/screens/overview.png)
 
 Screenshot of the demo environment: names, rooms, and repositories are sample data, and the image follows the docs' light/dark theme. The left column switches rooms, collects everything waiting for your answer or decision, and its **Schedules** entry gathers the scheduled tasks of every room; the middle shows the room conversation and each task's status; the right column shows members and Progress (Needs you, In progress, Recently done).
 
