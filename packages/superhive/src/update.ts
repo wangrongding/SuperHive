@@ -53,11 +53,12 @@ export function upgradeCommand(
     execPath?: string;
     platform?: NodeJS.Platform;
     exists?: (file: string) => boolean;
+    version?: string;
   } = {},
 ): { display: string; file: string; args: string[] } | undefined {
   const platform = options.platform ?? process.platform;
   const exists = options.exists ?? existsSync;
-  const spec = `${PACKAGE}@latest`;
+  const spec = `${PACKAGE}@${options.version ?? "latest"}`;
   const win = platform === "win32";
   switch (install.kind) {
     case "npm": {
@@ -138,13 +139,15 @@ export async function fetchLatestVersion(
     );
     if (!response.ok) return undefined;
     const latest = ((await response.json()) as { latest?: unknown }).latest;
-    return typeof latest === "string" && /^\d+\.\d+\.\d+/.test(latest) ? latest : undefined;
+    return typeof latest === "string" && /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(latest)
+      ? latest
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
-type CheckCache = { checkedAt: number; latest: string };
+type CheckCache = { checkedAt: number; latest: string | null };
 
 function cachePath(): string {
   return path.join(superhiveHome(), "update-check.json");
@@ -153,7 +156,8 @@ function cachePath(): string {
 function readCache(file: string): CheckCache | undefined {
   try {
     const value = JSON.parse(readFileSync(file, "utf8")) as Partial<CheckCache>;
-    return typeof value.checkedAt === "number" && typeof value.latest === "string"
+    return typeof value.checkedAt === "number" &&
+      (typeof value.latest === "string" || value.latest === null)
       ? { checkedAt: value.checkedAt, latest: value.latest }
       : undefined;
   } catch {
@@ -174,21 +178,17 @@ export async function checkLatest(
   const now = options.now ?? Date.now();
   const file = options.file ?? cachePath();
   const cached = readCache(file);
-  let latest =
-    cached && now - cached.checkedAt >= 0 && now - cached.checkedAt < CHECK_CACHE_MS
-      ? cached.latest
-      : undefined;
-  if (!latest) {
+  const fresh = cached && now - cached.checkedAt >= 0 && now - cached.checkedAt < CHECK_CACHE_MS;
+  let latest = fresh ? (cached.latest ?? undefined) : undefined;
+  if (!fresh) {
     latest = await (options.fetchLatest ?? fetchLatestVersion)(
       options.timeoutMs ?? QUICK_CHECK_TIMEOUT_MS,
     );
-    if (latest) {
-      try {
-        mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, `${JSON.stringify({ checkedAt: now, latest })}\n`);
-      } catch {
-        // 写不了缓存下次再查
-      }
+    try {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `${JSON.stringify({ checkedAt: now, latest: latest ?? null })}\n`);
+    } catch {
+      // 写不了缓存下次再查
     }
   }
   return latest && compareVersions(latest, current) > 0 ? latest : undefined;
@@ -250,13 +250,20 @@ const updateUsage = `
   --force           已是最新版也重新安装一遍
   --wait            重启交接不了时不问，等本机 Agent 手上的任务做完再重启
   --force-restart   重启交接不了时不问也不等，立即重启（会中断正在跑的任务）
+  --data-dir PATH   沿用这个数据目录里的 Server 配置更新并重启
 `;
 
 /** hive update 装好新版后调 hive restart 带的参数 */
-export function restartArgsFor(options: { wait?: boolean; "force-restart"?: boolean }): string[] {
-  if (options["force-restart"]) return ["restart", "--force"];
-  if (options.wait) return ["restart", "--wait"];
-  return ["restart"];
+export function restartArgsFor(options: {
+  wait?: boolean;
+  "force-restart"?: boolean;
+  "data-dir"?: string;
+}): string[] {
+  return [
+    "restart",
+    ...(options["force-restart"] ? ["--force"] : options.wait ? ["--wait"] : []),
+    ...(options["data-dir"] ? ["--data-dir", options["data-dir"]] : []),
+  ];
 }
 
 export async function updateCommand(
@@ -264,7 +271,7 @@ export async function updateCommand(
   context: {
     version: string;
     packageRoot: string;
-    serviceRunning: () => boolean;
+    serviceRunning: (dataDir?: string) => boolean;
   },
 ): Promise<void> {
   const parsed = parseArgs({
@@ -274,6 +281,7 @@ export async function updateCommand(
       force: { type: "boolean", default: false },
       wait: { type: "boolean", default: false },
       "force-restart": { type: "boolean", default: false },
+      "data-dir": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -327,7 +335,7 @@ export async function updateCommand(
     );
   }
   console.log(`[hive] 已更新到 ${latest}。`);
-  if (!context.serviceRunning()) {
+  if (!context.serviceRunning(parsed.values["data-dir"])) {
     console.log("[hive] Hive Server 没在运行，下次 hive 启动时就是新版本。");
     return;
   }

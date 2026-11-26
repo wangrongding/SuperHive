@@ -32,7 +32,7 @@ type ServiceStartOptions = {
   localAgents?: false;
 };
 
-type ServiceState = {
+export type ServiceState = {
   pid: number;
   instanceId: string;
   healthUrl: string;
@@ -149,6 +149,10 @@ function readState(statePath: string): ServiceState | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function readServiceState(dataDir: string): ServiceState | undefined {
+  return readState(pathsFor(dataDir).statePath);
 }
 
 function writeState(statePath: string, state: ServiceState): void {
@@ -319,6 +323,7 @@ export async function startService(args = process.argv.slice(3)): Promise<void> 
     HIVE_STATIC_DIR: staticDir,
     HIVE_INSTANCE_ID: instanceId,
     HIVE_SHUTDOWN_TOKEN: shutdownToken,
+    HIVE_SERVICE_MODE: parsed.values.foreground ? "foreground" : "background",
     ...(parsed.values["public-url"] ? { HIVE_PUBLIC_URL: parsed.values["public-url"] } : {}),
     ...(parsed.values.token ? { HIVE_TOKEN: parsed.values.token } : {}),
     ...(parsed.values["no-local-agents"] ? { HIVE_LOCAL_AGENTS: "0" } : {}),
@@ -607,7 +612,7 @@ export async function restartService(args = process.argv.slice(3)): Promise<void
 }
 
 /** 新版 Server 的 /health 带 handover: true，表示能把本机 Agent 交给下一个 Server */
-async function healthSupportsHandover(healthUrl: string): Promise<boolean> {
+export async function healthSupportsHandover(healthUrl: string): Promise<boolean> {
   try {
     const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_500) });
     if (!response.ok) return false;

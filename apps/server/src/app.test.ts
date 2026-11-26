@@ -129,6 +129,7 @@ describe("Hive WebSocket protocol", () => {
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.json()).toEqual({
       status: "ok",
+      version: expect.any(String),
       pid: process.pid,
       instanceId: "test-instance",
     });

@@ -2067,3 +2067,9 @@ export * from "./docs-links.js";
 export * from "./network-proxy.js";
 export * from "./remote-join.js";
 export * from "./plugin-manifest.js";
+export type {
+  NpmUpdateInfo,
+  NpmUpdateBlocker,
+  NpmUpdateChoice,
+  NpmUpdateJob,
+} from "./npm-update.js";

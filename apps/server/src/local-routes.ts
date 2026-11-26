@@ -65,6 +65,8 @@ import { registerRuntimeConfigRoutes } from "./runtime-config-routes.js";
 import { RuntimeConfigStore } from "./runtime-config.js";
 import type { AgentCliManager } from "./agent-clis.js";
 import { registerAgentCliRoutes } from "./agent-cli-routes.js";
+import { registerNpmUpdateRoutes } from "./npm-update-routes.js";
+import type { NpmUpdates } from "./npm-updates.js";
 import { registerRemoteJoinRoutes, type RunJoinCli } from "./remote-join-routes.js";
 
 /**
@@ -222,6 +224,7 @@ export type LocalRoomActions = {
   runtimeCredentials?: RuntimeCredentialStore;
   /** 本机装的 Agent CLI：检测版本与一键升级 */
   agentClis?: AgentCliManager;
+  npmUpdates?: NpmUpdates;
   /** 最近的慢操作（锁、git、重查询、HTTP 请求）；只限本机 */
   slowOps?: () => SlowOperationsResponse;
   /** 插件原型：本机房主管理插件（列出、批准、撤销） */
@@ -274,8 +277,9 @@ export function registerLocalAgentRoutes(
     return { enabled: false, reason: zhText(reason), reasonText: reason };
   }
 
-  app.get("/api/local/session", async (request): Promise<LocalSessionResponse> => {
-    if (!supervisor) return disabledSession(serverText("error.localAgent.disabled"));
+  function localSession(request: FastifyRequest, forUpdate = false): LocalSessionResponse {
+    if (!supervisor && !(rooms.npmUpdates && forUpdate))
+      return disabledSession(serverText("error.localAgent.disabled"));
     // 带着设备令牌来的按设备对待，即使页面开在这台电脑上：只下发和它身份相符的能力
     const device = deviceOf(request);
     if (staleDevice(request, device)) {
@@ -295,15 +299,19 @@ export function registerLocalAgentRoutes(
     const check = isLocal(request);
     if (!check.local) return disabledSession(check.reason);
     return { enabled: true, mode: "local", ownerToken, hostLabel, hostPlatform: process.platform };
-  });
+  }
+  app.get("/api/local/session", async (request) => localSession(request));
+  if (rooms.npmUpdates)
+    app.get("/api/local/update/session", async (request) => localSession(request, true));
 
   /** 校验请求方能否调用这一级接口；不能时发出响应并返回 undefined */
   function authorize(
     request: FastifyRequest,
     reply: FastifyReply,
     level: Level,
+    forUpdate = false,
   ): LocalCaller | undefined {
-    if (!supervisor) {
+    if (!supervisor && !(rooms.npmUpdates && forUpdate && level === "local")) {
       void reply.code(404).send({ ...errorText(serverText("error.localAgent.disabled")) });
       return undefined;
     }
@@ -809,6 +817,13 @@ export function registerLocalAgentRoutes(
       }
     },
   );
+
+  if (rooms.npmUpdates) {
+    registerNpmUpdateRoutes(app, {
+      manager: rooms.npmUpdates,
+      authorizeLocal: (request, reply) => Boolean(authorize(request, reply, "local", true)),
+    });
+  }
 
   if (supervisor) {
     registerAgentCliRoutes(app, {

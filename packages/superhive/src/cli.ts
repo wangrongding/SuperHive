@@ -4,6 +4,7 @@ import "./socket-tos-guard.js";
 import { createRequire } from "module";
 import { fileURLToPath } from "node:url";
 import { autostartCommand } from "./autostart.js";
+import { webUpdateCommand } from "./web-update.js";
 import { DOCS_URL } from "./docs-url.js";
 import { shouldExitAfterCommand } from "./electron-exit.js";
 import { mcpCommand } from "./mcp-command.js";
@@ -73,6 +74,7 @@ const QUIET_COMMANDS = new Set([
   "models",
   "--skill",
   "update",
+  "web-update",
   "-v",
   "-V",
   "--version",
@@ -133,11 +135,13 @@ async function main(): Promise<void> {
   if (command === "leave") return leaveCommand(process.argv.slice(3));
   if (command === "mcp") return mcpCommand(process.argv.slice(3));
   if (command === "models") return modelsCommand(process.argv.slice(3));
+  if (command === "web-update")
+    return webUpdateCommand(process.argv.slice(3), { version, packageRoot });
   if (command === "update" || command === "upgrade") {
     return updateCommand(process.argv.slice(3), {
       version,
       packageRoot,
-      serviceRunning: () => serviceRunning(),
+      serviceRunning,
     });
   }
   throw new Error(`未知命令：“${command}”。\n${usage}`);

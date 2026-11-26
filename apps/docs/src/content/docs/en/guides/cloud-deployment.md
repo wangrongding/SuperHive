@@ -202,6 +202,8 @@ A cloud workspace cannot create the same path on another computer. Clone reposit
 
 ## 7. Back up and upgrade
 
+Local npm background instances also support status-bar updates, but not the systemd foreground service described here. See the [updating guide](/en/guides/updating/) for permissions and recovery limits.
+
 Agree on idle maintenance and check active tasks and external side effects. This systemd service uses a consistent backup and explicit stop/start:
 
 ```bash

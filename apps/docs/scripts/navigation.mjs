@@ -25,6 +25,7 @@ export const navigation = [
       item("独立任务工作区", "Task directories", "guides/worktrees"),
       item("飞书与微信", "Feishu (Lark) and WeChat", "guides/im"),
       item("用量与费用", "Usage and cost", "guides/usage"),
+      item("更新 SuperHive", "Updating SuperHive", "guides/updating"),
       item("反馈与贡献", "Feedback and contributing", "guides/contributing"),
       item("插件开发", "Building plugins", "guides/plugins"),
     ],

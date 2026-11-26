@@ -11,6 +11,7 @@ import { timingSafeEqual } from "node:crypto";
 import { buildApp, resolveUrl } from "./app.js";
 import { RuntimeCredentialStore } from "./runtime-credentials.js";
 import { AgentCliManager } from "./agent-clis.js";
+import { NpmUpdateManager } from "./npm-updates.js";
 import { feishuDriver } from "./im/feishu.js";
 import type { ImChannelDriver } from "./im/types.js";
 import { lanAddresses } from "./lan-address.js";
@@ -69,17 +70,22 @@ function localAgentCli(): AgentCli | undefined {
   // 桌面端等宿主自己指定怎么拉起 Agent（那里 process.execPath 不是 Node）
   const override = agentCliOverride(process.env.HIVE_LOCAL_AGENT_CLI);
   if (override) return override;
+  return hiveCli();
+}
+
+function hiveCli(update = false): AgentCli | undefined {
+  const filename = update ? "web-update-cli" : "cli";
   if (isDevRuntime) {
     return {
       command: process.execPath,
       args: [
         "--import",
         import.meta.resolve("tsx"),
-        path.resolve(import.meta.dirname, "../../../packages/superhive/src/cli.ts"),
+        path.resolve(import.meta.dirname, `../../../packages/superhive/src/${filename}.ts`),
       ],
     };
   }
-  const cli = path.resolve(import.meta.dirname, "../cli.js");
+  const cli = path.resolve(import.meta.dirname, `../${filename}.js`);
   return existsSync(cli) ? { command: process.execPath, args: [cli] } : undefined;
 }
 const agentCli = sandbox || process.env.HIVE_LOCAL_AGENTS === "0" ? undefined : localAgentCli();
@@ -108,6 +114,9 @@ const roomAttachmentQuotaBytes = megabytes(process.env.HIVE_ROOM_ATTACHMENT_QUOT
 const pendingAttachmentQuotaBytes = megabytes(process.env.HIVE_PENDING_ATTACHMENT_QUOTA_MB);
 
 const app = await buildApp({
+  ...(!sandbox && !process.versions.electron && hiveCli(true)
+    ? { npmUpdates: new NpmUpdateManager(hiveCli(true)!, path.dirname(databasePath)) }
+    : {}),
   databasePath,
   ...(roomAttachmentQuotaBytes ? { roomAttachmentQuotaBytes } : {}),
   ...(pendingAttachmentQuotaBytes ? { pendingAttachmentQuotaBytes } : {}),

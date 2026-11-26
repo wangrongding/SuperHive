@@ -30,6 +30,7 @@ import {
   type ThemePreference,
 } from "./app-storage";
 import { DesktopUpdateEntry } from "./desktop-update";
+import { NpmUpdateEntry } from "./npm-update";
 import { KeyCombo } from "./key-combo";
 import { keepAwakeStatusText } from "./host-settings";
 import { listAllImConnections, IM_CHANNEL_LABELS } from "./im-api";
@@ -507,6 +508,7 @@ export function StatusBar(props: StatusBarProps) {
           )}
         />
         <DesktopUpdateEntry variant="status" />
+        {im && <NpmUpdateEntry base={im.base} token={im.token} />}
         {counts.total > 0 && (
           <StatusItem
             className="status-agents"

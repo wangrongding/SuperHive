@@ -1,0 +1,48 @@
+.npm-update-entry > .icon {
+  color: var(--success);
+}
+
+.npm-update-versions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  font-family: var(--font-mono);
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+.npm-update-versions strong {
+  color: var(--text);
+}
+
+.npm-update-handover {
+  color: var(--success);
+  font-size: 13px;
+}
+
+.npm-update-choice {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.npm-update-choice label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.npm-update-command {
+  overflow-x: auto;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

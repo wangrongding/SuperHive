@@ -15,6 +15,7 @@ import { errorText, hiveErrorBody, wsText } from "./texts.js";
 import { resolveRoom, roomsNamedLike } from "./room-lookup.js";
 import { observeRuntime } from "./runtime-observation.js";
 import { feedbackInfo } from "./feedback-info.js";
+import type { NpmUpdates } from "./npm-updates.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { open, readFile, realpath } from "node:fs/promises";
@@ -171,6 +172,7 @@ export function resolveUrl(value: ConfiguredUrl): string {
 }
 
 export type BuildAppOptions = {
+  npmUpdates?: NpmUpdates;
   databasePath?: string;
   token?: string;
   /** 对外地址；传函数时每次用到现取（按当前网卡推算的地址会随换网变化） */
@@ -1131,6 +1133,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       ? { runtimeCredentials: options.runtimeCredentials }
       : {}),
     ...(options.agentClis && !sandbox ? { agentClis: options.agentClis } : {}),
+    ...(options.npmUpdates && !sandbox ? { npmUpdates: options.npmUpdates } : {}),
     slowOps: () => slowOps.list(),
     ...(pluginRegistry ? { plugins: pluginRegistry } : {}),
     incidents: {
@@ -4579,6 +4582,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.get("/health", async () => ({
     status: "ok",
+    ...(feedback ? { version: feedback.version } : {}),
     ...(sandbox ? { sandbox: true } : {}),
     // 本机 Agent 在原 Server 退出后据此认出接管它的新 Server
     pid: process.pid,
@@ -4586,6 +4590,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     // hive restart 据此判断能不能换代交接（旧版 Server 没有这一项，重启会让本机 Agent 下线）
     ...(localAgents && options.handoverFile ? { handover: true } : {}),
   }));
+  app.get("/api/update", async (request, reply) => {
+    if (!guard(request, reply)) return reply;
+    if (!options.npmUpdates || sandbox) return { update: null };
+    try {
+      const info = await options.npmUpdates.inspect();
+      return {
+        update: info.latest
+          ? {
+              current: info.current,
+              latest: info.latest,
+              notes: info.notes,
+              releaseUrl: info.releaseUrl,
+            }
+          : null,
+      };
+    } catch {
+      return { update: null };
+    }
+  });
   /**
    * 网页把自己的报错交上来归档成故障单。只收房主的（访客的页面可能发来任何东西），
    * 每分钟最多 30 条，防止某个报错在渲染循环里刷屏。

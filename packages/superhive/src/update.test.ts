@@ -12,6 +12,7 @@ import {
   shouldCheckForUpdate,
   updateNotice,
   upgradeCommand,
+  restartArgsFor,
 } from "./update.js";
 
 describe("detectInstall", () => {
@@ -52,6 +53,17 @@ describe("detectInstall", () => {
 });
 
 describe("upgradeCommand", () => {
+  it("pins web updates to the confirmed version and preserves the data directory", () => {
+    expect(upgradeCommand({ kind: "npm", prefix: "/stage" }, { version: "0.4.9" })?.args).toContain(
+      "superhive@0.4.9",
+    );
+    expect(restartArgsFor({ wait: true, "data-dir": "/isolated" })).toEqual([
+      "restart",
+      "--wait",
+      "--data-dir",
+      "/isolated",
+    ]);
+  });
   it("npm 用 node 旁边的 npm 并锁定原来的全局目录", () => {
     const command = upgradeCommand(
       { kind: "npm", prefix: "/Users/a/my npm" },
@@ -130,6 +142,13 @@ describe("fetchLatestVersion", () => {
 });
 
 describe("checkLatest", () => {
+  it("also caches offline results instead of hitting the registry on every refresh", async () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "hive-update-offline-")), "check.json");
+    const fetchLatest = vi.fn(async () => undefined);
+    await checkLatest("0.4.8", { file, now: 100, fetchLatest });
+    await checkLatest("0.4.8", { file, now: 200, fetchLatest });
+    expect(fetchLatest).toHaveBeenCalledOnce();
+  });
   it("有新版返回新版本号并缓存 1 小时；缓存过期再查；查不到不报错", async () => {
     const file = path.join(mkdtempSync(path.join(tmpdir(), "hive-update-")), "update-check.json");
     const fetchLatest = vi.fn(async () => "0.4.0");
