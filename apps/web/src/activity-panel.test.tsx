@@ -10,7 +10,11 @@ afterEach(cleanup);
 const agent = (id: string, status: Participant["status"] = "online") =>
   ({ id, username: id, status, type: "agent" }) as Participant;
 
-function setup(participants: Participant[], invocations: Invocation[]) {
+function setup(
+  participants: Participant[],
+  invocations: Invocation[],
+  onOpenTask?: (invocation: Invocation) => void,
+) {
   const message = {
     id: "m1",
     roomId: "build",
@@ -36,6 +40,7 @@ function setup(participants: Participant[], invocations: Invocation[]) {
       participants={participants}
       search={async () => []}
       onOpenMessage={onOpenMessage}
+      onOpenTask={onOpenTask}
       onMarkMentionsRead={() => undefined}
       onClose={onClose}
     />,
@@ -87,5 +92,19 @@ describe("ActivityPanel · Agent 任务", () => {
     const members = screen.getByRole("region", { name: "成员状态" });
     expect(within(members).getByText("没有 Agent 在忙")).toBeTruthy();
     expect(within(members).getByRole("button", { name: /1 个空闲、1 个离线/ })).toBeTruthy();
+  });
+
+  it("opens the exact waiting invocation from task results and runtime rows", () => {
+    const waiting = { ...busy, status: "waiting_human" } as Invocation;
+    const other = { ...waiting, id: "i2", agentId: "other", agentName: "other" };
+    const onOpenTask = vi.fn();
+    const { onOpenMessage } = setup([agent("busy"), agent("other")], [waiting, other], onOpenTask);
+    const section = screen.getByRole("region", { name: "等你回答" });
+    fireEvent.click(within(section).getAllByRole("option")[1]!);
+    expect(onOpenTask).toHaveBeenLastCalledWith(other);
+    const members = screen.getByRole("region", { name: "成员状态" });
+    fireEvent.click(within(members).getByRole("button", { name: /@busy 等你回答，跳到当前任务/ }));
+    expect(onOpenTask).toHaveBeenLastCalledWith(waiting);
+    expect(onOpenMessage).not.toHaveBeenCalled();
   });
 });

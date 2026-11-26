@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Invocation } from "@superhive/protocol";
+import type { ChatMessage, Invocation } from "@superhive/protocol";
 import {
   attentionByRoom,
   attentionLabels,
+  attentionTarget,
   attentionTransition,
   collectAttention,
   concernsMe,
   type AttentionItem,
   type AttentionKind,
+  type AttentionTarget,
 } from "./attention";
 import { localized, t } from "./i18n";
 import type { IncidentAttentionItem } from "./incidents-panel";
@@ -153,6 +155,7 @@ export function useAttention({
   isOwner,
   currentRoomId,
   activeInvocations,
+  messages = [],
   preferences,
   roomName,
   onOpen,
@@ -162,17 +165,35 @@ export function useAttention({
   currentRoomId: string;
   /** 进行中和需要处理的调用（跨房间） */
   activeInvocations: ReadonlyMap<string, Invocation>;
+  messages?: readonly ChatMessage[];
   preferences: AttentionPreferences;
   roomName: (roomId: string) => string;
-  /** 打开某条任务：切到它所在的房间并定位到触发消息 */
-  onOpen: (item: { roomId: string; messageId: string; invocationId: string }) => void;
+  onOpen: (item: AttentionTarget) => void;
 }) {
   const [unseen, setUnseen] = useState(() => loadUnseen(username));
   const [toasts, setToasts] = useState<AttentionToast[]>([]);
   const [visible, setVisible] = useState(() => document.visibilityState === "visible");
   const knownRef = useRef(new Map<string, Invocation>());
-  const latest = useRef({ username, isOwner, currentRoomId, preferences, roomName, onOpen });
-  latest.current = { username, isOwner, currentRoomId, preferences, roomName, onOpen };
+  const latest = useRef({
+    username,
+    isOwner,
+    currentRoomId,
+    preferences,
+    roomName,
+    onOpen,
+    activeInvocations,
+    messages,
+  });
+  latest.current = {
+    username,
+    isOwner,
+    currentRoomId,
+    preferences,
+    roomName,
+    onOpen,
+    activeInvocations,
+    messages,
+  };
 
   useEffect(() => setUnseen(loadUnseen(username)), [username]);
   useEffect(() => {
@@ -214,11 +235,11 @@ export function useAttention({
       next.delete(invocation.id);
       return next;
     });
-    latest.current.onOpen({
-      roomId: invocation.roomId,
-      messageId: invocation.messageId,
-      invocationId: invocation.id,
-    });
+    const current =
+      latest.current.activeInvocations.get(invocation.id) ??
+      knownRef.current.get(invocation.id) ??
+      invocation;
+    latest.current.onOpen(attentionTarget(current, latest.current.messages));
   }, []);
 
   const alert = useCallback(
@@ -307,8 +328,8 @@ export function useAttention({
   );
 
   const items = useMemo(
-    () => collectAttention(activeInvocations.values(), unseen.values()),
-    [activeInvocations, unseen],
+    () => collectAttention(activeInvocations.values(), unseen.values(), messages),
+    [activeInvocations, unseen, messages],
   );
   const byRoom = useMemo(() => attentionByRoom(items), [items]);
   /** 每个房间「完成未看」的条数：侧栏在没有更急的事时显示 */

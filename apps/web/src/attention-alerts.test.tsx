@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Invocation } from "@superhive/protocol";
-import { AttentionToasts, type AttentionToast } from "./attention-alerts";
+import type { ChatMessage, Invocation } from "@superhive/protocol";
+import { AttentionToasts, useAttention, type AttentionToast } from "./attention-alerts";
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 const at = "2026-11-11T10:00:00.000Z";
@@ -28,6 +29,68 @@ function toast(index: number): AttentionToast {
   } as Invocation;
   return { id: `t${index}`, kind: "unseen", invocation };
 }
+
+describe("attention opening", () => {
+  it("resolves notification and toast clicks using the latest invocation and messages", () => {
+    const onOpen = vi.fn();
+    const initial = { ...toast(1).invocation, status: "running" } as Invocation;
+    const waiting = {
+      ...initial,
+      status: "waiting_human",
+      updatedAt: "2026-11-11T10:01:00.000Z",
+    } as Invocation;
+    const question = {
+      id: "question",
+      seq: 30,
+      roomId: waiting.roomId,
+      senderId: waiting.agentId,
+      parentMessageId: waiting.messageId,
+      kind: "question",
+    } as ChatMessage;
+    const notifications: Array<{ onclick?: () => void; close: () => void }> = [];
+    class NotificationMock {
+      static permission = "granted";
+      onclick?: () => void;
+      close = vi.fn();
+      constructor() {
+        notifications.push(this);
+      }
+    }
+    vi.stubGlobal("Notification", NotificationMock);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const focus = vi.spyOn(window, "focus").mockImplementation(() => undefined);
+    const { result, rerender } = renderHook(
+      ({ messages }: { messages: ChatMessage[] }) =>
+        useAttention({
+          username: "Alice",
+          isOwner: true,
+          currentRoomId: "general",
+          activeInvocations: new Map([[waiting.id, waiting]]),
+          messages,
+          preferences: { delivery: "system", sound: false },
+          roomName: (id) => id,
+          onOpen,
+        }),
+      { initialProps: { messages: [] as ChatMessage[] } },
+    );
+    act(() => {
+      result.current.seed([initial]);
+      result.current.observe(waiting);
+    });
+    expect(notifications).toHaveLength(1);
+    rerender({ messages: [question] });
+    act(() => notifications[0]!.onclick?.());
+    expect(onOpen).toHaveBeenLastCalledWith(
+      expect.objectContaining({ messageId: question.id, messageSeq: 30, invocation: waiting }),
+    );
+    act(() => result.current.open(initial));
+    expect(onOpen).toHaveBeenLastCalledWith(
+      expect.objectContaining({ messageId: question.id, invocation: waiting }),
+    );
+    focus.mockRestore();
+    visibility.mockRestore();
+  });
+});
 
 describe("AttentionToasts", () => {
   it("keeps completed toasts until dismissed and folds older ones", () => {

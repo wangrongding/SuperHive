@@ -5,7 +5,13 @@ import {
   type Invocation,
   type WhiteboardEntry,
 } from "@superhive/protocol";
-import { attentionKind, attentionLabels, type AttentionKind } from "./attention";
+import {
+  attentionKind,
+  attentionLabels,
+  attentionTarget,
+  questionOf,
+  type AttentionKind,
+} from "./attention";
 import { t } from "./i18n";
 import { formatRelativeTime } from "./whiteboard";
 import { Tooltip } from "./tooltip";
@@ -19,7 +25,7 @@ import { Button } from "./button";
 export type ProgressGroup = "attention" | "doing" | "done";
 
 /** 跳回聊天的位置：有消息 ID 按 ID 找，只知道序号（摘要里写的 #1234）按序号找 */
-export type ProgressTarget = { messageId?: string; messageSeq?: number };
+export type ProgressTarget = { messageId?: string; messageSeq?: number; invocation?: Invocation };
 
 export type ProgressItem = {
   id: string;
@@ -74,24 +80,6 @@ function entryTarget(
     if (message.deletedAt || message.senderId !== entry.authorId) continue;
     if (Date.parse(message.createdAt) <= before)
       return { messageId: message.id, messageSeq: message.seq };
-  }
-  return undefined;
-}
-
-/** 等你回答的问题：提问消息挂在触发这一轮的消息下面；找不到就跳到触发消息 */
-function questionOf(
-  invocation: Invocation,
-  messages: readonly ChatMessage[],
-): ChatMessage | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (
-      message.kind === "question" &&
-      !message.deletedAt &&
-      message.senderId === invocation.agentId &&
-      message.parentMessageId === invocation.messageId
-    )
-      return message;
   }
   return undefined;
 }
@@ -151,9 +139,7 @@ export function buildProgress({
       who: invocation.agentName,
       at: invocation.updatedAt,
       badge: { label: attentionLabels[kind], tone: "warning" },
-      target: question
-        ? { messageId: question.id, messageSeq: question.seq }
-        : { messageId: invocation.messageId },
+      target: attentionTarget(invocation, messages, kind),
     });
   }
   for (const entry of entries) {

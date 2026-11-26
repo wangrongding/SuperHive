@@ -435,7 +435,10 @@ export function MessageList({
                   <ul className="typing-agents">
                     {rows.map((row) => {
                       const target = row.invocation?.messageId;
-                      const canJump = Boolean(target && loadedMessageIds.has(target));
+                      const canJump = Boolean(
+                        row.invocation?.status === "waiting_human" ||
+                        (target && loadedMessageIds.has(target)),
+                      );
                       return (
                         <li key={row.participant.id}>
                           <Tooltip
@@ -451,7 +454,11 @@ export function MessageList({
                               type="button"
                               className={`typing-agent ${row.state}`}
                               disabled={!canJump}
-                              onClick={() => target && jumpToMessage(target)}
+                              onClick={() => {
+                                if (row.invocation?.status === "waiting_human")
+                                  jump.locateAttention(row.invocation);
+                                else if (target) jumpToMessage(target);
+                              }}
                             >
                               <span className="mention-avatar agent" aria-hidden="true">
                                 <AvatarGlyph

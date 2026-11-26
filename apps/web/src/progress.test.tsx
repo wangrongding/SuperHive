@@ -123,7 +123,7 @@ describe("buildProgress", () => {
       "helper 在问：要不要顺手清掉旧条目？",
       "helper 的任务被拦下，等你放行",
     ]);
-    expect(groups.attention[0]!.target).toEqual({ messageId: question.id, messageSeq: 11 });
+    expect(groups.attention[0]!.target).toMatchObject({ messageId: question.id, messageSeq: 11 });
     expect(groups.doing.map((item) => [item.title, item.badge?.label])).toEqual([
       ["在做 A", undefined],
       ["B 做完了", "做完待验收"],

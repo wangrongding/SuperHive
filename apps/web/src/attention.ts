@@ -1,4 +1,9 @@
-import { failureClass, isResumableUnknown, type Invocation } from "@superhive/protocol";
+import {
+  failureClass,
+  isResumableUnknown,
+  type ChatMessage,
+  type Invocation,
+} from "@superhive/protocol";
 import { localized, t } from "./i18n";
 
 /**
@@ -65,8 +70,8 @@ export type AttentionItem = {
   invocation: Invocation;
   kind: AttentionKind;
   roomId: string;
-  /** 触发这次调用的消息：跳转时定位到它 */
   messageId: string;
+  messageSeq?: number;
   /** 进入这个状态的时间 */
   at: string;
 };
@@ -154,26 +159,74 @@ export function attentionTransition(
 export function collectAttention(
   active: Iterable<Invocation>,
   unseen: Iterable<Invocation> = [],
+  messages: readonly ChatMessage[] = [],
 ): AttentionItem[] {
   const items = new Map<string, AttentionItem>();
   for (const invocation of active) {
     const kind = attentionKind(invocation);
-    if (kind) items.set(invocation.id, toItem(invocation, kind));
+    if (kind) items.set(invocation.id, toItem(invocation, kind, messages));
   }
   for (const invocation of unseen) {
-    if (!items.has(invocation.id)) items.set(invocation.id, toItem(invocation, "unseen"));
+    if (!items.has(invocation.id)) items.set(invocation.id, toItem(invocation, "unseen", messages));
   }
   return [...items.values()].sort(
     (a, b) => priority[a.kind] - priority[b.kind] || a.at.localeCompare(b.at),
   );
 }
 
-function toItem(invocation: Invocation, kind: AttentionKind): AttentionItem {
+export function questionOf(
+  invocation: Invocation,
+  messages: readonly ChatMessage[],
+): ChatMessage | undefined {
+  return messages.reduce<ChatMessage | undefined>((latest, message) => {
+    if (
+      message.roomId !== invocation.roomId ||
+      message.kind !== "question" ||
+      message.deletedAt ||
+      message.senderId !== invocation.agentId ||
+      message.parentMessageId !== invocation.messageId
+    )
+      return latest;
+    return !latest || message.seq > latest.seq ? message : latest;
+  }, undefined);
+}
+
+export type AttentionTarget = {
+  invocation: Invocation;
+  roomId: string;
+  messageId: string;
+  messageSeq?: number;
+};
+
+export function attentionTarget(
+  invocation: Invocation,
+  messages: readonly ChatMessage[],
+  kind = attentionKind(invocation) ?? (isCompleted(invocation) ? "unseen" : undefined),
+): AttentionTarget {
+  const question = kind === "question" ? questionOf(invocation, messages) : undefined;
+  const messageId =
+    question?.id ??
+    (kind === "unseen" ? invocation.replyMessageId : undefined) ??
+    invocation.messageId;
+  const message = messages.find(
+    (item) => item.roomId === invocation.roomId && item.id === messageId,
+  );
   return {
     invocation,
-    kind,
     roomId: invocation.roomId,
-    messageId: invocation.messageId,
+    messageId,
+    ...(message ? { messageSeq: message.seq } : {}),
+  };
+}
+
+function toItem(
+  invocation: Invocation,
+  kind: AttentionKind,
+  messages: readonly ChatMessage[],
+): AttentionItem {
+  return {
+    ...attentionTarget(invocation, messages, kind),
+    kind,
     at: invocation.finishedAt ?? invocation.updatedAt,
   };
 }

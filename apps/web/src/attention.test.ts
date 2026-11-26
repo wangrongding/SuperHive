@@ -1,10 +1,12 @@
-import type { Invocation } from "@superhive/protocol";
+import type { ChatMessage, Invocation } from "@superhive/protocol";
 import { describe, expect, it } from "vitest";
 import {
   attentionByRoom,
   attentionKind,
+  attentionTarget,
   attentionTransition,
   collectAttention,
+  questionOf,
   concernsMe,
   nextAttention,
   pinAttentionRooms,
@@ -26,6 +28,49 @@ const call = (id: string, status: Invocation["status"], extra: Partial<Invocatio
     updatedAt: "2026-11-06T00:00:00.000Z",
     ...extra,
   }) as Invocation;
+
+describe("attention targets", () => {
+  it("uses the newest live question from the same agent, parent and room", () => {
+    const invocation = call("target", "waiting_human");
+    const question = (seq: number, extra: Partial<ChatMessage> = {}) =>
+      ({
+        id: `q-${seq}`,
+        seq,
+        roomId: invocation.roomId,
+        senderId: invocation.agentId,
+        parentMessageId: invocation.messageId,
+        kind: "question",
+        ...extra,
+      }) as ChatMessage;
+    const latest = question(20);
+    const messages = [
+      latest,
+      question(30, { deletedAt: "now" }),
+      question(40, { senderId: "other" }),
+      question(50, { roomId: "other" }),
+      question(60, { parentMessageId: "other" }),
+      question(10),
+    ];
+    expect(questionOf(invocation, messages)).toBe(latest);
+    expect(collectAttention([invocation], [], messages)[0]).toMatchObject({
+      messageId: latest.id,
+      messageSeq: 20,
+    });
+    expect(attentionTarget(invocation, [])).toMatchObject({
+      messageId: invocation.messageId,
+      invocation,
+    });
+  });
+
+  it("keeps approval and decision actions on the trigger and unseen on the result", () => {
+    for (const status of ["blocked", "failed", "timed_out"] as const) {
+      const invocation = call(status, status, { replyMessageId: "result" });
+      expect(attentionTarget(invocation, []).messageId).toBe(invocation.messageId);
+    }
+    const completed = call("done", "completed", { replyMessageId: "result" });
+    expect(collectAttention([], [completed])[0]!.messageId).toBe("result");
+  });
+});
 
 describe("attentionKind", () => {
   it("按状态归类，忽略或被取代的不算，等人回答始终算", () => {

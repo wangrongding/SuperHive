@@ -274,6 +274,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
 type ResultItem = {
   key: string;
   message: ChatMessage;
+  invocation?: Invocation;
   unread?: boolean;
   badge?: ReactNode;
   detail?: string;
@@ -296,7 +297,7 @@ function ResultList({
   query?: string;
   roomName: (roomId: string) => string;
   activeIndex: number;
-  onActivate: (message: ChatMessage) => void;
+  onActivate: (message: ChatMessage, invocation?: Invocation) => void;
   onHover: (index: number) => void;
   now: number;
 }) {
@@ -325,7 +326,7 @@ function ResultList({
               aria-selected={index === activeIndex}
               className={`activity-result ${index === activeIndex ? "active" : ""} ${item.unread ? "unread" : ""}`}
               onMouseEnter={() => onHover(index)}
-              onClick={() => onActivate(item.message)}
+              onClick={() => onActivate(item.message, item.invocation)}
             >
               <span className="activity-result-meta">
                 {item.badge}
@@ -371,7 +372,7 @@ function AgentRuntimeList({
 }: {
   rows: AgentRuntimeRow[];
   messageFor: (invocation: Invocation) => ChatMessage | undefined;
-  onOpen: (message: ChatMessage) => void;
+  onOpen: (message: ChatMessage, invocation?: Invocation) => void;
 }) {
   const [showQuiet, setShowQuiet] = useState(false);
   const { active, idle, offline } = splitRuntimeRows(rows);
@@ -422,7 +423,7 @@ function AgentRuntimeList({
               0: row.participant.username,
               1: runtimeStateLabels[row.state],
             })}
-            onClick={() => onOpen(message)}
+            onClick={() => onOpen(message, row.current)}
           >
             {content}
           </button>
@@ -475,6 +476,7 @@ export function ActivityPanel({
   participants = [],
   search,
   onOpenMessage,
+  onOpenTask,
   onMarkMentionsRead,
   onDismiss,
   usageRoomId,
@@ -493,6 +495,7 @@ export function ActivityPanel({
   participants?: readonly Participant[];
   search: (query: string) => Promise<ChatMessage[]>;
   onOpenMessage: (message: ChatMessage) => void;
+  onOpenTask?: (invocation: Invocation) => void;
   onMarkMentionsRead: () => void;
   /** 把不再需要处理的失败、被拦、结果未知一次性标为已处理 */
   onDismiss?: (invocations: Invocation[]) => void;
@@ -567,6 +570,7 @@ export function ActivityPanel({
       return {
         key: invocation.id,
         message,
+        invocation,
         badge: (
           <span className={`activity-status ${invocation.status}`}>
             @{invocation.agentName} · {invocationStatusLabel(invocation, online)}
@@ -620,8 +624,9 @@ export function ActivityPanel({
           }))
         : [...taskItems.waiting, ...taskItems.attention, ...taskItems.inFlight];
 
-  const activate = (message: ChatMessage) => {
-    onOpenMessage(message);
+  const activate = (message: ChatMessage, invocation?: Invocation) => {
+    if (invocation?.status === "waiting_human" && onOpenTask) onOpenTask(invocation);
+    else onOpenMessage(message);
     onClose();
   };
 
@@ -635,7 +640,7 @@ export function ActivityPanel({
       setActiveIndex((index) => (index - 1 + items.length) % items.length);
     } else if (event.key === "Enter" && items[activeIndex]) {
       event.preventDefault();
-      activate(items[activeIndex].message);
+      activate(items[activeIndex].message, items[activeIndex].invocation);
     }
   };
 

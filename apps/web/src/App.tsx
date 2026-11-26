@@ -770,6 +770,7 @@ export function App({
   const [gotoNotice, setGotoNotice] = useState<string>();
   const jump = useMessageJump({
     messages,
+    messagesLoaded: room.messagesLoaded,
     setMessages,
     meta,
     authToken,
@@ -794,6 +795,7 @@ export function App({
     setCrossRoomJump,
     jumpToMessage,
     locateProgress,
+    locateAttention,
     locateMessage,
   } = jump;
   const locateMessageRef = useRef(locateMessage);
@@ -1287,7 +1289,7 @@ export function App({
       jumpToMessage(messageId);
       return;
     }
-    setCrossRoomJumpId(messageId);
+    setCrossRoomJumpId(messageId, roomId);
     switchRoom(roomId);
   }
 
@@ -1352,11 +1354,16 @@ export function App({
       );
     }
     const messageSeq = taskMessageSeq(task);
+    if (task.status === "waiting_human") {
+      locateAttention(task, messageSeq);
+      if (task.roomId !== currentRoomId) switchRoom(task.roomId);
+      return;
+    }
     if (task.roomId !== currentRoomId) {
       setCrossRoomJump(
         messageSeq === undefined
-          ? { messageId: task.messageId }
-          : { messageId: task.messageId, messageSeq },
+          ? { roomId: task.roomId, messageId: task.messageId }
+          : { roomId: task.roomId, messageId: task.messageId, messageSeq },
       );
       switchRoom(task.roomId);
     } else if (
@@ -1429,15 +1436,12 @@ export function App({
     isOwner,
     currentRoomId,
     activeInvocations,
+    messages,
     preferences: { delivery: attentionDelivery, sound: attentionSound },
     roomName: roomNameOf,
-    onOpen: ({ roomId, messageId }) => {
-      if (roomId === currentRoomId) {
-        jumpToMessage(messageId);
-        return;
-      }
-      setCrossRoomJumpId(messageId);
-      switchRoom(roomId);
+    onOpen: ({ roomId, invocation }) => {
+      locateAttention(invocation, taskMessageSeq(invocation));
+      if (roomId !== currentRoomId) switchRoom(roomId);
     },
   });
   attentionRef.current = attention;
@@ -2473,6 +2477,7 @@ export function App({
           participants={participants}
           search={searchMessages}
           onOpenMessage={openMessage}
+          onOpenTask={attention.open}
           onMarkMentionsRead={markMentionsRead}
           onDismiss={dismissInvocations}
           usageRoomId={currentRoomId}

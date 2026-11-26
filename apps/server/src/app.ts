@@ -308,6 +308,7 @@ const roomParamsSchema = z.object({
     .max(64),
 });
 const messagesQuerySchema = z.object({
+  messageId: z.string().uuid().optional(),
   afterSeq: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(500).default(200),
 });
@@ -5599,7 +5600,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.get<{
     Params: { roomId: string };
-    Querystring: { afterSeq?: string; limit?: string };
+    Querystring: { afterSeq?: string; limit?: string; messageId?: string };
   }>("/api/rooms/:roomId/messages", async (request, reply) => {
     const params = roomParamsSchema.safeParse(request.params);
     const query = messagesQuerySchema.safeParse(request.query);
@@ -5607,8 +5608,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
     }
     if (!guard(request, reply, params.data.roomId)) return reply;
+    const anchor = query.data.messageId ? database.getMessage(query.data.messageId) : undefined;
+    if (query.data.messageId && (!anchor || anchor.roomId !== params.data.roomId))
+      return reply.code(404).send({ ...errorText(serverText("error.request.invalid")) });
     return {
-      messages: database.getMessages(params.data.roomId, query.data.afterSeq, query.data.limit),
+      messages: database.getMessages(
+        params.data.roomId,
+        anchor ? anchor.seq - 1 : query.data.afterSeq,
+        query.data.limit,
+      ),
       latestSeq: database.latestSeq(params.data.roomId),
     };
   });
