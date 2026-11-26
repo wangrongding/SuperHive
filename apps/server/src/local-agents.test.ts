@@ -1717,6 +1717,102 @@ describe("LocalAgentSupervisor", () => {
     database.close();
   });
 
+  it("waits for a live leftover process to exit before launching, then settles what it was running", async () => {
+    const database = new HiveDatabase(":memory:");
+    const spawner = fakeSpawner();
+    const timers = manualTimers();
+    const settingsDir = mkdtempSync(path.join(tmpdir(), "hive-settings-"));
+    const alive = new Set([515151, 525252]);
+    const killed: Array<[number, string]> = [];
+    const ended: Array<[string, string]> = [];
+    const supervisor = new LocalAgentSupervisor({
+      database,
+      cli,
+      serverUrl: "http://127.0.0.1:8787",
+      joinToken: "join-token",
+      isAgentOnline: () => false,
+      isNameInUse: () => false,
+      spawn: spawner.spawn,
+      probe,
+      setTimer: timers.setTimer,
+      settingsDir,
+      findStrays: () => [...alive],
+      killStray: (pid, signal) => {
+        killed.push([pid, signal]);
+        if (signal === "SIGKILL") alive.delete(pid);
+      },
+      isStrayAlive: (pid) => alive.has(pid),
+      onAgentEnded: (name, reason) => ended.push([name, reason]),
+    });
+    supervisor.create({
+      provider: "claude",
+      name: "rd-claude2",
+      access: "full",
+      cwd: mkdtempSync(path.join(tmpdir(), "hive-stray-")),
+    });
+    // 上一个 Server 留下的旧进程还在收尾（停下回合、把没送达的停止回报写进状态文件）：
+    // 这时就起新进程，两个进程会同时读写同一份状态文件，旧进程的停止回报被新进程覆盖掉
+    expect(killed).toEqual([
+      [515151, "SIGTERM"],
+      [525252, "SIGTERM"],
+    ]);
+    expect(spawner.children).toHaveLength(0);
+    alive.delete(515151);
+    timers.fireNext();
+    expect(spawner.children).toHaveLength(0);
+    // 宽限期过了还没退出的 SIGKILL，然后才启动；旧进程没报完的调用按「被重启」结束，不再挂 10 分钟
+    while (spawner.children.length === 0) timers.fireNext();
+    expect(killed).toContainEqual([525252, "SIGKILL"]);
+    expect(ended).toEqual([["rd-claude2", "restarted"]]);
+    expect(spawner.children).toHaveLength(1);
+    database.close();
+  });
+
+  it("does not launch after waiting for a leftover process if the agent was stopped meanwhile", async () => {
+    const database = new HiveDatabase(":memory:");
+    const spawner = fakeSpawner();
+    const timers = manualTimers();
+    const alive = new Set([535353]);
+    const supervisor = new LocalAgentSupervisor({
+      database,
+      cli,
+      serverUrl: "http://127.0.0.1:8787",
+      joinToken: "join-token",
+      isAgentOnline: () => false,
+      isNameInUse: () => false,
+      spawn: spawner.spawn,
+      probe,
+      setTimer: timers.setTimer,
+      settingsDir: mkdtempSync(path.join(tmpdir(), "hive-settings-")),
+      findStrays: () => [...alive],
+      killStray: (pid, signal) => {
+        if (signal === "SIGKILL") alive.delete(pid);
+      },
+      isStrayAlive: (pid) => alive.has(pid),
+    });
+    const agent = supervisor.create({
+      provider: "claude",
+      name: "rd-claude2",
+      access: "full",
+      cwd: mkdtempSync(path.join(tmpdir(), "hive-stray-")),
+    });
+    expect(spawner.children).toHaveLength(0);
+    // 还在等旧进程退出时人点了停止
+    const stopping = supervisor.stop(agent.id);
+    alive.clear();
+    for (let index = 0; index < 5; index += 1) {
+      try {
+        timers.fireNext();
+      } catch {
+        break;
+      }
+    }
+    await stopping;
+    expect(spawner.children).toHaveLength(0);
+    expect(supervisor.get(agent.id).status).toBe("stopped");
+    database.close();
+  });
+
   it("escalates to SIGKILL when an agent ignores SIGTERM", async () => {
     const database = new HiveDatabase(":memory:");
     const spawner = fakeSpawner({ exitOnTerm: false });

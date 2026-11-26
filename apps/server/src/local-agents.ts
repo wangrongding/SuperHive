@@ -117,6 +117,8 @@ export type LocalAgentSupervisorOptions = {
    * 旧进程会留下来占着名字；默认按 ps / Win32_Process 的命令行找
    */
   findStrays?: (settingsFile: string) => number[];
+  /** 残留进程是否还活着（测试注入）；默认 process.kill(pid, 0) */
+  isStrayAlive?: (pid: number) => boolean;
   /** 结束找到的残留进程（测试注入）；默认 SIGTERM，Windows 上结束进程树 */
   killStray?: (pid: number, signal: NodeJS.Signals) => void;
   /** Agent 输出日志的目录；设置后 Agent 以独立进程组运行，Server 交接重启时不随之退出 */
@@ -144,6 +146,8 @@ const CRASH_LIMIT = 5;
 /** 连续运行超过 1 分钟视为稳定，之后再退出时退避从头计算 */
 const STABLE_RUN_MS = 60_000;
 const STOP_GRACE_MS = 5_000;
+/** 启动前等旧进程退出时，多久看一次 */
+const STRAY_POLL_MS = 200;
 /** 服务启动时要重新拉起多个 Agent：逐个错开，免得一下子起一堆 CLI 抢 CPU、同时去刷登录态 */
 const RESTORE_STAGGER_MS = 2_000;
 const PROBE_CACHE_MS = 60_000;
@@ -223,6 +227,8 @@ type Runtime = {
   failures: number[];
   consecutiveFailures: number;
   phase: "running" | "restarting" | "stopped" | "crashed";
+  /** 启动前在等上一个 Server 留下的旧进程退出（见 launchAfterStrays） */
+  waitingStrays?: boolean;
   /** 主动停止中：退出不算失败 */
   stopping: boolean;
   timer?: { cancel(): void } | undefined;
@@ -1276,10 +1282,45 @@ export class LocalAgentSupervisor {
     if (!strays.length) return;
     await new Promise<void>((resolve) => {
       this.setTimer(() => {
-        for (const pid of strays) if (isAlive(pid)) kill(pid, "SIGKILL");
+        for (const pid of strays) if (this.strayAlive(pid)) kill(pid, "SIGKILL");
         resolve();
       }, STOP_GRACE_MS);
     });
+  }
+
+  private strayAlive(pid: number): boolean {
+    return (this.options.isStrayAlive ?? isAlive)(pid);
+  }
+
+  /**
+   * 启动前发现旧进程还活着：等它退出（最多 STOP_GRACE_MS，之后 SIGKILL）再起新进程。
+   * 旧进程收到 SIGTERM 后还要停下回合、把没送达的停止回报写进状态文件；新进程同时起来会读到半截的
+   * 状态文件、随后又把它覆盖掉，旧进程手上那条调用就一直挂在「执行中」，10 分钟后被判结果未知。
+   * 旧进程退出后，它没来得及报的调用按「被重启」结束（和 Server 自己重启 Agent 一样）。
+   */
+  private launchAfterStrays(runtime: Runtime, strays: number[]): void {
+    const kill = this.options.killStray ?? defaultKillStray;
+    let polls = Math.ceil(STOP_GRACE_MS / STRAY_POLL_MS);
+    runtime.waitingStrays = true;
+    const check = () => {
+      runtime.timer = undefined;
+      runtime.waitingStrays = false;
+      if (this.shuttingDown || runtime.phase !== "running" || runtime.child) return;
+      const remaining = strays.filter((pid) => this.strayAlive(pid));
+      if (remaining.length && --polls > 0) {
+        runtime.waitingStrays = true;
+        runtime.timer = this.setTimer(check, STRAY_POLL_MS);
+        return;
+      }
+      for (const pid of remaining) kill(pid, "SIGKILL");
+      try {
+        this.options.onAgentEnded?.(runtime.config.name, "restarted");
+      } catch (error) {
+        this.log(`[local-agents] ${runtime.config.name}：标记中断的调用失败：${String(error)}`);
+      }
+      this.launch(runtime, true);
+    };
+    runtime.timer = this.setTimer(check, STRAY_POLL_MS);
   }
 
   /** 服务关闭：先 SIGTERM 让 Agent 正常离线，宽限期后仍未退出再 SIGKILL */
@@ -1367,8 +1408,8 @@ export class LocalAgentSupervisor {
     };
   }
 
-  private launch(runtime: Runtime): void {
-    if (this.shuttingDown || runtime.child) return;
+  private launch(runtime: Runtime, straysCleared = false): void {
+    if (this.shuttingDown || runtime.child || runtime.waitingStrays) return;
     const { config } = runtime;
     // 新进程跑的就是现在的代码：之前等着的重启不用再做了
     runtime.pendingRestart = undefined;
@@ -1387,8 +1428,14 @@ export class LocalAgentSupervisor {
       }
     }
     const cwd = fallback ? fallback.to : config.cwd;
-    // 旧进程还占着名字的话新进程上不了线（一直报「名字已在线」）：先请它退出
-    this.signalStrays(runtime);
+    // 旧进程还占着名字的话新进程上不了线（一直报「名字已在线」）：先请它退出，还活着就等它退出再启动
+    if (!straysCleared) {
+      const strays = this.signalStrays(runtime).filter((pid) => this.strayAlive(pid));
+      if (strays.length) {
+        this.launchAfterStrays(runtime, strays);
+        return;
+      }
+    }
     const settingsFile = this.writeSettings(runtime.config);
     runtime.settingsApplied = settingsFile !== undefined;
     const args = [
@@ -1508,6 +1555,7 @@ export class LocalAgentSupervisor {
   private async terminate(runtime: Runtime, reason?: LocalAgentEndReason): Promise<void> {
     runtime.timer?.cancel();
     runtime.timer = undefined;
+    runtime.waitingStrays = false;
     const child = runtime.child;
     if (!child) return;
     runtime.stopping = true;
