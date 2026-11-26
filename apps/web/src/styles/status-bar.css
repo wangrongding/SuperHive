@@ -410,3 +410,15 @@
     display: none;
   }
 }
+
+/* 切换主 Agent 的列表：Agent 多时在弹层里滚动，不把弹层撑高 */
+.status-lead-choices {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.status-lead-state {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}

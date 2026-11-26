@@ -150,6 +150,9 @@ describe("StatusBar", () => {
     const setLeadAgent = vi.fn();
     renderBar({ setLeadAgent });
     fireEvent.click(screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" }));
+    // 先只有一个入口，点了才列出 Agent
+    expect(screen.queryByRole("radiogroup", { name: "切换主 Agent" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
     const group = screen.getByRole("radiogroup", { name: "切换主 Agent" });
     expect(group).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: /rd-codex/ }));
@@ -158,7 +161,7 @@ describe("StatusBar", () => {
     cleanup();
     renderBar({ setLeadAgent: undefined });
     fireEvent.click(screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" }));
-    expect(screen.queryByRole("radiogroup", { name: "切换主 Agent" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /切换主 Agent/ })).toBeNull();
   });
 
   it("没有主 Agent 时房主能在状态栏里选一个", () => {

@@ -564,13 +564,15 @@ export function StatusBar(props: StatusBarProps) {
             tooltip={t("这个房间还没有主 Agent：没 @ 任何人的消息没人接")}
             popover={(close) => (
               <PopoverSection title={t("选一个主 Agent")}>
-                <LeadChoices
-                  agents={agentsOf(participants)}
-                  onSwitch={(name) => {
-                    close();
-                    setLeadAgent(name);
-                  }}
-                />
+                <div className="status-lead-choices">
+                  <LeadChoices
+                    agents={agentsOf(participants)}
+                    onSwitch={(name) => {
+                      close();
+                      setLeadAgent(name);
+                    }}
+                  />
+                </div>
               </PopoverSection>
             )}
           />
@@ -893,6 +895,9 @@ function LeadChoices({
   current?: string;
   onSwitch: (name: string) => void;
 }) {
+  // 一行一个：名字 + 右侧状态点（悬停看文字），列表短一半
+  const tone = (participant: Participant) =>
+    participant.status === "offline" ? "danger" : participant.status === "busy" ? "pending" : "ok";
   const statusText = (participant: Participant) =>
     participant.status === "offline"
       ? t("离线")
@@ -906,12 +911,40 @@ function LeadChoices({
       options={agents.map((agent) => ({
         value: agent.username,
         label: agent.username,
-        hint: statusText(agent),
+        extra: (
+          <span className="status-lead-state" title={statusText(agent)}>
+            <Dot tone={tone(agent)} />
+            <span className="sr-only">{statusText(agent)}</span>
+          </span>
+        ),
       }))}
       onChange={(name) => {
         if (name !== current) onSwitch(name);
       }}
     />
+  );
+}
+
+/** 详情下面先只有一个「切换主 Agent」，点了才展开列表 */
+function LeadSwitcher({
+  agents,
+  current,
+  onSwitch,
+}: {
+  agents: readonly Participant[];
+  current: string;
+  onSwitch: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return <PopoverLink onClick={() => setOpen(true)}>{t("切换主 Agent")}</PopoverLink>;
+  }
+  return (
+    <PopoverSection title={t("切换主 Agent")}>
+      <div className="status-lead-choices">
+        <LeadChoices agents={agents} current={current} onSwitch={onSwitch} />
+      </div>
+    </PopoverSection>
   );
 }
 
@@ -997,16 +1030,14 @@ function LeadAgentItem({
             )}
           </PopoverSection>
           {onSwitch && agents.length > 1 && (
-            <PopoverSection title={t("切换主 Agent")}>
-              <LeadChoices
-                agents={agents}
-                current={lead.username}
-                onSwitch={(name) => {
-                  close();
-                  onSwitch(name);
-                }}
-              />
-            </PopoverSection>
+            <LeadSwitcher
+              agents={agents}
+              current={lead.username}
+              onSwitch={(name) => {
+                close();
+                onSwitch(name);
+              }}
+            />
           )}
         </>
       )}
