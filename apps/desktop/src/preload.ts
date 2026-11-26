@@ -16,6 +16,8 @@ import {
   type TerminalLayoutAction,
   type TerminalSessionInfo,
   type UpdateOpenTarget,
+  type JoinRequest,
+  type RemoteServerView,
 } from "./ipc-contract.js";
 import type { DesktopUpdate } from "./update-install.js";
 import type { PickFilesRequest, PickFilesResult } from "./file-picker.js";
@@ -89,6 +91,27 @@ if (allowedOrigin && window.location.origin === allowedOrigin && window.top === 
         const handler = (_event: IpcRendererEvent, info: DesktopUpdate | null) => listener(info);
         ipcRenderer.on(IPC.updateChanged, handler);
         return () => ipcRenderer.removeListener(IPC.updateChanged, handler);
+      },
+    },
+    remote: {
+      /** 打开过的别人的服务器（最近打开的在前） */
+      list: (): Promise<RemoteServerView[]> => ipcRenderer.invoke(IPC.remoteList),
+      /** 在单独的窗口里打开别人的邀请链接或服务器地址；地址不对时返回 false */
+      open: (url: string): Promise<boolean> => ipcRenderer.invoke(IPC.remoteOpen, String(url)),
+      /** 忘掉这个服务器：关窗口、从列表删掉、清掉在它那里的访客身份 */
+      remove: (origin: string): Promise<boolean> =>
+        ipcRenderer.invoke(IPC.remoteRemove, String(origin)),
+      onChange: (listener: (servers: RemoteServerView[]) => void): (() => void) => {
+        const handler = (_event: IpcRendererEvent, servers: RemoteServerView[]) =>
+          listener(servers);
+        ipcRenderer.on(IPC.remoteChanged, handler);
+        return () => ipcRenderer.removeListener(IPC.remoteChanged, handler);
+      },
+      /** 菜单「加入别人的房间」或 superhive:// 链接要页面弹出对应的对话框 */
+      onJoinRequest: (listener: (request: JoinRequest) => void): (() => void) => {
+        const handler = (_event: IpcRendererEvent, request: JoinRequest) => listener(request);
+        ipcRenderer.on(IPC.joinRequest, handler);
+        return () => ipcRenderer.removeListener(IPC.joinRequest, handler);
       },
     },
     titlebar: {

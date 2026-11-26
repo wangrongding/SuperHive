@@ -53,6 +53,22 @@ import { Button } from "./button";
 
 type AgentAction = "start" | "stop" | "restart";
 
+/** 带 Agent 进别人房间的请求（字段与 remote-join-win 约定的 POST /api/local/remote-joins 一致） */
+export type RemoteJoinRequest = {
+  server: string;
+  roomId?: string;
+  name: string;
+  token: string;
+  /** 沿用这个本机 Agent 的运行时、模型、工作目录和权限档 */
+  agentId?: string;
+  /** 不沿用本机 Agent 时必填 */
+  runtime?: string;
+  /** 默认只读；workspace / full 时必须给 cwd */
+  access?: "read-only" | "workspace" | "full";
+  cwd?: string;
+  model?: string;
+};
+
 export type LocalAgentsState = {
   worktrees(roomId: string): Promise<{
     worktrees: WorktreeStatus[];
@@ -129,6 +145,13 @@ export type LocalAgentsState = {
   /** 本机 Agent 用的这份代码当前的版本 */
   currentVersion: AgentCodeVersion | undefined;
   create(request: CreateLocalAgentRequest): Promise<LocalAgent>;
+  /**
+   * 把本机 Agent 带进别人的房间：Server 在后台跑 `hive join`，清单在设置 →「这台电脑」里。
+   * 接口由 remote-join-win 提供；旧版 Server 没有时抛 404 的 LocalApiError。
+   */
+  joinRemote(request: RemoteJoinRequest): Promise<{ id: string; status: string }>;
+  /** 接入面板没开时也要知道装了哪些运行时（「带 Agent 加入」里选） */
+  refreshProviders(): Promise<void>;
   /** restart 默认等它手上的任务做完再重启；now 立即重启（会中断正在做的任务，调用方先让人确认） */
   act(id: string, action: AgentAction, options?: { now?: boolean }): Promise<void>;
   /**
@@ -515,6 +538,11 @@ export function useLocalAgents(
     return () => window.clearInterval(timer);
   }, [active, enabled, refreshAgents, request]);
 
+  const refreshProviders = useCallback(async () => {
+    const response = await request("/api/local/providers");
+    setProviders(((await response.json()) as { providers: LocalProviderInfo[] }).providers);
+  }, [request]);
+
   const create = useCallback(
     async (input: CreateLocalAgentRequest) => {
       const response = await requestApproved("/api/local/agents", {
@@ -524,6 +552,18 @@ export function useLocalAgents(
       const { agent } = (await response.json()) as { agent: LocalAgent };
       setAgents((current) => [...current.filter((item) => item.id !== agent.id), agent]);
       return agent;
+    },
+    [requestApproved],
+  );
+
+  const joinRemote = useCallback(
+    async (input: RemoteJoinRequest) => {
+      const response = await requestApproved("/api/local/remote-joins", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      const { join } = (await response.json()) as { join: { id: string; status: string } };
+      return join;
     },
     [requestApproved],
   );
@@ -1051,6 +1091,8 @@ export function useLocalAgents(
     setAutoUpdate,
     currentVersion,
     create,
+    joinRemote,
+    refreshProviders,
     act,
     openTerminal,
     sessionCommand,

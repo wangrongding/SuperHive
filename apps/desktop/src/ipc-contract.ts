@@ -36,7 +36,29 @@ export const IPC = {
   updateRestart: "superhive:update:restart",
   /** 主进程查到新版、安装进度变了（或提示该收起）时通知页面 */
   updateChanged: "superhive:update:changed",
+  /** 打开过的别人的服务器 */
+  remoteList: "superhive:remote:list",
+  /** 打开（或切到）别人的服务器：网页只给地址，主进程自己校验 */
+  remoteOpen: "superhive:remote:open",
+  /** 忘掉一个服务器（关窗口、清掉访客凭证） */
+  remoteRemove: "superhive:remote:remove",
+  /** 服务器列表或窗口开关变了 */
+  remoteChanged: "superhive:remote:changed",
+  /** 菜单或 superhive:// 链接让页面弹出「加入别人的房间」/「带 Agent 加入」 */
+  joinRequest: "superhive:join:request",
 } as const;
+
+export type RemoteServerView = {
+  origin: string;
+  host: string;
+  url: string;
+  lastOpenedAt: string;
+  /** 窗口现在开着 */
+  open: boolean;
+};
+
+export type JoinRequest =
+  { kind: "room" } | { kind: "agent"; server: string; roomId: string; name: string; token: string };
 
 /** 网页点新版提示里的哪个按钮 */
 export type UpdateOpenTarget = "download" | "release";

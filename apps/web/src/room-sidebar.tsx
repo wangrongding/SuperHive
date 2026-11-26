@@ -18,6 +18,7 @@ import type { useRoomReorder } from "./room-reorder";
 import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
 import { DesktopUpdateEntry } from "./desktop-update";
+import { openJoinDialog, RemoteServerList } from "./join-remote";
 
 /** 左侧栏：房间列表、需要处理的事项与当前用户 */
 export function RoomSidebar({
@@ -165,6 +166,18 @@ export function RoomSidebar({
           >
             <Icon name="plus" size={16} />
             <span>{t("新建房间")}</span>
+          </button>
+        )}
+        {isOwner && (
+          <button
+            className="sidebar-action"
+            type="button"
+            aria-label={t("加入别人的房间")}
+            aria-haspopup="dialog"
+            onClick={() => openJoinDialog()}
+          >
+            <Icon name="share" size={16} />
+            <span>{t("加入别人的房间")}</span>
           </button>
         )}
         <button
@@ -327,6 +340,7 @@ export function RoomSidebar({
         >
           {sidebarRooms.others.map((room, index) => renderRoomItem(room, index, false))}
         </div>
+        <RemoteServerList />
       </div>
       <Button
         size="sm"

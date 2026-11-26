@@ -435,6 +435,63 @@ describe("限时邀请与访客会话", () => {
     expect(errorCode(await rejoin.next((event) => event.type === "error"))).toBe("SESSION_REVOKED");
   });
 
+  it("房主可以单独暂停、恢复或移出访客带进来的 Agent，访客本人不受影响", async () => {
+    const { invite, redeem, join, api, guestHeaders } = await start();
+    const owner = await join("rd", "human");
+    await owner.next((event) => event.type === "room.snapshot");
+    const guestToken = (await redeem((await invite(null)).token, "alice")).body.token as string;
+    const alice = await join("alice", "human", guestToken);
+    await alice.next((event) => event.type === "room.snapshot");
+    const created = await api(
+      "POST",
+      "/api/guest-agents",
+      { username: "alice-bot" },
+      guestHeaders(guestToken),
+    );
+    const agentToken = created.body.token as string;
+    const agentSession = created.body.sessionId as string;
+    const bot = await join("alice-bot", "agent", agentToken);
+    await bot.next((event) => event.type === "room.snapshot");
+
+    // 访客不能暂停；访客本人不能被暂停（用续期和移出管理）
+    expect(
+      (await api("POST", `/api/guests/${agentSession}/pause`, {}, guestHeaders(guestToken))).status,
+    ).toBe(403);
+    const aliceSession = (await api("GET", "/api/access", undefined, guestHeaders(guestToken))).body
+      .sessionId as string;
+    expect((await api("POST", `/api/guests/${aliceSession}/pause`, {})).status).toBe(409);
+
+    expect((await api("POST", `/api/guests/${agentSession}/pause`, {})).status).toBe(200);
+    expect(errorCode(await bot.next((event) => event.type === "error"))).toBe("SESSION_PAUSED");
+    await bot.waitClosed();
+    const paused = await owner.next(
+      (event) =>
+        event.type === "presence.changed" &&
+        event.participant.username === "alice-bot" &&
+        Boolean(event.participant.access?.paused),
+    );
+    expect(paused.type === "presence.changed" && paused.participant.access).toMatchObject({
+      paused: true,
+    });
+    expect(paused.type === "presence.changed" && paused.participant.access?.ended).toBeUndefined();
+    // 暂停期间重连被拒，原因是「暂停」而不是「被移除」
+    const blocked = await join("alice-bot", "agent", agentToken);
+    expect(errorCode(await blocked.next((event) => event.type === "error"))).toBe("SESSION_PAUSED");
+    await blocked.waitClosed();
+
+    // 恢复后同一个令牌能连回来；访客本人一直在线
+    expect((await api("POST", `/api/guests/${agentSession}/resume`, {})).status).toBe(200);
+    const back = await join("alice-bot", "agent", agentToken);
+    await back.next((event) => event.type === "room.snapshot");
+    expect(alice.socket.readyState).toBe(1);
+
+    // 单独移出这个 Agent：它断开、再也连不上，访客本人不受影响
+    expect((await api("DELETE", `/api/guests/${agentSession}`)).status).toBe(200);
+    expect(errorCode(await back.next((event) => event.type === "error"))).toBe("SESSION_REVOKED");
+    expect((await api("POST", `/api/guests/${agentSession}/resume`, {})).status).toBe(409);
+    expect(alice.socket.readyState).toBe(1);
+  });
+
   it("访客收不到其他房间的跨房间事件", async () => {
     const { invite, redeem, join, api } = await start();
     const guestToken = (await redeem((await invite(60)).token, "alice")).body.token as string;

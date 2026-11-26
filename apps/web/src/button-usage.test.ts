@@ -35,6 +35,8 @@ const RAW_BUTTON_CLASSES = new Set([
   "progress-row",
   "artifact-tile",
   "agent-runtime-row",
+  // 侧栏「别人的服务器」里的一行：点了在单独的窗口打开
+  "remote-server-open",
   // Agent 任务侧栏里「另有 N 个空闲…」的展开行
   "agent-runtime-more",
   // 定时任务卡片元信息里的「# 房间」：和旁边的文字同一行的小标签

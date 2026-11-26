@@ -152,6 +152,20 @@ export function removeGuest(base: string, adminToken: string, sessionId: string)
   return call(`${base}/api/guests/${sessionId}`, { method: "DELETE", token: adminToken });
 }
 
+/** 暂停或恢复访客带进来的 Agent：暂停时立即断开，恢复后它自己会重连回来 */
+export function setGuestAgentPaused(
+  base: string,
+  adminToken: string,
+  sessionId: string,
+  paused: boolean,
+) {
+  return call(`${base}/api/guests/${sessionId}/${paused ? "pause" : "resume"}`, {
+    method: "POST",
+    token: adminToken,
+    body: "{}",
+  });
+}
+
 export function createGuestAgent(base: string, guestToken: string, username: string) {
   return call<{ command: string; expiresAt: string | null; username: string }>(
     `${base}/api/guest-agents`,

@@ -30,6 +30,32 @@ const texts = {
   help: { zh: "帮助", en: "Help" },
   pickAttachments: { zh: "添加附件", en: "Add Attachments" },
   newTerminal: { zh: "新建终端", en: "New Terminal" },
+  joinRemote: { zh: "加入别人的房间…", en: "Join Someone Else's Room…" },
+  remoteServers: { zh: "别人的服务器", en: "Other Servers" },
+  joinConfirmTitle: { zh: "加入别人的房间？", en: "Join someone else's room?" },
+  joinConfirmMessage: {
+    zh: "要打开 {host} 上的 {room} 吗？",
+    en: "Open {room} on {host}?",
+  },
+  joinConfirmAnyRoom: { zh: "房间", en: "the room" },
+  joinConfirmDetail: {
+    zh: "服务器：{origin}\n身份：{identity}\n\n会在单独的窗口里打开，对方拿不到这台电脑的终端和文件。只加入你认识的人发来的邀请。",
+    en: "Server: {origin}\nAs: {identity}\n\nIt opens in a separate window with no access to this computer's terminals or files. Only join invites from people you know.",
+  },
+  joinConfirmGuest: {
+    zh: "访客（用邀请加入，进去后填你的名字；对方房主可以随时把你移出）",
+    en: "Guest (joining with an invite; you'll enter your name next, and the owner can remove you any time)",
+  },
+  joinConfirmReturning: {
+    zh: "之前在这台服务器上用过的身份；没有的话需要邀请",
+    en: "Whatever identity you used on this server before; otherwise you'll need an invite",
+  },
+  joinConfirm: { zh: "加入", en: "Join" },
+  cancel: { zh: "取消", en: "Cancel" },
+  remoteFailed: {
+    zh: "连不上 {host}：对方的 Hive 可能没开，或者不在同一个网络。",
+    en: "Couldn't reach {host}. Their Hive may be off or on a different network.",
+  },
   toggleTerminalMaximized: { zh: "最大化 / 还原终端", en: "Maximize / Restore Terminal" },
   toggleTerminalPosition: {
     zh: "终端移到右侧 / 底部",

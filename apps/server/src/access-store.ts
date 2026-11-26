@@ -24,6 +24,8 @@ export type AccessSession = {
   inviteId?: string;
   createdAt: string;
   revokedAt?: string;
+  /** 房主暂停了这个访客 Agent：期间连不上，恢复后它自己会重连回来 */
+  pausedAt?: string;
   /** 会话自身的截止时间；Agent 会话以带它进来的访客为准，见 ResolvedSession */
   expiresAt: string | null;
   allowAgents: boolean;
@@ -39,7 +41,8 @@ export type ResolvedSession = {
   expiresAt: string | null;
   allowAgents: boolean;
   showTrace: boolean;
-  state: "active" | "expired" | "revoked";
+  /** paused：房主暂时请它下线，恢复后照常可用；与到期、移除不同，不会让 Agent 离开房间 */
+  state: "active" | "expired" | "revoked" | "paused";
 };
 
 type InviteRow = {
@@ -68,6 +71,7 @@ type SessionRow = {
   show_trace: number;
   created_at: string;
   revoked_at: string | null;
+  paused_at?: string | null;
 };
 
 const INVITE_PREFIX = "hvi_";
@@ -108,6 +112,7 @@ function mapSession(row: SessionRow): AccessSession {
     ...(row.invite_id ? { inviteId: row.invite_id } : {}),
     createdAt: row.created_at,
     ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}),
+    ...(row.paused_at ? { pausedAt: row.paused_at } : {}),
     expiresAt: row.expires_at,
     allowAgents: row.allow_agents === 1,
     showTrace: row.show_trace === 1,
@@ -133,6 +138,9 @@ export class AccessStore {
       const sessionColumns = db.pragma("table_info(access_sessions)") as Array<{ name: string }>;
       if (!sessionColumns.some((column) => column.name === "show_trace")) {
         db.exec("ALTER TABLE access_sessions ADD COLUMN show_trace INTEGER NOT NULL DEFAULT 1");
+      }
+      if (!sessionColumns.some((column) => column.name === "paused_at")) {
+        db.exec("ALTER TABLE access_sessions ADD COLUMN paused_at TEXT");
       }
     };
     db.exec(`
@@ -384,7 +392,9 @@ export class AccessStore {
       ? "revoked"
       : expiresAt && Date.parse(expiresAt) <= now
         ? "expired"
-        : "active";
+        : session.pausedAt
+          ? "paused"
+          : "active";
     return {
       session,
       ...(sponsor ? { sponsor } : {}),
@@ -443,5 +453,20 @@ export class AccessStore {
     const session = this.getSession(sessionId);
     if (!session) throw new HiveError("SESSION_NOT_FOUND", serverText("error.guest.notFound"));
     return session;
+  }
+
+  /** 暂停或恢复访客带入的 Agent；只有 Agent 会话能暂停（访客本人用续期和移除管理） */
+  setPaused(sessionId: string, paused: boolean): AccessSession {
+    const session = this.getSession(sessionId);
+    if (!session) throw new HiveError("SESSION_NOT_FOUND", serverText("error.guest.notFound"));
+    if (session.kind !== "agent") {
+      throw new HiveError("SESSION_NOT_PAUSABLE", serverText("error.guest.notPausable"));
+    }
+    if (session.revokedAt)
+      throw new HiveError("SESSION_REVOKED", serverText("error.guest.removed"));
+    this.db
+      .prepare("UPDATE access_sessions SET paused_at = ? WHERE id = ?")
+      .run(paused ? (session.pausedAt ?? new Date().toISOString()) : null, sessionId);
+    return this.getSession(sessionId)!;
   }
 }

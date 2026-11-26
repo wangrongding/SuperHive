@@ -16,6 +16,7 @@ import {
 import { localized, t, useLocale } from "./i18n";
 import { useAppReady, useAppReadyFallback } from "./boot-splash";
 import { Button } from "./button";
+import { roomJoinLink } from "./join-link";
 
 /** 进了房间后等消息快照再收起加载画面；一直等不到（连不上实时通道）也最多盖这么久 */
 const APP_READY_FALLBACK_MS = 4_000;
@@ -290,7 +291,42 @@ function RedeemForm({
           )}
         </form>
       )}
+      {!unusable && <OpenInClient />}
     </>
+  );
+}
+
+/** 已经在客户端里（本机窗口或别人服务器的窗口）就不用再唤起客户端 */
+function insideDesktopClient(): boolean {
+  return /\bElectron\//.test(navigator.userAgent);
+}
+
+const CLIENT_TRIED_KEY = "superhive.invite.clientTried";
+
+/**
+ * 浏览器里打开邀请链接时，先试着唤起本机客户端（superhive://join），由客户端确认后加入；
+ * 和 Zoom、飞书会议一样：每个邀请只自动试一次，之后只留一个按钮，没装客户端就照旧在网页里加入。
+ * 浏览器第一次会弹它自己的「是否打开」提示，网页跳不过去。
+ */
+function OpenInClient() {
+  const [link] = useState(() => roomJoinLink(window.location.href));
+  useEffect(() => {
+    if (insideDesktopClient()) return;
+    const tried = sessionStorage.getItem(CLIENT_TRIED_KEY);
+    if (tried === window.location.href) return;
+    sessionStorage.setItem(CLIENT_TRIED_KEY, window.location.href);
+    window.location.assign(link);
+  }, [link]);
+  if (insideDesktopClient()) return null;
+  return (
+    <div className="invite-open-client">
+      <Button variant="secondary" block onClick={() => window.location.assign(link)}>
+        <span>{t("在客户端中打开")}</span>
+      </Button>
+      <p className="fine-print">
+        {t("装了 SuperHive 客户端时，会在客户端里确认后加入；没装就直接在上面用网页加入。")}
+      </p>
+    </div>
   );
 }
 

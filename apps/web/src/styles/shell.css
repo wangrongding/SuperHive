@@ -1596,3 +1596,87 @@ body.room-dragging * {
     transform: none;
   }
 }
+
+/* 客户端里打开过的别人的服务器：和本机房间分开一组，图标表明会在单独的窗口打开 */
+.remote-servers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+}
+
+.remote-servers-title {
+  padding: 0 14px 4px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.remote-server {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-md);
+}
+
+.remote-server:hover {
+  background: var(--bg-hover);
+}
+
+.remote-server-open {
+  min-width: 0;
+  height: 34px;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 14px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.remote-server-host {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-server-open-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--success, #22a06b);
+}
+
+.remote-server-remove {
+  opacity: 0;
+  margin-right: 4px;
+}
+
+.remote-server:hover .remote-server-remove,
+.remote-server-remove:focus-visible {
+  opacity: 1;
+}
+
+.remote-server-confirm {
+  display: flex;
+  gap: 4px;
+  margin-right: 4px;
+}
+
+.join-remote-dialog textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.join-remote-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}

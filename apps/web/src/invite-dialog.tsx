@@ -11,12 +11,14 @@ import {
   listInvites,
   removeGuest,
   renewGuest,
+  setGuestAgentPaused,
   renewInvite,
   revokeInvite,
 } from "./access-api";
 import { copyTextToClipboard } from "./clipboard";
+import { agentJoinLink, parseJoinInput } from "./join-link";
 import { localized, t } from "./i18n";
-import { Button, IconButton } from "./button";
+import { Button, IconButton, buttonClass } from "./button";
 
 type DurationChoice = { kind: "preset"; minutes: number | null } | { kind: "custom" };
 
@@ -477,11 +479,17 @@ export function GuestAccessBadge({ participant, now }: { participant: Participan
   if (!access) return null;
   const ended = access.ended || (access.expiresAt !== null && Date.parse(access.expiresAt) <= now);
   const label = `${access.sponsorName ? t("{0} 带入", { 0: access.sponsorName }) : t("访客")} · ${
-    ended ? (access.revoked ? t("已移除") : t("已到期")) : formatRemaining(access.expiresAt, now)
+    ended
+      ? access.revoked
+        ? t("已移除")
+        : t("已到期")
+      : access.paused
+        ? t("已暂停")
+        : formatRemaining(access.expiresAt, now)
   }`;
   return (
     <span
-      className={`guest-badge ${ended ? "ended" : expiresSoon(access.expiresAt, now) ? "soon" : ""}`}
+      className={`guest-badge ${ended || access.paused ? "ended" : expiresSoon(access.expiresAt, now) ? "soon" : ""}`}
       title={formatDeadline(access.expiresAt)}
     >
       {label}
@@ -491,6 +499,7 @@ export function GuestAccessBadge({ participant, now }: { participant: Participan
 
 /**
  * 房主对访客的操作：名字右侧的「⋯」（悬停成员行时出现），点开浮层续期（访客带入的 Agent 跟着延长）或移出。
+ * 访客带进来的 Agent 没有自己的期限，浮层里换成暂停 / 恢复和单独移出。
  * 浮层渲染到 body 并用 fixed 定位，避免被侧栏的滚动容器裁掉；空间不够时向上展开。
  */
 export function GuestMemberActions({
@@ -554,7 +563,8 @@ export function GuestMemberActions({
     };
   }, [open, place]);
 
-  if (!access || access.sponsorName) return null;
+  if (!access) return null;
+  const guestAgent = Boolean(access.sponsorName);
   const ended = access.ended || (access.expiresAt !== null && Date.parse(access.expiresAt) <= now);
 
   const run = async (action: () => Promise<unknown>) => {
@@ -576,7 +586,11 @@ export function GuestMemberActions({
         ref={triggerRef}
         type="button"
         className={`guest-actions-trigger ${open ? "open" : ""}`}
-        aria-label={t("管理访客 {0}", { 0: participant.username })}
+        aria-label={
+          guestAgent
+            ? t("管理 Agent {0}", { 0: participant.username })
+            : t("管理访客 {0}", { 0: participant.username })
+        }
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={(event) => {
@@ -600,22 +614,49 @@ export function GuestMemberActions({
             ref={popoverRef}
             className="guest-popover"
             role="dialog"
+            // 浮层经 portal 渲染，React 事件仍会冒泡到成员行：别让点按钮变成「@ 他」
+            onClick={(event) => event.stopPropagation()}
             aria-label={t("管理访客 {0}", { 0: participant.username })}
             style={position}
           >
             <header>
               <strong>{participant.username}</strong>
               <small>
-                {ended
-                  ? access.revoked
-                    ? t("已被移除，需要重新邀请")
-                    : t("已于 {0} 到期", {
-                        0: formatDeadline(access.expiresAt).replace(t(" 到期"), ""),
-                      })
-                  : `${formatDeadline(access.expiresAt)} · ${formatRemaining(access.expiresAt, now)}`}
+                {guestAgent && !ended
+                  ? access.paused
+                    ? t("已暂停，恢复后它会自己重新连上")
+                    : t("{0} 带入，期限跟着 {0}", { 0: access.sponsorName })
+                  : ended
+                    ? access.revoked
+                      ? t("已被移除，需要重新邀请")
+                      : t("已于 {0} 到期", {
+                          0: formatDeadline(access.expiresAt).replace(t(" 到期"), ""),
+                        })
+                    : `${formatDeadline(access.expiresAt)} · ${formatRemaining(access.expiresAt, now)}`}
               </small>
             </header>
-            {!access.revoked && (
+            {guestAgent && !ended && (
+              <section>
+                <span className="guest-popover-label">
+                  {access.paused
+                    ? t("恢复后它在对方电脑上的进程会在几秒内重新连上")
+                    : t("暂停会立即断开它，恢复前接不到活；不用对方重新接入")}
+                </span>
+                <Button
+                  variant="primary"
+                  block
+                  disabled={busy}
+                  onClick={() =>
+                    void run(() =>
+                      setGuestAgentPaused(base, adminToken, access.sessionId, !access.paused),
+                    )
+                  }
+                >
+                  {access.paused ? t("恢复") : t("暂停")}
+                </Button>
+              </section>
+            )}
+            {!guestAgent && !access.revoked && (
               <section>
                 <span className="guest-popover-label">
                   {ended ? t("续期后可重新进入") : t("从现在起续期")}
@@ -637,7 +678,13 @@ export function GuestMemberActions({
               <footer>
                 {confirmRemove ? (
                   <>
-                    <span>{t("他和他带入的 Agent 会被立即断开。")}</span>
+                    <span>
+                      {guestAgent
+                        ? t("它会被立即断开，之后都连不上；要再进来得由 {0} 重新带入。", {
+                            0: access.sponsorName,
+                          })
+                        : t("他和他带入的 Agent 会被立即断开。")}
+                    </span>
                     <Button size="sm" onClick={() => setConfirmRemove(false)}>
                       {t("取消")}
                     </Button>
@@ -742,6 +789,26 @@ export function GuestAgentDialog({
           )}
           {command && (
             <div className="invite-created" role="status">
+              {(() => {
+                const target = parseJoinInput(command);
+                return target?.kind === "agent" ? (
+                  <>
+                    <strong>
+                      {t("装了 SuperHive 客户端的话，点这里选一个本机 Agent，它会在后台加入：")}
+                    </strong>
+                    <a
+                      className={buttonClass(
+                        { variant: "primary", size: "sm" },
+                        "invite-client-link",
+                      )}
+                      href={agentJoinLink(target)}
+                    >
+                      {t("用 SuperHive 客户端加入")}
+                    </a>
+                    <span>{t("没装客户端，就在你自己的电脑上运行下面的命令：")}</span>
+                  </>
+                ) : null;
+              })()}
               <strong>{t("在你自己的电脑上运行（可加 --provider claude 等参数）")}</strong>
               <code>{command}</code>
               <Button

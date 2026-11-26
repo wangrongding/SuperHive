@@ -112,6 +112,29 @@ export type DesktopUpdatesApi = {
   restart?(): Promise<boolean>;
 };
 
+/** 客户端里打开过的别人的服务器 */
+export type DesktopRemoteServer = {
+  origin: string;
+  host: string;
+  url: string;
+  lastOpenedAt: string;
+  /** 窗口现在开着 */
+  open: boolean;
+};
+
+/** 菜单「加入别人的房间」或 superhive:// 链接让页面弹出的对话框 */
+export type DesktopJoinRequest =
+  { kind: "room" } | { kind: "agent"; server: string; roomId: string; name: string; token: string };
+
+/** 别人的服务器：每个开一个单独的窗口，拿不到本机能力（老版本桌面端没有） */
+export type DesktopRemoteApi = {
+  list(): Promise<DesktopRemoteServer[]>;
+  open(url: string): Promise<boolean>;
+  remove(origin: string): Promise<boolean>;
+  onChange(listener: (servers: DesktopRemoteServer[]) => void): () => void;
+  onJoinRequest(listener: (request: DesktopJoinRequest) => void): () => void;
+};
+
 export type DesktopBridge = {
   version: number;
   platform: string;
@@ -123,6 +146,8 @@ export type DesktopBridge = {
   files?: DesktopFilesApi;
   /** 检查新版（老版本桌面端没有这一项，不显示新版提示） */
   updates?: DesktopUpdatesApi;
+  /** 加入别人的房间（老版本桌面端没有这一项，只能在浏览器里打开邀请链接） */
+  remote?: DesktopRemoteApi;
 };
 
 declare global {
@@ -142,6 +167,7 @@ const TERMINAL_METHODS = [
 ] as const;
 
 const UPDATE_METHODS = ["get", "open", "dismiss", "onChange"] as const;
+const REMOTE_METHODS = ["list", "open", "remove", "onChange", "onJoinRequest"] as const;
 
 /** 读取并校验桌面端能力；形状不对（版本不兼容、被别的脚本冒充）就当作不在桌面端 */
 export function desktopBridge(
@@ -185,6 +211,13 @@ export function desktopBridge(
     delete cleaned.install;
     delete cleaned.restart;
     return desktopBridge({ ...value, updates: cleaned });
+  }
+  const remote = value.remote as Partial<DesktopRemoteApi> | undefined;
+  if (
+    remote !== undefined &&
+    (!remote || REMOTE_METHODS.some((name) => typeof remote[name] !== "function"))
+  ) {
+    return desktopBridge({ ...value, remote: undefined });
   }
   const titlebar = value.titlebar as Partial<DesktopTitlebarApi> | undefined;
   if (titlebar !== undefined && (!titlebar || typeof titlebar.setAppearance !== "function")) {

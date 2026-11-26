@@ -1278,3 +1278,10 @@
     text-align: left;
   }
 }
+
+/* 邀请页：在客户端中打开 */
+.invite-open-client {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}

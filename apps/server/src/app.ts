@@ -1178,8 +1178,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         sessionId: resolved.session.id,
         expiresAt: resolved.expiresAt,
         ...(resolved.sponsor ? { sponsorName: resolved.sponsor.username } : {}),
-        ...(resolved.state !== "active" ? { ended: true } : {}),
+        ...(resolved.state === "expired" || resolved.state === "revoked" ? { ended: true } : {}),
         ...(resolved.state === "revoked" ? { revoked: true } : {}),
+        ...(resolved.state === "paused" ? { paused: true } : {}),
       },
     };
   }
@@ -1192,10 +1193,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const endedMessages = {
     expired: { code: "SESSION_EXPIRED", ...wsText(serverText("error.guest.expired")) },
     revoked: { code: "SESSION_REVOKED", ...wsText(serverText("error.guest.revoked")) },
+    // 暂停不是结束：Agent 收到后照常隔一会儿重连，恢复后就能连上
+    paused: { code: "SESSION_PAUSED", ...wsText(serverText("error.guest.paused")) },
   } as const;
 
   /** 断开访客会话（及其带入的 Agent）的所有连接，并刷新成员列表里的期限 */
-  function endSessionConnections(sessionIds: string[], reason: "expired" | "revoked"): void {
+  function endSessionConnections(
+    sessionIds: string[],
+    reason: "expired" | "revoked" | "paused",
+  ): void {
     const ids = new Set(sessionIds);
     for (const connection of [...connections]) {
       if (connection.principal?.kind !== "guest") continue;
@@ -1243,7 +1249,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       connection.principal = { kind: "guest", resolved };
       return true;
     }
-    const reason = resolved?.state === "expired" ? "expired" : "revoked";
+    const reason =
+      resolved?.state === "expired" || resolved?.state === "paused" ? resolved.state : "revoked";
     send(connection.socket, { type: "error", ...endedMessages[reason] });
     connection.socket.close(4401, reason);
     disconnect(connection);
@@ -4582,7 +4589,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
     const resolved = token && isGuestToken(token) ? access.resolveToken(token, clock()) : undefined;
     if (!resolved) return { role: "none", reason: "no_invite" };
-    if (resolved.state !== "active") return { role: "none", reason: resolved.state };
+    if (resolved.state !== "active")
+      return { role: "none", reason: resolved.state === "paused" ? "revoked" : resolved.state };
     return sessionView(resolved);
   });
 
@@ -4752,6 +4760,32 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
     },
   );
+
+  /**
+   * 房主暂停 / 恢复访客带进来的 Agent：暂停时立即断开，它在对方电脑上的进程照常隔几秒重连、
+   * 被拒；恢复后下一次重连就回到房间。和「移出房间」不同，不用对方重新生成接入命令。
+   */
+  for (const action of ["pause", "resume"] as const) {
+    app.post<{ Params: { sessionId: string } }>(
+      `/api/guests/:sessionId/${action}`,
+      async (request, reply) => {
+        if (!adminOnly(request, reply)) return reply;
+        try {
+          const session = access.setPaused(request.params.sessionId, action === "pause");
+          if (action === "pause") endSessionConnections([session.id], "paused");
+          refreshAccessPresence([session.id]);
+          return { session: sessionView(access.resolve(session, clock())) };
+        } catch (error) {
+          if (error instanceof HiveError) {
+            return reply
+              .code(error.code === "SESSION_NOT_FOUND" ? 404 : 409)
+              .send(hiveErrorBody(error));
+          }
+          throw error;
+        }
+      },
+    );
+  }
 
   /** 访客为自己带入一个 Agent：同房间、同期限，访客到期或被移除时一起失效 */
   app.post("/api/guest-agents", async (request, reply) => {

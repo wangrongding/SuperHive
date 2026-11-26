@@ -95,6 +95,8 @@ export const participantAccessSchema = z.object({
   ended: z.boolean().optional(),
   /** 被房主移除或所在链接被撤销（区别于自然到期）：不能续期，只能重新邀请 */
   revoked: z.boolean().optional(),
+  /** 房主暂停了这个访客 Agent：暂时连不上，恢复后它自己会重连回来 */
+  paused: z.boolean().optional(),
 });
 
 /** Agent 在某个房间实际的工作目录：加入房间时上报，成员列表据此显示、提示工作区变更是否已生效 */

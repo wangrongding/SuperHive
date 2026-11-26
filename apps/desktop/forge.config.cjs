@@ -40,6 +40,8 @@ module.exports = {
     executableName: process.platform === "linux" ? "superhive" : "SuperHive",
     appBundleId: "dev.superhive.desktop",
     appCategoryType: "public.app-category.developer-tools",
+    // Mac 的 Info.plist 里声明 superhive:// 链接（打开别人的邀请、带 Agent 加入）；Windows 由主进程启动时注册
+    protocols: [{ name: "SuperHive", schemes: ["superhive"] }],
     icon: path.join(desktopDir, "build/icon"),
     // 原生模块和 node-pty 的 spawn-helper 必须放在 asar 外面才能加载 / 执行
     asar: {

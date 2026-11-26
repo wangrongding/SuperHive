@@ -64,6 +64,7 @@ import { agentTasks, nextAgentTaskIndex } from "./agent-tasks";
 import { copyTextToClipboard } from "./clipboard";
 import type { GuestAccess } from "./access-gate";
 import { GuestAgentDialog, InviteDialog } from "./invite-dialog";
+import { JoinRemoteHost } from "./join-remote";
 import { ImDialog } from "./im-dialog";
 import { OwnerDevicesDialog } from "./owner-devices-dialog";
 import { AgentSettingsDialog, SettingsGlyph } from "./agent-settings-dialog";
@@ -2585,6 +2586,15 @@ export function App({
         </div>
       )}
 
+      {isOwner && !guest && (
+        <JoinRemoteHost
+          local={local}
+          openLocalSettings={() => {
+            setSettingsTab("computer");
+            setSettingsOpen(true);
+          }}
+        />
+      )}
       {inviteDialogOpen && isOwner && authToken && (
         <InviteDialog
           base={base}

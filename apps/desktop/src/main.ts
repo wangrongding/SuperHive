@@ -83,6 +83,20 @@ import { createMacUpdater } from "./mac-update.js";
 import { createWindowsUpdater } from "./win-update.js";
 import { UpdateInstaller, type DesktopUpdate, type InstallBackend } from "./update-install.js";
 import { loadWindowState, restoreBounds, saveWindowState, MIN_SIZE } from "./window-state.js";
+import {
+  DEEP_LINK_SCHEME,
+  REMOTE_PARTITION,
+  deepLinkFromArgv,
+  describeRoomLink,
+  loadRemoteServers,
+  normalizeRemoteUrl,
+  parseDeepLink,
+  remoteWindowTitle,
+  saveRemoteServers,
+  upsertRemoteServer,
+  type RemoteServer,
+} from "./remote-servers.js";
+import type { JoinRequest, RemoteServerView } from "./ipc-contract.js";
 
 const CLI_FLAG = "--superhive-cli";
 const DOCS_URL = "https://wangrongding.github.io/SuperHive/";
@@ -464,7 +478,13 @@ function runApp(): void {
     event.returnValue = originAnswer(event, { origin: allowedOrigin, webContentsIds: trustedIds });
   });
   ipcMain.on(IPC.appReady, (event) => {
-    if (trusted(event)) splash?.controller.ready();
+    if (!trusted(event)) return;
+    splash?.controller.ready();
+    mainPageReady = true;
+    if (pendingJoin) {
+      event.sender.send(IPC.joinRequest, pendingJoin);
+      pendingJoin = undefined;
+    }
   });
 
   // ---------- 标题栏 ----------
@@ -506,17 +526,22 @@ function runApp(): void {
   });
 
   // ---------- 安全：所有 webContents 统一限制 ----------
-  const sameOriginUrl = (url: string): boolean => {
-    if (!allowedOrigin) return false;
+  /** 这个 webContents 只能待在哪个来源：别人的服务器窗口（及其弹窗）是对方的地址，其余是本机 Hive */
+  const homeOrigin = (contents: WebContents): string | undefined =>
+    remoteOrigins.get(contents.id) ?? allowedOrigin;
+  const sameOriginUrl = (contents: WebContents, url: string): boolean => {
+    const home = homeOrigin(contents);
+    if (!home) return false;
     if (url.startsWith("blob:")) {
       try {
-        return new URL(url).origin === allowedOrigin;
+        return new URL(url).origin === home;
       } catch {
         return false;
       }
     }
-    return originOf(url) === allowedOrigin;
+    return originOf(url) === home;
   };
+  const isDeepLink = (url: string) => url.toLowerCase().startsWith(`${DEEP_LINK_SCHEME}:`);
   const openExternal = (url: string) => {
     if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url);
   };
@@ -530,23 +555,40 @@ function runApp(): void {
   app.on("web-contents-created", (_event, contents) => {
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.on("will-navigate", (event) => {
-      if (sameOriginUrl(event.url)) return;
+      if (sameOriginUrl(contents, event.url)) return;
       event.preventDefault();
-      openExternal(event.url);
+      // 页面里的 superhive:// 链接（比如别人房间里「用客户端带 Agent 加入」）交给自己处理
+      if (isDeepLink(event.url)) handleDeepLink(event.url);
+      else openExternal(event.url);
     });
     contents.on("will-redirect", (event) => {
-      if (event.isMainFrame && !sameOriginUrl(event.url)) event.preventDefault();
+      if (event.isMainFrame && !sameOriginUrl(contents, event.url)) event.preventDefault();
     });
     contents.setWindowOpenHandler(({ url }) => {
       // 同源的新窗口（附件预览、导出）照常打开，但不带 preload，拿不到终端
-      if (sameOriginUrl(url)) {
+      if (sameOriginUrl(contents, url)) {
+        const remote = remoteOrigins.has(contents.id);
         return {
           action: "allow",
-          overrideBrowserWindowOptions: { autoHideMenuBar: true, webPreferences: popupPreferences },
+          overrideBrowserWindowOptions: {
+            autoHideMenuBar: true,
+            webPreferences: remote
+              ? { ...popupPreferences, partition: REMOTE_PARTITION }
+              : popupPreferences,
+          },
         };
       }
-      openExternal(url);
+      if (isDeepLink(url)) handleDeepLink(url);
+      else openExternal(url);
       return { action: "deny" };
+    });
+    // 别人服务器窗口里弹出的窗口也只能待在对方的地址上
+    contents.on("did-create-window", (child) => {
+      const origin = remoteOrigins.get(contents.id);
+      if (!origin) return;
+      const id = child.webContents.id;
+      remoteOrigins.set(id, origin);
+      child.once("closed", () => remoteOrigins.delete(id));
     });
   });
 
@@ -558,6 +600,200 @@ function runApp(): void {
   ]);
   const permissionOk = (permission: string, origin: string | undefined) =>
     allowedPermissions.has(permission) && Boolean(origin) && originOf(origin!) === allowedOrigin;
+  /** 别人的服务器只给通知、写剪贴板和全屏；读剪贴板这类不给 */
+  const remotePermissions = new Set(["clipboard-sanitized-write", "notifications", "fullscreen"]);
+  const remotePermissionOk = (permission: string, origin: string | undefined) => {
+    const from = origin ? originOf(origin) : undefined;
+    return (
+      remotePermissions.has(permission) &&
+      Boolean(from) &&
+      remoteServers.some((server) => server.origin === from)
+    );
+  };
+
+  // ---------- 别人的 Hive ----------
+  const remoteFile = () => path.join(app.getPath("userData"), "remote-servers.json");
+  let remoteServers: RemoteServer[] = [];
+  /** 每个外部服务器一个窗口 */
+  const remoteWindows = new Map<string, BrowserWindow>();
+  /** 外部服务器窗口（含它弹出的窗口）的 webContents → 所属 origin */
+  const remoteOrigins = new Map<number, string>();
+  /** 本机页面还没准备好时先记下要它弹的「加入」对话框 */
+  let pendingJoin: JoinRequest | undefined;
+  let mainPageReady = false;
+
+  const remoteViews = (): RemoteServerView[] =>
+    remoteServers.map((server) => ({
+      origin: server.origin,
+      host: new URL(server.origin).host,
+      url: server.url,
+      lastOpenedAt: server.lastOpenedAt,
+      open: Boolean(
+        remoteWindows.get(server.origin) && !remoteWindows.get(server.origin)!.isDestroyed(),
+      ),
+    }));
+
+  function notifyRemoteChanged(): void {
+    buildMenu();
+    const contents = mainWindow?.webContents;
+    if (contents && !contents.isDestroyed()) contents.send(IPC.remoteChanged, remoteViews());
+  }
+
+  /** 打开（或切到）别人的服务器窗口；url 带着邀请时在那个窗口里跳过去 */
+  function openRemote(target: { origin: string; url: string }): void {
+    if (allowedOrigin && target.origin === allowedOrigin) {
+      // 其实是本机 Hive 的链接：直接在主窗口里打开
+      showMainWindow();
+      void mainWindow?.loadURL(target.url).catch(() => undefined);
+      return;
+    }
+    remoteServers = upsertRemoteServer(remoteServers, target, new Date());
+    saveRemoteServers(remoteFile(), remoteServers);
+    const existing = remoteWindows.get(target.origin);
+    if (existing && !existing.isDestroyed()) {
+      if (existing.isMinimized()) existing.restore();
+      existing.show();
+      existing.focus();
+      if (target.url !== target.origin && target.url !== `${target.origin}/`)
+        void existing.loadURL(target.url).catch(() => undefined);
+      notifyRemoteChanged();
+      return;
+    }
+    const window = new BrowserWindow({
+      width: 1200,
+      height: 800,
+      minWidth: MIN_SIZE.width,
+      minHeight: MIN_SIZE.height,
+      title: remoteWindowTitle(target.origin),
+      backgroundColor: backgroundColor(),
+      autoHideMenuBar: process.platform !== "darwin",
+      // 不给 preload：别人的页面拿不到终端、选文件这些本机能力
+      webPreferences: { ...popupPreferences, partition: REMOTE_PARTITION },
+    });
+    const id = window.webContents.id;
+    remoteOrigins.set(id, target.origin);
+    remoteWindows.set(target.origin, window);
+    window.webContents.on("page-title-updated", (event, title) => {
+      event.preventDefault();
+      window.setTitle(remoteWindowTitle(target.origin, title));
+    });
+    window.webContents.on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
+      if (!isMainFrame || code === -3) return;
+      void dialog.showMessageBox(window, {
+        type: "warning",
+        message: t("remoteFailed", { host: new URL(target.origin).host }),
+        detail: `${description} (${code})`,
+        buttons: [t("ok")],
+      });
+    });
+    window.on("closed", () => {
+      remoteOrigins.delete(id);
+      if (remoteWindows.get(target.origin) === window) remoteWindows.delete(target.origin);
+      notifyRemoteChanged();
+    });
+    void window.loadURL(target.url).catch(() => undefined);
+    notifyRemoteChanged();
+  }
+
+  /** 忘掉一个服务器：关窗口、删列表、清掉这个地址下的访客凭证 */
+  async function removeRemote(origin: string): Promise<void> {
+    const window = remoteWindows.get(origin);
+    if (window && !window.isDestroyed()) window.close();
+    remoteServers = remoteServers.filter((server) => server.origin !== origin);
+    saveRemoteServers(remoteFile(), remoteServers);
+    await session
+      .fromPartition(REMOTE_PARTITION)
+      .clearStorageData({ origin })
+      .catch(() => undefined);
+    notifyRemoteChanged();
+  }
+
+  /** 让本机页面弹出「加入别人的房间」或「带 Agent 加入」 */
+  function sendJoinRequest(request: JoinRequest): void {
+    showMainWindow();
+    const contents = mainWindow?.webContents;
+    if (!mainPageReady || !contents || contents.isDestroyed()) {
+      pendingJoin = request;
+      return;
+    }
+    contents.send(IPC.joinRequest, request);
+  }
+
+  /** 深链接来自浏览器或别的程序，先让人看清真实的服务器和房间再打开；取消什么都不做 */
+  async function confirmRemote(target: { origin: string; url: string }): Promise<void> {
+    if (allowedOrigin && target.origin === allowedOrigin) {
+      openRemote(target);
+      return;
+    }
+    const info = describeRoomLink(target);
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    if (parent) showMainWindow();
+    const options = {
+      type: "question" as const,
+      title: t("joinConfirmTitle"),
+      message: t("joinConfirmMessage", {
+        host: info.host,
+        room: info.roomId ? `# ${info.roomId}` : t("joinConfirmAnyRoom"),
+      }),
+      detail: t("joinConfirmDetail", {
+        origin: info.origin,
+        identity: info.hasInvite ? t("joinConfirmGuest") : t("joinConfirmReturning"),
+      }),
+      buttons: [t("joinConfirm"), t("cancel")],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const { response } = parent
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options);
+    if (response === 0) openRemote(target);
+  }
+
+  let appStarted = false;
+  const queuedLinks: string[] = [];
+  function handleDeepLink(raw: string): void {
+    if (!appStarted) {
+      queuedLinks.push(raw);
+      return;
+    }
+    const link = parseDeepLink(raw);
+    if (!link) return;
+    if (link.kind === "open") void confirmRemote(link);
+    else {
+      sendJoinRequest({
+        kind: "agent",
+        server: link.server,
+        roomId: link.roomId,
+        name: link.name,
+        token: link.token,
+      });
+    }
+  }
+  // macOS 从浏览器点 superhive:// 链接走 open-url；要在 ready 之前就挂上
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    handleDeepLink(url);
+  });
+
+  ipcMain.handle(IPC.remoteList, (event) => {
+    if (!trusted(event)) throw new Error("Forbidden");
+    return remoteViews();
+  });
+  ipcMain.handle(IPC.remoteOpen, (event, input: unknown) => {
+    if (!trusted(event)) throw new Error("Forbidden");
+    const target = typeof input === "string" ? normalizeRemoteUrl(input) : undefined;
+    if (!target) return false;
+    openRemote(target);
+    return true;
+  });
+  ipcMain.handle(IPC.remoteRemove, async (event, origin: unknown) => {
+    if (!trusted(event)) throw new Error("Forbidden");
+    if (typeof origin !== "string" || !remoteServers.some((server) => server.origin === origin))
+      return false;
+    await removeRemote(origin);
+    return true;
+  });
 
   // ---------- 窗口 ----------
   const windowStateFile = () => path.join(app.getPath("userData"), "window-state.json");
@@ -701,7 +937,10 @@ function runApp(): void {
     // 刷新或渲染进程崩溃：终端先留着，新页面在宽限期内接回去（回放最近的输出），没接回的才结束；
     // 窗口销毁时全部结束
     window.webContents.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) terminals.detachOwner(contentsId);
+      if (details.isMainFrame && !details.isSameDocument) {
+        terminals.detachOwner(contentsId);
+        mainPageReady = false;
+      }
     });
     window.webContents.on("render-process-gone", () => terminals.detachOwner(contentsId));
     window.webContents.on("destroyed", () => {
@@ -866,6 +1105,22 @@ function runApp(): void {
         submenu: [
           { label: t("newTerminal"), accelerator: "Ctrl+`", click: sendNewTerminal },
           {
+            label: t("joinRemote"),
+            accelerator: "CmdOrCtrl+Shift+J",
+            click: () => sendJoinRequest({ kind: "room" }),
+          },
+          ...(remoteServers.length
+            ? [
+                {
+                  label: t("remoteServers"),
+                  submenu: remoteServers.map((server) => ({
+                    label: new URL(server.origin).host,
+                    click: () => openRemote(server),
+                  })),
+                },
+              ]
+            : []),
+          {
             label: t("openInBrowser"),
             enabled: Boolean(allowedOrigin),
             click: () => allowedOrigin && void shell.openExternal(allowedOrigin),
@@ -926,7 +1181,11 @@ function runApp(): void {
   }
 
   // ---------- 生命周期 ----------
-  app.on("second-instance", () => showMainWindow());
+  app.on("second-instance", (_event, argv) => {
+    const link = deepLinkFromArgv(argv);
+    if (link) handleDeepLink(link);
+    else showMainWindow();
+  });
   app.on("activate", () => showMainWindow());
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
@@ -963,12 +1222,29 @@ function runApp(): void {
     session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
       permissionOk(permission, requestingOrigin),
     );
+    remoteServers = loadRemoteServers(remoteFile());
+    const remoteSession = session.fromPartition(REMOTE_PARTITION);
+    remoteSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      callback(remotePermissionOk(permission, details.requestingUrl ?? contents.getURL()));
+    });
+    remoteSession.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+      remotePermissionOk(permission, requestingOrigin),
+    );
+    // 只有装好的正式包才注册 superhive://：开发时跑的 Electron 不能抢走已安装客户端的链接
+    if (app.isPackaged && !process.env.SUPERHIVE_DESKTOP_DATA_DIR) {
+      app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
+    }
     buildMenu();
     // 从访达 / Dock 打开时 PATH 不全、也没有终端里设的代理变量，本机 Agent 和终端都要用到
     const shellEnv = await loginShellEnv();
     if (shellEnv?.PATH) process.env.PATH = mergePath(shellEnv.PATH, process.env.PATH);
     mergeProxyEnv(process.env, shellEnv);
     await boot();
+    appStarted = true;
+    // 冷启动时带进来的深链接：macOS 在 open-url 里排队，Windows / Linux 在命令行参数里
+    const initial = deepLinkFromArgv(process.argv);
+    if (initial) queuedLinks.push(initial);
+    for (const link of queuedLinks.splice(0)) handleDeepLink(link);
     if (updateCheckEnabled) {
       // 清掉上次下载了但没换上的临时文件（Mac 暂存在 .app 旁边的目录）
       updateInstaller().cleanup();

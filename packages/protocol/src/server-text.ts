@@ -1029,6 +1029,14 @@ export const serverTexts = {
     zh: "访客不能停下 Agent 正在执行的任务。",
     en: "Guests can't stop a task an agent is running.",
   },
+  "error.guest.notPausable": {
+    zh: "只能暂停访客带进来的 Agent；访客本人请用续期或移出房间。",
+    en: "Only agents brought in by guests can be paused. Use renew or remove for the guest.",
+  },
+  "error.guest.paused": {
+    zh: "房主暂停了这个 Agent，恢复后会自动重新连上。",
+    en: "The owner paused this agent. It reconnects automatically once resumed.",
+  },
   "error.guest.removed": {
     zh: "这个访客已被移除，请重新邀请。",
     en: "This guest was removed. Invite them again.",
