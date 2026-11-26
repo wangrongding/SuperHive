@@ -28,6 +28,10 @@ import { Button, IconButton } from "./button";
 const PreviewMarkdown = lazy(() =>
   import("./message-markdown").then((module) => ({ default: module.MessageMarkdown })),
 );
+// .md 文件按「读文档」排版：标题层级、目录、frontmatter，和聊天气泡分开
+const PreviewDoc = lazy(() =>
+  import("./doc-markdown").then((module) => ({ default: module.DocMarkdown })),
+);
 
 /** 与服务端 LIMITS 一致：单个 20 MiB、一条消息 10 个、合计 50 MiB */
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -692,6 +696,8 @@ export function FilePreview({
   const { url, blob, error } = useAttachmentUrl(base, token, attachment.id, kind !== "office");
   // HTML 默认看渲染后的页面，可以切回源码
   const [htmlView, setHtmlView] = useState<"page" | "source">("page");
+  // Markdown 默认看排好版的文档，可以切到源码
+  const [markdownView, setMarkdownView] = useState<"rendered" | "source">("rendered");
   // 放大：铺满窗口，选择记在本机，下次打开预览照旧
   const [maximized, setMaximized] = useState(loadPreviewMaximized);
   const toggleMaximized = useCallback(() => {
@@ -791,6 +797,14 @@ export function FilePreview({
     );
   }
 
+  const clippedNotice = (
+    <p className="file-preview-status">
+      {t("文件较长，只显示前 {0} 字；完整内容请下载查看。", {
+        0: PREVIEW_TEXT_LIMIT.toLocaleString(),
+      })}
+    </p>
+  );
+
   const body = error ? (
     <p className="file-preview-status danger">{error}</p>
   ) : kind === "office" ? (
@@ -850,20 +864,16 @@ export function FilePreview({
     )
   ) : text === undefined ? (
     <p className="file-preview-status">{t("加载中…")}</p>
+  ) : kind === "markdown" && markdownView === "rendered" ? (
+    <Suspense fallback={<pre className="file-preview-fallback">{text.value}</pre>}>
+      <PreviewDoc content={text.value} footer={text.clipped ? clippedNotice : undefined} />
+    </Suspense>
   ) : (
-    <div className={`file-preview-text${kind === "markdown" ? " markdown" : ""}`}>
+    <div className="file-preview-text">
       <Suspense fallback={<pre>{text.value}</pre>}>
-        <PreviewMarkdown
-          content={kind === "markdown" ? text.value : codeFence(attachment.name, text.value)}
-        />
+        <PreviewMarkdown content={codeFence(attachment.name, text.value)} />
       </Suspense>
-      {text.clipped && (
-        <p className="file-preview-status">
-          {t("文件较长，只显示前 {0} 字；完整内容请下载查看。", {
-            0: PREVIEW_TEXT_LIMIT.toLocaleString(),
-          })}
-        </p>
-      )}
+      {text.clipped && clippedNotice}
     </div>
   );
 
@@ -880,6 +890,22 @@ export function FilePreview({
           </small>
         </span>
         {notice}
+        {kind === "markdown" && (
+          <div className="file-preview-views" role="radiogroup" aria-label={t("预览方式")}>
+            {(["rendered", "source"] as const).map((view) => (
+              <button
+                type="button"
+                role="radio"
+                aria-checked={markdownView === view}
+                className={markdownView === view ? "active" : ""}
+                onClick={() => setMarkdownView(view)}
+                key={view}
+              >
+                {view === "rendered" ? t("渲染") : t("源码")}
+              </button>
+            ))}
+          </div>
+        )}
         {kind === "html" && (
           <>
             <div className="file-preview-views" role="radiogroup" aria-label={t("预览方式")}>

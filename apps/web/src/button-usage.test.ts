@@ -18,6 +18,8 @@ import { describe, expect, it } from "vitest";
 const RAW_BUTTON_CLASSES = new Set([
   // MCP 快速安装里的清单卡片：整张卡片是一块可点区域，选中进入下一步
   "runtime-install-card",
+  // 文档预览右侧目录里的一行：像链接一样点了滚到对应标题
+  "doc-toc-item",
   // 遮罩：点空白处关闭
   "room-dialog-scrim",
   "activity-scrim",

@@ -5,6 +5,8 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  lazy,
+  Suspense,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -57,6 +59,12 @@ import {
 } from "./workspace-diff";
 import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
+
+// .md 默认按文档排版看（和附件预览同一套），能切回带行号的源码
+const WorkspaceDoc = lazy(() =>
+  import("./doc-markdown").then((module) => ({ default: module.DocMarkdown })),
+);
+const MARKDOWN_FILE = /\.(md|markdown|mdx)$/i;
 
 /**
  * 房间工作区面板：从聊天头部「代码」打开的宽抽屉，只读。
@@ -1773,6 +1781,8 @@ function FilePreview({
   const hasSource = /\.svg$/i.test(path) || isTextOffice(officeKind(path));
   const [showSource, setShowSource] = useState(false);
   const showMedia = Boolean(media) && !showSource;
+  const markdown = MARKDOWN_FILE.test(path);
+  const [markdownSource, setMarkdownSource] = useState(false);
   const file = useAsync(
     async () =>
       showMedia
@@ -1815,6 +1825,19 @@ function FilePreview({
         <DownloadButton api={api} source={source} path={path} />
       </div>
     );
+  else if (markdown && !markdownSource && file.data?.content !== undefined)
+    content = (
+      <>
+        {file.data.truncated && (
+          <p className="workspace-banner">
+            {t("文件较大，只显示前 {0}。", { 0: formatBytes(512 * 1024) })}
+          </p>
+        )}
+        <Suspense fallback={<div className="workspace-loading">{t("加载中…")}</div>}>
+          <WorkspaceDoc content={file.data.content} />
+        </Suspense>
+      </>
+    );
   else if (lines)
     content = (
       <>
@@ -1856,7 +1879,19 @@ function FilePreview({
         {file.data && <span className="workspace-muted">{formatBytes(file.data.size)}</span>}
         {((media && hasSource) || lines) && (
           <div className="workspace-viewer-actions">
-            {lines && !showMedia && <WrapToggle wrap={wrap} onChange={setWrap} />}
+            {lines && markdown && (
+              <button
+                type="button"
+                aria-pressed={markdownSource}
+                className={markdownSource ? "active" : ""}
+                onClick={() => setMarkdownSource((value) => !value)}
+              >
+                {markdownSource ? t("看渲染") : t("看源码")}
+              </button>
+            )}
+            {lines && !showMedia && (!markdown || markdownSource) && (
+              <WrapToggle wrap={wrap} onChange={setWrap} />
+            )}
             {media && hasSource && (
               <button
                 type="button"
@@ -1870,7 +1905,11 @@ function FilePreview({
           </div>
         )}
       </div>
-      <div className="workspace-viewer-scroll">{content}</div>
+      <div
+        className={`workspace-viewer-scroll${markdown && !markdownSource && lines ? " doc" : ""}`}
+      >
+        {content}
+      </div>
     </div>
   );
 }

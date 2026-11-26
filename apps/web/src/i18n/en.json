@@ -2448,5 +2448,9 @@
   "设主 Agent": "Set lead agent",
   "这个房间还没有主 Agent：没 @ 任何人的消息没人接": "This room has no lead agent: messages that don't @ anyone go unanswered",
   "选一个主 Agent": "Pick a lead agent",
-  "切换主 Agent": "Switch lead agent"
+  "切换主 Agent": "Switch lead agent",
+  "文档信息": "Document info",
+  "目录": "Contents",
+  "渲染": "Rendered",
+  "看渲染": "View rendered"
 }

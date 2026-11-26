@@ -149,7 +149,7 @@ function extractCodeMeta(node: HastNode | undefined): { language: string | null;
   };
 }
 
-function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & ExtraProps) {
+export function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & ExtraProps) {
   const { language, text } = extractCodeMeta(node);
   const [copied, setCopied] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -185,7 +185,7 @@ function CodeBlock({ node, children, ...rest }: ComponentProps<"pre"> & ExtraPro
   );
 }
 
-const markdownComponents: Components = {
+export const markdownComponents: Components = {
   a(props) {
     const { node, ...rest } = props;
     void node;

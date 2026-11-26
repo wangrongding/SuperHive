@@ -1279,3 +1279,10 @@
 .split-resizer:focus-visible {
   outline: none;
 }
+
+/* .md 按文档排版看：滚动交给文档自己（目录不跟着滚走） */
+.workspace-viewer-scroll.doc {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

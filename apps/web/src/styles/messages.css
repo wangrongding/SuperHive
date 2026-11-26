@@ -581,8 +581,8 @@
   border-radius: var(--radius-lg);
 }
 
-/* 代码高亮：浅色沿用 GitHub 风格，深色只改语义变量 */
-.message-body {
+/* 代码高亮：浅色沿用 GitHub 风格，深色只改语义变量；文件预览、文档阅读共用 */
+:is(.message-body, .doc-markdown, .file-preview-text) {
   --hl-comment: #6e7781;
   --hl-keyword: #cf222e;
   --hl-string: #0a3069;
@@ -594,7 +594,7 @@
   --hl-deletion: #82071e;
 }
 
-:root[data-theme="dark"] .message-body {
+:root[data-theme="dark"] :is(.message-body, .doc-markdown, .file-preview-text) {
   --hl-comment: #8b949e;
   --hl-keyword: #ff7b72;
   --hl-string: #a5d6ff;
@@ -606,67 +606,67 @@
   --hl-deletion: #ffa198;
 }
 
-.message-body .hljs-comment,
-.message-body .hljs-quote {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-comment,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-quote {
   color: var(--hl-comment);
   font-style: italic;
 }
 
-.message-body .hljs-keyword,
-.message-body .hljs-selector-tag,
-.message-body .hljs-doctag,
-.message-body .hljs-template-tag {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-keyword,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-selector-tag,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-doctag,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-template-tag {
   color: var(--hl-keyword);
 }
 
-.message-body .hljs-string,
-.message-body .hljs-regexp,
-.message-body .hljs-addition {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-string,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-regexp,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-addition {
   color: var(--hl-string);
 }
 
-.message-body .hljs-number,
-.message-body .hljs-literal,
-.message-body .hljs-built_in {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-number,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-literal,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-built_in {
   color: var(--hl-number);
 }
 
-.message-body .hljs-title,
-.message-body .hljs-section {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-title,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-section {
   color: var(--hl-title);
 }
 
-.message-body .hljs-title.class_,
-.message-body .hljs-type {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-title.class_,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-type {
   color: var(--hl-type);
 }
 
-.message-body .hljs-attr,
-.message-body .hljs-attribute,
-.message-body .hljs-variable,
-.message-body .hljs-template-variable,
-.message-body .hljs-selector-attr {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-attr,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-attribute,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-variable,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-template-variable,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-selector-attr {
   color: var(--hl-attr);
 }
 
-.message-body .hljs-symbol,
-.message-body .hljs-bullet,
-.message-body .hljs-meta,
-.message-body .hljs-selector-id,
-.message-body .hljs-selector-class,
-.message-body .hljs-link {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-symbol,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-bullet,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-meta,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-selector-id,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-selector-class,
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-link {
   color: var(--hl-symbol);
 }
 
-.message-body .hljs-deletion {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-deletion {
   color: var(--hl-deletion);
 }
 
-.message-body .hljs-emphasis {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-emphasis {
   font-style: italic;
 }
 
-.message-body .hljs-strong {
+:is(.message-body, .doc-markdown, .file-preview-text) .hljs-strong {
   font-weight: 600;
 }
 

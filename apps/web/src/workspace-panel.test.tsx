@@ -205,8 +205,17 @@ describe("WorkspacePanel", () => {
     open(api);
     await userEvent.click(await screen.findByRole("tab", { name: "文件树" }));
     await userEvent.click(await screen.findByRole("button", { name: /^README\.md/ }));
+    // .md 默认按文档排版看，这时没有换行开关；切到源码才是带行号的表格
+    await waitFor(() => expect(document.querySelector(".doc-markdown")).toBeTruthy(), {
+      timeout: 5_000,
+    });
+    expect(screen.queryByRole("button", { name: "自动换行" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "看源码" }));
     const readme = await screen.findByRole("table", { name: "README.md" });
     expect(readme.classList.contains("wrap")).toBe(true);
+    expect(screen.getByRole("button", { name: "看渲染" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     await userEvent.click(screen.getByRole("button", { name: "自动换行" }));
     expect(screen.getByRole("table", { name: "README.md" }).classList.contains("wrap")).toBe(false);
     // 代码文件用记住的选择（之前切成了换行）

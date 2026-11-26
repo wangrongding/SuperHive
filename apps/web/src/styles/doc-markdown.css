@@ -1,0 +1,445 @@
+/*
+ * 读文档的排版（DocMarkdown）：附件、产物、代码面板里打开 .md。
+ * 聊天消息的 .message-body 不受影响；颜色全部来自 tokens.css，深浅色自动跟随。
+ */
+
+/* 外层：正文滚动区 + 右侧目录。按自身宽度（不是窗口宽度）决定要不要显示目录，停靠在侧栏时也对 */
+.doc-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  container-type: inline-size;
+}
+
+.doc-view-scroll {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 32px 40px 48px;
+  scroll-behavior: smooth;
+}
+
+.doc-view-scroll > .file-preview-status {
+  max-width: 760px;
+  margin: 24px auto 0;
+  padding: 0;
+}
+
+/* ---------- 正文 ---------- */
+.doc-markdown {
+  max-width: 760px;
+  margin: 0 auto;
+  color: var(--text);
+  font-size: var(--text-lg);
+  line-height: 1.7;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.doc-markdown > :first-child {
+  margin-top: 0;
+}
+
+.doc-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.doc-markdown :is(p, ul, ol, blockquote, .code-block, .doc-table, hr, details, figure) {
+  margin: 0 0 16px;
+}
+
+.doc-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 32px 0 12px;
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  line-height: 1.35;
+  scroll-margin-top: 12px;
+}
+
+.doc-markdown h1 {
+  margin-top: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.875em;
+  letter-spacing: -0.01em;
+}
+
+.doc-markdown h2 {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.45em;
+}
+
+.doc-markdown h3 {
+  font-size: 1.2em;
+}
+
+.doc-markdown h4 {
+  font-size: 1.05em;
+}
+
+.doc-markdown :is(h5, h6) {
+  font-size: 0.95em;
+  color: var(--text-secondary);
+}
+
+.doc-markdown strong {
+  font-weight: var(--weight-semibold);
+}
+
+.doc-markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  text-underline-offset: 3px;
+}
+
+.doc-markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ---------- 列表 ---------- */
+.doc-markdown :is(ul, ol) {
+  padding-left: 1.6em;
+}
+
+.doc-markdown :is(ul, ol) :is(ul, ol) {
+  margin: 4px 0 0;
+}
+
+.doc-markdown li + li {
+  margin-top: 4px;
+}
+
+.doc-markdown li > p {
+  margin: 0 0 6px;
+}
+
+.doc-markdown li > p:last-child {
+  margin-bottom: 0;
+}
+
+.doc-markdown li::marker {
+  color: var(--text-tertiary);
+}
+
+.doc-markdown ol > li::marker {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 任务列表：复选框挂在左边的缩进里，文字和普通列表对齐 */
+.doc-markdown .contains-task-list {
+  padding-left: 1.6em;
+}
+
+.doc-markdown li.task-list-item {
+  position: relative;
+  list-style: none;
+}
+
+.doc-markdown li.task-list-item > input[type="checkbox"],
+.doc-markdown li.task-list-item > p > input[type="checkbox"]:first-child {
+  position: absolute;
+  top: 0.42em;
+  left: -1.45em;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  opacity: 1;
+}
+
+.doc-markdown li.task-list-item:has(> input:checked),
+.doc-markdown li.task-list-item:has(> p > input:checked) {
+  color: var(--text-secondary);
+}
+
+/* ---------- 引用、分隔线、图片 ---------- */
+.doc-markdown blockquote {
+  padding: 10px 16px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--accent-soft);
+  color: var(--text-secondary);
+}
+
+.doc-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.doc-markdown hr {
+  height: 0;
+  margin: 28px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.doc-markdown img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+  vertical-align: middle;
+}
+
+.doc-markdown p > img:only-child {
+  display: block;
+  margin: 8px auto;
+  box-shadow: 0 0 0 1px var(--border-light);
+}
+
+/* ---------- 行内代码、代码块 ---------- */
+.doc-markdown :not(pre) > code {
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.doc-markdown .code-block {
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--bg-code);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.doc-markdown .code-block-header {
+  border-bottom: 1px solid var(--border-light);
+}
+
+.doc-markdown pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+
+.doc-markdown pre code {
+  display: block;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+/* ---------- 表格 ---------- */
+.doc-markdown .doc-table {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.doc-markdown table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+  line-height: 1.55;
+}
+
+.doc-markdown :is(th, td) {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc-markdown :is(th, td) + :is(th, td) {
+  border-left: 1px solid var(--border-light);
+}
+
+.doc-markdown th {
+  background: var(--bg-subtle);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.doc-markdown tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--bg-subtle) 55%, transparent);
+}
+
+.doc-markdown tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+/* ---------- frontmatter：开头的元信息 ---------- */
+.doc-meta {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.doc-meta > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  user-select: none;
+}
+
+.doc-meta[open] > summary {
+  border-bottom: 1px solid var(--border-light);
+}
+
+.doc-meta-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-active);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.doc-meta dl {
+  display: grid;
+  grid-template-columns: minmax(80px, max-content) 1fr;
+  gap: 6px 20px;
+  margin: 0;
+  padding: 10px 14px 12px;
+}
+
+.doc-meta-row {
+  display: contents;
+}
+
+.doc-meta dt {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.8;
+}
+
+.doc-meta dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 目录 ---------- */
+.doc-toc {
+  width: 232px;
+  flex-shrink: 0;
+  overflow: auto;
+  padding: 32px 16px 32px 0;
+  font-size: var(--text-sm);
+}
+
+.doc-toc-title {
+  margin: 0 0 8px;
+  padding-left: 12px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.doc-toc ol {
+  margin: 0;
+  padding: 0;
+  border-left: 1px solid var(--border);
+  list-style: none;
+}
+
+.doc-toc-item {
+  display: block;
+  width: 100%;
+  margin-left: -1px;
+  padding: 4px 8px 4px 12px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  line-height: 1.45;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.doc-toc .level-2 button {
+  padding-left: 24px;
+}
+
+.doc-toc .level-3 button {
+  padding-left: 36px;
+  font-size: var(--text-xs);
+}
+
+.doc-toc-item:hover {
+  color: var(--text);
+}
+
+.doc-toc-item[aria-current] {
+  border-left-color: var(--accent);
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+/* 宽度不够时收起目录，正文优先 */
+@container (max-width: 840px) {
+  .doc-toc {
+    display: none;
+  }
+}
+
+@container (max-width: 560px) {
+  .doc-view-scroll {
+    padding: 20px 16px 32px;
+  }
+
+  .doc-markdown {
+    font-size: var(--text-message);
+  }
+
+  .doc-markdown h1 {
+    font-size: 1.6em;
+  }
+
+  .doc-markdown h2 {
+    font-size: 1.3em;
+  }
+}
+
+/* 加载渲染器前先显示原文 */
+.file-preview-fallback {
+  margin: 0;
+  padding: 16px 20px;
+  white-space: pre-wrap;
+}
+
+/* 代码、源码预览里的代码块：带底色、语言和复制按钮 */
+.file-preview-text .code-block {
+  border-radius: var(--radius-md);
+  background: var(--bg-code);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.file-preview-text .code-block-header {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  position: sticky;
+  top: 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.file-preview-text pre {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+
+.file-preview-text pre code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
