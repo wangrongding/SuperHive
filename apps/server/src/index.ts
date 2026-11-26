@@ -2,7 +2,7 @@
 import "./socket-tos-guard.js";
 import { serverText } from "@superhive/protocol";
 import { errorText } from "./texts.js";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { timingSafeEqual } from "node:crypto";
@@ -19,6 +19,15 @@ import { agentCliOverride } from "./agent-cli-override.js";
 const host = process.env.HIVE_HOST ?? "0.0.0.0";
 const port = Number.parseInt(process.env.HIVE_PORT ?? "8787", 10);
 const databasePath = process.env.HIVE_DATABASE ?? path.resolve("data/hive.sqlite");
+/**
+ * 换代交接标记：dev supervisor 经 HIVE_HANDOVER_FILE 指定；hive restart / hive update 经
+ * POST /api/local/shutdown {"handover":true} 请 Server 自己写，默认放在数据目录里。
+ */
+const handoverFile =
+  process.env.HIVE_HANDOVER_FILE ?? path.join(path.dirname(databasePath), "agent-handover");
+// 交接标记只对被请求换代的那个 Server 有效：上一个 Server 没来得及删的（被强制结束），这里清掉，
+// 否则这个 Server 两分钟内正常停止时会误以为在交接，留下没人管的 Agent 进程
+rmSync(handoverFile, { force: true });
 const staticDir = process.env.HIVE_STATIC_DIR;
 const instanceId = process.env.HIVE_INSTANCE_ID;
 /** 沙箱预览：不连 IM、不起本机 Agent、不跑定时任务、不动真实仓库（见 BuildAppOptions.sandbox） */
@@ -120,7 +129,7 @@ const app = await buildApp({
         },
       }
     : {}),
-  ...(process.env.HIVE_HANDOVER_FILE ? { handoverFile: process.env.HIVE_HANDOVER_FILE } : {}),
+  handoverFile,
   // 新任务目录自动准备依赖，HIVE_WORKTREE_DEPS=0 关闭
   worktreeDependencies: ["0", "false", "off"].includes(
     process.env.HIVE_WORKTREE_DEPS?.toLowerCase() ?? "",
@@ -141,7 +150,16 @@ function shutdown() {
   closing = true;
   const prepare = (app as unknown as { prepareClose?: () => Promise<void> }).prepareClose;
   void (prepare ? prepare().catch(() => undefined) : Promise.resolve())
-    .then(() => app.close())
+    .then(() => {
+      // app.close() 要等所有连接断开：没回应关闭握手的 WebSocket（卡住的页面、交接中保持运行的
+      // Agent）要等 30 秒、长连接请求会一直等。稍等让正常的收尾，然后强制断开，
+      // 免得 hive restart / stop 等到超时把 Server 强杀，交接标记、数据库这些收尾没做完
+      setTimeout(() => {
+        app.server.closeAllConnections();
+        for (const client of app.websocketServer?.clients ?? []) client.terminate();
+      }, 1_000).unref();
+      return app.close();
+    })
     .finally(() => process.exit(0));
 }
 if (shutdownToken) {
@@ -159,8 +177,19 @@ if (shutdownToken) {
     if (!local || provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
       return reply.code(403).send({ ...errorText(serverText("error.auth.notAllowed")) });
     }
+    // 换代重启（hive restart / hive update）：本机 Agent 不随之下线，交给下一个 Server 接管
+    const body = request.body as { handover?: unknown } | undefined;
+    let handover = false;
+    if (body?.handover === true && agentCli) {
+      try {
+        writeFileSync(handoverFile, `${new Date().toISOString()}\n`, { mode: 0o600 });
+        handover = true;
+      } catch (error) {
+        app.log.warn({ err: error }, "无法写入交接标记，本机 Agent 将随 Server 下线");
+      }
+    }
     setImmediate(shutdown);
-    return reply.code(202).send({ ok: true });
+    return reply.code(202).send({ ok: true, handover });
   });
 }
 await app.listen({ host, port });

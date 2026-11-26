@@ -15,6 +15,13 @@ import { parseArgs } from "node:util";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { spawnBackground } from "./background-process.js";
+import {
+  askBusyChoice,
+  handoverBlocker,
+  readLocalAgents,
+  waitForIdle,
+  type LocalAgentSnapshot,
+} from "./restart-handover.js";
 
 type ServiceStartOptions = {
   host: string;
@@ -63,6 +70,9 @@ const restartUsage = `
 
 说明：
   默认沿用上次启动时的 host、port 和 public-url；显式传入的选项会覆盖原配置。
+  本机 Agent 不下线：旧 Server 把它们交给新 Server 接管，正在跑的任务继续做完，回复照常送达。
+  交接不了时（正在运行的是旧版 Server、换了端口或 Join Token、关掉本机 Agent），有 Agent 正在干活
+  就先问你：等它们做完再重启，还是立即重启（中断任务）；不在终端里运行时等它们做完。
 
 选项：
   --host ADDRESS     监听地址
@@ -74,6 +84,8 @@ const restartUsage = `
   --local-agents     重新开启网页上的"在本机启动 Agent"
   --open             重启后用默认浏览器打开网页（默认不打开，已开着的页面刷新即可）
   --foreground       重启后在前台运行
+  --wait             交接不了时不问，等本机 Agent 手上的任务做完再重启（最多 30 分钟）
+  --force            交接不了时不问也不等，立即重启（会中断正在跑的任务）
 `;
 
 function pathsFor(dataDir?: string): {
@@ -432,14 +444,36 @@ export async function stopService(args = process.argv.slice(3)): Promise<void> {
     throw new Error(`PID ${state.pid} 与记录的 Hive 实例不匹配，为避免停止其他进程，已拒绝操作。`);
   }
 
+  await stopRunning(servicePaths, state);
+}
+
+/**
+ * 请正在运行的 Server 退出。handover 时请它把本机 Agent 交给下一个 Server（不结束进程），
+ * 返回 Server 是否答应了交接。
+ */
+async function stopRunning(
+  servicePaths: ReturnType<typeof pathsFor>,
+  state: ServiceState,
+  options: { handover?: boolean } = {},
+): Promise<{ handedOver: boolean }> {
   // 先请 Server 自己退出（让本机 Agent 正常下线、IM 断开）；Windows 上信号就是强制结束，只能这样
+  let handedOver = false;
   const asked = state.shutdownToken
     ? await fetch(new URL("/api/local/shutdown", state.healthUrl), {
         method: "POST",
-        headers: { "x-hive-shutdown": state.shutdownToken },
+        headers: {
+          "x-hive-shutdown": state.shutdownToken,
+          ...(options.handover ? { "content-type": "application/json" } : {}),
+        },
+        ...(options.handover ? { body: JSON.stringify({ handover: true }) } : {}),
         signal: AbortSignal.timeout(3_000),
       }).then(
-        (response) => response.ok,
+        async (response) => {
+          if (!response.ok) return false;
+          const payload = (await response.json().catch(() => ({}))) as { handover?: unknown };
+          handedOver = payload.handover === true;
+          return true;
+        },
         () => false,
       )
     : false;
@@ -451,6 +485,7 @@ export async function stopService(args = process.argv.slice(3)): Promise<void> {
   if (processExists(state.pid)) process.kill(state.pid, "SIGKILL");
   rmSync(servicePaths.statePath, { force: true });
   console.log(`[hive] 已停止 Hive Server（PID ${state.pid}）。`);
+  return { handedOver };
 }
 
 /** 由 hive start 启动的 Server 是否还在运行（只看记录的进程在不在，不做健康检查） */
@@ -497,6 +532,8 @@ export async function restartService(args = process.argv.slice(3)): Promise<void
       "local-agents": { type: "boolean" },
       foreground: { type: "boolean", default: false },
       open: { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
+      wait: { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -522,9 +559,114 @@ export async function restartService(args = process.argv.slice(3)): Promise<void
   // 重启时网页多半已经开着（刷新即可），默认不再新开一个标签页
   if (!parsed.values.open) startArgs.push("--no-open");
 
-  await stopService(parsed.values["data-dir"] ? ["--data-dir", parsed.values["data-dir"]] : []);
+  const state = readState(servicePaths.statePath);
+  const running =
+    state && processExists(state.pid) && (await healthMatches(state.healthUrl, state.instanceId));
+  if (!state || !running) {
+    await stopService(parsed.values["data-dir"] ? ["--data-dir", parsed.values["data-dir"]] : []);
+    console.log("[hive] 正在启动 Hive Server…");
+    await startService(startArgs);
+    return;
+  }
+
+  // 能交接就交接：本机 Agent 不下线，正在跑的任务继续，由新 Server 接管
+  const before = readLocalAgents(servicePaths.databasePath);
+  const blocker = handoverBlocker({
+    serverSupports: await healthSupportsHandover(state.healthUrl),
+    canAskShutdown: Boolean(state.shutdownToken),
+    previous: {
+      host: previousOptions?.host ?? "0.0.0.0",
+      port: previousOptions?.port ?? 8787,
+      localAgentsOff: previousOptions?.localAgents === false,
+    },
+    next: { host, port: Number.parseInt(port, 10), localAgentsOff },
+    tokenChanged: Boolean(parsed.values.token),
+  });
+  // 能交接就总是请求交接：Server 没开本机 Agent 时会忽略，读不到数据库也不影响
+  const handover = !blocker;
+  if (blocker && !parsed.values.force) {
+    const proceed = await confirmInterruption(servicePaths.databasePath, blocker, {
+      wait: Boolean(parsed.values.wait),
+    });
+    if (!proceed) {
+      console.log("[hive] 已取消，Hive Server 没有重启。");
+      return;
+    }
+  }
+
+  const { handedOver } = await stopRunning(servicePaths, state, { handover });
+  if (handover && !handedOver)
+    console.warn("[hive] Server 没有接受交接，本机 Agent 已随旧 Server 下线，重启后会重新拉起。");
   console.log("[hive] 正在重新启动 Hive Server…");
   await startService(startArgs);
+  if (handedOver && before) reportHandover(servicePaths.databasePath, before);
+}
+
+/** 新版 Server 的 /health 带 handover: true，表示能把本机 Agent 交给下一个 Server */
+async function healthSupportsHandover(healthUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_500) });
+    if (!response.ok) return false;
+    return ((await response.json()) as { handover?: unknown }).handover === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 交接不了：没人在忙就直接重启；有人在忙时，终端里让用户选，非终端（脚本）等它们空闲 */
+async function confirmInterruption(
+  databasePath: string,
+  reason: string,
+  options: { wait: boolean },
+): Promise<boolean> {
+  const snapshot = readLocalAgents(databasePath);
+  if (!snapshot) {
+    console.warn(
+      `[hive] ${reason}；看不到本机 Agent 是否在忙，重启会让它们下线，进行中的任务会被中断。`,
+    );
+    return true;
+  }
+  if (snapshot.busy.length === 0) {
+    if (snapshot.running.length > 0)
+      console.log(`[hive] ${reason}；本机 Agent 都空闲，重启后会重新拉起。`);
+    return true;
+  }
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const choice = options.wait || !interactive ? "wait" : await askBusyChoice(snapshot.busy, reason);
+  if (choice === "cancel") return false;
+  if (choice === "now") return true;
+  if (!interactive || options.wait)
+    console.log(`[hive] ${reason}；${snapshot.busy.join("、")} 正在干活，等它们做完再重启。`);
+  const still = await waitForIdle(() => readLocalAgents(databasePath)?.busy, {
+    timeoutMs: WAIT_IDLE_TIMEOUT_MS,
+  });
+  if (still.length > 0) {
+    throw new Error(
+      `等了 ${WAIT_IDLE_TIMEOUT_MS / 60_000} 分钟，${still.join("、")} 还在忙，没有重启。确定要中断它们就运行 hive restart --force。`,
+    );
+  }
+  console.log("[hive] 本机 Agent 都空闲了，开始重启。");
+  return true;
+}
+
+/** 等忙的 Agent 空闲最多这么久 */
+const WAIT_IDLE_TIMEOUT_MS = 30 * 60_000;
+
+/** 新 Server 起来时已按进程号接管：进程号没变的就是接上了 */
+function reportHandover(databasePath: string, before: LocalAgentSnapshot): void {
+  const after = readLocalAgents(databasePath);
+  if (!after) return;
+  const pids = new Map(after.running.map((agent) => [agent.name, agent.pid]));
+  const kept = before.running.filter((agent) => pids.get(agent.name) === agent.pid);
+  const relaunched = before.running.length - kept.length;
+  const busy = before.busy.filter((name) => kept.some((agent) => agent.name === name));
+  console.log(
+    `[hive] ${kept.length} 个本机 Agent 已由新 Server 接管，没有下线` +
+      (busy.length ? `；${busy.join("、")} 手上的任务继续执行，回复照常送达` : "") +
+      (relaunched ? `；另有 ${relaunched} 个没接上，已重新拉起` : "") +
+      "。",
+  );
+  console.log("[hive] 它们跑的还是旧版本代码，空闲后会自动重启换成新版本（设置里可关自动更新）。");
 }
 
 /**

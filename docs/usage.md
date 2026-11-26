@@ -183,7 +183,7 @@ Hive Server 只转发消息，不提供远程 Shell。`workspace` 和 `full` 的
 
 在网页上「在本机启动」的 Agent，配置和「是否该运行」都存在 Server 的数据库里：
 
-- **Server 重启**（`hive restart`、`hive stop` 后再 `hive start`、开发时代码换代）：没被你手动停止的本机 Agent 会自动拉起；手动停止过的保持停止。上一个 Server 交接时还在跑的进程直接接管，手上的任务不中断。需要重新拉起多个 Agent 时逐个错开约 2 秒，不会同时启动一堆 CLI 抢 CPU 和登录态。
+- **Server 重启**（`hive restart`、`hive stop` 后再 `hive start`、开发时代码换代）：没被你手动停止的本机 Agent 会自动拉起；手动停止过的保持停止。上一个 Server 交接时还在跑的进程直接接管，手上的任务不中断：`hive restart`、`hive update` 默认就走交接（旧 Server 退出前写交接标记，不结束本机 Agent；新 Server 按数据库里记的进程号接管）。交接不了（旧版 Server、换了端口或 Join Token、关掉本机 Agent）又有 Agent 在干活时，终端里先问你等它们做完还是立即重启，脚本里等它们做完（最多 30 分钟），`--wait` / `--force`（`hive update` 是 `--force-restart`）跳过询问。需要重新拉起多个 Agent 时逐个错开约 2 秒，不会同时启动一堆 CLI 抢 CPU 和登录态。
 - **会话续上**：每个 Agent 在本机状态目录（`~/.superhive/agents/`）里按「Server 地址 + 房间 + 名字」保存会话和消息游标，重新拉起后接着原来的会话，只读取上次处理之后的新消息。
 - **对话跟着任务走**：房间主对话（人 @、主 Agent 接话、定时任务）和每件子任务（别人 `hive_invoke` 派来的，含同一件活的返修、回执、回复唤醒，以及人直接回复子任务交付）各用一段会话，按「目录 + 道」收起和接回，最多留 16 段。主对话在两件活之间达到约 20 万 token（不超过压缩阈值的 0.6），或空闲超过缓存时长且在 10 万以上时换新，新会话开头附按房间记录拼的交接摘要。每轮附带的公共消息默认约 2.4 万 token，回复链、@ 了它的、回复它的、它自己发的必带，其余从新到旧装满，装不下的给索引和补读方式；子任务结果全文每条最多 1.6 万字符。`HIVE_TASK_LANES=0` 全部关掉，`HIVE_LANE_RENEW=0` 只关换新，`HIVE_LANE_RENEW_TOKENS` / `HIVE_LANE_RENEW_IDLE_TOKENS` / `HIVE_PROMPT_BUDGET_TOKENS` 调阈值。方案见 [task-scoped-sessions](research/task-scoped-sessions.md)。
 - **电脑重启或关机**：系统关机时 Server 会让本机 Agent 正常离线，「该运行」的标记不变。电脑开机后要有人启动 Server，Agent 才会跟着回来：运行一次 `hive start`，或用 `hive autostart on` 让 Server 在登录后自动启动（见下文）。
@@ -347,7 +347,7 @@ hive --data-dir /srv/superhive
 
 ### 更新
 
-- `hive update` 先查 npm 上的最新版，再用你当初安装 `superhive` 的那个包管理器（npm、pnpm、bun 或 yarn 全局安装，自动识别）装到最新版。Hive Server 正在运行的话，装好后自动用新版本重启，沿用原来的启动配置。已经是最新版会直接说明。
+- `hive update` 先查 npm 上的最新版，再用你当初安装 `superhive` 的那个包管理器（npm、pnpm、bun 或 yarn 全局安装，自动识别）装到最新版。Hive Server 正在运行的话，装好后自动用新版本重启，沿用原来的启动配置；重启时本机 Agent 不下线，正在跑的任务继续做完（见上文「Server 重启」）。已经是最新版会直接说明。
 - 平时在终端运行 `hive` 时会顺便检查一次有没有新版本：最多等 1.5 秒，查不到不影响使用，结果缓存 1 小时。有新版会提示运行 `hive update`。设置环境变量 `NO_UPDATE_NOTIFIER=1` 可以关闭这项检查。
 
 ### 不想全局安装：用 npx

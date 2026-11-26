@@ -159,6 +159,8 @@ If `superhive` is already installed globally on that computer, replace `npx --ye
 
 When running through `npx`, there's no `hive update`; use `npx superhive@latest restart` to update and restart instead.
 
+`hive restart` and `hive update` keep local Agents online: running tasks finish and their replies arrive. If a handover isn't possible while tasks are running, you're asked whether to wait or interrupt.
+
 `hive autostart on` starts the server when you log in to this computer, so local agents come back after a reboot too.
 
 ## Run the desktop app from source

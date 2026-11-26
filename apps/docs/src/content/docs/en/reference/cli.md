@@ -30,7 +30,7 @@ Whether a subcommand accepts `--help` depends on its own parser. `skill install`
 | ----------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | `hive start`            | Starts the server and web UI, in the background by default     | Listens on `0.0.0.0:8787` by default and tries to open a local browser         |
 | `hive stop`             | Stops the service started by Hive                              | With a custom data directory, pass the same `--data-dir`                       |
-| `hive restart`          | Restarts with the original startup configuration               | Restarts the current version only; doesn't download updates                    |
+| `hive restart`          | Restarts with the original config; local Agents stay online    | Restarts the current version only; doesn't download updates                    |
 | `hive update`           | Updates to the latest version; a running server restarts on it | Installs globally with the original package manager; doesn't update agent CLIs |
 | `hive update --check`   | Only checks whether a new version exists                       | Doesn't install or restart                                                     |
 | `hive autostart on`     | Starts Hive when the current user logs in                      | Changes local autostart config; install globally first for long-term use       |
@@ -65,6 +65,8 @@ Passing `--data-dir` doesn't migrate history from an old directory. Change an ex
 ### Updates and new-version notices
 
 `hive update` checks npm for the latest version, then installs it with whichever package manager originally installed `superhive` (npm, pnpm, bun or yarn global install, detected automatically). If Hive Server is running, it restarts on the new version with the original startup config; if you're already up to date, it says so. When running through npx, use `npx superhive@latest restart` instead.
+
+Local Agents stay online: the old Server hands them over to the new one, so running tasks finish and their replies are delivered, and open pages reconnect after a few seconds. When a handover isn't possible (the running Server is an older version without handover, or the restart changes the port, the Join Token, or turns local Agents off) and an Agent is busy, you're asked first: press Enter to wait until they finish, `f` to restart now (interrupting their tasks), or `n` to cancel. Outside a terminal (scripts, autostart) it waits, for up to 30 minutes. `--wait` waits without asking and `--force` restarts without asking; for `hive update` use `--wait` and `--force-restart`. Agents that were handed over still run the old code and restart onto the new version once idle, via "Restart after code updates".
 
 Each time you run `hive` in a terminal it does a quick version check: it waits at most 1.5 seconds, never blocks you if the check fails, and caches the result for an hour. If a new version exists, it suggests running `hive update`. Set `NO_UPDATE_NOTIFIER=1` to turn this off.
 

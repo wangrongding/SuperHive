@@ -159,6 +159,8 @@ npx --yes superhive@latest join \
 
 用 `npx` 临时运行时没有 `hive update`，改用 `npx superhive@latest restart` 更新并重启。
 
+`hive restart` 和 `hive update` 重启时本机 Agent 不下线，正在跑的任务继续做完；交接不了又有任务在跑时会先问你等还是中断。
+
 `hive autostart on` 让 Server 在登录这台电脑后自动启动，电脑重启后本机 Agent 也会跟着回来。
 
 ## 从源码运行桌面端

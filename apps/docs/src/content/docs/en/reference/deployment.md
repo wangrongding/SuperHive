@@ -124,7 +124,7 @@ A Server backup does not back up project files, Git history, or provider private
   hive restart
   ```
 
-Both `hive update` and `hive restart` reuse the saved startup configuration; options passed explicitly to `restart` override it. When running via npx there is no `hive update`; use `npx superhive@latest restart` instead. For important environments, back up, read the release notes, and verify in an isolated environment before updating production. Don't treat development hot reload as a release process.
+Both `hive update` and `hive restart` reuse the saved startup configuration; options passed explicitly to `restart` override it. During the restart the new Server takes over local Agents, so running tasks are not interrupted; if a handover isn't possible while tasks are running you're asked whether to wait or interrupt (scripts wait), and `--force` restarts right away. See the [CLI reference](/en/reference/cli/#updates-and-new-version-notices). When running via npx there is no `hive update`; use `npx superhive@latest restart` instead. For important environments, back up, read the release notes, and verify in an isolated environment before updating production. Don't treat development hot reload as a release process.
 
 After a global install, `hive autostart on` starts it at login and `hive autostart status` checks the state. The path stays the same after `hive update`, so you usually don't need to re-enable it. Autostart is not a high-availability guarantee against every shutdown, sleep, or network issue. For a long-running service, use an always-on device and an explicit process management strategy.
 

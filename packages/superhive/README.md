@@ -78,6 +78,11 @@ hive --public-url https://hive.example.com
 
 For a foreground process, use `hive --foreground`.
 
+Restarts are seamless for local Agents: the old server hands them over to the new one, so running
+tasks finish and their replies arrive. If a handover is not possible (an older server, or a changed
+port or token) while an Agent is busy, `hive restart` asks whether to wait or interrupt; it waits
+when not in a terminal. `--wait` / `--force` skip the question (`--force-restart` for `hive update`).
+
 `hive update` checks npm for the latest version and installs it with the package manager you
 originally used (npm, pnpm, bun or yarn global installs are detected). Each time you run `hive` in a
 terminal it also checks for a new version (waits at most 1.5 seconds, never blocks on failure,

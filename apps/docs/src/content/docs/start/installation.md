@@ -170,6 +170,8 @@ hive --host 127.0.0.1
 
 `hive update` 先查 npm 上的最新版，再用你当初安装 `superhive` 的那个包管理器（npm、pnpm、bun 或 yarn 全局安装，自动识别）装到最新版；已经是最新会直接说明。`restart` 默认不再打开浏览器，需要时加 `--open`。更新的只是 SuperHive 本身，外部 Agent CLI 不会随之更新。
 
+`hive restart` 和 `hive update` 重启时，本机 Agent 不会因此下线：旧 Server 把它们交给新 Server 接管，正在跑的任务继续做完、回复照常送达，网页断开几秒后自动重连。交接不了时（正在运行的是不支持交接的旧版 Server，或者重启时换了端口、Join Token、关掉了本机 Agent），如果有 Agent 正在干活，会先问你：回车等它们做完再重启，`f` 立即重启（中断任务），`n` 取消；不在终端里运行（脚本、自启动）时等它们做完，最多 30 分钟。`--wait` 不问直接等，`--force` 不问直接重启；`hive update` 对应的是 `--wait` 和 `--force-restart`。接管过来的 Agent 还跑着旧版本代码，空闲后会按「代码更新后自动重启」换成新版本。
+
 平时在终端运行 `hive` 时会顺便检查一次新版本：最多等 1.5 秒，查不到不影响使用，结果缓存 1 小时；有新版会提示运行 `hive update`。设置 `NO_UPDATE_NOTIFIER=1` 可以关闭。
 
 用 `npx` 临时运行时没有 `hive update`，改用 `npx superhive@latest restart` 更新并重启。

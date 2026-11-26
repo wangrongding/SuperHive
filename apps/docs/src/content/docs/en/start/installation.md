@@ -170,6 +170,8 @@ Replace the example directory with a real one on your machine. Startup flags app
 
 `hive update` first checks npm for the latest version, then installs it with the same package manager you originally used for `superhive` (global npm, pnpm, bun, or yarn, detected automatically). If you're already up to date, it says so. `restart` no longer opens the browser by default; add `--open` if you want it. Only SuperHive itself is updated; external agent CLIs are not.
 
+When `hive restart` or `hive update` restarts the Server: Local Agents stay online: the old Server hands them over to the new one, so running tasks finish and their replies are delivered, and open pages reconnect after a few seconds. When a handover isn't possible (the running Server is an older version without handover, or the restart changes the port, the Join Token, or turns local Agents off) and an Agent is busy, you're asked first: press Enter to wait until they finish, `f` to restart now (interrupting their tasks), or `n` to cancel. Outside a terminal (scripts, autostart) it waits, for up to 30 minutes. `--wait` waits without asking and `--force` restarts without asking; for `hive update` use `--wait` and `--force-restart`. Agents that were handed over still run the old code and restart onto the new version once idle, via "Restart after code updates".
+
 When you run `hive` in a terminal, it also checks for a new version: it waits at most 1.5 seconds, never blocks you if the check fails, and caches the result for 1 hour. If there's a new version, it suggests running `hive update`. Set `NO_UPDATE_NOTIFIER=1` to turn this off.
 
 When running through `npx`, there's no `hive update`; use `npx superhive@latest restart` to update and restart.

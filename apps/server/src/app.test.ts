@@ -134,6 +134,37 @@ describe("Hive WebSocket protocol", () => {
     });
   });
 
+  it("tells hive restart it can hand local Agents over only when it manages them", async () => {
+    const app = await buildApp({
+      databasePath: ":memory:",
+      token: "test-token",
+      staticDir: "/definitely-not-present",
+      handoverFile: "/definitely-not-present/agent-handover",
+      localAgents: {
+        cli: { command: "/usr/bin/node", args: ["/opt/superhive/dist/cli.js"] },
+        serverUrl: "http://127.0.0.1:8787",
+        probe: async () => ({ installed: false, version: null }),
+      },
+    });
+    closeApp = () => app.close();
+    expect((await app.inject({ method: "GET", url: "/health" })).json()).toMatchObject({
+      handover: true,
+    });
+    await app.close();
+
+    // 没开本机 Agent：没有可交接的，不报这一项
+    const plain = await buildApp({
+      databasePath: ":memory:",
+      token: "test-token",
+      staticDir: "/definitely-not-present",
+      handoverFile: "/definitely-not-present/agent-handover",
+    });
+    closeApp = () => plain.close();
+    expect((await plain.inject({ method: "GET", url: "/health" })).json()).not.toHaveProperty(
+      "handover",
+    );
+  });
+
   it("can expose the workspace command during local development", async () => {
     const app = await buildApp({
       databasePath: ":memory:",

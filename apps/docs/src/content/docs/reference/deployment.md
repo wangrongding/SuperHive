@@ -124,7 +124,7 @@ location / {
   hive restart
   ```
 
-`hive update` 和 `hive restart` 都会沿用保存的启动配置，`restart` 显式传入的参数可覆盖它。用 npx 运行时没有 `hive update`，改用 `npx superhive@latest restart`。对重要环境，先备份、核对发布说明并在隔离环境验证，再更新生产；不要把开发热重载当作发布流程。
+`hive update` 和 `hive restart` 都会沿用保存的启动配置，`restart` 显式传入的参数可覆盖它。重启时本机 Agent 由新 Server 接管，正在跑的任务不中断；交接不了又有任务在跑时会先问你等还是中断，脚本里默认等，`--force` 立即重启，详见 [CLI 参考](/reference/cli/#更新和新版本提示)。用 npx 运行时没有 `hive update`，改用 `npx superhive@latest restart`。对重要环境，先备份、核对发布说明并在隔离环境验证，再更新生产；不要把开发热重载当作发布流程。
 
 全局安装后可用 `hive autostart on` 设置登录自启，`hive autostart status` 核对状态；`hive update` 后路径不变，一般不用重新开启。自启动不是对一切关机、睡眠或网络问题的高可用保证。长期服务建议用持续在线的设备和明确的进程管理策略。
 

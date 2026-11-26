@@ -4427,6 +4427,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     // 本机 Agent 在原 Server 退出后据此认出接管它的新 Server
     pid: process.pid,
     ...(options.instanceId ? { instanceId: options.instanceId } : {}),
+    // hive restart 据此判断能不能换代交接（旧版 Server 没有这一项，重启会让本机 Agent 下线）
+    ...(localAgents && options.handoverFile ? { handover: true } : {}),
   }));
   /**
    * 网页把自己的报错交上来归档成故障单。只收房主的（访客的页面可能发来任何东西），

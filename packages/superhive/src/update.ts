@@ -243,11 +243,21 @@ const updateUsage = `
 说明：
   查 npm 上的最新版，用你安装 superhive 时的那个包管理器（npm / pnpm / bun / yarn 全局）装到最新版；
   Hive Server 正在运行时自动用新版本重启，沿用原来的启动配置。
+  重启时本机 Agent 不下线，正在跑的任务继续做完（见 hive restart --help）。
 
 选项：
-  --check   只检查有没有新版本，不安装
-  --force   已是最新版也重新安装一遍
+  --check           只检查有没有新版本，不安装
+  --force           已是最新版也重新安装一遍
+  --wait            重启交接不了时不问，等本机 Agent 手上的任务做完再重启
+  --force-restart   重启交接不了时不问也不等，立即重启（会中断正在跑的任务）
 `;
+
+/** hive update 装好新版后调 hive restart 带的参数 */
+export function restartArgsFor(options: { wait?: boolean; "force-restart"?: boolean }): string[] {
+  if (options["force-restart"]) return ["restart", "--force"];
+  if (options.wait) return ["restart", "--wait"];
+  return ["restart"];
+}
 
 export async function updateCommand(
   args: string[],
@@ -262,6 +272,8 @@ export async function updateCommand(
     options: {
       check: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      wait: { type: "boolean", default: false },
+      "force-restart": { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -328,8 +340,10 @@ export async function updateCommand(
       ? path.join(install.prefix, win ? "hive.cmd" : path.join("bin", "hive"))
       : undefined;
   const hive = anchored && existsSync(anchored) ? anchored : win ? "hive.cmd" : "hive";
-  const restart = await runInherit(hive, ["restart"]).catch(() =>
-    runInherit(process.execPath, [process.argv[1]!, "restart"]),
+  const restartArgs = restartArgsFor(parsed.values);
+  const restart = await runInherit(hive, restartArgs).catch(() =>
+    runInherit(process.execPath, [process.argv[1]!, ...restartArgs]),
   );
-  if (restart !== 0) throw new Error("新版本已装好，但重启 Server 失败，请手动运行 hive restart。");
+  if (restart !== 0)
+    throw new Error("新版本已装好，但 Server 没有重启（原因见上面），稍后手动运行 hive restart。");
 }
