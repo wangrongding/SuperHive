@@ -77,6 +77,9 @@ const RAW_BUTTON_CLASSES = new Set([
   "stepper-step",
   "duration-stepper-step",
   "agent-step-back",
+  // 底部状态栏的一项、弹出面板底部的「去设置」链接行：一套单独的低调小控件，和状态栏一起设计
+  "status-item",
+  "status-popover-link",
   // 顶栏、输入框工具条：一套单独的图标工具按钮，和顶栏、输入框一起设计
   "header-button",
   "composer-tool",
@@ -138,6 +141,15 @@ function leadingClass(init: ts.JsxAttributeValue | undefined): string | undefine
   if (ts.isNoSubstitutionTemplateLiteral(expression)) return fromText(expression.text);
   if (ts.isTemplateExpression(expression)) return fromText(expression.head.text);
   if (ts.isStringLiteral(expression)) return fromText(expression.text);
+  // 条件表达式：两边都得是允许的类，才算允许
+  if (ts.isConditionalExpression(expression)) {
+    const sides = [expression.whenTrue, expression.whenFalse].map((side) =>
+      ts.isStringLiteral(side) || ts.isNoSubstitutionTemplateLiteral(side)
+        ? fromText(side.text)
+        : undefined,
+    );
+    return sides.every((side) => side && RAW_BUTTON_CLASSES.has(side)) ? sides[0] : undefined;
+  }
   return undefined;
 }
 

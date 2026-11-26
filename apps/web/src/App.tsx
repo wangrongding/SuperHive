@@ -85,6 +85,7 @@ import {
   storedNotificationSoundKey,
   storedPresenceNotificationsKey,
   storedThemeKey,
+  storedStatusBarKey,
   storedDensityKey,
   storedThreadWidthKey,
   storedMessageSizeKey,
@@ -139,6 +140,7 @@ import { Tooltip } from "./tooltip";
 import { useAppLoadingStatus, useAppReady } from "./boot-splash";
 import type { LoadingStatus } from "./loading-status";
 import { Button } from "./button";
+import { StatusBar } from "./status-bar";
 
 export function App({
   guest,
@@ -368,6 +370,13 @@ export function App({
   const [reduceMotion, setReduceMotion] = useState(() =>
     storedBoolean(storedReduceMotionKey, false),
   );
+  const [statusBarVisible, setStatusBarVisibleState] = useState(() =>
+    storedBoolean(storedStatusBarKey, true),
+  );
+  const setStatusBarVisible = useCallback((visible: boolean) => {
+    setStatusBarVisibleState(visible);
+    localStorage.setItem(storedStatusBarKey, String(visible));
+  }, []);
   const notificationPreferencesRef = useRef({
     messageNotifications,
     notificationSound,
@@ -2560,6 +2569,56 @@ export function App({
           whiteboardEpochRef={whiteboardEpochRef}
         />
       </section>
+      {statusBarVisible && (
+        <StatusBar
+          connectionState={connectionState}
+          meta={meta}
+          participants={participants}
+          leadAgentName={currentRoom?.leadAgent ?? undefined}
+          isOwner={isOwner}
+          local={local}
+          im={
+            isOwner && authToken && !meta?.sandbox
+              ? {
+                  base,
+                  token: authToken,
+                  dialogOpen: imDialogOpen,
+                  open: () => setImDialogOpen(true),
+                }
+              : undefined
+          }
+          incidents={
+            incidents.enabled
+              ? {
+                  count: incidents.unhandled,
+                  open: (trigger) => {
+                    incidentsTriggerRef.current = trigger;
+                    setActivityView(undefined);
+                    setSchedulesOpen(false);
+                    setIncidentsView({ tab: "incidents" });
+                  },
+                }
+              : undefined
+          }
+          openAgentTasks={(trigger) => openActivity("tasks", trigger)}
+          openSettings={(tab) => {
+            setSettingsTab(tab);
+            setSettingsOpen(true);
+          }}
+          openProxySettings={openProxySettings}
+          settingsOpen={settingsOpen}
+          messageNotifications={messageNotifications}
+          updateMessageNotifications={updateMessageNotifications}
+          sendShortcut={sendShortcut}
+          setSendShortcut={setSendShortcut}
+          themePreference={themePreference}
+          setThemePreference={setThemePreference}
+          interfaceDensity={interfaceDensity}
+          setInterfaceDensity={setInterfaceDensity}
+          localePreference={localePreference}
+          hide={() => setStatusBarVisible(false)}
+        />
+      )}
       {dockedPreview?.popped && (
         <FilePreview
           key={dockedPreview.attachment.id}
@@ -2885,6 +2944,8 @@ export function App({
           setMessageSize={setMessageSize}
           setNotificationSound={setNotificationSound}
           setReduceMotion={setReduceMotion}
+          statusBarVisible={statusBarVisible}
+          setStatusBarVisible={setStatusBarVisible}
           setRichComposer={setRichComposer}
           setSendShortcut={setSendShortcut}
           setSettingsTab={setSettingsTab}

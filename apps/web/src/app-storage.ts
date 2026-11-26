@@ -20,6 +20,8 @@ export const storedReduceMotionKey = "superhive.reduce-motion";
 export const storedAttentionDeliveryKey = "superhive.attention-delivery";
 export const storedAttentionSoundKey = "superhive.attention-sound";
 export const storedAttentionGroupKey = "superhive.attention-group";
+/** 窗口底部的状态栏：默认显示，可在「外观」或状态栏自己的菜单里关掉 */
+export const storedStatusBarKey = "superhive.status-bar";
 export type MessageNotificationMode = "off" | "mentions" | "all";
 export type SendShortcut = "modifier-enter" | "enter";
 export type SettingsTab = "chat" | "notifications" | "appearance" | "computer" | "runtimes";

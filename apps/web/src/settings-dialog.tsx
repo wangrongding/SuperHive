@@ -78,6 +78,8 @@ export function SettingsDialog({
   setThemePreference,
   setThreadWidth,
   setTimeFormat,
+  setStatusBarVisible,
+  statusBarVisible,
   settingsCloseRef,
   settingsDialogRef,
   settingsTab,
@@ -124,6 +126,8 @@ export function SettingsDialog({
   setThemePreference: Dispatch<SetStateAction<ThemePreference>>;
   setThreadWidth: Dispatch<SetStateAction<ThreadWidth>>;
   setTimeFormat: Dispatch<SetStateAction<TimeFormat>>;
+  setStatusBarVisible: (visible: boolean) => void;
+  statusBarVisible: boolean;
   settingsCloseRef: RefObject<HTMLButtonElement | null>;
   settingsDialogRef: RefObject<HTMLDivElement | null>;
   settingsTab: SettingsTab;
@@ -639,6 +643,14 @@ export function SettingsDialog({
                       setReduceMotion(checked);
                       localStorage.setItem(storedReduceMotionKey, String(checked));
                     }}
+                  />
+                  <SettingsSwitch
+                    checked={statusBarVisible}
+                    label={t("显示底部状态栏")}
+                    description={t(
+                      "窗口最下面一条：连接、Agent 和常用开关，点开直接改；窄屏上不显示",
+                    )}
+                    onChange={setStatusBarVisible}
                   />
                 </div>
               </section>

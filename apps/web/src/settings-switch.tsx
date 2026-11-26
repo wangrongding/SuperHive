@@ -9,7 +9,7 @@ export function SettingsSwitch({
   checked: boolean;
   disabled?: boolean;
   label: string;
-  description: string;
+  description?: string;
   onChange: (checked: boolean) => void;
 }) {
   return (
@@ -23,7 +23,7 @@ export function SettingsSwitch({
     >
       <span>
         <strong>{label}</strong>
-        <small>{description}</small>
+        {description && <small>{description}</small>}
       </span>
       <i className="switch-control" aria-hidden="true">
         <b />

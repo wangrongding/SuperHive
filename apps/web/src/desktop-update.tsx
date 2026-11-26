@@ -104,9 +104,12 @@ function percent(received: number, total: number): number | undefined {
 export function DesktopUpdateEntry({
   api: injected,
   platform = desktopBridge()?.platform,
+  variant = "sidebar",
 }: {
   api?: DesktopUpdatesApi;
   platform?: string;
+  /** sidebar=左栏底部的入口；status=底部状态栏里的一小项 */
+  variant?: "sidebar" | "status";
 }) {
   const { info, api } = useDesktopUpdate(injected ?? desktopBridge()?.updates);
   const [open, setOpen] = useState(false);
@@ -214,7 +217,11 @@ export function DesktopUpdateEntry({
     <>
       <button
         type="button"
-        className="sidebar-action desktop-update-entry"
+        className={
+          variant === "status"
+            ? "status-item ok desktop-update-status"
+            : "sidebar-action desktop-update-entry"
+        }
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
       >
