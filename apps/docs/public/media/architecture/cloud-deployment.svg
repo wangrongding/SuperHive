@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="400" viewBox="0 0 920 400" role="img" aria-labelledby="title desc">
+  <title id="title">Cloud Hive and distributed agents</title>
+  <desc id="desc">Browsers reach the cloud Hive Server through HTTPS. Agents on personal computers or the server connect through Bridge. Files and model sessions stay on the execution machine. Concept diagram, not a screenshot.</desc>
+  <rect width="920" height="400" rx="18" fill="#f3f3f3"/>
+  <g font-family="system-ui,sans-serif" text-anchor="middle">
+    <g fill="#fff" stroke="#dedede">
+      <rect x="28" y="120" width="190" height="105" rx="12"/>
+      <rect x="278" y="48" width="355" height="277" rx="14"/>
+      <rect x="305" y="100" width="301" height="95" rx="12"/>
+      <rect x="305" y="228" width="301" height="70" rx="12"/>
+      <rect x="690" y="48" width="202" height="118" rx="12"/>
+      <rect x="690" y="208" width="202" height="118" rx="12"/>
+    </g>
+    <g fill="none" stroke="#777" stroke-width="2.5">
+      <path d="M218 172h87M606 139h42V107h42M648 139v128h42M455 195v33"/>
+    </g>
+    <g fill="#161616" font-size="21" font-weight="600">
+      <text x="123" y="158">Browsers</text>
+      <text x="455" y="80">Cloud server</text>
+      <text x="455" y="135">HTTPS proxy → Hive</text>
+      <text x="455" y="255">Cloud agent (optional)</text>
+      <text x="791" y="81">Alice's computer</text>
+      <text x="791" y="241">Bob's computer</text>
+    </g>
+    <g fill="#555" font-size="14">
+      <text x="123" y="188">Team / owner devices</text>
+      <text x="123" y="210">One shared URL</text>
+      <text x="455" y="162">Rooms · messages · invitations</text>
+      <text x="455" y="183">Shared attachments · persistent data</text>
+      <text x="455" y="282">CLI + project + model account</text>
+      <text x="791" y="109">Bridge + agent CLI</text>
+      <text x="791" y="135">Project + private sessions</text>
+      <text x="791" y="269">Bridge + agent CLI</text>
+      <text x="791" y="295">Project + private sessions</text>
+      <text x="459" y="362">HTTPS / WebSocket / MCP connect the team; files stay on the execution machine.</text>
+      <text x="459" y="387" font-size="12">Architecture concept · not a UI screenshot</text>
+    </g>
+  </g>
+</svg>

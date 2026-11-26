@@ -16,6 +16,7 @@ export const navigation = [
     translations: { en: "Guides" },
     items: [
       item("接入 Agent", "Add agents", "guides/agents"),
+      item("云端部署与多人共用", "Cloud deployment and team access", "guides/cloud-deployment"),
       item("权限与审批", "Permissions and approvals", "guides/permissions"),
       item("房间与成员", "Rooms and members", "guides/rooms"),
       item("消息与附件", "Messages and attachments", "guides/messaging"),

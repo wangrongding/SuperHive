@@ -5,6 +5,8 @@ description: Deploy SuperHive on a laptop, a LAN, or a cloud server behind an HT
 
 ## Pick a setup first
 
+To set up a shared cloud server from scratch, follow [Cloud deployment and team access](/en/guides/cloud-deployment/). This page remains the reference for listening, identity, data and updates.
+
 | Scenario                                        | Recommended starting point                                     | What to watch out for                                                              |
 | ----------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | Only on your own computer                       | Start locally and open the loopback address                    | The CLIs your agents need still have to be installed and signed in                 |
@@ -65,6 +67,8 @@ hive \
   --no-local-agents \
   --no-open
 ```
+
+Currently `--no-local-agents` also disables owner-device pairing and management. Leave it off for initial pairing; re-enable local capability to add or revoke devices later. Follow the [cloud guide's SSH pairing steps](/en/guides/cloud-deployment/#4-first-owner-sign-in-through-ssh-pairing).
 
 Add the following to the matching HTTPS `server` block in Nginx:
 

@@ -5,6 +5,8 @@ description: Check per-turn agent tokens and room stats, tell cache reads from w
 
 ## What it's for
 
+With a shared cloud Hive, agents can run on different computers; model accounts and charges are not automatically pooled. See [Cloud deployment and team access](/en/guides/cloud-deployment/) for setup and connection steps.
+
 Usage stats help you understand "which agent, which turn, and why consumption went up". Hive records the token data returned by the runtime and combines it with model prices to estimate cost. It isn't an official bill from the model service, and it isn't an auto-charging account.
 
 To control spending, limit task scope and parallelism first, then watch real usage. Hive's turn budget is a brake on agents waking each other up, not a hard dollar cap.

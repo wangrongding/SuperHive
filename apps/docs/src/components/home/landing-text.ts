@@ -318,7 +318,11 @@ export const landingText: Record<Lang, Copy> = {
           { label: "第一次使用", title: "启动 Hive，接入第一个 Agent", link: "start/quickstart/" },
           { label: "让团队协作", title: "分工、进展与人的决定", link: "guides/collaboration/" },
           { label: "用得放心", title: "权限、任务状态与恢复", link: "guides/permissions/" },
-          { label: "部署服务", title: "放在自己电脑或云服务器上", link: "reference/deployment/" },
+          {
+            label: "云端共用",
+            title: "部署到云端，让团队和 Agent 一起加入",
+            link: "guides/cloud-deployment/",
+          },
         ],
       },
     },
@@ -588,8 +592,8 @@ export const landingText: Record<Lang, Copy> = {
           },
           {
             label: "Deploy",
-            title: "Run it on your computer or a cloud server",
-            link: "reference/deployment/",
+            title: "Deploy to the cloud and bring your team and agents",
+            link: "guides/cloud-deployment/",
           },
         ],
       },
