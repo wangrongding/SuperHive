@@ -1,3 +1,4 @@
+import { registerPluginLocalRoutes, type PluginRegistry } from "./plugins.js";
 import {
   CLAUDE_COMPACT_WINDOW_DEFAULT,
   canOpenWithDefaultApp,
@@ -222,6 +223,8 @@ export type LocalRoomActions = {
   agentClis?: AgentCliManager;
   /** 最近的慢操作（锁、git、重查询、HTTP 请求）；只限本机 */
   slowOps?: () => SlowOperationsResponse;
+  /** 插件原型：本机房主管理插件（列出、批准、撤销） */
+  plugins?: PluginRegistry;
   /** 故障单、经验库、规则提议；只限本机（现场里有调用栈和仓库路径） */
   incidents?: {
     snapshot(): IncidentsResponse;
@@ -826,6 +829,14 @@ export function registerLocalAgentRoutes(
       });
     }
   }
+
+  if (rooms.plugins)
+    registerPluginLocalRoutes(app, {
+      registry: rooms.plugins,
+      authorizeLocal: (request, reply) => Boolean(authorize(request, reply, "local")),
+      audit: (action, id, permissions) =>
+        app.log.info({ plugin: id, action, permissions }, "plugin grant changed"),
+    });
 
   // 慢操作里有仓库路径、房间和调用来源：和运行时配置一样只给本机看
   app.get("/api/local/slow-ops", async (request, reply) => {

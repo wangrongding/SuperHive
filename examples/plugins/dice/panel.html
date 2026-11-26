@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>骰子</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <h1>骰子</h1>
+    <p id="who">读取成员中…</p>
+    <form id="form">
+      <input id="spec" value="1d6" aria-label="骰子规格，例如 2d6" />
+      <button>掷</button>
+    </form>
+    <output id="result" aria-live="polite"></output>
+    <p id="probe"></p>
+    <script src="sdk.js"></script>
+    <script src="panel.js"></script>
+  </body>
+</html>

@@ -98,6 +98,7 @@ import {
   type DependencySettings,
 } from "./worktrees.js";
 import { registerWorkspaceFileRoutes } from "./workspace-files-routes.js";
+import { PluginRegistry, registerPluginRoomRoutes } from "./plugins.js";
 import { readOnlyGit, resolveInside } from "./workspace-files.js";
 import {
   LocalAgentSupervisor,
@@ -259,6 +260,8 @@ export type BuildAppOptions = {
    * 任务目录不建不删不自动清理、不开终端、不阻止睡眠、不读写运行时全局配置。
    */
   sandbox?: boolean;
+  /** 插件原型：插件目录（docs/research/plugin-system.md）；省略即不开放插件 */
+  plugins?: { dir: string; hostVersion: string };
   /**
    * 新任务目录自动准备依赖（按锁文件安装，失败退回软链主目录）。省略或 false 时关闭（测试默认关闭，
    * 免得每个建任务线的用例都去跑安装）；由 index.ts 按 HIVE_WORKTREE_DEPS 打开。
@@ -457,6 +460,9 @@ function incidentGit(repo: string | undefined, running: string | undefined): Inc
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const sandbox = options.sandbox === true;
+  // 网页面板、本机管理共用一份，批准、撤销立即对两边生效
+  const pluginRegistry =
+    options.plugins && !sandbox ? new PluginRegistry(options.plugins) : undefined;
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: LIMITS.maxClientPayloadBytes,
@@ -1125,6 +1131,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       : {}),
     ...(options.agentClis && !sandbox ? { agentClis: options.agentClis } : {}),
     slowOps: () => slowOps.list(),
+    ...(pluginRegistry ? { plugins: pluginRegistry } : {}),
     incidents: {
       snapshot: () => incidentDesk.snapshot(),
       updateSettings: (patch) => incidentDesk.updateSettings(patch),
@@ -5248,6 +5255,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return undefined;
     }
   };
+  if (pluginRegistry)
+    registerPluginRoomRoutes(app, {
+      registry: pluginRegistry,
+      authorizeRoom: (request, reply, roomId) => {
+        const principal = guard(request, reply, roomId);
+        return principal ? (principal.kind === "admin" ? "owner" : "guest") : undefined;
+      },
+      frameAncestorOf,
+    });
   const isHtmlAttachment = (item: StoredAttachment) =>
     /\.html?$/i.test(item.name) || item.mime.startsWith("text/html");
 

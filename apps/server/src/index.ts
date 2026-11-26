@@ -123,6 +123,16 @@ const app = await buildApp({
   webUrl,
   agentCommandPrefix,
   ...(staticDir ? { staticDir } : {}),
+  // 插件原型（docs/research/plugin-system.md）：默认关闭，设了 HIVE_PLUGINS_DIR 才开放；
+  // 正式版改成数据目录下的 plugins/，版本号从包版本取
+  ...(process.env.HIVE_PLUGINS_DIR
+    ? {
+        plugins: {
+          dir: path.resolve(process.env.HIVE_PLUGINS_DIR),
+          hostVersion: process.env.HIVE_PLUGIN_HOST_VERSION ?? "0.4.8",
+        },
+      }
+    : {}),
   ...(instanceId ? { instanceId } : {}),
   ...(agentCli
     ? {

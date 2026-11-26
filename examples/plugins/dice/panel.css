@@ -1,0 +1,18 @@
+body {
+  font:
+    14px system-ui,
+    sans-serif;
+  margin: 12px;
+  color: #222;
+}
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #ddd;
+    background: #1b1b1b;
+  }
+}
+output {
+  display: block;
+  font-size: 28px;
+  margin: 12px 0;
+}

@@ -1,0 +1,13 @@
+{
+  "id": "dice",
+  "name": "骰子",
+  "version": "0.1.0",
+  "description": "示例插件：在右侧面板掷骰子，结果填进输入框，发不发由你决定",
+  "engines": { "superhive": ">=0.4.0" },
+  "permissions": ["members:read", "composer:write"],
+  "guests": false,
+  "contributes": {
+    "panels": [{ "id": "main", "title": "骰子", "entry": "panel.html" }],
+    "commands": [{ "name": "roll", "description": "掷骰子，例如 /roll 2d6", "panel": "main" }]
+  }
+}
