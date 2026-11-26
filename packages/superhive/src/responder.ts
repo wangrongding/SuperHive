@@ -216,10 +216,28 @@ export function isCancelled(error: unknown, signal?: AbortSignal): boolean {
   return error instanceof AgentCancelledError || Boolean(signal?.aborted);
 }
 
+/**
+ * 测试用：HIVE_ECHO_DELAY_MS 让回显先等这么久，模拟一轮要跑一阵的任务（冒烟测试在这期间重启 Server）。
+ * 等待中每秒报一次进度；人点停止时按停止结束。
+ */
+async function echoDelay(input: AgentReplyInput): Promise<void> {
+  const total = Number.parseInt(process.env.HIVE_ECHO_DELAY_MS ?? "", 10);
+  if (!Number.isInteger(total) || total <= 0) return;
+  const started = Date.now();
+  while (Date.now() - started < total) {
+    if (input.signal?.aborted) throw new AgentCancelledError();
+    input.onProgress?.(`echo 等待中 ${Math.round((Date.now() - started) / 1000)}s`);
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(1_000, total - (Date.now() - started))),
+    );
+  }
+}
+
 export class EchoResponder implements AgentResponder {
   constructor(private readonly agentName: string) {}
 
   async reply(input: AgentReplyInput): Promise<AgentReply> {
+    await echoDelay(input);
     const block = input.prompt.match(/<trigger_message>\s*([\s\S]*?)\s*<\/trigger_message>/)?.[1];
     const triggers = [...(block ?? "").matchAll(/^#\d+ (?:id=\S+ )?\[[^\]]+\] (.*)$/gm)].map(
       (match) => match[1],

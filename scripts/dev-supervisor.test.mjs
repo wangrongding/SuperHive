@@ -463,6 +463,79 @@ test("a code update leaves a handover marker so local Agents survive; a real sto
   assert.equal(fs.existsSync(handoverPath), false);
 });
 
+test("stopping pnpm dev hands local Agents over by default; only an explicit full stop takes them down", async (t) => {
+  for (const [options, expected] of [
+    [{ handover: true }, true],
+    [{}, false],
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-dev-stop-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const handoverPath = path.join(root, ".superhive-dev/agent-handover");
+    const seenAtStop = [];
+    const supervisor = new DevSupervisor({
+      statusPath: path.join(root, ".superhive-dev/status.json"),
+      handoverPath,
+      debounceMs: 20,
+      build: async () => ({}),
+      startServer: async () => {
+        const server = fakeServer();
+        const stop = server.stop.bind(server);
+        server.stop = async () => {
+          seenAtStop.push(fs.existsSync(handoverPath));
+          fs.rmSync(handoverPath, { force: true }); // 真 Server 退出时用掉标记
+          await stop();
+        };
+        return server;
+      },
+    });
+    const statuses = [];
+    supervisor.on("status", (status) => statuses.push(status));
+    supervisor.changed(["initial-start"], { immediate: true });
+    await until(() => statuses.some((s) => s.state === "ready"));
+    await supervisor.close(options);
+    // 交接标记在 Server 退出那一刻决定本机 Agent 留不留
+    assert.deepEqual(seenAtStop, [expected]);
+  }
+});
+
+test("a replacement that fails its health check is stopped by handover, keeping the adopted Agents", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-dev-failed-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const handoverPath = path.join(root, ".superhive-dev/agent-handover");
+  const seenAtStop = [];
+  let launches = 0;
+  const supervisor = new DevSupervisor({
+    statusPath: path.join(root, ".superhive-dev/status.json"),
+    handoverPath,
+    debounceMs: 20,
+    build: async () => ({}),
+    startServer: async () => {
+      launches += 1;
+      // 第二代没在期限内通过健康检查（例如机器负载很高）
+      const server = fakeServer(
+        launches === 2 ? async () => Promise.reject(new DevError("health timeout")) : undefined,
+      );
+      const stop = server.stop.bind(server);
+      server.stop = async () => {
+        seenAtStop.push(fs.existsSync(handoverPath));
+        fs.rmSync(handoverPath, { force: true }); // 真 Server 退出时用掉标记
+        await stop();
+      };
+      return server;
+    },
+  });
+  const statuses = [];
+  supervisor.on("status", (status) => statuses.push(status));
+  t.after(() => supervisor.close());
+  supervisor.changed(["initial-start"], { immediate: true });
+  await until(() => statuses.some((s) => s.state === "ready"));
+  supervisor.changed(["apps/server/src/app.ts"]);
+  await until(() => statuses.some((s) => s.state === "failed"));
+  await until(() => seenAtStop.length === 2);
+  // 停旧 Server、停坏掉的新 Server 时都带着交接标记
+  assert.deepEqual(seenAtStop, [true, true]);
+});
+
 test("a supervisor without its Server reclaims the old generation by handover instead of failing on the busy port", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-dev-reclaim-"));
   const handoverPath = path.join(root, ".superhive-dev/agent-handover");

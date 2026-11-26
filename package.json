@@ -23,7 +23,8 @@
     "docs:verify": "pnpm --filter @superhive/docs verify",
     "docs:screens": "pnpm --filter @superhive/docs screens",
     "test:dev": "node --test scripts/dev-supervisor.test.mjs scripts/dev-reload.test.mjs scripts/preview-sandbox.test.mjs scripts/git-hooks.test.mjs",
-    "test:dev:smoke": "node scripts/dev-supervisor.smoke.mjs"
+    "test:dev:smoke": "node scripts/dev-supervisor.smoke.mjs",
+    "test:dev:handover": "node scripts/dev-handover.smoke.mjs"
   },
   "keywords": [
     "codex",

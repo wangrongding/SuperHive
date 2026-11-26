@@ -58,7 +58,7 @@ pnpm dev
 
 如果 5188 被占用，Vite 会自动选择其他端口；以终端实际输出为准。
 
-`pnpm dev` 下改动 Server 源码会自动换代重启 Server：本机 Agent 不中断，交接给新 Server 接管，期间的回复等 Server 恢复后再交。Windows 上同样可用。网页改动走 Vite 热更新；Bridge（`packages/superhive`）的改动要重启对应 Agent 才生效。
+`pnpm dev` 下改动 Server 源码会自动换代重启 Server：本机 Agent 不中断，交接给新 Server 接管，期间的回复等 Server 恢复后再交。Windows 上同样可用。停掉 `pnpm dev` 本身（Ctrl+C、关掉终端）也走交接：本机 Agent 接着做手上的任务，2 分钟内重新 `pnpm dev` 就由新 Server 接管；一直没有新 Server 时它们自己离线。想停 `pnpm dev` 时连本机 Agent 一起停，用 `HIVE_DEV_KEEP_AGENTS=0 pnpm dev` 启动。网页改动走 Vite 热更新；Bridge（`packages/superhive`）的改动由 Server 等 Agent 空闲后自动重启它生效（设置里可关），正在跑的任务不会被打断。
 
 生产构建和完整检查：
 

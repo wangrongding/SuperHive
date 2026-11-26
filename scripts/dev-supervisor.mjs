@@ -161,8 +161,7 @@ export class DevSupervisor extends EventEmitter {
       this.status("restarting", files);
       const previous = this.server ?? (await this.reclaim?.());
       this.server = undefined; // An intentional exit must not be reported as a crash.
-      if (previous) this.markHandover(true);
-      await previous?.stop();
+      if (previous) await this.stopServer(previous);
       if (this.closed || this.paused || this.pending.size) return;
       await build?.publish?.();
       if (this.closed) return;
@@ -187,15 +186,22 @@ export class DevSupervisor extends EventEmitter {
       if (this.closed) return;
       console.error("[dev]", publicError(error));
       this.status("failed", files, error);
-      // A hung/broken replacement must not keep the port or its managed Agents alive.
+      // A hung/broken replacement must not keep the port. Its local Agents are still handed over:
+      // the next good build adopts them; without one they go offline after their 2-minute grace.
       const failedServer = this.server;
       if (failedServer && build) {
         this.server = undefined;
-        await failedServer.stop();
+        await this.stopServer(failedServer);
       }
     } finally {
       await build?.dispose?.();
     }
+  }
+
+  /** 停掉换代下来的 Server：先写交接标记，它退出时不结束本机 Agent，由下一个 Server 接管 */
+  async stopServer(server) {
+    this.markHandover(true);
+    await server.stop();
   }
 
   /** 交接标记：true 时写入（Server 只是换代），false 时删除（真正停止，本机 Agent 一起结束） */
@@ -229,7 +235,12 @@ export class DevSupervisor extends EventEmitter {
     await this.active;
   }
 
-  async close({ preserveStatus = false } = {}) {
+  /**
+   * preserveStatus：开发 supervisor 自更新，状态留给下一代接着写。
+   * handover：Server 退出时把本机 Agent 留给下一个 Server 接管（默认跟 preserveStatus 一致）；
+   * 停掉 pnpm dev 时也传 true（见 main），只有明确要连 Agent 一起停时才是 false。
+   */
+  async close({ preserveStatus = false, handover = preserveStatus } = {}) {
     if (this.closed) return;
     if (!preserveStatus) this.status("failed", [], new DevError("开发 supervisor 已停止。"));
     this.closed = true;
@@ -238,8 +249,7 @@ export class DevSupervisor extends EventEmitter {
     await this.active;
     const server = this.server;
     this.server = undefined;
-    // 开发 supervisor 自更新（preserveStatus）时 Server 也只是换代；Ctrl+C 才让本机 Agent 一起结束
-    this.markHandover(preserveStatus);
+    this.markHandover(handover);
     await server?.stop();
   }
 }
@@ -634,13 +644,19 @@ export async function main() {
   let reloadWatcher;
   let reloader;
   let closing;
+  // 停掉 pnpm dev（Ctrl+C、关掉终端、Vite 退出）也按交接退出：本机 Agent 接着跑手上的任务，
+  // 重新 pnpm dev 后新 Server 按 pid 接管、回复照常送达；一直没有新 Server 时 Agent 宽限期（2 分钟）后自己离线。
+  // 要连本机 Agent 一起停，用 HIVE_DEV_KEEP_AGENTS=0 启动
+  const keepAgents = !["0", "false", "off"].includes(
+    process.env.HIVE_DEV_KEEP_AGENTS?.trim().toLowerCase() ?? "",
+  );
   const close = ({ restarting = false } = {}) => {
     closing ??= (async () => {
       stopWatching?.();
       reloadWatcher?.close();
       await Promise.all([
         reloader?.stop({ wait: !restarting }),
-        supervisor.close({ preserveStatus: restarting }),
+        supervisor.close({ preserveStatus: restarting, handover: restarting || keepAgents }),
       ]);
       await web?.stop();
     })();
@@ -690,8 +706,16 @@ export async function main() {
       process.exitCode = RESTART_EXIT_CODE;
     },
   });
-  for (const signal of ["SIGINT", "SIGTERM"])
+  // 关掉终端后再往终端写会报 EIO：别让它打断收尾（交接标记、停 Server、停 Vite）
+  for (const stream of [process.stdout, process.stderr]) stream.on("error", () => {});
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"])
     process.on(signal, () => {
+      if (closing) return;
+      console.log(
+        keepAgents
+          ? "[dev] 正在停止。本机 Agent 继续运行：2 分钟内重新 pnpm dev 会接管，手上的任务不中断；否则它们自己离线。要连 Agent 一起停，用 HIVE_DEV_KEEP_AGENTS=0 pnpm dev 启动。"
+          : "[dev] 正在停止，本机 Agent 一起离线（HIVE_DEV_KEEP_AGENTS=0）。",
+      );
       void close();
     });
   try {

@@ -23,6 +23,16 @@
   retries. There is no automatic rollback or replay of interrupted Agent tasks.
 - Generated output, databases, logs, status files and `node_modules` do not
   trigger updates. Manual/remote Agents are not upgraded by this supervisor.
+- Local Agents survive every Server generation change: code edits, supervisor
+  self-updates, a replacement that fails its health check, and stopping
+  `pnpm dev` itself (`Ctrl+C`, closing the terminal, Vite exiting). The
+  supervisor writes the handover marker before the Server exits, so the Server
+  leaves its Agents running; the next Server adopts them by pid and their running
+  tasks continue, replies delivered once it is up. With no new Server, Agents go
+  offline by themselves after a 2-minute grace. Start with `HIVE_DEV_KEEP_AGENTS=0`
+  to have stopping `pnpm dev` take local Agents down too. Bridge
+  (`packages/superhive`) changes reach an Agent through the Server's
+  restart-when-idle auto-update; a busy Agent is never restarted mid-task.
 - `Ctrl+C` stops the managed processes. Occupied ports cause an error, never a
   kill of another dev instance. `HIVE_PORT`/`HIVE_HOST` still configure Server;
   `HIVE_DEV_WEB_PORT` optionally changes Vite's port. For a non-default Server
@@ -60,7 +70,13 @@ Tests:
 ```sh
 pnpm test:dev        # controller, real watcher/process/health integration
 pnpm test:dev:smoke  # isolated copy of the real app; compiles and boots Vite + Server
+pnpm test:dev:handover  # isolated copy with a real local Agent mid-task across restarts
 ```
+
+The handover smoke runs a real `hive join` (echo provider that waits
+`HIVE_ECHO_DELAY_MS` before replying) under an isolated `pnpm dev` with its own
+ports, database and `HOME`. Mid-task it edits Server code, then stops and restarts
+`pnpm dev`; both times the same Agent pid must be adopted and the reply delivered.
 
 The smoke test edits only a temporary source copy, uses separate ephemeral ports
 and a temporary SQLite database, and disables local Agent startup. It checks all
