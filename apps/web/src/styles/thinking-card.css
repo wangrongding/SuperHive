@@ -55,10 +55,12 @@
   animation: none;
 }
 
+/* 一律允许换行：卡片宽度跟着对话栏走（侧栏打开时很窄），不只看窗口宽度；放不下时「显示多少」换到第二行靠右 */
 .thinking-card header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   min-width: 0;
   font-size: var(--text-sm);
 }
@@ -90,7 +92,8 @@
 }
 
 .thinking-card-current {
-  flex: 1 1 auto;
+  /* 基准宽度 0：长文字只截断显示，不会把自己挤到下一行 */
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   color: var(--text-secondary);
@@ -228,6 +231,7 @@
 .thinking-card-detail {
   display: inline-flex;
   flex: 0 0 auto;
+  margin-left: auto;
   gap: 1px;
   padding: 1px;
   border: 1px solid var(--border-light);
@@ -418,13 +422,6 @@
     display: block;
     flex-basis: 100%;
     order: 1;
-  }
-  /* 窄屏：显示多少的切换换到第二行靠右，名字和状态留在第一行 */
-  .thinking-card header {
-    flex-wrap: wrap;
-  }
-  .thinking-card-detail {
-    margin-left: auto;
   }
 }
 
