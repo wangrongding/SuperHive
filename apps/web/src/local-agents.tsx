@@ -322,6 +322,8 @@ export class LocalApiError extends Error {
 const KEEP_AWAKE_POLL_MS = 30_000;
 
 const POLL_MS = 2_000;
+/** 「接入 Agent」面板没打开时本机 Agent 列表的刷新间隔 */
+const BACKGROUND_POLL_MS = 15_000;
 
 async function readError(response: Response): Promise<LocalApiError> {
   let body: Record<string, unknown> = {};
@@ -545,7 +547,15 @@ export function useLocalAgents(
   useEffect(() => {
     if (!enabled) return;
     void refreshAgents().catch(() => undefined);
-    if (!active) return;
+    // 面板没打开时也要慢速刷新：成员列表的设置齿轮、模型标签都靠这份列表，
+    // 首次拉取正好碰上 Server 换代失败时，不刷新就一直是空的，齿轮全部消失
+    if (!active) {
+      const timer = window.setInterval(
+        () => void refreshAgents().catch(() => undefined),
+        BACKGROUND_POLL_MS,
+      );
+      return () => window.clearInterval(timer);
+    }
     void request("/api/local/providers")
       .then((response) => response.json() as Promise<{ providers: LocalProviderInfo[] }>)
       .then((value) => setProviders(value.providers))

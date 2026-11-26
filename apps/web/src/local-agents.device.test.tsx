@@ -206,3 +206,27 @@ describe("房主设备上的本机功能", () => {
     expect(screen.queryByRole("button", { name: /退出其他所有设备|全部退出/ })).toBeNull();
   });
 });
+
+describe("本机 Agent 列表后台刷新", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("首次拉取失败（如 Server 换代中）后，面板没打开也会自己补上", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let agentsCalls = 0;
+    fakeServer({ manageUntil: "2099-01-01T00:00:00.000Z" }, (call) => {
+      if (!call.url.endsWith("/api/local/agents")) return undefined;
+      agentsCalls += 1;
+      return agentsCalls === 1 ? json({ error: "restarting" }, 503) : undefined;
+    });
+    const { result } = renderHook(() => useLocalAgents("", false, DEVICE_TOKEN));
+    await waitFor(() => expect(agentsCalls).toBe(1));
+    expect(result.current.agents).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    await waitFor(() => expect(result.current.agents.map((item) => item.name)).toEqual(["rd-omp"]));
+  });
+});
