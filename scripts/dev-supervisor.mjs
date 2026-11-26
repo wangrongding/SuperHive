@@ -53,6 +53,10 @@ const IGNORED = new Set([
   ".superhive-dev",
 ]);
 
+export function serverRestartDelay(attempt) {
+  return [1_000, 2_000, 5_000, 10_000, 30_000][Math.min(Math.max(attempt - 1, 0), 4)];
+}
+
 export function isWatchedFile(file) {
   const normalized = file.replaceAll("\\", "/");
   if (normalized.split("/").some((part) => IGNORED.has(part))) return false;
@@ -76,6 +80,9 @@ export class DevSupervisor extends EventEmitter {
     healthTimeoutMs = 30_000,
     handoverPath,
     reclaim,
+    restartDelay = serverRestartDelay,
+    crashWindowMs = 60_000,
+    crashLimit = 5,
   }) {
     super();
     // 手上没有在跑的 Server 时，找回端口上本仓库上一代留下的 Server（supervisor 意外退出后的孤儿），
@@ -97,9 +104,15 @@ export class DevSupervisor extends EventEmitter {
     this.closed = false;
     this.paused = false;
     this.abort = new globalThis.AbortController();
+    this.restartDelay = restartDelay;
+    this.crashWindowMs = crashWindowMs;
+    this.crashLimit = crashLimit;
+    this.crashes = [];
+    this.restartAttempt = 0;
+    this.recoveryPending = false;
   }
 
-  status(state, changedFiles = [], error) {
+  status(state, changedFiles = [], error, recovery = {}) {
     if (this.closed) return;
     let detail = error ? publicError(error) : undefined;
     if (this.controlFailure) {
@@ -120,6 +133,7 @@ export class DevSupervisor extends EventEmitter {
       updatedAt: new Date().toISOString(),
       changedFiles,
       ...(detail ? { error: detail } : {}),
+      ...recovery,
     };
     writeStatus(this.statusPath, status);
     this.emit("status", status);
@@ -128,6 +142,11 @@ export class DevSupervisor extends EventEmitter {
   changed(files, { immediate = false } = {}) {
     if (this.closed) return;
     for (const file of files) this.pending.add(file);
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+    this.crashes = [];
+    this.restartAttempt = 0;
+    this.recoveryStopped = false;
     this.lastChange = Date.now();
     if (this.paused) return;
     if (!this.active) this.status("pending", [...this.pending].sort());
@@ -141,14 +160,98 @@ export class DevSupervisor extends EventEmitter {
       if (this.closed || this.paused || this.active || !this.pending.size) return;
       const files = [...this.pending].sort();
       this.pending.clear();
-      this.active = this.update(files).finally(() => {
-        this.active = undefined;
-        if (!this.closed && !this.paused && this.pending.size) {
-          this.status("pending", [...this.pending].sort());
-          this.schedule(Math.max(0, this.lastChange + this.debounceMs - Date.now()));
+      this.run(() => this.update(files));
+    }, wait);
+  }
+
+  run(action) {
+    this.active = action().finally(() => {
+      this.active = undefined;
+      if (this.closed || this.paused) return;
+      if (this.pending.size) {
+        this.status("pending", [...this.pending].sort());
+        this.schedule(Math.max(0, this.lastChange + this.debounceMs - Date.now()));
+      } else this.scheduleRecovery();
+    });
+  }
+
+  serverFailed(error) {
+    if (this.closed) return;
+    const now = Date.now();
+    this.crashes = this.crashes.filter((timestamp) => now - timestamp < this.crashWindowMs);
+    if (!this.crashes.length) this.restartAttempt = 0;
+    this.crashes.push(now);
+    this.recoveryPending = true;
+    this.recoveryError = error;
+    console.error("[dev]", publicError(error));
+    if (this.crashes.length >= this.crashLimit) {
+      this.recoveryStopped = true;
+      this.status(
+        "failed",
+        this.runtimeFiles,
+        new DevError(
+          `Hive Server 在 ${this.crashWindowMs / 1_000} 秒内连续失败 ${this.crashes.length} 次，已停止自动重启。最后原因：${publicError(error)}。请查看本机 dev 终端，修正代码后会重新尝试。`,
+        ),
+        { restartStopped: true },
+      );
+    } else this.scheduleRecovery();
+  }
+
+  scheduleRecovery() {
+    if (
+      this.closed ||
+      this.paused ||
+      this.active ||
+      this.pending.size ||
+      this.server ||
+      !this.recoveryPending ||
+      this.recoveryStopped ||
+      this.recoveryTimer ||
+      this.runtimeGeneration === undefined
+    )
+      return;
+    const restartAttempt = this.restartAttempt + 1;
+    const restartDelayMs = this.restartDelay(restartAttempt);
+    this.status("restarting", this.runtimeFiles, this.recoveryError, {
+      restartAttempt,
+      restartDelayMs,
+    });
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = undefined;
+      if (this.closed || this.paused || this.active || this.pending.size) return;
+      this.restartAttempt = restartAttempt;
+      this.run(() => this.launchServer());
+    }, restartDelayMs);
+  }
+
+  async launchServer() {
+    let server;
+    try {
+      server = await this.startServer({ generation: this.runtimeGeneration });
+      this.server = server;
+      this.recoveryPending = false;
+      server.exited.then((result) => {
+        if (!this.closed && this.server === server) {
+          this.server = undefined;
+          const reason = result?.signal
+            ? `信号 ${result.signal}`
+            : `退出码 ${result?.code ?? "未知"}`;
+          this.serverFailed(new DevError(`Hive Server 意外退出（${reason}）`));
         }
       });
-    }, wait);
+      await server.ready({ timeoutMs: this.healthTimeoutMs, signal: this.abort.signal });
+      if (this.closed || this.server !== server) return;
+      if (!this.paused && !this.pending.size) {
+        if (this.buildFailure)
+          this.status("failed", this.buildFailure.files, this.buildFailure.error);
+        else this.status("ready", this.runtimeFiles);
+      }
+    } catch (error) {
+      if (this.closed || (server && this.server !== server)) return;
+      this.server = undefined;
+      if (server) await this.stopServer(server);
+      this.serverFailed(error);
+    }
   }
 
   async update(files) {
@@ -165,26 +268,14 @@ export class DevSupervisor extends EventEmitter {
       if (this.closed || this.paused || this.pending.size) return;
       await build?.publish?.();
       if (this.closed) return;
-      const server = await this.startServer({ generation: this.generation });
-      this.server = server;
-      server.exited.then(() => {
-        if (!this.closed && this.server === server) {
-          this.server = undefined;
-          this.status(
-            "failed",
-            files,
-            new DevError("Hive Server 已退出；修改代码后会自动重试，请查看本机 dev 终端。"),
-          );
-        }
-      });
-      await server.ready({ timeoutMs: this.healthTimeoutMs, signal: this.abort.signal });
-      if (this.closed) return;
-      if (this.server !== server)
-        throw new DevError("Hive Server 在就绪前退出；修改代码后会自动重试。");
-      if (!this.paused && !this.pending.size) this.status("ready", files);
+      this.runtimeGeneration = this.generation;
+      this.runtimeFiles = files;
+      this.buildFailure = undefined;
+      await this.launchServer();
     } catch (error) {
       if (this.closed) return;
       console.error("[dev]", publicError(error));
+      this.buildFailure = { files, error };
       this.status("failed", files, error);
       // A hung/broken replacement must not keep the port. Its local Agents are still handed over:
       // the next good build adopts them; without one they go offline after their 2-minute grace.
@@ -227,11 +318,14 @@ export class DevSupervisor extends EventEmitter {
     this.paused = false;
     // Preserve the failure notice until the queued build actually starts.
     if (this.pending.size) this.schedule(0);
+    else this.scheduleRecovery();
   }
 
   async pause() {
     this.paused = true;
     clearTimeout(this.timer);
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
     await this.active;
   }
 
@@ -245,6 +339,7 @@ export class DevSupervisor extends EventEmitter {
     if (!preserveStatus) this.status("failed", [], new DevError("开发 supervisor 已停止。"));
     this.closed = true;
     clearTimeout(this.timer);
+    clearTimeout(this.recoveryTimer);
     this.abort.abort();
     await this.active;
     const server = this.server;
@@ -266,11 +361,15 @@ export async function buildWorkspace(
   const protocolStagingRoot = path.join(repoRoot, "packages/protocol/.superhive-dev");
   fs.mkdirSync(protocolStagingRoot, { recursive: true });
   const protocolOutput = fs.mkdtempSync(path.join(protocolStagingRoot, "build-"));
+  const serverStagingRoot = path.join(repoRoot, "apps/server/.superhive-dev");
+  fs.mkdirSync(serverStagingRoot, { recursive: true });
+  const serverOutput = fs.mkdtempSync(path.join(serverStagingRoot, "build-"));
   const require = createRequire(path.join(repoRoot, "package.json"));
   const tsc = require.resolve("typescript/bin/tsc");
   const dispose = () => {
     fs.rmSync(staging, { recursive: true, force: true });
     fs.rmSync(protocolOutput, { recursive: true, force: true });
+    fs.rmSync(serverOutput, { recursive: true, force: true });
   };
   try {
     await runCheck(
@@ -295,7 +394,8 @@ export async function buildWorkspace(
         JSON.stringify({
           extends: path.join(repoRoot, pkg, "tsconfig.json"),
           compilerOptions: {
-            noEmit: true,
+            noEmit: pkg !== "apps/server",
+            ...(pkg === "apps/server" ? { outDir: serverOutput, sourceMap: false } : {}),
             baseUrl: repoRoot,
             paths: { "@superhive/protocol": [path.join(protocolOutput, "index.d.ts")] },
             typeRoots: [
@@ -312,13 +412,24 @@ export async function buildWorkspace(
     }
     return {
       publish() {
-        const destination = path.join(repoRoot, "packages/protocol/dist");
-        const previous = path.join(staging, "previous-protocol");
-        if (fs.existsSync(destination)) fs.renameSync(destination, previous);
+        const outputs = [
+          [protocolOutput, path.join(repoRoot, "packages/protocol/dist")],
+          [serverOutput, path.join(serverStagingRoot, "runtime")],
+        ];
+        const replacements = [];
         try {
-          fs.renameSync(protocolOutput, destination);
+          for (const [output, destination] of outputs) {
+            const previous = path.join(staging, `previous-${replacements.length}`);
+            const hadPrevious = fs.existsSync(destination);
+            if (hadPrevious) fs.renameSync(destination, previous);
+            replacements.push({ destination, previous, hadPrevious });
+            fs.renameSync(output, destination);
+          }
         } catch (error) {
-          if (fs.existsSync(previous)) fs.renameSync(previous, destination);
+          for (const { destination, previous, hadPrevious } of replacements.reverse()) {
+            fs.rmSync(destination, { recursive: true, force: true });
+            if (hadPrevious) fs.renameSync(previous, destination);
+          }
           throw error;
         }
       },
@@ -334,8 +445,7 @@ export async function waitForHealth(url, instanceId, server, { timeoutMs = 30_00
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (signal.aborted) throw new DevError("开发更新已停止。");
-    if (server.finished)
-      throw new DevError("Hive Server 启动失败；修改代码后会自动重试，请查看本机 dev 终端。");
+    if (server.finished) throw new DevError("Hive Server 启动失败；请查看本机 dev 终端。");
     try {
       const response = await globalThis.fetch(url, {
         signal: globalThis.AbortSignal.timeout(1_000),
@@ -596,8 +706,11 @@ export async function main() {
   };
   await reclaim();
   await reclaimWebPort({ port: webPort, host: "0.0.0.0", repoRoot });
-  removeStaleStaging([stateDir, path.join(repoRoot, "packages/protocol/.superhive-dev")]);
-  const require = createRequire(path.join(repoRoot, "apps/server/package.json"));
+  removeStaleStaging([
+    stateDir,
+    path.join(repoRoot, "packages/protocol/.superhive-dev"),
+    path.join(repoRoot, "apps/server/.superhive-dev"),
+  ]);
   const handoverPath = path.join(stateDir, "agent-handover");
   const supervisor = new DevSupervisor({
     statusPath,
@@ -610,7 +723,11 @@ export async function main() {
       const server = startProcess(
         process.execPath,
         // --import 要的是 URL：Windows 上 C:\... 这样的路径会被当成 c: 协议报错
-        ["--import", pathToFileURL(require.resolve("tsx")).href, serverEntry],
+        [
+          "--import",
+          pathToFileURL(path.join(repoRoot, "scripts/dev-server-runtime.mjs")).href,
+          serverEntry,
+        ],
         {
           cwd: path.join(repoRoot, "apps/server"),
           env: {
@@ -620,6 +737,8 @@ export async function main() {
             HIVE_DEV_WEB_PORT: String(webPort),
             HIVE_HANDOVER_FILE: handoverPath,
             HIVE_SHUTDOWN_TOKEN: shutdownToken,
+            HIVE_DEV_SERVER_SOURCE: path.join(repoRoot, "apps/server/src"),
+            HIVE_DEV_SERVER_OUTPUT: path.join(repoRoot, "apps/server/.superhive-dev/runtime"),
           },
           // Windows：请 Server 自己退出，它才会写交接、让本机 Agent 继续运行由新 Server 接管
           gracefulStop: () =>

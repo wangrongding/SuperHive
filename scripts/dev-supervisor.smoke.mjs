@@ -9,12 +9,27 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { startProcess } from "./dev-supervisor.mjs";
+import { adoptProcess, startProcess } from "./dev-process.mjs";
 
 const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-live-smoke-"));
 let child;
 let logs = "";
+const ownedPidLog = path.join(root, ".superhive-dev/owned-pids");
+
+async function stopRecordedProcesses() {
+  if (!fs.existsSync(ownedPidLog)) return;
+  const roots = [root, fs.realpathSync(root)];
+  const pids = new Set(fs.readFileSync(ownedPidLog, "utf8").trim().split(/\s+/).map(Number));
+  for (const pid of pids) {
+    if (!Number.isSafeInteger(pid) || pid <= 1) continue;
+    await adoptProcess(pid, {
+      isOwn: (_pid, info) =>
+        roots.some((directory) => info?.command.includes(directory + path.sep)),
+      stopGraceMs: 2_000,
+    }).stop();
+  }
+}
 
 function copy(relative) {
   const destination = path.join(root, relative);
@@ -47,7 +62,7 @@ async function freePort() {
 }
 
 async function waitStatus(state, generation) {
-  const deadline = Date.now() + 45_000;
+  const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (child.finished) throw new Error("isolated dev process exited unexpectedly");
     try {
@@ -55,7 +70,12 @@ async function waitStatus(state, generation) {
         fs.readFileSync(path.join(root, ".superhive-dev/status.json"), "utf8"),
       );
       if (status.state === state && status.generation === generation) return status;
-      if (status.state === "failed" && status.generation >= generation && state !== "failed")
+      if (
+        status.state === "failed" &&
+        status.generation >= generation &&
+        state !== "failed" &&
+        !(state === "restarting" && !status.restartStopped)
+      )
         throw new Error(status.error);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
@@ -75,6 +95,8 @@ try {
     "scripts/dev-process.mjs",
     "scripts/dev-reload.mjs",
     "scripts/dev-supervisor.mjs",
+    "scripts/dev-server-runtime.mjs",
+    "scripts/dev-server-loader.mjs",
   ])
     copy(file);
   fs.symlinkSync(path.join(checkout, "node_modules"), path.join(root, "node_modules"), "dir");
@@ -86,11 +108,16 @@ try {
     "index.html",
     "vite.config.ts",
     "dev-status-plugin.ts",
+    "favicon-plugin.ts",
     "pptx-preview-plugin.ts",
     "tsconfig.node.json",
     "public",
   ])
     copy(`apps/web/${file}`);
+  fs.appendFileSync(
+    path.join(root, "scripts/dev-server-runtime.mjs"),
+    `\nimport smokeFs from 'node:fs'; smokeFs.appendFileSync(${JSON.stringify(ownedPidLog)}, String(process.pid)+'\\n', {mode:0o600});\n`,
+  );
   // Only the install subcommand is simulated: this smoke copy shares dependency
   // symlinks with the checkout, so a real install here could mutate the live app.
   const realPnpm = execFileSync("which", ["pnpm"], { encoding: "utf8" }).trim();
@@ -100,6 +127,7 @@ try {
     path.join(bin, "pnpm"),
     `#!${process.execPath}
 import fs from 'node:fs'; import cp from 'node:child_process';
+fs.appendFileSync(${JSON.stringify(ownedPidLog)},String(process.pid)+'\\n',{mode:0o600});
 const args=process.argv.slice(2);
 if(args[0]==='install'){
   const counter='.superhive-dev/install-count';let count=0;try{count=Number(fs.readFileSync(counter,'utf8'))}catch{}
@@ -140,7 +168,36 @@ if(args[0]==='install'){
   // Transform the actual app, not only its HTML shell.
   const appResponse = await globalThis.fetch(`http://127.0.0.1:${webPort}/src/App.tsx`);
   assert.equal(appResponse.status, 200);
+  const faviconModule = await globalThis.fetch(`http://127.0.0.1:${webPort}/src/favicon-badge.ts`);
+  assert.equal(faviconModule.status, 200);
+  const faviconImport = await faviconModule.text();
+  assert.match(faviconImport, /hive-favicon/);
+  const faviconSource = await globalThis.fetch(
+    `http://127.0.0.1:${webPort}/@id/__x00__hive-favicon`,
+  );
+  assert.equal(faviconSource.status, 200);
+  assert.match(await faviconSource.text(), /<svg/);
+  const favicon = await globalThis.fetch(`http://127.0.0.1:${webPort}/favicon.svg`);
+  assert.equal(
+    await favicon.text(),
+    fs.readFileSync(path.join(root, "apps/web/public/favicon.svg"), "utf8"),
+  );
+  assert.doesNotMatch(logs, /Assets in public directory cannot be imported from JavaScript/);
+  console.log("PASS favicon uses the canonical public SVG without Vite import warnings");
   let identity = (await json(healthUrl)).instanceId;
+  const crashAndRecover = async (generation, finalState = "ready") => {
+    const previous = await json(healthUrl);
+    const ownedPid = previous.pid;
+    assert.ok(Number.isSafeInteger(ownedPid) && ownedPid > 1);
+    process.kill(ownedPid, "SIGKILL");
+    await waitStatus("restarting", generation);
+    await waitStatus(finalState, generation);
+    const next = await json(healthUrl);
+    assert.notEqual(next.instanceId, previous.instanceId);
+    return next.instanceId;
+  };
+  identity = await crashAndRecover(1);
+  console.log("PASS unexpected Server exit restarts automatically without a build or source edit");
   for (const [index, file] of [
     "apps/server/src/index.ts",
     "packages/protocol/src/index.ts",
@@ -165,10 +222,18 @@ if(args[0]==='install'){
   console.log("PASS Vite serves latest frontend source without restarting Server");
   const brokenFile = path.join(root, "apps/server/src/index.ts");
   const original = fs.readFileSync(brokenFile, "utf8");
-  fs.appendFileSync(brokenFile, "\nconst smokeBroken: string = 123;\n");
+  fs.appendFileSync(
+    brokenFile,
+    '\nconst smokeBroken: string = 123;\nthrow new Error("unvalidated source must not run");\n',
+  );
   await waitStatus("failed", 5);
   assert.equal((await json(healthUrl)).instanceId, identity);
   assert.equal((await json(statusUrl)).state, "failed");
+  identity = await crashAndRecover(5, "failed");
+  assert.match((await json(statusUrl)).error, /检查 apps\/server失败/);
+  console.log(
+    "PASS recovery boots cached checked Server output even when current sources are broken",
+  );
   fs.writeFileSync(brokenFile, original);
   await waitStatus("ready", 6);
   assert.notEqual((await json(healthUrl)).instanceId, identity);
@@ -299,6 +364,7 @@ if(args[0]==='install'){
     "PASS killed supervisor leaves Server/Vite behind; the next one reclaims them by handover",
   );
   await child.stop();
+  await stopRecordedProcesses();
   for (const url of [healthUrl, statusUrl]) {
     await assert.rejects(globalThis.fetch(url, { signal: globalThis.AbortSignal.timeout(500) }));
   }
@@ -311,5 +377,6 @@ if(args[0]==='install'){
   process.exitCode = 1;
 } finally {
   await child?.stop();
+  await stopRecordedProcesses();
   if (!process.exitCode) fs.rmSync(root, { recursive: true, force: true });
 }

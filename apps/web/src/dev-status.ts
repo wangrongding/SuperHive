@@ -16,6 +16,9 @@ export interface DevStatus {
   changedFiles?: string[];
   /** 失败时的错误摘要 */
   error?: string | null;
+  restartAttempt?: number;
+  restartDelayMs?: number;
+  restartStopped?: boolean;
 }
 
 const STATES = new Set<DevUpdateState>(["pending", "building", "restarting", "ready", "failed"]);
@@ -35,6 +38,13 @@ export function parseDevStatus(value: unknown): DevStatus | undefined {
       ? record.changedFiles.filter((file): file is string => typeof file === "string")
       : [],
     error: typeof record.error === "string" ? record.error : null,
+    ...(Number.isSafeInteger(record.restartAttempt) && Number(record.restartAttempt) > 0
+      ? { restartAttempt: Number(record.restartAttempt) }
+      : {}),
+    ...(Number.isFinite(record.restartDelayMs) && Number(record.restartDelayMs) >= 0
+      ? { restartDelayMs: Number(record.restartDelayMs) }
+      : {}),
+    ...(record.restartStopped === true ? { restartStopped: true } : {}),
   };
 }
 

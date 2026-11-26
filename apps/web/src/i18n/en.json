@@ -550,6 +550,8 @@
   "暂不": "Not now",
   "暂停": "Pause",
   "更新失败，修正后会自动重试": "Update failed; it retries automatically once fixed",
+  "Server 意外退出，正在自动重启（第 {0} 次）": "Server exited unexpectedly; restarting automatically (attempt {0})",
+  "Server 反复崩溃，已停止自动重启": "Server keeps crashing; automatic restarts stopped",
   "最后更新": "Last updated",
   "最近 API 异常": "Recent API errors",
   "最近 Runtime 事件": "Last runtime event",

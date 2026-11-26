@@ -77,7 +77,13 @@ export function DevStatusBanner() {
   return (
     <div className={`dev-status dev-status-${status.state}`} role="status" aria-live="polite">
       <span className="dev-status-dot" aria-hidden="true" />
-      <span className="dev-status-label">{LABELS[status.state]}</span>
+      <span className="dev-status-label">
+        {status.state === "restarting" && status.restartAttempt
+          ? t("Server 意外退出，正在自动重启（第 {0} 次）", { 0: status.restartAttempt })
+          : status.restartStopped
+            ? t("Server 反复崩溃，已停止自动重启")
+            : LABELS[status.state]}
+      </span>
       <span className="dev-status-meta">
         {t("代次 {0} {1}", { 0: status.generation, 1: files ? ` · ${files}` : "" })}
       </span>

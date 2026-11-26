@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import faviconSvg from "../public/favicon.svg?raw";
+import faviconSvg from "virtual:hive-favicon";
 
 /**
  * 标签页图标上的状态小圆点：按「跟你有关」的最重要的一种状态显示，优先级从高到低：

@@ -6,6 +6,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { hiveDevStatus } from "./dev-status-plugin";
 import { pptxPreviewPatches } from "./pptx-preview-plugin";
+import { hiveFavicon } from "./favicon-plugin";
 
 const version = (
   JSON.parse(
@@ -28,7 +29,7 @@ try {
 
 export default defineConfig({
   define: { __HIVE_FEEDBACK_BUILD__: JSON.stringify({ version, commit }) },
-  plugins: [aiIns(), react(), hiveDevStatus(), pptxPreviewPatches()],
+  plugins: [aiIns(), react(), hiveDevStatus(), hiveFavicon(), pptxPreviewPatches()],
   // 开发时依赖预构建不走上面的 plugins，pptx-preview 的补丁要在这里再挂一次
   optimizeDeps: { rolldownOptions: { plugins: [pptxPreviewPatches()] } },
   server: { port: 5188 },

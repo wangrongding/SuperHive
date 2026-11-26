@@ -10,17 +10,26 @@
 - Server, protocol and Bridge source/config changes are debounced for 1.5 seconds.
   Each update stages the protocol build and checks Server + Bridge types before
   stopping the old Server. Only successful checks publish the protocol output.
-- Server runs from source **without** its own `tsx watch`. The supervisor owns
-  restarts; Server continues to own its autostart-enabled local Agents.
+- Server runs checked JavaScript with its original source module URLs, **without**
+  its own `tsx watch`. The supervisor owns restarts; Server continues to own its
+  autostart-enabled local Agents.
 - A new Server must answer `/health` with its unique instance identity before
   the generation becomes `ready`. This does not assert that every Agent has
   finished connecting or that a previous task completed.
 - Atomic status writes follow `apps/web/src/dev-status.ts`. Diagnostics shown
   on the public development page are bounded summaries; compiler/runtime output
   remains in the local terminal.
-- Failed checks keep the previous Server. Runtime startup failures may leave
-  Server offline; Vite and the supervisor stay alive and another source edit
-  retries. There is no automatic rollback or replay of interrupted Agent tasks.
+- Failed checks keep the previous Server. Successful checks also cache the Server's
+  emitted JavaScript; automatic recovery uses that published output, not unvalidated
+  source edits. A dev-only Node loader preserves original module URLs and dependency
+  resolution, including the development CLI and repository paths.
+- Unexpected exits and startup failures retry after 1, 2, 5, 10 and then at most
+  30 seconds. Five failures within 60 seconds stop automatic recovery and publish
+  an actionable `failed` status. The floating status banner shows the attempt count
+  or the crash-loop stop reason. Source edits reset the guard and take priority over
+  pending recovery; checks and launches remain serialized. `Ctrl+C` and supervisor
+  self-update pauses cancel recovery timers. Vite stays alive during Server recovery.
+  There is no automatic rollback or replay of interrupted Agent tasks.
 - Generated output, databases, logs, status files and `node_modules` do not
   trigger updates. Manual/remote Agents are not upgraded by this supervisor.
 - Local Agents survive every Server generation change: code edits, supervisor
@@ -81,6 +90,7 @@ ports, database and `HOME`. Mid-task it edits Server code, then stops and restar
 The smoke test edits only a temporary source copy, uses separate ephemeral ports
 and a temporary SQLite database, and disables local Agent startup. It checks all
 three backend source roots, frontend source, build/runtime failures, self-reload,
+unexpected exits, cached-output recovery with broken sources, favicon imports,
 manifest/lock changes, installer failure, source-build recovery without clearing
 control errors, real ESM-link validation, generation continuity and cleanup.
 The full-app smoke uses a mock installer because its dependency links reference
@@ -88,3 +98,8 @@ the checkout; it must never install through those links. A separate regression
 runs real offline pnpm install in a dependency-free temporary project. Browser
 reload and live provider-task verification remain separate. Full app tests remain
 part of `pnpm test`.
+
+The opt-in smoke allows three minutes per build/update phase on busy development
+machines; this does not change the Server's health timeout or recovery backoff.
+Its temporary Server and pnpm processes are recorded by PID at startup and cleaned
+up on failure as well as success, with ownership checked again before signaling.

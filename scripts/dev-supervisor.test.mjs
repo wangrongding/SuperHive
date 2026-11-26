@@ -15,6 +15,7 @@ import {
   isWatchedFile,
   publicError,
   readGeneration,
+  serverRestartDelay,
   startProcess,
   waitForHealth,
   watchWorkspace,
@@ -219,29 +220,199 @@ test("failed checks leave the previous process alive; fixes recover without manu
   assert.equal(f.servers.length, 2);
 });
 
-test("startup failures stop the broken replacement and do not stop the watcher", async (t) => {
+test("startup health failures stop the broken replacement and retry automatically", async (t) => {
   const failed = fakeServer(async () => {
     throw new DevError("健康检查失败");
   });
   let launches = 0;
-  const f = fixture(t, { startServer: async () => (++launches === 1 ? failed : fakeServer()) });
-  f.supervisor.changed(["broken.ts"], { immediate: true });
+  const context = fixture(t, {
+    restartDelay: () => 5,
+    startServer: async () => (++launches === 1 ? failed : fakeServer()),
+  });
+  context.supervisor.changed(["broken.ts"], { immediate: true });
   await until(() => failed.stopped);
-  assert.equal(f.statuses.at(-1).state, "failed");
-  f.supervisor.changed(["fixed.ts"], { immediate: true });
-  await f.ready(2);
+  await context.ready(1);
+  assert.equal(launches, 2);
+  context.supervisor.changed(["fixed.ts"], { immediate: true });
+  await context.ready(2);
 });
 
-test("unexpected server exit revokes ready without entering a crash loop", async (t) => {
-  const f = fixture(t);
-  f.supervisor.changed(["start"], { immediate: true });
-  await f.ready(1);
-  f.servers[0].crash({ code: 1 });
-  await until(() => f.statuses.at(-1).state === "failed");
-  await delay(50);
-  assert.equal(f.servers.length, 1);
-  f.supervisor.changed(["fix"], { immediate: true });
-  await f.ready(2);
+test("unexpected exits reuse the published build without a source edit or new generation", async (t) => {
+  let builds = 0;
+  const context = fixture(t, {
+    restartDelay: () => 5,
+    build: async () => {
+      builds += 1;
+      return {};
+    },
+  });
+  context.supervisor.changed(["start"], { immediate: true });
+  await context.ready(1);
+  context.servers[0].crash({ code: 1 });
+  await until(() => context.servers.length === 2 && context.statuses.at(-1).state === "ready");
+  assert.equal(builds, 1);
+  assert.equal(context.supervisor.generation, 1);
+  assert.equal(
+    context.statuses.some((status) => status.restartAttempt === 1),
+    true,
+  );
+  context.supervisor.changed(["fix"], { immediate: true });
+  await context.ready(2);
+});
+
+test("restart backoff grows from one second to a thirty-second cap", () => {
+  assert.deepEqual(
+    [1, 2, 3, 4, 5, 6, 100].map(serverRestartDelay),
+    [1_000, 2_000, 5_000, 10_000, 30_000, 30_000, 30_000],
+  );
+});
+
+test("five crashes in a minute stop retries with an actionable failure; edits recover", async (t) => {
+  const context = fixture(t, { restartDelay: () => 5 });
+  context.supervisor.changed(["start"], { immediate: true });
+  await context.ready(1);
+  for (let index = 0; index < 5; index += 1) {
+    context.servers[index].crash({ signal: "SIGTERM" });
+    if (index < 4)
+      await until(
+        () => context.servers.length === index + 2 && context.statuses.at(-1).state === "ready",
+      );
+  }
+  await until(() => context.statuses.at(-1).restartStopped);
+  assert.match(context.statuses.at(-1).error, /60 秒内连续失败 5 次.*信号 SIGTERM/);
+  await delay(30);
+  assert.equal(context.servers.length, 5);
+  context.supervisor.changed(["fixed.ts"], { immediate: true });
+  await context.ready(2);
+  assert.equal(context.servers.length, 6);
+});
+
+test("launch exceptions also obey the crash limit instead of becoming an unhandled rejection", async (t) => {
+  let launches = 0;
+  const context = fixture(t, {
+    restartDelay: () => 5,
+    startServer: async () => {
+      launches += 1;
+      throw new DevError("无法拉起 Server");
+    },
+  });
+  context.supervisor.changed(["start"], { immediate: true });
+  await until(() => context.statuses.at(-1).restartStopped);
+  assert.equal(launches, 5);
+  assert.match(context.statuses.at(-1).error, /无法拉起 Server/);
+});
+
+test("an exit before health is counted only once and never publishes ready", async (t) => {
+  const gate = deferred();
+  const failed = fakeServer(() => gate.promise);
+  const context = fixture(t, {
+    restartDelay: () => 5,
+    startServer: async () => failed,
+  });
+  context.supervisor.changed(["start"], { immediate: true });
+  await until(() => context.supervisor.server === failed);
+  failed.crash({ code: 1 });
+  await until(() => context.supervisor.server === undefined);
+  gate.reject(new DevError("已退出"));
+  await until(() => context.statuses.at(-1).restartStopped);
+  assert.equal(context.supervisor.crashes.length, 5);
+  assert.equal(
+    context.statuses.some((status) => status.state === "ready"),
+    false,
+  );
+});
+
+test("a stable interval resets the crash window and retry delay", async (t) => {
+  const context = fixture(t, { restartDelay: () => 1, crashWindowMs: 30 });
+  context.supervisor.changed(["start"], { immediate: true });
+  await context.ready(1);
+  context.servers[0].crash({ code: 1 });
+  await until(() => context.servers.length === 2 && context.statuses.at(-1).state === "ready");
+  await delay(40);
+  context.servers[1].crash({ code: 1 });
+  await until(() => context.servers.length === 3 && context.statuses.at(-1).state === "ready");
+  assert.equal(context.supervisor.crashes.length, 1);
+  assert.equal(context.supervisor.restartAttempt, 1);
+});
+
+test("edits cancel a scheduled restart and rebuild first, with no extra launch", async (t) => {
+  const context = fixture(t, { restartDelay: () => 50 });
+  context.supervisor.changed(["start"], { immediate: true });
+  await context.ready(1);
+  context.servers[0].crash({ code: 1 });
+  await until(() => context.statuses.at(-1).restartAttempt === 1);
+  context.supervisor.changed(["fixed.ts"], { immediate: true });
+  await context.ready(2);
+  await delay(65);
+  assert.equal(context.servers.length, 2);
+});
+
+test("recovery retains a failed source build instead of claiming the bad generation is ready", async (t) => {
+  let bad = false;
+  const context = fixture(t, {
+    restartDelay: () => 5,
+    build: async () => {
+      if (bad) throw new DevError("最新代码检查失败");
+      return {};
+    },
+  });
+  context.supervisor.changed(["start"], { immediate: true });
+  await context.ready(1);
+  bad = true;
+  context.supervisor.changed(["broken.ts"], { immediate: true });
+  await until(() => context.statuses.at(-1).state === "failed");
+  context.servers[0].crash({ code: 1 });
+  await until(() => context.servers.length === 2 && context.statuses.at(-1).state === "failed");
+  assert.equal(context.supervisor.runtimeGeneration, 1);
+  assert.equal(context.statuses.at(-1).generation, 2);
+  assert.equal(context.statuses.at(-1).error, "最新代码检查失败");
+});
+
+test("edits during automatic recovery wait for health before rebuilding", async (t) => {
+  const gate = deferred();
+  let launches = 0;
+  let builds = 0;
+  const context = fixture(t, {
+    restartDelay: () => 5,
+    build: async () => {
+      builds += 1;
+      return {};
+    },
+    startServer: async () => {
+      launches += 1;
+      return fakeServer(launches === 2 ? () => gate.promise : async () => {});
+    },
+  });
+  context.supervisor.changed(["start"], { immediate: true });
+  await context.ready(1);
+  context.supervisor.server.crash({ code: 1 });
+  await until(() => launches === 2);
+  context.supervisor.changed(["edited.ts"], { immediate: true });
+  await delay(30);
+  assert.equal(builds, 1);
+  gate.resolve();
+  await context.ready(2);
+  assert.equal(builds, 2);
+  assert.equal(launches, 3);
+});
+
+test("pause and shutdown cancel retries; only resume can restart a paused server", async (t) => {
+  const context = fixture(t, { restartDelay: () => 20 });
+  context.supervisor.changed(["start"], { immediate: true });
+  await context.ready(1);
+  context.servers[0].crash({ code: 1 });
+  await until(() => context.statuses.at(-1).restartAttempt === 1);
+  await context.supervisor.pause();
+  await delay(30);
+  assert.equal(context.servers.length, 1);
+  context.supervisor.resume();
+  await until(() => context.servers.length === 2);
+  await context.supervisor.active;
+  context.servers[1].crash({ code: 1 });
+  await until(() => context.statuses.at(-1).restartAttempt === 2);
+  await context.supervisor.close();
+  await delay(30);
+  assert.equal(context.servers.length, 2);
 });
 
 test("shutdown cancels checks and never restarts a server afterwards", async (t) => {
@@ -272,6 +443,48 @@ test("shutdown cancels checks and never restarts a server afterwards", async (t)
 test("public error summaries never include raw exception contents", () => {
   assert.doesNotMatch(publicError(new Error("private mock credential")), /private mock credential/);
   assert.equal(publicError(new DevError("编译失败")), "编译失败");
+});
+
+test("the dev loader uses cached JavaScript while keeping original source URLs and dependencies", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-dev-loader-"));
+  const sourceDir = path.join(root, "src");
+  const outputDir = path.join(root, "compiled");
+  fs.mkdirSync(sourceDir);
+  fs.mkdirSync(outputDir);
+  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+  fs.writeFileSync(path.join(sourceDir, "index.ts"), 'throw new Error("unvalidated source");');
+  fs.writeFileSync(path.join(sourceDir, "helper.ts"), 'throw new Error("unvalidated helper");');
+  fs.writeFileSync(path.join(outputDir, "helper.js"), 'export const value = "cached";');
+  fs.writeFileSync(
+    path.join(outputDir, "index.js"),
+    'import {value} from "./helper.js"; import path from "node:path"; console.log(JSON.stringify({value,dirname:import.meta.dirname,base:path.basename(import.meta.dirname)}));',
+  );
+  const server = startProcess(
+    process.execPath,
+    [
+      "--import",
+      new URL("./dev-server-runtime.mjs", import.meta.url).href,
+      path.join(sourceDir, "index.ts"),
+    ],
+    {
+      cwd: root,
+      env: { ...process.env, HIVE_DEV_SERVER_SOURCE: sourceDir, HIVE_DEV_SERVER_OUTPUT: outputDir },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  let stdout = "";
+  let stderr = "";
+  server.child.stdout.on("data", (data) => (stdout += data));
+  server.child.stderr.on("data", (data) => (stderr += data));
+  assert.equal((await server.exited).code, 0, stderr);
+  const result = JSON.parse(stdout);
+  assert.equal(result.value, "cached");
+  assert.equal(fs.realpathSync(result.dirname), fs.realpathSync(sourceDir));
+  assert.equal(result.base, "src");
 });
 
 test("workspace watchers see atomic saves and ignore output/status churn", async (t) => {
@@ -498,7 +711,7 @@ test("stopping pnpm dev hands local Agents over by default; only an explicit ful
   }
 });
 
-test("a replacement that fails its health check is stopped by handover, keeping the adopted Agents", async (t) => {
+test("failed replacements and automatic retries stop by handover, keeping the adopted Agents", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hive-dev-failed-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const handoverPath = path.join(root, ".superhive-dev/agent-handover");
@@ -508,12 +721,14 @@ test("a replacement that fails its health check is stopped by handover, keeping 
     statusPath: path.join(root, ".superhive-dev/status.json"),
     handoverPath,
     debounceMs: 20,
+    restartDelay: () => 5,
     build: async () => ({}),
     startServer: async () => {
       launches += 1;
-      // 第二代没在期限内通过健康检查（例如机器负载很高）
       const server = fakeServer(
-        launches === 2 ? async () => Promise.reject(new DevError("health timeout")) : undefined,
+        launches === 2 || launches === 3
+          ? async () => Promise.reject(new DevError("health timeout"))
+          : undefined,
       );
       const stop = server.stop.bind(server);
       server.stop = async () => {
@@ -530,10 +745,10 @@ test("a replacement that fails its health check is stopped by handover, keeping 
   supervisor.changed(["initial-start"], { immediate: true });
   await until(() => statuses.some((s) => s.state === "ready"));
   supervisor.changed(["apps/server/src/app.ts"]);
-  await until(() => statuses.some((s) => s.state === "failed"));
-  await until(() => seenAtStop.length === 2);
-  // 停旧 Server、停坏掉的新 Server 时都带着交接标记
-  assert.deepEqual(seenAtStop, [true, true]);
+  await until(() => statuses.some((status) => status.state === "ready" && status.generation === 2));
+  assert.equal(launches, 4);
+  assert.deepEqual(seenAtStop, [true, true, true]);
+  assert.ok(statuses.some((status) => status.restartAttempt === 2));
 });
 
 test("a supervisor without its Server reclaims the old generation by handover instead of failing on the busy port", async (t) => {

@@ -248,6 +248,7 @@ try {
     "index.html",
     "vite.config.ts",
     "dev-status-plugin.ts",
+    "favicon-plugin.ts",
     "pptx-preview-plugin.ts",
     "tsconfig.node.json",
     "public",

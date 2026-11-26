@@ -35,6 +35,15 @@ describe("dev status contract", () => {
     expect(shouldReload(3, ready(4))).toBe(true);
     expect(shouldReload(4, ready(3))).toBe(true);
   });
+
+  it("保留自动恢复字段，忽略不可信的非法计数", () => {
+    expect(
+      parseDevStatus({ ...ready(3), state: "restarting", restartAttempt: 2, restartDelayMs: 2000 }),
+    ).toMatchObject({ restartAttempt: 2, restartDelayMs: 2000 });
+    expect(
+      parseDevStatus({ ...ready(3), restartAttempt: -1, restartDelayMs: "2000" }),
+    ).not.toHaveProperty("restartAttempt");
+  });
 });
 
 describe("DevStatusBanner", () => {
@@ -65,6 +74,17 @@ describe("DevStatusBanner", () => {
     expect(await screen.findByText("更新失败，修正后会自动重试")).toBeTruthy();
     expect(screen.getByText("TS2345: bad")).toBeTruthy();
     expect(screen.getByText(/代次 5 · apps\/server\/src\/app.ts/)).toBeTruthy();
+  });
+
+  it("自动恢复显示重启次数，崩溃保护显示已经停止", async () => {
+    respond({ ...ready(5), state: "restarting", restartAttempt: 3 });
+    const view = render(<DevStatusBanner />);
+    expect(await screen.findByText("Server 意外退出，正在自动重启（第 3 次）")).toBeTruthy();
+    view.unmount();
+    respond({ ...ready(5), state: "failed", restartStopped: true, error: "60 秒内失败 5 次" });
+    render(<DevStatusBanner />);
+    expect(await screen.findByText("Server 反复崩溃，已停止自动重启")).toBeTruthy();
+    expect(screen.getByText("60 秒内失败 5 次")).toBeTruthy();
   });
 
   it("刷新后短暂提示已运行最新改动", async () => {
