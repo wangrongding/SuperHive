@@ -2148,5 +2148,6 @@
   "忘掉": "Forget",
   "忘掉 {0}（关掉窗口，清掉在那里的访客身份）": "Forget {0} (closes the window and clears your guest identity there)",
   "在客户端中打开": "Open in the App",
-  "装了 SuperHive 客户端时，会在客户端里确认后加入；没装就直接在上面用网页加入。": "With the SuperHive app installed, you'll confirm and join there. Otherwise, just join in the browser above."
+  "装了 SuperHive 客户端时，会在客户端里确认后加入；没装就直接在上面用网页加入。": "With the SuperHive app installed, you'll confirm and join there. Otherwise, just join in the browser above.",
+  "没有唤起客户端：可能没装 SuperHive 客户端，或浏览器拦下了。直接在上面用网页加入就行。": "The app didn't open. It may not be installed, or the browser blocked it. Just join in the browser above."
 }

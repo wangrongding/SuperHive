@@ -125,6 +125,71 @@ describe("RoomClient", () => {
     expect(connections).toBe(2);
   });
 
+  it("被房主暂停（SESSION_PAUSED）后照常重连但拉长间隔，恢复后重新加入", async () => {
+    server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await waitFor<void>((resolve) => server!.on("listening", () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+    const self = {
+      id: "00000000-0000-4000-8000-000000000001",
+      roomId: "general",
+      username: "guest-agent",
+      type: "agent" as const,
+      status: "online" as const,
+      joinedAt: "2026-07-18T00:00:00.000Z",
+      lastSeenAt: "2026-07-18T00:00:00.000Z",
+    };
+    let paused = true;
+    const joinedAt: number[] = [];
+    server.on("connection", (socket) => {
+      socket.on("message", () => {
+        joinedAt.push(Date.now());
+        if (paused) {
+          socket.send(JSON.stringify({ type: "error", code: "SESSION_PAUSED", message: "paused" }));
+          socket.close(4401, "paused");
+          return;
+        }
+        socket.send(
+          JSON.stringify({
+            type: "room.snapshot",
+            self,
+            participants: [self],
+            messages: [],
+            latestSeq: 1,
+          }),
+        );
+      });
+    });
+    const codes: string[] = [];
+    const rejoined = waitFor<void>((resolve) => {
+      client = new RoomClient(
+        {
+          serverUrl: `http://127.0.0.1:${port}`,
+          roomId: "general",
+          username: "guest-agent",
+          token: "t",
+          pausedRetryMs: 400,
+        },
+        {
+          onSnapshot: () => resolve(),
+          onMention: () => undefined,
+          onError: (error) => {
+            if (error instanceof RoomClientError) codes.push(error.code);
+            // 被拒两次后房主恢复
+            if (codes.length === 2) paused = false;
+          },
+        },
+      );
+      client.start();
+    }, 5_000);
+    await rejoined;
+    expect(codes).toEqual(["SESSION_PAUSED", "SESSION_PAUSED"]);
+    expect(joinedAt).toHaveLength(3);
+    // 普通断线第一次只等 500ms；暂停时每次都按 pausedRetryMs 等，不按 500ms 起的指数退避
+    expect(joinedAt[1]! - joinedAt[0]!).toBeGreaterThanOrEqual(380);
+    expect(joinedAt[2]! - joinedAt[1]!).toBeGreaterThanOrEqual(380);
+    expect(joinedAt[2]! - joinedAt[1]!).toBeLessThan(1_500);
+  });
+
   it("dispatches snapshots, rooms.changed, message.deleted, and typed error codes", async () => {
     server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await waitFor<void>((resolve) => server!.on("listening", () => resolve()));

@@ -22,7 +22,12 @@ import {
   type AgentReplyInput,
   type AgentResponder,
 } from "./responder.js";
-import type { RoomClient, RoomClientHandlers, Snapshot } from "./room-client.js";
+import {
+  RoomClientError,
+  type RoomClient,
+  type RoomClientHandlers,
+  type Snapshot,
+} from "./room-client.js";
 import { StateStore, type AgentState } from "./state-store.js";
 
 const SELF = "00000000-0000-4000-8000-0000000000aa";
@@ -357,6 +362,36 @@ describe("AgentBridge", () => {
     const input = await completePromptTurn();
     expect(input.instructions).toContain("本房间工作区：~/proj");
     expect(input.instructions).toContain(`你当前的工作目录：${directory}（只读`);
+  });
+
+  it("被房主暂停：只记一次日志、不离开房间，恢复加入后再记一次", async () => {
+    const logs: string[] = [];
+    const onArchived = vi.fn();
+    bridge = new AgentBridge(
+      { ...identity, persona: "p", provider: "codex", token: "t", onArchived },
+      store,
+      responder,
+      (line) => logs.push(line),
+      (_options, handlers) => {
+        room.handlers = handlers;
+        return room as unknown as RoomClient;
+      },
+    );
+    // 冷启动时正处于暂停：加入前的步骤不需要访客凭证，start 照常完成
+    await bridge.start();
+    const paused = new RoomClientError("SESSION_PAUSED: paused", "SESSION_PAUSED");
+    for (let attempt = 0; attempt < 5; attempt += 1) room.handlers.onError(paused);
+    expect(logs.filter((line) => line.includes("SESSION_PAUSED"))).toEqual([]);
+    expect(logs.filter((line) => line.includes("已被房主暂停"))).toHaveLength(1);
+    expect(onArchived).not.toHaveBeenCalled();
+    await room.handlers.onSnapshot({ self, latestSeq: 0, messages: [], participants: [self] });
+    expect(logs.filter((line) => line.includes("房主已恢复"))).toHaveLength(1);
+    // 再次暂停又会提示一次
+    room.handlers.onError(paused);
+    expect(logs.filter((line) => line.includes("已被房主暂停"))).toHaveLength(2);
+    // 真被移除才离开
+    room.handlers.onError(new RoomClientError("SESSION_REVOKED: revoked", "SESSION_REVOKED"));
+    expect(onArchived).toHaveBeenCalledTimes(1);
   });
 
   it("工作区档没有系统沙箱：加入时上报 noSandbox，规则如实说明", async () => {

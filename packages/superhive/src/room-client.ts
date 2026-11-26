@@ -41,6 +41,8 @@ export type RoomClientOptions = {
   version?: AgentCodeVersion;
   /** 在本房间实际的工作目录、房间设置的工作区、没用上的原因；加入时上报，旧版服务端会忽略 */
   workspace?: { cwd: string; roomWorkspace?: string; note?: string; noSandbox?: boolean };
+  /** 被房主暂停（SESSION_PAUSED）后隔多久再试着重连；默认 45 秒 */
+  pausedRetryMs?: number;
 };
 
 export type Snapshot = {
@@ -111,6 +113,8 @@ export class RoomClient {
   private session?: { sessionId: string; cwd: string };
   /** 正在干活：重连后服务端会把状态重置成在线，要再报一次，否则成员列表显示空闲、对话流里却还在执行 */
   private typing = false;
+  /** 房主暂停了这个访客 Agent：重连拉长间隔，直到重新加入成功 */
+  private paused = false;
 
   constructor(
     private readonly options: RoomClientOptions,
@@ -327,7 +331,10 @@ export class RoomClient {
         pending.reject(new Error("聊天室连接在确认回复前断开。"));
         this.pending.delete(clientMessageId);
       }
-      const wait = Math.min(10_000, 500 * 2 ** this.retry++);
+      // 暂停不是结束：照常重连，但不用 10 秒一次地敲门，恢复后最多晚这么久回来
+      const wait = this.paused
+        ? (this.options.pausedRetryMs ?? 45_000)
+        : Math.min(10_000, 500 * 2 ** this.retry++);
       this.reconnectTimer = setTimeout(() => this.connect(), wait);
     });
   }
@@ -335,6 +342,7 @@ export class RoomClient {
   private handleEvent(event: ServerEvent): void {
     if (event.type === "room.snapshot") {
       this.retry = 0;
+      this.paused = false;
       this.joined = true;
       this.serverTracksInvocations = Array.isArray(event.invocations);
       this.serverAcceptsTrace = event.features?.includes("trace") === true;
@@ -418,6 +426,7 @@ export class RoomClient {
     }
     if (event.type === "error") {
       const error = new RoomClientError(`${event.code}: ${event.message}`, event.code);
+      if (event.code === "SESSION_PAUSED") this.paused = true;
       const first = this.pending.entries().next().value as [string, PendingSend] | undefined;
       if (first) {
         const [clientMessageId, pending] = first;

@@ -17,6 +17,7 @@ import { localized, t, useLocale } from "./i18n";
 import { useAppReady, useAppReadyFallback } from "./boot-splash";
 import { Button } from "./button";
 import { roomJoinLink } from "./join-link";
+import { launchClient } from "./client-launch";
 
 /** 进了房间后等消息快照再收起加载画面；一直等不到（连不上实时通道）也最多盖这么久 */
 const APP_READY_FALLBACK_MS = 4_000;
@@ -306,25 +307,36 @@ const CLIENT_TRIED_KEY = "superhive.invite.clientTried";
 /**
  * 浏览器里打开邀请链接时，先试着唤起本机客户端（superhive://join），由客户端确认后加入；
  * 和 Zoom、飞书会议一样：每个邀请只自动试一次，之后只留一个按钮，没装客户端就照旧在网页里加入。
+ * 用隐藏 iframe 唤起（见 launchClient），没装客户端时 Safari 不弹报错、Firefox 不跳错误页；
  * 浏览器第一次会弹它自己的「是否打开」提示，网页跳不过去。
  */
 function OpenInClient() {
   const [link] = useState(() => roomJoinLink(window.location.href));
+  const [missed, setMissed] = useState(false);
+  const open = useCallback(() => {
+    setMissed(false);
+    launchClient(link, { onMissed: () => setMissed(true) });
+  }, [link]);
   useEffect(() => {
     if (insideDesktopClient()) return;
     const tried = sessionStorage.getItem(CLIENT_TRIED_KEY);
     if (tried === window.location.href) return;
     sessionStorage.setItem(CLIENT_TRIED_KEY, window.location.href);
-    window.location.assign(link);
-  }, [link]);
+    // 不在卸载时收掉：StrictMode 下开发版会立刻卸载重挂，收掉就等于没唤起；iframe 到时会自己移除
+    open();
+  }, [open]);
   if (insideDesktopClient()) return null;
   return (
     <div className="invite-open-client">
-      <Button variant="secondary" block onClick={() => window.location.assign(link)}>
+      <Button variant="secondary" block onClick={open}>
         <span>{t("在客户端中打开")}</span>
       </Button>
-      <p className="fine-print">
-        {t("装了 SuperHive 客户端时，会在客户端里确认后加入；没装就直接在上面用网页加入。")}
+      <p className="fine-print" role={missed ? "status" : undefined}>
+        {missed
+          ? t(
+              "没有唤起客户端：可能没装 SuperHive 客户端，或浏览器拦下了。直接在上面用网页加入就行。",
+            )
+          : t("装了 SuperHive 客户端时，会在客户端里确认后加入；没装就直接在上面用网页加入。")}
       </p>
     </div>
   );

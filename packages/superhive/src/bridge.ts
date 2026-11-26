@@ -258,6 +258,8 @@ const COMPACTION_REPORTING_PROVIDERS = new Set(["claude", "codex"]);
 export class AgentBridge {
   private state!: AgentState;
   private stateExisted = false;
+  /** 房主暂停了这个访客 Agent（SESSION_PAUSED）：只在开始暂停时记一次日志，恢复加入后清掉 */
+  private pausedByHost = false;
   private ownParticipantId = "";
   private instructions = "";
   private serverRules = "";
@@ -496,6 +498,14 @@ export class AgentBridge {
         },
         ...(this.options.onShutdown ? { onShutdown: this.options.onShutdown } : {}),
         onError: (error) => {
+          // 被房主暂停：照常隔一会儿重连，每次都会再被拒一次，只在开始暂停时记一行
+          if (error instanceof RoomClientError && error.code === "SESSION_PAUSED") {
+            if (!this.pausedByHost) {
+              this.pausedByHost = true;
+              this.log("[hive] 已被房主暂停，恢复后自动回来。");
+            }
+            return;
+          }
           this.log(`[hive] ${error.message}`);
           if (error instanceof RoomClientError && error.code === "ROOM_ARCHIVED") {
             this.options.onArchived?.();
@@ -772,6 +782,10 @@ export class AgentBridge {
 
   private async onSnapshot(snapshot: Snapshot): Promise<void> {
     this.ownParticipantId = snapshot.self.id;
+    if (this.pausedByHost) {
+      this.pausedByHost = false;
+      this.log("[hive] 房主已恢复，重新回到房间。");
+    }
     this.log(`[hive] 已加入 #${this.options.roomId}，公共消息最新 seq=${snapshot.latestSeq}`);
     this.deliverSaved(snapshot);
     if (!this.stateExisted) {
