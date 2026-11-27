@@ -20,6 +20,7 @@ import type {
   WorkspaceDiff,
   WorkspaceDiffMode,
   WorkspaceFile,
+  WorkspaceTextEncoding,
   WorkspaceOverview,
   WorkspaceSourceInfo,
   WorkspaceSearch,
@@ -1053,6 +1054,17 @@ function WrapToggle({
   );
 }
 
+/** 不是 UTF-8 的文本：标出按哪种编码解码显示（面板只读，不会写回成 UTF-8） */
+function EncodingBadge({ encoding }: { encoding: WorkspaceTextEncoding | undefined }) {
+  if (!encoding) return null;
+  const label = encoding === "gbk" ? "GBK" : "UTF-16";
+  return (
+    <Tooltip content={t("这个文件不是 UTF-8，按 {0} 解码显示，只读", { 0: label })}>
+      <span className="workspace-encoding">{label}</span>
+    </Tooltip>
+  );
+}
+
 function useDiffView(): [DiffView, (view: DiffView) => void] {
   const [view, setView] = useState<DiffView>(() =>
     localStorage.getItem(VIEW_KEY) === "split" ? "split" : "unified",
@@ -1284,6 +1296,7 @@ function DiffViewer({
           {selection.path}
         </span>
         {stats && <Counts additions={stats.additions} deletions={stats.deletions} />}
+        {!showMedia && <EncodingBadge encoding={diff.data?.encoding} />}
         <div className="workspace-viewer-actions">
           {media && diff.data?.patch !== undefined && (
             <button
@@ -1877,6 +1890,7 @@ function FilePreview({
           {path}
         </span>
         {file.data && <span className="workspace-muted">{formatBytes(file.data.size)}</span>}
+        {!showMedia && <EncodingBadge encoding={file.data?.encoding} />}
         {((media && hasSource) || lines) && (
           <div className="workspace-viewer-actions">
             {lines && markdown && (

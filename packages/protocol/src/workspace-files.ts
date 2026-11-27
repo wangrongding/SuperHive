@@ -123,6 +123,8 @@ export const workspaceDiffModeSchema = z.enum([
   "base",
 ]);
 
+export const workspaceTextEncodingSchema = z.enum(["gbk", "utf-16"]);
+
 export const workspaceDiffSchema = z.object({
   path: z.string(),
   binary: z.boolean().optional(),
@@ -134,6 +136,8 @@ export const workspaceDiffSchema = z.object({
   patch: z.string().optional(),
   /** patch 带了整份文件作上下文：未改动的部分可以在网页上展开 */
   full: z.boolean().optional(),
+  /** 不是 UTF-8 的文本：按 GBK（GB18030）或 UTF-16 解码后显示，只读 */
+  encoding: workspaceTextEncodingSchema.optional(),
 });
 
 export const workspaceTreeEntrySchema = z.object({
@@ -165,6 +169,8 @@ export const workspaceFileSchema = z.object({
   /** 超过预览上限，只返回了开头一部分 */
   truncated: z.boolean().optional(),
   content: z.string().optional(),
+  /** 不是 UTF-8 的文本：按 GBK（GB18030）或 UTF-16 解码后显示，只读 */
+  encoding: workspaceTextEncodingSchema.optional(),
 });
 
 export const workspaceSearchSchema = z.object({
@@ -183,6 +189,7 @@ export type WorkspaceCommit = z.infer<typeof workspaceCommitSchema>;
 export type WorkspaceLog = z.infer<typeof workspaceLogSchema>;
 export type WorkspaceChangeSet = z.infer<typeof workspaceChangeSetSchema>;
 export type WorkspaceDiffMode = z.infer<typeof workspaceDiffModeSchema>;
+export type WorkspaceTextEncoding = z.infer<typeof workspaceTextEncodingSchema>;
 export type WorkspaceDiff = z.infer<typeof workspaceDiffSchema>;
 export type WorkspaceTreeEntry = z.infer<typeof workspaceTreeEntrySchema>;
 export type WorkspaceTree = z.infer<typeof workspaceTreeSchema>;

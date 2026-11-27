@@ -353,6 +353,113 @@ describe("git 状态与 diff", () => {
   });
 });
 
+describe("非 UTF-8 文件的预览与 diff", () => {
+  const gbk = (hexText: string) => Buffer.from(hexText.replace(/\s/g, ""), "hex");
+  const utf16le = (text: string) =>
+    Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+
+  it("GBK 文件：预览与已暂存、未暂存、未跟踪、提交里的 diff 都按 GB18030 解码并标 gbk", async () => {
+    const root = repository();
+    const view = new WorkspaceView(root);
+    // 「// 中文\n」→「// 修改\n」
+    write(root, "gbk.c", gbk("2f2f20 d6d0cec4 0a"));
+    expect(await view.file("gbk.c", false)).toMatchObject({
+      content: "// 中文\n",
+      encoding: "gbk",
+    });
+    expect(await view.diff({ path: "gbk.c", mode: "untracked", reveal: false })).toMatchObject({
+      patch: "@@ -0,0 +1,1 @@\n+// 中文\n",
+      encoding: "gbk",
+    });
+    git(root, "add", "gbk.c");
+    git(root, "commit", "-q", "-m", "gbk");
+    write(root, "gbk.c", gbk("2f2f20 d0deb8c4 0a"));
+    expect(await view.diff({ path: "gbk.c", mode: "unstaged", reveal: false })).toMatchObject({
+      patch: expect.stringContaining("-// 中文\n+// 修改"),
+      encoding: "gbk",
+    });
+    git(root, "add", "gbk.c");
+    expect(await view.diff({ path: "gbk.c", mode: "staged", reveal: false })).toMatchObject({
+      patch: expect.stringContaining("-// 中文\n+// 修改"),
+      encoding: "gbk",
+    });
+    git(root, "commit", "-q", "-m", "change");
+    const hash = git(root, "rev-parse", "HEAD").trim();
+    expect(
+      await view.diff({ path: "gbk.c", mode: "commit", commit: hash, reveal: false, full: true }),
+    ).toMatchObject({ patch: "@@ -1 +1 @@\n-// 中文\n+// 修改\n", encoding: "gbk", full: true });
+    // 普通 UTF-8 的 diff 不带 encoding
+    write(root, "a.txt", "一\n");
+    expect(
+      (await view.diff({ path: "a.txt", mode: "unstaged", reveal: false })).encoding,
+    ).toBeUndefined();
+    expect((await view.file("a.txt", false)).encoding).toBeUndefined();
+  });
+
+  it("UTF-16 文件：预览不再判成二进制；git 当二进制的改动解码两侧后照常给 diff", async () => {
+    const root = repository();
+    const view = new WorkspaceView(root);
+    write(root, "out.txt", utf16le("第一行\r\n上面\r\n"));
+    expect(await view.file("out.txt", false)).toMatchObject({
+      content: "第一行\r\n上面\r\n",
+      encoding: "utf-16",
+    });
+    expect(await view.diff({ path: "out.txt", mode: "untracked", reveal: false })).toMatchObject({
+      patch: "@@ -0,0 +1,2 @@\n+第一行\r\n+上面\r\n",
+      encoding: "utf-16",
+    });
+    git(root, "add", "out.txt");
+    // 新增到暂存区：HEAD 里没有，按整份新增
+    expect(await view.diff({ path: "out.txt", mode: "staged", reveal: false })).toMatchObject({
+      patch: "@@ -0,0 +1,2 @@\n+第一行\r\n+上面\r\n",
+      encoding: "utf-16",
+    });
+    git(root, "commit", "-q", "-m", "utf16");
+    write(root, "out.txt", utf16le("第一行\r\n下面\r\n"));
+    // 改动列表里也按解码后的行数算，不标二进制
+    expect((await view.status()).changes).toContainEqual(
+      expect.objectContaining({ path: "out.txt", additions: 1, deletions: 1 }),
+    );
+    expect(
+      (await view.status()).changes.find((item) => item.path === "out.txt")?.binary,
+    ).toBeUndefined();
+    const unstaged = await view.diff({
+      path: "out.txt",
+      mode: "unstaged",
+      reveal: false,
+      full: true,
+    });
+    expect(unstaged).toEqual({
+      path: "out.txt",
+      patch: "@@ -1,2 +1,2 @@\n 第一行\r\n-上面\r\n+下面\r\n",
+      full: true,
+      encoding: "utf-16",
+    });
+    git(root, "add", "out.txt");
+    git(root, "commit", "-q", "-m", "edit");
+    const hash = git(root, "rev-parse", "HEAD").trim();
+    expect((await view.commit(hash)).changes).toEqual([
+      expect.objectContaining({ path: "out.txt", additions: 1, deletions: 1 }),
+    ]);
+    expect(
+      await view.diff({ path: "out.txt", mode: "commit", commit: hash, reveal: false }),
+    ).toMatchObject({ patch: expect.stringContaining("-上面\r\n+下面"), encoding: "utf-16" });
+    // 删掉：工作区没有了，按整份删除
+    rmSync(path.join(root, "out.txt"));
+    expect(await view.diff({ path: "out.txt", mode: "unstaged", reveal: false })).toMatchObject({
+      patch: "@@ -1,2 +0,0 @@\n-第一行\r\n-下面\r\n",
+      encoding: "utf-16",
+    });
+    // 真二进制照旧
+    write(root, "blob.bin", Buffer.from([0, 0, 1]));
+    git(root, "add", "blob.bin");
+    expect(await view.diff({ path: "blob.bin", mode: "staged", reveal: false })).toEqual({
+      path: "blob.bin",
+      binary: true,
+    });
+  });
+});
+
 describe("文件树与预览", () => {
   it("懒加载一层，默认隐藏被忽略的与 .git，可切换显示；带 git 状态", async () => {
     const root = repository();

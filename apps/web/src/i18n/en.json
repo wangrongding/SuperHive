@@ -1619,6 +1619,7 @@
   "看图片对照": "Compare images",
   "看文本 diff": "Text diff",
   "二进制文件，不能在这里预览。": "Binary file; it can't be previewed here.",
+  "这个文件不是 UTF-8，按 {0} 解码显示，只读": "Not UTF-8; shown decoded as {0}, read-only",
   "看图片": "View image",
   "看源码": "View source",
   "在访达中显示": "Show in Finder",

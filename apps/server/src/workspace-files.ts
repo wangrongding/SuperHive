@@ -16,6 +16,7 @@ import type {
 } from "@superhive/protocol";
 import { HiveError } from "./database.js";
 import { gitOperationName, slowOps } from "./slow-ops.js";
+import { decodeDiff, decodeText, diffTexts, type TextEncodingLabel } from "./workspace-text.js";
 
 const { createReadStream } = userFs;
 const { lstat, open, readdir, realpath, stat } = userFsPromises;
@@ -111,6 +112,9 @@ export async function resolveInside(root: string, relative: string): Promise<str
 
 /** 「整份上下文」的行数：比任何能在上限内显示的文件都长 */
 const FULL_CONTEXT = 1_000_000;
+
+/** 改动列表里最多为这么多个被 git 当成二进制的文件检查是不是 UTF-16 */
+const RECOUNT_LIMIT = 50;
 
 type GitOutput = { code: number; stdout: Buffer; stderr: string };
 
@@ -378,10 +382,20 @@ export class WorkspaceView {
       for (const item of changes)
         if (item.group === group) Object.assign(item, countsOf(stats.get(item.path)));
     };
-    if (changes.some((item) => item.group === "staged"))
+    if (changes.some((item) => item.group === "staged")) {
       apply("staged", await this.numstat(["diff", "--cached"]));
-    if (changes.some((item) => item.group === "unstaged"))
+      await this.recountDecoded(
+        changes.filter((item) => item.group === "staged"),
+        ["--cached"],
+      );
+    }
+    if (changes.some((item) => item.group === "unstaged")) {
       apply("unstaged", await this.numstat(["diff"]));
+      await this.recountDecoded(
+        changes.filter((item) => item.group === "unstaged"),
+        [],
+      );
+    }
     let counted = 0;
     for (const item of changes) {
       if (item.group !== "untracked") continue;
@@ -436,7 +450,39 @@ export class WorkspaceView {
         ...countsOf(stats.get(file)),
       });
     }
+    await this.recountDecoded(changes, range);
     return { changes, truncated };
+  }
+
+  /**
+   * numstat 把 UTF-16 文件算成二进制：工作区里这个文件以 UTF-16 BOM 开头的，解码两侧后重新数增删行，
+   * 和点开看到的 diff 一致。只看前 RECOUNT_LIMIT 个二进制改动。
+   */
+  private async recountDecoded(changes: WorkspaceChange[], range: string[]): Promise<void> {
+    let checked = 0;
+    for (const item of changes) {
+      if (!item.binary || item.status === "D") continue;
+      if (checked++ >= RECOUNT_LIMIT) break;
+      if (!(await this.startsWithUtf16Bom(item.path))) continue;
+      const diffed = await this.decodedDiff(
+        range,
+        item.path,
+        item.oldPath ?? item.path,
+        false,
+      ).catch(() => null);
+      if (diffed?.patch === undefined) continue;
+      delete item.binary;
+      Object.assign(item, patchCounts(diffed.patch));
+    }
+  }
+
+  private async startsWithUtf16Bom(relative: string): Promise<boolean> {
+    try {
+      const { data } = await readHeadBytes(await resolveInside(this.root, relative), 2);
+      return (data[0] === 0xff && data[1] === 0xfe) || (data[0] === 0xfe && data[1] === 0xff);
+    } catch {
+      return false;
+    }
   }
 
   async log(options: { skip?: number; limit?: number } = {}): Promise<WorkspaceCommit[]> {
@@ -594,7 +640,20 @@ export class WorkspaceView {
           "WORKSPACE_GIT_FAILED",
           output.stderr.trim().slice(0, 500) || `git exit ${output.code}`,
         );
-      return { ...result, ...hunksOf(output.stdout.toString("utf8")), ...(full ? { full } : {}) };
+      const decoded = decodeDiff(output.stdout);
+      const hunks = hunksOf(decoded.text);
+      if (hunks.binary && input.mode !== "conflict") {
+        // git 看到 NUL 就当二进制：UTF-16 文件取出新旧两侧解码后再比
+        const text = await this.decodedDiff(range, relative, oldPath ?? relative, full);
+        if (text?.tooLarge) continue;
+        if (text) return { ...result, ...text };
+      }
+      return {
+        ...result,
+        ...hunks,
+        ...(full ? { full } : {}),
+        ...(decoded.encoding && hunks.patch ? { encoding: decoded.encoding } : {}),
+      };
     }
     return { ...result, tooLarge: true };
   }
@@ -605,14 +664,82 @@ export class WorkspaceView {
     const info = await stat(real);
     if (!info.isFile()) return { binary: true };
     if (info.size > WORKSPACE_LIMITS.diffBytes) return { tooLarge: true };
-    const text = await this.readText(relative);
-    if (text === null) return { binary: true };
-    if (text === "") return { patch: "" };
+    const decoded = await this.readDecoded(relative);
+    if (decoded === null) return { binary: true };
+    const { text, encoding } = decoded;
+    const withEncoding = encoding ? { encoding } : {};
+    if (text === "") return { patch: "", ...withEncoding };
     const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
     const noNewline = text.endsWith("\n") ? "" : "\n\\ No newline at end of file";
     return {
       patch: `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}${noNewline}\n`,
+      ...withEncoding,
     };
+  }
+
+  /**
+   * git 判成二进制的改动：取出新旧两侧按 decodeText 解码，两侧都是文本、且有一侧是 UTF-16 时，
+   * 转成 UTF-8 再让 git 比（别的二进制照旧不显示）。range 同 git diff 的参数：
+   * ["--cached"] 是 HEAD→暂存区，[] 是暂存区→工作区，[a] 是 a→工作区，[a, b] 是 a→b。
+   */
+  private async decodedDiff(
+    range: string[],
+    relative: string,
+    oldPath: string,
+    full: boolean,
+  ): Promise<Partial<WorkspaceDiff> | null> {
+    const [before, after] =
+      range[0] === "--cached"
+        ? ["HEAD", ""]
+        : range.length === 2
+          ? [range[0]!, range[1]!]
+          : [range[0] ?? "", undefined];
+    let sides: [Buffer | null, Buffer | null];
+    try {
+      sides = await Promise.all([
+        this.blobBytes(before, oldPath),
+        after === undefined ? this.worktreeBytes(relative) : this.blobBytes(after, relative),
+      ]);
+    } catch (error) {
+      if (error instanceof HiveError && error.code === "WORKSPACE_TOO_LARGE")
+        return { tooLarge: true };
+      throw error;
+    }
+    if (!sides[0] && !sides[1]) return null;
+    const decoded = sides.map((side) => (side ? decodeText(side) : { text: "" }));
+    if (decoded.some((side) => side === null)) return null;
+    const [old, next] = decoded as [
+      { text: string; encoding?: TextEncodingLabel },
+      { text: string; encoding?: TextEncodingLabel },
+    ];
+    const encoding = next.encoding ?? old.encoding;
+    if (encoding !== "utf-16") return null;
+    const diffed = await diffTexts(old.text, next.text, full ? FULL_CONTEXT : undefined, (args) =>
+      readOnlyGit(this.root, args, { maxBytes: WORKSPACE_LIMITS.diffBytes }),
+    );
+    if (diffed === null) return { tooLarge: true };
+    return { ...hunksOf(diffed), ...(full ? { full } : {}), encoding };
+  }
+
+  /** git 里某个版本（rev 为空是暂存区）的文件字节；不存在返回 null，超过 diff 上限报 WORKSPACE_TOO_LARGE */
+  private async blobBytes(rev: string, relative: string): Promise<Buffer | null> {
+    const shown = await readOnlyGit(this.root, ["cat-file", "blob", `${rev}:./${relative}`], {
+      maxBytes: WORKSPACE_LIMITS.diffBytes,
+    });
+    return shown.code === 0 ? shown.stdout : null;
+  }
+
+  private async worktreeBytes(relative: string): Promise<Buffer | null> {
+    let real: string;
+    try {
+      real = await resolveInside(this.root, relative);
+    } catch {
+      return null;
+    }
+    const info = await stat(real);
+    if (!info.isFile()) return null;
+    if (info.size > WORKSPACE_LIMITS.diffBytes) fail("WORKSPACE_TOO_LARGE", "File too large");
+    return (await readHeadBytes(real, Math.max(1, info.size))).data;
   }
 
   private async resolveCommit(input: string): Promise<string> {
@@ -648,9 +775,15 @@ export class WorkspaceView {
 
   /** 读文本：不存在或不是普通文件抛错，二进制返回 null，超过预览上限截断 */
   private async readText(relative: string): Promise<string | null> {
+    return (await this.readDecoded(relative))?.text ?? null;
+  }
+
+  private async readDecoded(
+    relative: string,
+  ): Promise<{ text: string; encoding?: TextEncodingLabel } | null> {
     const real = await resolveInside(this.root, relative);
-    const { content, binary } = await readHead(real, WORKSPACE_LIMITS.previewBytes);
-    return binary ? null : content;
+    const { content, binary, encoding } = await readHead(real, WORKSPACE_LIMITS.previewBytes);
+    return binary ? null : { text: content, ...(encoding ? { encoding } : {}) };
   }
 
   /**
@@ -723,11 +856,12 @@ export class WorkspaceView {
       ...(sensitive ? { sensitive } : {}),
     };
     if (sensitive && !reveal) return result;
-    const { content, binary } = await readHead(real, WORKSPACE_LIMITS.previewBytes);
+    const { content, binary, encoding } = await readHead(real, WORKSPACE_LIMITS.previewBytes);
     if (binary) return { ...result, binary };
     return {
       ...result,
       content,
+      ...(encoding ? { encoding } : {}),
       ...(info.size > WORKSPACE_LIMITS.previewBytes ? { truncated: true } : {}),
     };
   }
@@ -959,6 +1093,17 @@ export function hunksOf(output: string): Partial<WorkspaceDiff> {
   return { patch: start < 0 ? "" : output.slice(start) };
 }
 
+/** 统一格式 diff 里的增删行数（不算 @@ 行和「No newline」标记） */
+function patchCounts(patch: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+")) additions++;
+    else if (line.startsWith("-")) deletions++;
+  }
+  return { additions, deletions };
+}
+
 function lineCount(text: string): number {
   if (!text) return 0;
   const lines = text.split("\n").length;
@@ -971,21 +1116,31 @@ function subsequence(haystack: string, needle: string): boolean {
   return false;
 }
 
-/** 读文件开头：前 8000 字节里有 NUL 就当二进制 */
+/** 读文件开头并解码（规则见 workspace-text.ts 的 decodeText） */
 async function readHead(
   file: string,
   limit: number,
-): Promise<{ content: string; binary: boolean }> {
+): Promise<{ content: string; binary: boolean; encoding?: TextEncodingLabel }> {
+  const { data, partial } = await readHeadBytes(file, limit);
+  const decoded = decodeText(data, { partial });
+  if (!decoded) return { content: "", binary: true };
+  return {
+    content: decoded.text,
+    binary: false,
+    ...(decoded.encoding ? { encoding: decoded.encoding } : {}),
+  };
+}
+
+/** 文件开头最多 limit 字节；partial：读满了上限（后面可能还有） */
+async function readHeadBytes(
+  file: string,
+  limit: number,
+): Promise<{ data: Buffer; partial: boolean }> {
   const handle = await open(file, "r");
   try {
     const buffer = Buffer.alloc(limit);
     const { bytesRead } = await handle.read(buffer, 0, limit, 0);
-    const data = buffer.subarray(0, bytesRead);
-    if (data.subarray(0, 8000).includes(0)) return { content: "", binary: true };
-    let content = data.toString("utf8");
-    // 截在多字节字符中间时去掉最后半个字符
-    if (bytesRead === limit) content = content.replace(/�$/, "");
-    return { content, binary: false };
+    return { data: buffer.subarray(0, bytesRead), partial: bytesRead === limit };
   } finally {
     await handle.close();
   }

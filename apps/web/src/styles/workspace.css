@@ -666,6 +666,19 @@
   white-space: nowrap;
 }
 
+/* 非 UTF-8 文件的编码标签：中性小胶囊 */
+.workspace-encoding {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  line-height: 16px;
+}
+
 .workspace-viewer-actions {
   display: flex;
   align-items: center;

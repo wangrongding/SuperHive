@@ -272,6 +272,34 @@ describe("WorkspacePanel", () => {
     );
   });
 
+  it("非 UTF-8 文件：diff 和预览头部标出编码，UTF-8 的不标", async () => {
+    const api = fakeApi({
+      "/diff": (query) =>
+        query.path === "README.md"
+          ? { path: query.path, patch: "@@ -1 +1 @@\n-// 中文\n+// 修改\n", encoding: "gbk" }
+          : { path: query.path!, patch: longPatch, full: true },
+      "/file": (query) =>
+        query.path === "README.md"
+          ? { path: query.path, size: 20, content: "第一行\r\n", encoding: "utf-16" }
+          : { path: query.path, size: 20, content: "const a = 1;\n" },
+    });
+    open(api);
+    const badge = await screen.findByText("GBK");
+    expect(badge.classList.contains("workspace-encoding")).toBe(true);
+    // 换到 UTF-8 的改动，标签跟着消失
+    await userEvent.click(screen.getByRole("button", { name: /app\.ts/ }));
+    await screen.findByRole("table", { name: "src/app.ts 的改动" });
+    expect(screen.queryByText("GBK")).toBeNull();
+    await userEvent.click(await screen.findByRole("tab", { name: "文件树" }));
+    await userEvent.click(await screen.findByRole("button", { name: /^README\.md/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "看源码" }));
+    expect(await screen.findByText("UTF-16")).toBeTruthy();
+    await userEvent.click(await screen.findByRole("button", { name: /^src/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^app\.ts/ }));
+    await screen.findByRole("table", { name: "src/app.ts" });
+    expect(screen.queryByText("UTF-16")).toBeNull();
+  });
+
   it("面板打开时定时刷新状态，Esc 关闭", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = fakeApi();
