@@ -309,10 +309,12 @@ function AgentCliCard({
   const label = mine
     ? action === "install"
       ? t("正在安装…")
-      : t("正在升级…")
+      : reinstall
+        ? t("正在重新安装…")
+        : t("正在升级…")
     : action === "install"
       ? t("安装")
-      : info.status === "broken"
+      : reinstall
         ? t("重新安装")
         : info.updateAvailable && info.latest
           ? t("升级到 {0}", { 0: info.latest })
@@ -566,7 +568,14 @@ function JobStatus({
     return (
       <div className="agent-cli-job" role="status">
         <span className="agent-cli-spinner" aria-hidden />
-        <span>{job.action === "install" ? t("正在安装…") : t("正在升级…")}</span>
+        <span>
+          {job.action === "install"
+            ? t("正在安装…")
+            : // 升级前查不到版本（装了但跑不起来）就是重新安装；老 Server 不带这个字段，按升级说
+              job.versionBefore === null
+              ? t("正在重新安装…")
+              : t("正在升级…")}
+        </span>
         {job.progress && <code className="agent-cli-progress">{job.progress}</code>}
       </div>
     );

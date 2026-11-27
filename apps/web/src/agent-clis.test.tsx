@@ -380,6 +380,9 @@ describe("AgentClisGroup", () => {
       fireEvent.click(dialog.querySelector("button:last-child")!);
     });
     expect(client.upgradeAgentCli).toHaveBeenCalledWith("codex", COMMAND);
+    // 进行中也说「正在重新安装」：按钮和进度行都是
+    expect(await screen.findByText("正在重新安装…", { selector: "span" })).toBeTruthy();
+    expect(screen.queryByText("正在升级…")).toBeNull();
 
     // 原来那一处查不到版本：做完说「已重新安装」，不说「已升级到」
     current = { ...current, state: "succeeded", versionAfter: "0.170.0" };

@@ -1364,6 +1364,7 @@
   "升级到 {0}": "Update to {0}",
   "尝试升级": "Try updating",
   "重新安装": "Reinstall",
+  "正在重新安装…": "Reinstalling…",
   "确认升级 {0}": "Confirm updating {0}",
   "在这台电脑上执行升级命令": "Run the update on this computer",
   "确认重新安装 {0}": "Confirm reinstalling {0}",
