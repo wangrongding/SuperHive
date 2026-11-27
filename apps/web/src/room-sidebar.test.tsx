@@ -77,6 +77,24 @@ describe("sidebar incident entry", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "反馈问题 / 建议功能" }));
     expect(openFeedback).toHaveBeenCalledTimes(2);
   });
+  it("keeps the menu open when the click right after hovering would otherwise close it", () => {
+    const matchMedia = vi
+      .spyOn(window, "matchMedia")
+      .mockImplementation((query) => ({ matches: query === "(hover: hover)" }) as MediaQueryList);
+    try {
+      const setUserMenuOpen = vi.fn();
+      const { container, rerender } = render(<RoomSidebar {...props({ setUserMenuOpen })} />);
+      fireEvent.mouseEnter(container.querySelector(".sidebar-user")!);
+      expect(setUserMenuOpen).toHaveBeenLastCalledWith(true);
+      rerender(<RoomSidebar {...props({ setUserMenuOpen, userMenuOpen: true })} />);
+      // 鼠标移上来就展开了，用户顺手再点一下头像：仍然开着，不是 toggle 关掉
+      fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
+      expect(setUserMenuOpen).toHaveBeenLastCalledWith(true);
+    } finally {
+      matchMedia.mockRestore();
+    }
+  });
+
   it("isn't there unless the page is the owner's on this computer", () => {
     render(<RoomSidebar {...props()} />);
     expect(screen.getByRole("button", { name: "Agent 任务" })).toBeTruthy();

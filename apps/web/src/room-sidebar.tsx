@@ -10,7 +10,7 @@ import {
 } from "./app-storage";
 import { avatarHueStyle } from "./avatar";
 import { docsHref } from "./docs-link";
-import type { RefObject, Dispatch, SetStateAction, ReactNode } from "react";
+import { useRef, type RefObject, type Dispatch, type SetStateAction, type ReactNode } from "react";
 import type { RoomSummary } from "@superhive/protocol";
 import type { ActivityView } from "./activity";
 import type { IncidentAttentionItem } from "./incidents-panel";
@@ -19,6 +19,9 @@ import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
 import { DesktopUpdateEntry } from "./desktop-update";
 import { openJoinDialog, RemoteServerList } from "./join-remote";
+
+/** 悬停展开用户菜单后这么久之内的点击算「打开」，不当成「关上」 */
+const HOVER_CLICK_GRACE_MS = 600;
 
 /** 左侧栏：房间列表、需要处理的事项与当前用户 */
 export function RoomSidebar({
@@ -114,6 +117,7 @@ export function RoomSidebar({
   userMenuRef: RefObject<HTMLDivElement | null>;
   username: string;
 }) {
+  const hoverOpenedAt = useRef(0);
   return (
     <aside
       className={`rooms-panel panel ${mobilePanel === "rooms" ? "mobile-open" : ""}`}
@@ -358,6 +362,7 @@ export function RoomSidebar({
           // 鼠标设备悬停头像即展开菜单；触屏仍通过点击切换
           if (!window.matchMedia?.("(hover: hover)").matches) return;
           window.clearTimeout(userMenuHoverTimer.current);
+          if (!userMenuOpen) hoverOpenedAt.current = Date.now();
           setUserMenuOpen(true);
         }}
         onMouseLeave={() => {
@@ -455,7 +460,14 @@ export function RoomSidebar({
             aria-label={t("用户菜单")}
             aria-haspopup="menu"
             aria-expanded={userMenuOpen}
-            onClick={() => setUserMenuOpen((current) => !current)}
+            onClick={() => {
+              // 鼠标移上来菜单已经展开，紧接着的这一下点击是想打开，不能又把它关上
+              if (Date.now() - hoverOpenedAt.current < HOVER_CLICK_GRACE_MS) {
+                setUserMenuOpen(true);
+                return;
+              }
+              setUserMenuOpen((current) => !current);
+            }}
           >
             <span className="identity-avatar" style={avatarHueStyle(username)} aria-hidden="true">
               {username.slice(0, 1).toUpperCase()}
