@@ -21,6 +21,56 @@ describe("squirrel events", () => {
     expect(updateExeArgs("obsolete", execPath)).toBeUndefined();
   });
 
+  it("unregisters superhive:// before removing shortcuts on uninstall, and never blocks it", () => {
+    const order: string[] = [];
+    const run = vi.fn((_command: string, args: string[], done: () => void) => {
+      order.push(args[0]!);
+      done();
+    });
+    const quit = vi.fn();
+    const onUninstall = vi.fn(() => {
+      order.push("unregister");
+    });
+    handleSquirrelEvent({
+      platform: "win32",
+      argv: [execPath, "--squirrel-uninstall"],
+      execPath,
+      run,
+      quit,
+      onUninstall,
+    });
+    expect(order).toEqual(["unregister", "--removeShortcut=SuperHive.exe"]);
+    expect(quit).toHaveBeenCalledTimes(1);
+
+    // 清理抛错也照样删快捷方式、退出
+    const failingQuit = vi.fn();
+    handleSquirrelEvent({
+      platform: "win32",
+      argv: [execPath, "--squirrel-uninstall"],
+      execPath,
+      run,
+      quit: failingQuit,
+      onUninstall: () => {
+        throw new Error("registry denied");
+      },
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(failingQuit).toHaveBeenCalledTimes(1);
+
+    // 安装、更新时不清
+    for (const arg of ["--squirrel-install", "--squirrel-updated", "--squirrel-obsolete"]) {
+      handleSquirrelEvent({
+        platform: "win32",
+        argv: [execPath, arg],
+        execPath,
+        run,
+        quit,
+        onUninstall,
+      });
+    }
+    expect(onUninstall).toHaveBeenCalledTimes(1);
+  });
+
   it("runs Update.exe then quits, and leaves normal launches alone", () => {
     const quit = vi.fn();
     const run = vi.fn((_command: string, _args: string[], done: () => void) => {

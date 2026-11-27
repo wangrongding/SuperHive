@@ -123,6 +123,8 @@ if (cliIndex >= 0) {
     execPath: process.execPath,
     run: runUpdateExe,
     quit: () => app.quit(),
+    // 只删指向这个 exe 的登记（Electron 会核对），别的程序或别处装的 SuperHive 登记的不动
+    onUninstall: () => app.removeAsDefaultProtocolClient(DEEP_LINK_SCHEME),
   })
 ) {
   runApp();

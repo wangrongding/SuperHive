@@ -57,7 +57,7 @@ Windows 上打包（Windows 11 x64 实测过）：
 - 连不上 GitHub 时设 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 下载 Electron。
 - 打包时重命名临时目录报 `EPERM`，多半是 Defender 正在扫刚解压的文件，重试或把构建目录加进排除项。
 - Squirrel 最后用 rcedit 给 `Setup.exe` 写版本信息时可能报 `Unable to commit changes`，Forge 会把这当失败；这时 `out/make/squirrel.windows/x64/Setup.exe` 已经生成、可以正常安装，只是没有版本信息、也没改名成 `SuperHive-<版本>-win-x64-Setup.exe`（正常完成时 Forge 直接产出这个名字，和 Release 上的一致，不用手动改名）。
-- 安装包装到 `%LOCALAPPDATA%\SuperHive`，安装时建开始菜单和桌面快捷方式，卸载时删掉（主进程处理 `--squirrel-*` 事件，见 `src/squirrel.ts`）；Electron 自己的数据在 `%APPDATA%\SuperHive`，Hive 数据仍是 `%USERPROFILE%\.superhive`。
+- 安装包装到 `%LOCALAPPDATA%\SuperHive`，安装时建开始菜单和桌面快捷方式，卸载时删掉，并撤掉正式包启动时登记的 `superhive://` 链接（主进程处理 `--squirrel-*` 事件，见 `src/squirrel.ts`）；Electron 自己的数据在 `%APPDATA%\SuperHive`，Hive 数据仍是 `%USERPROFILE%\.superhive`。
 
 打包版的冒烟测试（fuses 开着，用 Chromium 远程调试端口连上窗口）：
 

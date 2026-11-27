@@ -44,6 +44,11 @@ export interface SquirrelDeps {
   /** 跑 Update.exe，结束（或失败）后回调 */
   run: (command: string, args: string[], done: () => void) => void;
   quit: () => void;
+  /**
+   * 卸载时先做的清理：正式包启动时把 superhive:// 登记到这个版本的 exe（HKCU\Software\Classes），
+   * 卸载不删的话链接会指向已经删掉的程序。出错不影响卸载
+   */
+  onUninstall?: () => void;
 }
 
 /** 是 Squirrel 事件就处理掉并返回 true（调用方不要再启动应用），否则返回 false */
@@ -51,6 +56,13 @@ export function handleSquirrelEvent(deps: SquirrelDeps): boolean {
   if (deps.platform !== "win32") return false;
   const event = squirrelEvent(deps.argv);
   if (!event) return false;
+  if (event === "uninstall") {
+    try {
+      deps.onUninstall?.();
+    } catch {
+      // 清理失败也照常删快捷方式、退出，不能挡住卸载
+    }
+  }
   const args = updateExeArgs(event, deps.execPath);
   if (!args) {
     deps.quit();
