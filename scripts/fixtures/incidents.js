@@ -1,9 +1,10 @@
-/* global window, location, URL, Response, MessageEvent */
+/* global window, location, URL, URLSearchParams, Response, MessageEvent */
 // 截图用的测试替身：沙箱里 /api/local/* 是关的，Server 也不推故障单和慢操作。
 // 和 local-agents.js 一起用（它负责假装页面开在 Server 所在电脑上）：
 //   pnpm screenshot --url $SANDBOX_URL --init-script scripts/fixtures/local-agents.js \
 //     --init-script scripts/fixtures/incidents.js --action "click:[aria-label^='故障']"
 // 给出几张故障单（升级给人、待处理、修复中、已解决、外部原因）、一条待批准的规则提议和几条慢操作。
+// 地址里加 ?slowOps=60 再多造 60 条慢操作，看列表很长时弹窗怎么滚。
 (() => {
   const now = Date.now();
   const ago = (minutes) => new Date(now - minutes * 60_000).toISOString();
@@ -141,6 +142,23 @@
       slow(15, { kind: "request", name: "GET /api/rooms/build/messages", durationMs: 6_100 }),
     ],
   };
+  const extraSlowOps = Number(new URLSearchParams(location.search).get("slowOps")) || 0;
+  const kinds = [
+    { kind: "operation", name: "worktrees.list", source: "GET /api/local/worktrees/:roomId" },
+    { kind: "git", name: "git cherry", source: "worktrees.merged" },
+    { kind: "request", name: "GET /api/local/worktrees/:roomId", status: 200 },
+    { kind: "operation", name: "worktrees.status", failed: true, source: "worktrees.list" },
+  ];
+  for (let index = 0; index < extraSlowOps; index++) {
+    slowOps.operations.push(
+      slow(20 + index, {
+        ...kinds[index % kinds.length],
+        id: `slow-extra-${index}`,
+        durationMs: 3_100 + ((index * 977) % 11_000),
+        roomId: "build",
+      }),
+    );
+  }
   const NativeWebSocket = window.WebSocket;
   window.WebSocket = class extends NativeWebSocket {
     addEventListener(type, listener, options) {

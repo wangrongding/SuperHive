@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_INCIDENT_SETTINGS,
@@ -311,6 +313,44 @@ describe("IncidentsDialog", () => {
     expect(screen.getByText(/记录超过 3 秒（请求 5 秒）的操作/)).toBeTruthy();
   });
 
+  it("60 条慢操作全放在弹窗内容区里，列表和说明都在唯一的滚动区内", () => {
+    const many: SlowOpsState = {
+      ...slowOps,
+      operations: Array.from({ length: 60 }, (_, index) => ({
+        id: `s${index}`,
+        at: new Date(Date.now() - index * 120_000).toISOString(),
+        kind: index % 2 ? ("git" as const) : ("request" as const),
+        name: `op-${index}`,
+        durationMs: 4_000,
+      })),
+    };
+    render(
+      <IncidentsDialog
+        tab="slow-ops"
+        incidents={state({ data: response({}) })}
+        slowOps={many}
+        rooms={[]}
+        currentRoomId="build"
+        username="rd"
+        loadAgents={loadAgents}
+        onTab={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "故障" });
+    const body = screen.getByRole("tabpanel");
+    expect(body.classList.contains("app-dialog-body")).toBe(true);
+    const list = screen.getByRole("list", { name: "最近慢操作" });
+    expect(list.querySelectorAll("li")).toHaveLength(60);
+    expect(body.contains(list)).toBe(true);
+    expect(body.contains(screen.getByText(/记录超过 3 秒/))).toBe(true);
+    // 标签切换和关闭按钮在标题栏里，不在滚动区内
+    const header = dialog.querySelector(".app-dialog-header")!;
+    expect(header.contains(screen.getByRole("tab", { name: "慢操作" }))).toBe(true);
+    expect(header.querySelector(".app-dialog-close")).toBeTruthy();
+    expect(body.contains(header)).toBe(false);
+  });
+
   const agentsByRoom: Record<string, RoomAgent[]> = {
     build: [
       { username: "rd-claude", status: "offline", provider: "claude" },
@@ -546,5 +586,38 @@ describe("installErrorReporter", () => {
       { message: "fetch failed", kind: "unhandledrejection", roomId: "build" },
     ]);
     expect(ignorableError("x", "at chrome-extension://abc/content.js:1:1")).toBe(true);
+  });
+});
+
+describe("故障弹窗只有一个滚动区（样式）", () => {
+  const stylesDir = path.join(import.meta.dirname, "styles");
+  const rules = (name: string) =>
+    [
+      ...readFileSync(path.join(stylesDir, name), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/@media[^{]*\{/g, "")
+        .matchAll(/([^{}]+)\{([^{}]*)\}/g),
+    ].map((match) => ({ selector: match[1]!.replace(/\s+/g, " ").trim(), body: match[2]! }));
+
+  it("故障单、慢操作的样式里不给列表、调用栈等内容限高或单独滚动", () => {
+    const nested = ["incidents.css", "slow-ops.css"].flatMap((name) =>
+      rules(name)
+        .filter(
+          (rule) =>
+            /(^|[;\s])max-height\s*:/.test(rule.body) ||
+            /(^|[;\s])overflow(-y)?\s*:\s*(auto|scroll)/.test(rule.body),
+        )
+        .map((rule) => `${name}: ${rule.selector}`),
+    );
+    expect(nested).toEqual([]);
+  });
+
+  it("宽屏下弹窗高度贴合内容（不沿用 xl 的固定高度），顶边按撑满时的位置固定", () => {
+    const dialog = rules("incidents.css").find(
+      (rule) => rule.selector === ".app-dialog.xl.incidents-dialog",
+    );
+    expect(dialog?.body).toMatch(/height:\s*auto/);
+    expect(dialog?.body).toMatch(/align-self:\s*start/);
+    expect(dialog?.body).toMatch(/margin-top:.*100cqh/);
   });
 });

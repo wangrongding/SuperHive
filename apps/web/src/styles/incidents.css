@@ -239,12 +239,12 @@
   overflow-wrap: anywhere;
 }
 
+/* 调用栈是点开「现场与派修记录」才看的，展开就整段显示、自动换行，不再套一层滚动框 */
 .incident-sample pre {
-  max-height: 200px;
   margin: 0;
-  overflow: auto;
   font-size: 11px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .incident-dispatches {
@@ -268,6 +268,23 @@
 .incident-list > li.focused {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/*
+ * 故障弹窗只有一个滚动区：内容区（.app-dialog-body）。标题、「故障单 / 慢操作」切换和关闭按钮在外壳的标题栏里，不随内容滚。
+ * 宽屏下高度贴合内容，最高到外壳的上限，多了在内容区里滚；顶边固定在内容撑满时的位置，
+ * 切换标签、展开派修设置时只有底边伸缩，标签按钮不会在鼠标下面上下跳。窄屏照外壳铺满窗口。
+ */
+@media (min-width: 721px) {
+  .app-dialog-layer:has(> .incidents-dialog) {
+    container-type: size;
+  }
+
+  .app-dialog.xl.incidents-dialog {
+    height: auto;
+    align-self: start;
+    margin-top: max(0px, calc((100cqh - var(--app-dialog-max-height)) / 2));
+  }
 }
 
 .incidents-dialog-body > .incidents {
