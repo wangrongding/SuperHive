@@ -76,7 +76,7 @@ export function AppDialog({
   useEffect(() => {
     // 关掉后焦点回到打开前的位置（侧栏入口、快捷键前的输入框）
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    (initialFocus?.current ?? dialogRef.current)?.focus();
+    (initialFocus?.current ?? dialogRef.current)?.focus({ preventScroll: true });
     return () => {
       // 面板里的操作已经把焦点交给别处（比如打开了调用详情）就不抢回来
       const active = document.activeElement;

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { ChatMessage, Invocation, Participant } from "@superhive/protocol";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,5 +108,94 @@ describe("ActivityPanel · Agent 任务", () => {
     fireEvent.click(within(members).getByRole("button", { name: /@busy 等你回答，跳到当前任务/ }));
     expect(onOpenTask).toHaveBeenLastCalledWith(waiting);
     expect(onOpenMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActivityPanel · 数据更新时不动滚动位置（#7370）", () => {
+  const message = (id: string) =>
+    ({
+      id,
+      roomId: "build",
+      seq: 1,
+      senderId: "rd",
+      senderName: "rd",
+      senderType: "human",
+      content: `@a 任务 ${id}`,
+      mentions: [],
+      createdAt: "2026-11-24T12:00:00.000Z",
+    }) as unknown as ChatMessage;
+  const running = (id: string, minute: number, progress: string) =>
+    ({
+      id,
+      agentId: "a",
+      agentName: "a",
+      status: "running",
+      progress,
+      messageId: `m-${id}`,
+      roomId: "build",
+      createdAt: "2026-11-24T12:00:00.000Z",
+      updatedAt: `2026-11-24T12:${String(minute).padStart(2, "0")}:00.000Z`,
+    }) as unknown as Invocation;
+
+  it("进行中的调用换了进度、重新排序、跑完离开列表：内容区不重挂、不抢焦点、scrollTop 不变", () => {
+    const ids = Array.from({ length: 8 }, (_, i) => `i${i}`);
+    const messages = new Map(ids.map((id) => [`m-${id}`, message(`m-${id}`)]));
+    const panel = (invocations: Invocation[]) => (
+      <ActivityPanel
+        view="tasks"
+        rooms={[{ id: "build", name: "build" } as never]}
+        mentions={[]}
+        readSeqs={{}}
+        invocations={invocations}
+        invocationMessages={messages}
+        isAgentOnline={() => true}
+        participants={[agent("a")]}
+        search={async () => []}
+        onOpenMessage={() => undefined}
+        onMarkMentionsRead={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+    const first = ids.map((id, i) => running(id, i, "读代码"));
+    const { rerender } = render(panel(first));
+    const body = document.getElementById("activity-results")!;
+    const rows = () =>
+      within(screen.getByRole("region", { name: "进行中" }))
+        .getAllByRole("option")
+        .map((option) => option.textContent ?? "");
+    expect(rows()[0]).toContain("任务 m-i7");
+    body.scrollTop = 640;
+
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    // 排在最后的一条有了新进度，挪到最前面；另一条跑完离开列表
+    rerender(panel([...first.slice(1, 7), running("i0", 30, "跑测试 · 第 3 步")]));
+    expect(rows()[0]).toContain("跑测试 · 第 3 步");
+    expect(rows()).toHaveLength(7);
+    expect(document.getElementById("activity-results")).toBe(body);
+    expect(body.scrollTop).toBe(640);
+    expect(focus).not.toHaveBeenCalled();
+    focus.mockRestore();
+  });
+
+  it("切换视图时放回焦点用 preventScroll", () => {
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    setup([agent("busy")], []);
+    expect(focus).toHaveBeenCalled();
+    for (const [options] of focus.mock.calls) expect(options).toEqual({ preventScroll: true });
+    focus.mockRestore();
+  });
+
+  it("按最近更新重新排序的列表不当滚动锚点", () => {
+    // jsdom 不做滚动锚定：浏览器里会跟着被挪到最前面的那一项把内容区滚回顶部，只能锁住样式
+    const styles = path.join(import.meta.dirname, "styles");
+    const rule = (file: string, selector: string) => {
+      const css = readFileSync(path.join(styles, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|\\})\\s*${escaped}\\s*\\{[^}]*overflow-anchor:\\s*none`).test(css);
+    };
+    expect(rule("activity.css", ".activity-tasks-main > section:not(.usage-section)")).toBe(true);
+    expect(rule("activity.css", ".agent-runtime-list")).toBe(true);
+    expect(rule("incidents.css", ".incident-list")).toBe(true);
+    expect(rule("slow-ops.css", ".slow-ops")).toBe(true);
   });
 });

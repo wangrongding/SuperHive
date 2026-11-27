@@ -113,7 +113,7 @@ pnpm screenshot --compare output/before.png output/after.png --out output/compar
 - `--theme light,dark` 一次截两张，文件名自动加上 `-light`、`-dark`。`--compare` 会把多张图原尺寸并排拼起来，并加标签（默认「改前」「改后」）。
 - 「改前」的图：在 main 的工作区（或改动前的提交）上照样起一个沙箱再截。
 - `--hide-sandbox-badge` 可以隐藏顶部的沙箱标记。Chrome 按常见安装位置查找，也可以用 `--chrome` 或环境变量 `CHROME_PATH` 指定。
-- 沙箱里不起本机 Agent，`/api/local/*` 也是关的。要看本机 Agent 相关的界面，用 `--init-script scripts/fixtures/local-agents.js` 加载测试替身：它在页面加载前拦截 fetch 和房间快照，模拟几个忙、空闲、旧版本、已停止的本机 Agent，例如 `pnpm screenshot --url {url} --init-script scripts/fixtures/local-agents.js --action settings:computer`。`--init-script` 可以重复，自己写的替身脚本也能这样加载。左侧「故障」入口再叠加 `scripts/fixtures/incidents.js`：它给出几张故障单、一条待批准的规则提议和几条慢操作，并替换掉沙箱 Server 推来的空数据。
+- 沙箱里不起本机 Agent，`/api/local/*` 也是关的。要看本机 Agent 相关的界面，用 `--init-script scripts/fixtures/local-agents.js` 加载测试替身：它在页面加载前拦截 fetch 和房间快照，模拟几个忙、空闲、旧版本、已停止的本机 Agent，例如 `pnpm screenshot --url {url} --init-script scripts/fixtures/local-agents.js --action settings:computer`。`--init-script` 可以重复，自己写的替身脚本也能这样加载。左侧「故障」入口再叠加 `scripts/fixtures/incidents.js`：它给出几张故障单、一条待批准的规则提议和几条慢操作，并替换掉沙箱 Server 推来的空数据。「Agent 任务」弹窗要看调用持续更新时的样子（比如往下翻到用量时位置会不会跳），用 `scripts/fixtures/activity-churn.js`：它假装有十几个进行中的调用，默认每秒推一条 `invocation.updated`（进度变化、跑完带回用量、新调用开始），地址加 `?churn=毫秒` 改间隔，配 `--from-data` 能看到真实的用量统计。
 
 **一次跑完**：在 `--` 后面写要执行的命令，Server 就绪后运行它。命令里的 `{url}` 会换成沙箱地址，环境变量 `SANDBOX_URL` 也会带上；命令结束后沙箱自动关闭，退出码和命令一致：
 

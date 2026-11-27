@@ -6,7 +6,9 @@
   justify-content: space-between;
 }
 
+/* 新的一条进来时同类分组会挪到最前面。浏览器的滚动锚定会跟着被挪到最前面的那一项把整个内容区滚回顶部（#7370），排除后锚点落在列表外面，人停在哪就是哪 */
 .slow-ops {
+  overflow-anchor: none;
   display: grid;
   gap: 6px;
   margin: 8px 0 0;

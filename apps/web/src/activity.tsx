@@ -520,10 +520,11 @@ export function ActivityPanel({
   const roomNames = useMemo(() => new Map(rooms.map((room) => [room.id, room.name])), [rooms]);
   const roomName = (roomId: string) => roomNames.get(roomId) ?? roomId;
 
+  // 切换视图时把焦点放回来；不滚动内容区（人可能正往下翻着看）
   useEffect(() => {
     setActiveIndex(0);
-    if (view === "search") inputRef.current?.focus();
-    else panelRef.current?.focus();
+    if (view === "search") inputRef.current?.focus({ preventScroll: true });
+    else panelRef.current?.focus({ preventScroll: true });
   }, [view]);
 
   // 输入停顿 250ms 后再查询，丢弃过期的响应
