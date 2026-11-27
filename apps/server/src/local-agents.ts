@@ -1520,6 +1520,22 @@ export class LocalAgentSupervisor {
    * 返回的 Promise 在查完、拉起（或转去等旧进程退出）后完成，不需要等的调用方直接 void
    */
   private async launch(runtime: Runtime, straysCleared = false): Promise<void> {
+    try {
+      await this.launchNow(runtime, straysCleared);
+    } catch (error) {
+      // 调用方大多是 void 掉的（定时器、接口里不等它）：拉起时同步抛错（写设置文件失败、spawn 报错等）
+      // 不能变成没人接的 rejection 把 Server 带崩，按「无法启动」走和进程起不来一样的重试 / 停止
+      const failure = error instanceof Error ? error : new Error(String(error));
+      runtime.pendingQuery = undefined;
+      runtime.waitingStrays = false;
+      this.appendLog(runtime, `[hive] 无法启动：${failure.message}\n`);
+      this.log(`[local-agents] ${runtime.config.name} 无法启动：${failure.message}`);
+      if (runtime.child || this.runtimes.get(runtime.config.id) !== runtime) return;
+      this.handleExit(runtime, null, failure);
+    }
+  }
+
+  private async launchNow(runtime: Runtime, straysCleared: boolean): Promise<void> {
     if (this.shuttingDown || runtime.child || runtime.waitingStrays) return;
     // 旧进程还占着名字的话新进程上不了线（一直报「名字已在线」）：先请它退出，还活着就等它退出再启动
     if (!straysCleared && this.settingsFile(runtime.config)) {

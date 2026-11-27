@@ -1504,6 +1504,36 @@ describe("LocalAgentSupervisor", () => {
     database.close();
   });
 
+  it("treats a launch that throws as a failed start instead of an unhandled rejection", async () => {
+    const database = new HiveDatabase(":memory:");
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    try {
+      let attempts = 0;
+      const { supervisor, timers } = supervisorWith(database, {
+        spawn: () => {
+          attempts += 1;
+          throw new Error("spawn EPERM");
+        },
+      });
+      const agent = supervisor.create({ provider: "omp", name: "rd-omp", access: "read-only" });
+      await new Promise((resolve) => setImmediate(resolve));
+      const failed = supervisor.get(agent.id);
+      expect(failed.status).toBe("restarting");
+      expect(failed.lastError).toBe("spawn EPERM");
+      expect(supervisor.logs(agent.id).join("\n")).toContain("[hive] 无法启动：spawn EPERM");
+      // 照常按退避重试
+      timers.fireNext();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(attempts).toBe(2);
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+      database.close();
+    }
+  });
+
   it("resets the backoff after the agent ran stably", () => {
     const database = new HiveDatabase(":memory:");
     const { supervisor, spawner, timers, advance } = supervisorWith(database);
