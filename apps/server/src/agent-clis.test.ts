@@ -994,7 +994,7 @@ describe("planInstall", () => {
     }
     expect(planInstall("agy", { ...NPM, platform: "win32" })).toMatchObject({
       kind: "manual",
-      reasonText: { key: "agentCli.manual.windows" },
+      reasonText: { key: "agentCli.manual.windowsInstall" },
     });
   });
 
@@ -1016,7 +1016,7 @@ describe("planInstall", () => {
     }
     expect(planInstall("codex", { ...NPM, platform: "win32" })).toMatchObject({
       kind: "manual",
-      reasonText: { key: "agentCli.manual.windows" },
+      reasonText: { key: "agentCli.manual.windowsInstall" },
     });
     const evil = "/opt/x'; touch /tmp/pwned; '/npm";
     expect(planInstall("codex", { ...NPM, npm: evil })).toEqual({
@@ -1418,12 +1418,17 @@ describe("desktop bundled Node and npm", () => {
       { ...win, bundled: undefined },
       { ...win, bundled: { ...bundled, prefix: "C:\\Users\\100%\\agent-clis" } },
     ]) {
+      // 还没装的说「安装」，不说「升级」
       expect(planInstall(context === win ? "omp" : "codex", context)).toMatchObject({
         kind: "manual",
-        reasonText: { key: "agentCli.manual.windows" },
+        reason: "Windows 上暂不支持一键安装，请按官方说明安装",
+        reasonText: { key: "agentCli.manual.windowsInstall" },
       });
     }
-    expect(planInstall("agy", win)).toMatchObject({ kind: "manual" });
+    expect(planInstall("agy", win)).toMatchObject({
+      kind: "manual",
+      reasonText: { key: "agentCli.manual.windowsInstall" },
+    });
   });
 
   it("on Windows names agent-clis as the install dir for every npm tool and knows it is on PATH", async () => {

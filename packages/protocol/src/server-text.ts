@@ -1600,6 +1600,10 @@ export const serverTexts = {
     zh: "Windows 上暂不支持一键升级，请用原来的安装方式升级",
     en: "One-click updates aren't supported on Windows yet; update it the way it was installed",
   },
+  "agentCli.manual.windowsInstall": {
+    zh: "Windows 上暂不支持一键安装，请按官方说明安装",
+    en: "One-click install isn't supported on Windows yet; install it following the official instructions",
+  },
   "error.room.agentsAbsent": {
     zh: "#{room} 里还没有在线的 {agents}，稍后再试或换一个 Agent。",
     en: "{agents} isn't online in #{room} yet. Try again shortly or pick another agent.",

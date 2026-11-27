@@ -612,7 +612,10 @@ export function planInstall(tool: AgentCliTool, context: InstallContext): AgentC
   if (context.platform === "win32") {
     const command =
       context.bundled && tool !== "omp" ? windowsNpmInstall(context.bundled, spec) : undefined;
-    return command ? { kind: "anchored", command } : manual(serverText("agentCli.manual.windows"));
+    // 还没装：说「安装」，不说「升级」
+    return command
+      ? { kind: "anchored", command }
+      : manual(serverText("agentCli.manual.windowsInstall"));
   }
   let npm: string | undefined;
   if (spec.package && context.npm && safePath(context.npm)) {
