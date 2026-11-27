@@ -1092,6 +1092,27 @@ describe("local agent routes", () => {
     rmSync(second, { recursive: true, force: true });
   });
 
+  it("lists Codex's models with its working directory (project .codex/config.toml)", async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "hive-codex-"));
+    const listModels = vi.fn(async () => ({
+      source: "runtime" as const,
+      models: [{ id: "gpt-6.1-sol", isDefault: true }],
+      efforts: ["low", "high"],
+    }));
+    const { app, owner } = await setup({ listModels });
+    const id = (
+      await app.inject({
+        method: "POST",
+        url: "/api/local/agents",
+        headers: owner,
+        payload: { provider: "codex", name: "rd-codex-a", access: "workspace", cwd },
+      })
+    ).json().agent.id as string;
+    await app.inject({ method: "GET", url: `/api/local/agents/${id}/models`, headers: owner });
+    expect(listModels).toHaveBeenCalledWith("codex", { cwd: realpathSync(cwd) });
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("reports why the model list could not be fetched instead of failing", async () => {
     const { app, owner } = await setup({
       listModels: async () => {

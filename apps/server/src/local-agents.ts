@@ -862,9 +862,9 @@ export class LocalAgentSupervisor {
   async models(id: string, refresh = false): Promise<LocalAgentModelsResponse> {
     const { config } = this.require(id);
     const { provider } = config;
-    // Claude 按工作目录读项目级配置；和启动时一样，目录用不了就按主目录
+    // Claude、Codex 按工作目录读项目级配置；和启动时一样，目录用不了就按主目录
     const cwd =
-      provider === "claude"
+      provider === "claude" || provider === "codex"
         ? (checkCwd(config.cwd, this.options.home?.())?.to ?? config.cwd ?? undefined)
         : undefined;
     const key = cwd ? `${provider}\u0000${cwd}` : provider;

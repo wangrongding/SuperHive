@@ -21,7 +21,8 @@ describe("listModels", () => {
         { id: "gpt-secret", model: "gpt-secret", hidden: true },
       ],
     }));
-    await expect(listModels({ provider: "codex", listCodex })).resolves.toEqual({
+    const codexConfig = () => ({ providerId: "openai", codexHome: "/nonexistent" });
+    await expect(listModels({ provider: "codex", listCodex, codexConfig })).resolves.toEqual({
       provider: "codex",
       source: "runtime",
       models: [

@@ -195,7 +195,7 @@ function hostOf(baseUrl: string): string {
 }
 
 /** 给人看的失败原因；不带密钥 */
-function describeFailure(error: unknown, host: string, seconds: number): string {
+export function describeFetchFailure(error: unknown, host: string, seconds: number): string {
   const failure = error as { name?: string; cause?: { code?: unknown; name?: string } };
   if (failure?.name === "TimeoutError" || failure?.cause?.name === "TimeoutError")
     return `请求 ${host} 超时（${seconds} 秒）`;
@@ -204,16 +204,21 @@ function describeFailure(error: unknown, host: string, seconds: number): string 
   return `连不上 ${host}（${error instanceof Error ? error.message : String(error)}）`;
 }
 
-function statusReason(status: number, host: string, detail: string): string {
+export function fetchStatusReason(
+  status: number,
+  host: string,
+  detail: string,
+  endpoint = "/v1/models",
+): string {
   const tail = detail ? `：${detail}` : "";
   if (status === 401) return `${host} 返回 401，密钥无效或已过期${tail}`;
   if (status === 403) return `${host} 返回 403，这个密钥没有列模型的权限${tail}`;
-  if (status === 404) return `${host} 返回 404，这个接口不支持列模型（/v1/models）${tail}`;
+  if (status === 404) return `${host} 返回 404，这个接口不支持列模型（${endpoint}）${tail}`;
   return `${host} 返回 ${status}${tail}`;
 }
 
 /** 响应里的错误说明：Anthropic { error: { message } }、OpenAI 同形，或纯文本 */
-async function errorDetail(response: Response): Promise<string> {
+export async function responseErrorDetail(response: Response): Promise<string> {
   let body = "";
   try {
     body = await response.text();
@@ -278,10 +283,12 @@ export async function fetchClaudeModels(
         signal,
       });
     } catch (error) {
-      throw new Error(redact(describeFailure(error, host, Math.ceil(timeoutMs / 1000))));
+      throw new Error(redact(describeFetchFailure(error, host, Math.ceil(timeoutMs / 1000))));
     }
     if (!response.ok) {
-      throw new Error(redact(statusReason(response.status, host, await errorDetail(response))));
+      throw new Error(
+        redact(fetchStatusReason(response.status, host, await responseErrorDetail(response))),
+      );
     }
     let body: { data?: unknown; has_more?: unknown; last_id?: unknown };
     try {

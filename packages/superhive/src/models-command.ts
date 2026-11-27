@@ -13,6 +13,13 @@ import {
   type ClaudeApiOptions,
   type FetchLike,
 } from "./claude-models.js";
+import {
+  fetchCodexModels,
+  resolveCodexApi,
+  resolveCodexConfig,
+  type CodexConfig,
+  type CodexConfigOptions,
+} from "./codex-models.js";
 import { geminiHomeEnv, hasGeminiApiKey } from "./gemini-client.js";
 import { superhiveHome } from "./home-dir.js";
 import { spawnStdioTransport } from "./stdio-transport.js";
@@ -23,7 +30,9 @@ const usage = `
   hive models --provider codex|claude|copilot|opencode|omp|openclaw|gemini|agy [--command PATH] [--cwd DIR] [--json]
 
 列出这个 Agent CLI 能用的模型，供网页上选择模型、「换个模型重试」使用。
-codex 用 app-server 的 model/list，opencode 用 opencode models，omp 用 omp models --json，
+codex 走自定义网关（当前 provider 有 base_url）时按它实际生效的配置（--cwd 是 Agent 的工作目录，
+项目里的 .codex/config.toml 会盖过全局配置）请求 {base_url}/models，拉不到或用官方接口、账号登录时用 app-server 的
+model/list，配置里的 model 不在列表里也补在最前；opencode 用 opencode models，omp 用 omp models --json，
 openclaw 用 openclaw models list --json，gemini、agy 经 ACP 开一个空会话读它给的模型；
 claude 按它实际生效的接口地址和密钥（--cwd 是 Agent 的工作目录，项目配置会盖过全局配置）请求 /v1/models，
 只列具体模型（opusplan 在最后）；用账号登录（没有 key）或拉取失败时给出常用别名；copilot 给出常用选项。网页上都能手填。
@@ -482,8 +491,10 @@ export async function listModels(options: {
   cwd?: string;
   /** 算出 Claude 实际用的接口和密钥（测试注入） */
   claudeApi?: (options: ClaudeApiOptions) => Promise<ClaudeApi>;
-  /** 请求 Claude 的 /v1/models（测试注入） */
+  /** 请求 Claude 的 /v1/models、Codex 网关的 /models（测试注入） */
   fetch?: FetchLike;
+  /** 合出 Codex 当前生效的 model 和 provider（测试注入） */
+  codexConfig?: (options: CodexConfigOptions) => CodexConfig;
 }): Promise<ModelList> {
   const { provider } = options;
   const command = options.command ?? provider;
@@ -492,13 +503,12 @@ export async function listModels(options: {
   const preset = PRESETS[provider];
   const fallback = () => (options.configuredDefault ?? configuredDefaultModel)(provider);
   if (provider === "claude") return listClaude(options, efforts, fallback);
+  if (provider === "codex") return listCodex(options, efforts);
   if (preset)
     return { provider, source: "preset", models: withDefault(preset, fallback()), efforts };
   try {
     let models: ModelEntry[];
-    if (provider === "codex")
-      models = parseCodex(await (options.listCodex ?? defaultCodexLister)(command));
-    else if (provider === "opencode") models = parseLines(await run(command, ["models"]));
+    if (provider === "opencode") models = parseLines(await run(command, ["models"]));
     else if (provider === "omp") models = parseOmp(await run(command, ["models", "--json"]));
     else if (provider === "gemini" || provider === "agy")
       models = parseAcpSession(await (options.listAcp ?? defaultAcpLister)(provider, command));
@@ -548,12 +558,7 @@ async function listClaude(
       ...(options.cwd ? { cwd: options.cwd } : {}),
     });
     if (api.kind !== "key") return preset({ presetReason: api.kind });
-    if (!options.fetch)
-      useEnvProxy(
-        process.env,
-        (http as { setGlobalProxyFromEnv?: (env: NodeJS.ProcessEnv) => unknown })
-          .setGlobalProxyFromEnv,
-      );
+    proxyFetch(options);
     const fetched = await fetchClaudeModels(api, options.fetch);
     const configured = fallback();
     // 按模型名排序：网关返回的顺序每次不一样，排好后列表稳定，`hive models` 和网页看到的一致
@@ -582,6 +587,93 @@ async function listClaude(
   } catch (error) {
     return preset({ error: errorText(error) });
   }
+}
+
+/** 设了 HTTPS_PROXY 等代理时让 fetch 走代理（测试注入 fetch 时不动全局） */
+function proxyFetch(options: Parameters<typeof listModels>[0]): void {
+  if (!options.fetch)
+    useEnvProxy(
+      process.env,
+      (http as { setGlobalProxyFromEnv?: (env: NodeJS.ProcessEnv) => unknown })
+        .setGlobalProxyFromEnv,
+    );
+}
+
+/** 配置里的 model 就是 Codex 实际用的默认：标上它（不在列表里就补在最前），其他的不再标默认 */
+function withCodexDefault(models: ModelEntry[], id: string | undefined): ModelEntry[] {
+  if (!id) return models;
+  const plain = models.map((model) => {
+    const copy = { ...model };
+    delete copy.isDefault;
+    return copy;
+  });
+  return withDefault(plain, id);
+}
+
+/**
+ * Codex：当前 provider 是自定义网关时请求 {base_url}/models，拉到了就用网关列表（按名字排；思考强度从
+ * model/list 里同名的模型拿，没有就用通用的那几档），配置的 model 不在列表里补在最前。官方 openai、要账号登录、
+ * 认证方式不支持时用 model/list；网关拉取失败也退回 model/list 并说明原因。两边都拿不到时至少列出配置的 model
+ */
+async function listCodex(
+  options: Parameters<typeof listModels>[0],
+  efforts: string[],
+): Promise<ModelList> {
+  const command = options.command ?? "codex";
+  let config: CodexConfig | undefined;
+  let gatewayError: string | undefined;
+  let gateway: Promise<string[]> | undefined;
+  try {
+    config = (options.codexConfig ?? resolveCodexConfig)({
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+    });
+    const api = resolveCodexApi(config);
+    if (api.kind === "gateway") {
+      proxyFetch(options);
+      gateway = fetchCodexModels(api, options.fetch);
+    }
+  } catch (error) {
+    gatewayError = errorText(error);
+  }
+  const catalog = Promise.resolve()
+    .then(() => (options.listCodex ?? defaultCodexLister)(command))
+    .then((result) => unique(parseCodex(result)));
+  const [fetched, listed] = await Promise.allSettled([
+    gateway ?? Promise.resolve(undefined),
+    catalog,
+  ]);
+  const known = listed.status === "fulfilled" ? listed.value : undefined;
+  const model = config?.model;
+  if (fetched.status === "fulfilled" && fetched.value) {
+    const byId = new Map((known ?? []).map((entry) => [entry.id, entry]));
+    const models = fetched.value
+      .map((id) => byId.get(id) ?? entry(id))
+      .sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
+    return {
+      provider: "codex",
+      source: "runtime",
+      models: withCodexDefault(unique(models), model),
+      efforts,
+    };
+  }
+  if (fetched.status === "rejected") gatewayError = errorText(fetched.reason);
+  if (known) {
+    return {
+      provider: "codex",
+      // 网关没拉到：model/list 只是 Codex 自带的目录，不是网关上的完整列表
+      source: gatewayError ? "preset" : "runtime",
+      models: withCodexDefault(known, model),
+      efforts,
+      ...(gatewayError ? { error: gatewayError } : {}),
+    };
+  }
+  return {
+    provider: "codex",
+    source: "preset",
+    models: withCodexDefault([], model),
+    efforts,
+    error: gatewayError ?? errorText((listed as PromiseRejectedResult).reason),
+  };
 }
 
 const PROVIDERS: readonly ModelProvider[] = [
