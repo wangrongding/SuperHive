@@ -5,6 +5,12 @@ import { SettingsSwitch } from "./settings-switch";
 import { copyTextToClipboard } from "./clipboard";
 import { localized, t } from "./i18n";
 import { Button } from "./button";
+import {
+  desktopBridge,
+  type DesktopFirewallStatus,
+  type DesktopLanApi,
+  type DesktopLanState,
+} from "./desktop-bridge";
 
 /** 侧栏小月亮的悬停说明 */
 export function keepAwakeSummary(state: KeepAwakeState): string {
@@ -218,13 +224,114 @@ export function KeepAwakeSettingsGroup({ local }: { local: LocalAgentsState }) {
 }
 
 /** 在其他设备上登录：二维码 / 一次性链接、已登录设备、复制总令牌；在用户菜单的弹窗里 */
+/** 桌面端的局域网访问开关：不在桌面端、老版本桌面端、连的是别人起的 Server 时都是 undefined */
+export function useDesktopLan(
+  api: DesktopLanApi | undefined = desktopBridge()?.lan,
+): { state: DesktopLanState; set: (enabled: boolean) => void; api: DesktopLanApi } | undefined {
+  const [state, setState] = useState<DesktopLanState>();
+  useEffect(() => {
+    if (!api) return;
+    let alive = true;
+    api.get().then(
+      (value) => alive && setState(value),
+      () => undefined,
+    );
+    const off = api.onChange((value) => setState(value));
+    return () => {
+      alive = false;
+      off();
+    };
+  }, [api]);
+  const set = useCallback(
+    (enabled: boolean) => {
+      if (!api) return;
+      // 先显示「正在重启」，完成后以桌面端答复为准
+      setState((current) => current && { ...current, enabled, restarting: true });
+      api.set(enabled).then(setState, () => api.get().then(setState, () => undefined));
+    },
+    [api],
+  );
+  if (!api || !state?.managed) return undefined;
+  return { state, set, api };
+}
+
+/** 设备页最上面：「允许局域网设备访问」开关，Windows 上开着时顺带查防火墙 */
+export function LanAccessGroup({
+  lan,
+}: {
+  lan: { state: DesktopLanState; set: (enabled: boolean) => void; api: DesktopLanApi };
+}) {
+  const { state, api } = lan;
+  const [firewall, setFirewall] = useState<DesktopFirewallStatus | null>();
+  const [copied, setCopied] = useState(false);
+  const watch = state.enabled && !state.restarting;
+  useEffect(() => {
+    setFirewall(undefined);
+    if (!watch) return;
+    let alive = true;
+    api.firewall().then(
+      (value) => alive && setFirewall(value),
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+  }, [api, watch]);
+  const blocked = firewall?.status === "blocked" || firewall?.status === "missing";
+  return (
+    <>
+      <SettingsSwitch
+        checked={state.enabled}
+        disabled={state.restarting}
+        label={t("允许局域网设备访问")}
+        description={
+          state.restarting
+            ? t("正在重启 Server，Agent 不会断开…")
+            : t("手机或另一台电脑扫码、用局域网地址连进来时要打开。关着时只有这台电脑能打开。")
+        }
+        onChange={lan.set}
+      />
+      {blocked && firewall && (
+        <div className="lan-firewall-note" role="status">
+          <p>
+            {firewall.status === "blocked"
+              ? t(
+                  "Windows 防火墙拦着 SuperHive，其他设备连不上。到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里勾上这个程序：",
+                )
+              : t(
+                  "Windows 防火墙里还没有放行 SuperHive，其他设备可能连不上。到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里添加这个程序：",
+                )}
+          </p>
+          <code>{firewall.program}</code>
+          <Button
+            size="sm"
+            onClick={() =>
+              void copyTextToClipboard(firewall.program).then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1_500);
+              })
+            }
+          >
+            {copied ? t("已复制") : t("复制路径")}
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function OwnerDevicesPanel({ local }: { local: LocalAgentsState }) {
+  const lan = useDesktopLan();
+  const lanOff = local.mode === "local" && lan !== undefined && !lan.state.enabled;
   const [devices, setDevices] = useState<OwnerDevice[]>();
   const [pair, setPair] = useState<{ url: string; expiresAt: string; qrDataUrl: string }>();
   const [error, setError] = useState<string>();
   const [copied, setCopied] = useState<string>();
   const enabled = local.enabled;
   const { ownerDevices } = local;
+  // 换了监听地址，之前的二维码可能连不上了
+  const lanEnabled = lan?.state.enabled;
+  useEffect(() => setPair(undefined), [lanEnabled]);
   const refresh = useCallback(() => {
     ownerDevices().then(setDevices, () => setDevices(undefined));
   }, [ownerDevices]);
@@ -251,7 +358,12 @@ export function OwnerDevicesPanel({ local }: { local: LocalAgentsState }) {
   };
   return (
     <div className="settings-group owner-devices-panel">
-      {local.mode === "device" ? null : pair ? (
+      {local.mode === "local" && lan && <LanAccessGroup lan={lan} />}
+      {local.mode === "device" ? null : lanOff ? (
+        <p className="settings-note">
+          {t("先打开「允许局域网设备访问」，手机和其他电脑才能扫码登录。")}
+        </p>
+      ) : pair ? (
         <div className="owner-pair">
           <img src={pair.qrDataUrl} alt={t("登录二维码")} width={160} height={160} />
           <div>

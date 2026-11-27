@@ -311,7 +311,17 @@ test("renderer is locked down", async () => {
     await page.evaluate(() =>
       Object.keys((window as unknown as { superhiveDesktop: object }).superhiveDesktop).sort(),
     ),
-  ).toEqual(["files", "platform", "ready", "terminal", "titlebar", "updates", "version"]);
+  ).toEqual([
+    "files",
+    "lan",
+    "platform",
+    "ready",
+    "remote",
+    "terminal",
+    "titlebar",
+    "updates",
+    "version",
+  ]);
   // 开发时不查新版：没有提示，也打不开任何链接（网页本来也传不了地址），不下载不重启
   expect(
     await page.evaluate(async () => {

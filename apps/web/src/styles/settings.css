@@ -748,6 +748,32 @@
   white-space: nowrap;
 }
 
+/* Windows 防火墙拦着时的提示：路径完整换行显示，方便照着找 */
+.lan-firewall-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 4px 0 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+}
+
+.lan-firewall-note p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
+.lan-firewall-note code {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
 .owner-pair-actions {
   display: flex;
   gap: 8px;

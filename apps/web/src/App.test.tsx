@@ -134,6 +134,8 @@ const roomSummary = (id: string, extra: Record<string, unknown> = {}) => ({
 const crossRoom: {
   mentions: ChatMessage[];
   invocations: Invocation[];
+  /** GET /api/invocations 里目标 Agent 在线的那些调用 */
+  onlineInvocationIds?: string[];
   invocationMessages: ChatMessage[];
   searchable: ChatMessage[];
   /** GET /api/schedules：所有能看到的房间的定时任务与它们触发的调用 */
@@ -218,6 +220,7 @@ describe("App mention autocomplete", () => {
     FakeNotification.instances.length = 0;
     crossRoom.mentions = [];
     crossRoom.invocations = [];
+    delete crossRoom.onlineInvocationIds;
     crossRoom.invocationMessages = [];
     crossRoom.searchable = [];
     crossRoom.schedules = [];
@@ -359,6 +362,9 @@ describe("App mention autocomplete", () => {
           return jsonResponse({
             invocations: crossRoom.invocations,
             messages: crossRoom.invocationMessages,
+            ...(crossRoom.onlineInvocationIds
+              ? { onlineInvocationIds: crossRoom.onlineInvocationIds }
+              : {}),
           });
         }
         if (url.includes("/api/schedules")) {
@@ -4756,6 +4762,51 @@ describe("App mention autocomplete", () => {
     // 失败的计数和转圈并排：房间里还有 Agent 在干活，不能因为一条失败就看不出来
     expect(await screen.findByRole("img", { name: "# frontend：1 个任务需要处理" })).toBeTruthy();
     expect(screen.getByRole("img", { name: "# frontend：1 个任务进行中" })).toBeTruthy();
+  });
+
+  it("does not spin for a task queued for an offline agent that never received it", async () => {
+    localStorage.setItem("superhive.username", "Alice");
+    const at = new Date().toISOString();
+    const task = (id: string, roomId: string, extra: Partial<Invocation> = {}) =>
+      ({
+        id,
+        roomId,
+        messageId: "00000000-0000-4000-8000-000000000201",
+        agentId: "00000000-0000-4000-8000-000000000105",
+        agentName: "frontend-agent",
+        requesterName: "Alice",
+        requesterType: "human",
+        status: "queued",
+        attempts: 1,
+        createdAt: at,
+        updatedAt: at,
+        ...extra,
+      }) as Invocation;
+    crossRoom.invocations = [
+      // 停掉的 Agent 名下：没送达、不在线
+      task("00000000-0000-4000-8000-000000000321", "frontend"),
+      // 在线 Agent 的排队任务、已送达的排队任务照常转圈
+      task("00000000-0000-4000-8000-000000000322", "general"),
+      task("00000000-0000-4000-8000-000000000323", "frontend", { receivedAt: at }),
+    ];
+    crossRoom.onlineInvocationIds = ["00000000-0000-4000-8000-000000000322"];
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self: participant("00000000-0000-4000-8000-000000000001", "Alice", "human"),
+        participants: [],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    expect(await screen.findByRole("img", { name: "# general：1 个任务进行中" })).toBeTruthy();
+    // frontend 两条里只有已送达的那条算
+    expect(screen.getByRole("img", { name: "# frontend：1 个任务进行中" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "# frontend：2 个任务进行中" })).toBeNull();
   });
 
   it("reminds me across rooms when my task needs me or finishes, and jumps to it", async () => {

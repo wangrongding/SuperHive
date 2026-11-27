@@ -69,8 +69,8 @@ export function actionScript(action) {
       return click('[data-entry="schedules"]');
     case "settings":
       return `(async () => {
-        await window.__shot.click(".sidebar-user-chip");
-        await window.__shot.click('[role="menuitem"]', (el) => /^(设置|Settings)$/.test(el.textContent.trim()));
+        // 设置是左下角单独的齿轮按钮（不再在头像菜单里）
+        await window.__shot.click(".sidebar-settings");
         ${arg ? `await window.__shot.click(${JSON.stringify(`[aria-controls="settings-panel-${arg}"]`)});` : ""}
       })()`;
     case "side":

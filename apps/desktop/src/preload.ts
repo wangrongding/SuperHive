@@ -24,6 +24,7 @@ import {
   type RestartResult,
 } from "./ipc-contract.js";
 import type { DesktopUpdate } from "./update-install.js";
+import type { FirewallStatus, LanAccessState } from "./lan-access.js";
 import type { PickFilesRequest, PickFilesResult } from "./file-picker.js";
 import { applyDesktopMarks, parseTitlebarArg, setFullscreenMark } from "./titlebar-dom.js";
 
@@ -127,6 +128,20 @@ if (allowedOrigin && window.location.origin === allowedOrigin && window.top === 
         const handler = (_event: IpcRendererEvent, request: JoinRequest) => listener(request);
         ipcRenderer.on(IPC.joinRequest, handler);
         return () => ipcRenderer.removeListener(IPC.joinRequest, handler);
+      },
+    },
+    lan: {
+      /** 「允许局域网设备访问」现在的状态；managed=false 时连的是别人起的 Server，开关不显示 */
+      get: (): Promise<LanAccessState> => ipcRenderer.invoke(IPC.lanGet),
+      /** 打开 / 关上：会交接重启内置 Server（Agent 不断），完成后返回新状态 */
+      set: (enabled: boolean): Promise<LanAccessState> =>
+        ipcRenderer.invoke(IPC.lanSet, enabled === true),
+      /** Windows 上只读查防火墙；不是 Windows 或开关关着时是 null */
+      firewall: (): Promise<FirewallStatus | null> => ipcRenderer.invoke(IPC.lanFirewall),
+      onChange: (listener: (state: LanAccessState) => void): (() => void) => {
+        const handler = (_event: IpcRendererEvent, state: LanAccessState) => listener(state);
+        ipcRenderer.on(IPC.lanChanged, handler);
+        return () => ipcRenderer.removeListener(IPC.lanChanged, handler);
       },
     },
     titlebar: {

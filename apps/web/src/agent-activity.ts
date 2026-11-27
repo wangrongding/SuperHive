@@ -61,6 +61,14 @@ export function agentActivity(
   for (const participant of participants) {
     if (participant.type !== "agent") continue;
     const invocation = byAgent.get(participant.id);
+    // 离线 Agent 名下还没送达的排队任务：在等它上线（停掉的 Agent 会一直等），不算在干活，
+    // 不然底部一直挂着「正在处理」。消息下的状态写着「等待上线」
+    if (
+      invocation?.status === "queued" &&
+      !invocation.receivedAt &&
+      participant.status === "offline"
+    )
+      continue;
     if (!invocation) {
       if (participant.status === "busy") {
         rows.push({ participant, state: "thinking", label: STATE_TEXT.thinking });

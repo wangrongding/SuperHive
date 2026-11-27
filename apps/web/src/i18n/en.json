@@ -2680,5 +2680,12 @@
   "新版需要 Node {0}，这台电脑用的是 Node {1}。": "The new version needs Node {0}; this computer has Node {1}.",
   "Agent 运行时：{0} 个 CLI 有新版": "Agent runtimes: {0} CLI updates available",
   "Agent 运行时：{0} 个 CLI 都是最新": "Agent runtimes: {0} CLIs, all up to date",
-  "运行时设置": "Runtime settings"
+  "运行时设置": "Runtime settings",
+  "允许局域网设备访问": "Allow devices on your network",
+  "正在重启 Server，Agent 不会断开…": "Restarting the server; agents stay connected…",
+  "手机或另一台电脑扫码、用局域网地址连进来时要打开。关着时只有这台电脑能打开。": "Turn on to let a phone or another computer scan in or connect over your local network. When off, only this computer can open SuperHive.",
+  "Windows 防火墙拦着 SuperHive，其他设备连不上。到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里勾上这个程序：": "Windows Firewall is blocking SuperHive, so other devices can't connect. Allow this program in Windows Security → Firewall & network protection → Allow an app through firewall:",
+  "Windows 防火墙里还没有放行 SuperHive，其他设备可能连不上。到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里添加这个程序：": "Windows Firewall hasn't allowed SuperHive yet, so other devices may not connect. Add this program in Windows Security → Firewall & network protection → Allow an app through firewall:",
+  "复制路径": "Copy path",
+  "先打开「允许局域网设备访问」，手机和其他电脑才能扫码登录。": "Turn on “Allow devices on your network” first so phones and other computers can scan in."
 }

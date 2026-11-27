@@ -155,26 +155,40 @@ export function useActivityData({
       ).length,
     [currentRoomId, mentionMessages, readSeqs],
   );
+  /**
+   * 在跑的任务（转圈）：Agent 离线、还没送达的排队任务不算——它在等 Agent 上线，
+   * 停掉的 Agent 名下这种任务会一直留着，转圈看着像卡住了。消息下的状态写着「等待上线」
+   */
+  const spinning = useCallback(
+    (invocation: Invocation) =>
+      isInFlight(invocation) &&
+      !(
+        invocation.status === "queued" &&
+        !invocation.receivedAt &&
+        !onlineInvocationIds.has(invocation.id)
+      ),
+    [onlineInvocationIds],
+  );
   const taskCounts = useMemo(() => {
     let attention = 0;
     let inFlight = 0;
     for (const invocation of activeInvocations.values()) {
       if (needsAttention(invocation)) attention += 1;
-      else if (isInFlight(invocation)) inFlight += 1;
+      else if (spinning(invocation)) inFlight += 1;
     }
     return { attention, inFlight };
-  }, [activeInvocations]);
+  }, [activeInvocations, spinning]);
   /** 每个房间正在跑、需要处理的任务数：房间列表右侧据此显示状态 */
   const roomTaskCounts = useMemo(() => {
     const counts = new Map<string, { attention: number; inFlight: number }>();
     for (const invocation of activeInvocations.values()) {
       const entry = counts.get(invocation.roomId) ?? { attention: 0, inFlight: 0 };
       if (needsAttention(invocation)) entry.attention += 1;
-      else if (isInFlight(invocation)) entry.inFlight += 1;
+      else if (spinning(invocation)) entry.inFlight += 1;
       counts.set(invocation.roomId, entry);
     }
     return counts;
-  }, [activeInvocations]);
+  }, [activeInvocations, spinning]);
 
   function markMentionsRead() {
     const rooms: Record<string, number> = {};

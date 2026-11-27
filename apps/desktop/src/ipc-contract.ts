@@ -48,6 +48,12 @@ export const IPC = {
   remoteRemove: "superhive:remote:remove",
   /** 服务器列表或窗口开关变了 */
   remoteChanged: "superhive:remote:changed",
+  /** 「允许局域网设备访问」开关：读、改（改了会重启内置 Server）、状态变了时推给页面 */
+  lanGet: "superhive:lan:get",
+  lanSet: "superhive:lan:set",
+  lanChanged: "superhive:lan:changed",
+  /** Windows 上只读检查防火墙有没有拦这个 exe */
+  lanFirewall: "superhive:lan:firewall",
   /** 菜单或 superhive:// 链接让页面弹出「加入别人的房间」/「带 Agent 加入」 */
   joinRequest: "superhive:join:request",
 } as const;

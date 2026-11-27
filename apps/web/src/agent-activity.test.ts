@@ -62,3 +62,25 @@ describe("底部的谁在干活", () => {
     expect(rows[2]!.invocation).toBeUndefined();
   });
 });
+
+describe("离线 Agent 的排队任务", () => {
+  it("还没送达、Agent 离线：在等它上线，不算在干活（停掉的 Agent 不会一直挂着「正在处理」）", () => {
+    const rows = agentActivity(
+      [agent("a", "win-mr-watch-claude", "offline"), agent("b", "rd-claude")],
+      [invocation("a", "queued"), invocation("b", "queued")],
+      "general",
+    );
+    expect(rows.map((row) => [row.participant.username, row.state])).toEqual([
+      ["rd-claude", "queued"],
+    ]);
+  });
+
+  it("已经送达的照常列出", () => {
+    const rows = agentActivity(
+      [agent("a", "rd-codex", "offline")],
+      [invocation("a", "queued", { receivedAt: "2026-10-31T00:00:01.000Z" })],
+      "general",
+    );
+    expect(rows.map((row) => row.state)).toEqual(["queued"]);
+  });
+});

@@ -182,7 +182,8 @@ export type OwnedServer = {
   state: ServiceState;
   child: ServerChild;
   exited: Promise<number>;
-  stop(): Promise<void>;
+  /** handover：换代重启，本机 Agent 交给下一个 Server 接管，不下线 */
+  stop(options?: { handover?: boolean }): Promise<void>;
 };
 
 /**
@@ -222,7 +223,8 @@ export async function startServer(options: {
 }): Promise<OwnedServer> {
   const dataDir = options.dataDir;
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const host = options.host ?? "0.0.0.0";
+  // 默认只听本机；要让局域网设备连进来由调用方传 0.0.0.0（见 lan-access.ts）
+  const host = options.host ?? "127.0.0.1";
   const instanceId = randomUUID();
   const shutdownToken = randomUUID();
   const healthUrl = `http://127.0.0.1:${options.port}/health`;
@@ -291,7 +293,7 @@ export async function startServer(options: {
         state,
         child,
         exited,
-        stop: () => stopServer({ state, child, exited, statePath }),
+        stop: (stopOptions) => stopServer({ state, child, exited, statePath, ...stopOptions }),
       };
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -312,6 +314,7 @@ export async function stopServer(options: {
   exited: Promise<number>;
   statePath: string;
   timeoutMs?: number;
+  handover?: boolean;
 }): Promise<void> {
   const { state } = options;
   let done = false;
@@ -321,7 +324,11 @@ export async function stopServer(options: {
   if (state.shutdownToken) {
     await fetch(new URL("/api/local/shutdown", state.healthUrl), {
       method: "POST",
-      headers: { "x-hive-shutdown": state.shutdownToken },
+      headers: {
+        "x-hive-shutdown": state.shutdownToken,
+        ...(options.handover ? { "content-type": "application/json" } : {}),
+      },
+      ...(options.handover ? { body: JSON.stringify({ handover: true }) } : {}),
       signal: AbortSignal.timeout(3_000),
     }).catch(() => undefined);
   }
@@ -332,4 +339,24 @@ export async function stopServer(options: {
   const current = readState(options.statePath);
   if (!current || current.instanceId === state.instanceId)
     rmSync(options.statePath, { force: true });
+}
+
+/** 问自己起的 Server 有没有别的设备连进来过（老 Server 没有这个接口、出错时返回 undefined） */
+export async function readLanUsage(
+  state: Pick<ServiceState, "healthUrl" | "shutdownToken">,
+): Promise<{ ownerDevices: number; guestSessions: number } | undefined> {
+  if (!state.shutdownToken) return undefined;
+  try {
+    const response = await fetch(new URL("/api/local/lan-usage", state.healthUrl), {
+      headers: { "x-hive-shutdown": state.shutdownToken },
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!response.ok) return undefined;
+    const value = (await response.json()) as { ownerDevices?: unknown; guestSessions?: unknown };
+    if (typeof value.ownerDevices !== "number" || typeof value.guestSessions !== "number")
+      return undefined;
+    return { ownerDevices: value.ownerDevices, guestSessions: value.guestSessions };
+  } catch {
+    return undefined;
+  }
 }

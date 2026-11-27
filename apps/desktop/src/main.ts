@@ -28,13 +28,24 @@ import {
   type WebContents,
   type WebPreferences,
 } from "electron";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  checkFirewall,
+  hostFor,
+  legacyLanWanted,
+  loadLanSetting,
+  saveLanSetting,
+  type FirewallStatus,
+  type LanAccessState,
+} from "./lan-access.js";
+import {
   discover,
+  readLanUsage,
   startServer,
   superhiveHome,
   type ForkServer,
@@ -452,6 +463,37 @@ function runApp(): void {
   ipcMain.handle(IPC.updateCancelRestart, (event) => {
     if (!trusted(event) || !updateCheckEnabled) return false;
     return gate?.cancel() ?? false;
+  });
+  ipcMain.handle(IPC.lanGet, (event): LanAccessState => {
+    if (!trusted(event)) throw new Error("Forbidden");
+    return lanState();
+  });
+  ipcMain.handle(IPC.lanSet, async (event, enabled: unknown): Promise<LanAccessState> => {
+    if (!trusted(event)) throw new Error("Forbidden");
+    if (typeof enabled !== "boolean" || !owned || lanRestarting || enabled === lanEnabled)
+      return lanState();
+    lanEnabled = enabled;
+    saveLanSetting(lanFile(), enabled);
+    await relaunchOwned();
+    return lanState();
+  });
+  // 只读查 Windows 防火墙有没有拦这个 exe（Server 是它的 utility 子进程，规则也记在它名下）
+  ipcMain.handle(IPC.lanFirewall, async (event): Promise<FirewallStatus | null> => {
+    if (!trusted(event)) throw new Error("Forbidden");
+    if (lanEnabled !== true) return null;
+    return checkFirewall({
+      platform: process.platform,
+      program: process.execPath,
+      run: (script, env) =>
+        new Promise((resolve, reject) => {
+          execFile(
+            "powershell.exe",
+            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+            { env: { ...process.env, ...env }, windowsHide: true, timeout: 30_000 },
+            (error, stdout) => (error ? reject(error) : resolve(String(stdout))),
+          );
+        }),
+    });
   });
   /** 人主动检查（菜单、网页按钮）：马上查，忽略过的版本重新提示，并把结果推给网页 */
   const manualUpdateCheck = async () => {
@@ -1140,20 +1182,31 @@ function runApp(): void {
       });
     });
 
-  async function connect(onPhase: (phase: SplashPhase) => void): Promise<string> {
-    const found = await discover({ dataDir, preferredPort: PREFERRED_PORT });
-    if (found.kind === "existing") {
-      onPhase("connecting");
-      console.log(`[superhive-desktop] ${t("connectedExisting", { origin: found.origin })}`);
-      return found.origin;
-    }
-    onPhase("starting");
-    owned = await startServer({
+  // ---------- 局域网访问 ----------
+  const lanFile = () => path.join(app.getPath("userData"), "lan-access.json");
+  /** 存下来的选择；升级前的版本没存过，第一次起 Server 后按有没有别的设备连进来过决定 */
+  let lanEnabled: boolean | undefined;
+  let lanRestarting = false;
+  /** 正在被换掉的 Server：它退出不算「Server 停了」 */
+  let replacing: OwnedServer | undefined;
+  const lanState = (): LanAccessState => ({
+    enabled: lanEnabled === true,
+    managed: owned !== undefined || lanRestarting,
+    restarting: lanRestarting,
+  });
+  function pushLan(): void {
+    const contents = mainWindow?.webContents;
+    if (contents && !contents.isDestroyed()) contents.send(IPC.lanChanged, lanState());
+  }
+
+  async function launchOwned(port: number): Promise<OwnedServer> {
+    const server = await startServer({
       fork,
       serverEntry: path.join(superhiveRoot, "dist", "server", "index.js"),
       staticDir: path.join(superhiveRoot, "web"),
       dataDir,
-      port: found.port,
+      port,
+      host: hostFor(lanEnabled === true),
       env: {
         ...process.env,
         ...bundledRuntimeEnv(
@@ -1172,14 +1225,66 @@ function runApp(): void {
       launcher: `SuperHive Desktop ${app.getVersion()}`,
       home: homedir(),
     });
-    const server = owned;
+    owned = server;
     void server.exited.then((code) => {
       if (owned === server) owned = undefined;
-      if (quitting) return;
+      if (quitting || replacing === server) return;
       // 被 hive stop 停掉或者崩溃：在窗口上盖出错画面，可以重试
       handleServerGone(code);
     });
-    return owned.origin;
+    return server;
+  }
+
+  /**
+   * 换监听地址：交接方式重启（本机 Agent 和正在跑的任务不断），端口不变，网页地址也不变，
+   * 页面自己重连。起不来时盖出错画面，可以重试。
+   */
+  async function relaunchOwned(): Promise<void> {
+    const server = owned;
+    if (!server) return;
+    lanRestarting = true;
+    replacing = server;
+    pushLan();
+    try {
+      await server.stop({ handover: true });
+      await launchOwned(Number(new URL(server.origin).port));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        failSplash(mainWindow, reason);
+        showMainWindow();
+      }
+    } finally {
+      replacing = undefined;
+      lanRestarting = false;
+      pushLan();
+    }
+  }
+
+  async function connect(onPhase: (phase: SplashPhase) => void): Promise<string> {
+    const found = await discover({ dataDir, preferredPort: PREFERRED_PORT });
+    if (found.kind === "existing") {
+      onPhase("connecting");
+      console.log(`[superhive-desktop] ${t("connectedExisting", { origin: found.origin })}`);
+      return found.origin;
+    }
+    onPhase("starting");
+    lanEnabled ??= loadLanSetting(lanFile());
+    // 没有数据库就是新装：直接默认只听本机，不用问
+    const firstRun = !existsSync(path.join(dataDir, "hive.sqlite"));
+    if (lanEnabled === undefined && firstRun) {
+      lanEnabled = false;
+      saveLanSetting(lanFile(), false);
+    }
+    const server = await launchOwned(found.port);
+    if (lanEnabled === undefined) {
+      // 从一直听 0.0.0.0 的老版本升上来：先只听本机（不弹防火墙），问一下以前有没有别的设备
+      // 连进来过，有就保持局域网访问，交接重启一次换到 0.0.0.0
+      lanEnabled = legacyLanWanted(await readLanUsage(server.state));
+      saveLanSetting(lanFile(), lanEnabled);
+      if (lanEnabled) await relaunchOwned();
+    }
+    return server.origin;
   }
 
   function handleServerGone(code: number): void {

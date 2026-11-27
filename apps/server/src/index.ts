@@ -8,6 +8,7 @@ import { networkInterfaces } from "node:os";
 import path from "node:path";
 import { feedbackInfo } from "./feedback-info.js";
 import { timingSafeEqual } from "node:crypto";
+import type { FastifyRequest } from "fastify";
 import { buildApp, resolveUrl } from "./app.js";
 import { RuntimeCredentialStore } from "./runtime-credentials.js";
 import { AgentCliManager } from "./agent-clis.js";
@@ -194,9 +195,9 @@ function shutdown() {
 }
 if (shutdownToken) {
   const expected = Buffer.from(shutdownToken);
-  app.post("/api/local/shutdown", async (request, reply) => {
+  /** 带启动口令的本机请求：回环地址，或本机自己的网卡地址（只监听某块网卡时，本机请求也从那个地址来） */
+  const fromLauncher = (request: FastifyRequest): boolean => {
     const provided = Buffer.from(String(request.headers["x-hive-shutdown"] ?? ""));
-    // 来自本机：回环地址，或本机自己的网卡地址（只监听某块网卡时，本机请求也从那个地址来）
     const remote = (request.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
     const local =
       remote === "127.0.0.1" ||
@@ -204,7 +205,17 @@ if (shutdownToken) {
       Object.values(networkInterfaces()).some((entries) =>
         (entries ?? []).some((entry) => entry.address === remote),
       );
-    if (!local || provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+    return local && provided.length === expected.length && timingSafeEqual(provided, expected);
+  };
+  // 桌面端升级到「默认只听本机」后第一次启动时问一次：以前有别的设备连进来过就保持局域网访问
+  app.get("/api/local/lan-usage", async (request, reply) => {
+    if (!fromLauncher(request))
+      return reply.code(403).send({ ...errorText(serverText("error.auth.notAllowed")) });
+    const usage = (app as unknown as { lanUsage?: () => unknown }).lanUsage;
+    return usage ? usage() : { ownerDevices: 0, guestSessions: 0 };
+  });
+  app.post("/api/local/shutdown", async (request, reply) => {
+    if (!fromLauncher(request)) {
       return reply.code(403).send({ ...errorText(serverText("error.auth.notAllowed")) });
     }
     // 换代重启（hive restart / hive update）：本机 Agent 不随之下线，交给下一个 Server 接管

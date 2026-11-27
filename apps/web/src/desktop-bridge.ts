@@ -167,6 +167,29 @@ export type DesktopRemoteApi = {
   onJoinRequest(listener: (request: DesktopJoinRequest) => void): () => void;
 };
 
+/** 「允许局域网设备访问」开关的状态 */
+export type DesktopLanState = {
+  enabled: boolean;
+  /** 连的是别人起的 Server（hive start）时为 false，开关不显示 */
+  managed: boolean;
+  /** 正在换监听地址重启 Server */
+  restarting: boolean;
+};
+
+/** Windows 防火墙对 SuperHive.exe 的入站规则（只读检查） */
+export type DesktopFirewallStatus = {
+  status: "ok" | "blocked" | "missing" | "unknown";
+  program: string;
+};
+
+/** 内置 Server 只听本机还是也听局域网（老版本桌面端没有，一直听局域网） */
+export type DesktopLanApi = {
+  get(): Promise<DesktopLanState>;
+  set(enabled: boolean): Promise<DesktopLanState>;
+  firewall(): Promise<DesktopFirewallStatus | null>;
+  onChange(listener: (state: DesktopLanState) => void): () => void;
+};
+
 export type DesktopBridge = {
   version: number;
   platform: string;
@@ -180,6 +203,8 @@ export type DesktopBridge = {
   updates?: DesktopUpdatesApi;
   /** 加入别人的房间（老版本桌面端没有这一项，只能在浏览器里打开邀请链接） */
   remote?: DesktopRemoteApi;
+  /** 局域网访问开关（老版本桌面端没有这一项，不显示开关） */
+  lan?: DesktopLanApi;
 };
 
 declare global {
@@ -200,6 +225,7 @@ const TERMINAL_METHODS = [
 
 const UPDATE_METHODS = ["get", "open", "dismiss", "onChange"] as const;
 const REMOTE_METHODS = ["list", "open", "remove", "onChange", "onJoinRequest"] as const;
+const LAN_METHODS = ["get", "set", "firewall", "onChange"] as const;
 
 /** 读取并校验桌面端能力；形状不对（版本不兼容、被别的脚本冒充）就当作不在桌面端 */
 export function desktopBridge(
@@ -262,6 +288,10 @@ export function desktopBridge(
     (!remote || REMOTE_METHODS.some((name) => typeof remote[name] !== "function"))
   ) {
     return desktopBridge({ ...value, remote: undefined });
+  }
+  const lan = value.lan as Partial<DesktopLanApi> | undefined;
+  if (lan !== undefined && (!lan || LAN_METHODS.some((name) => typeof lan[name] !== "function"))) {
+    return desktopBridge({ ...value, lan: undefined });
   }
   const titlebar = value.titlebar as Partial<DesktopTitlebarApi> | undefined;
   if (titlebar !== undefined && (!titlebar || typeof titlebar.setAppearance !== "function")) {

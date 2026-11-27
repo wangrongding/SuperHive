@@ -134,4 +134,17 @@ describe("desktopBridge", () => {
     expect(broken?.restart).toBe(fn);
     expect(broken && "cancelRestart" in broken).toBe(false);
   });
+
+  it("drops only a malformed LAN access API", () => {
+    const lan = { get: fn, set: fn, firewall: fn, onChange: fn };
+    expect(desktopBridge({ version: 1, platform: "win32", terminal, lan })?.lan).toBe(lan);
+    const broken = desktopBridge({
+      version: 1,
+      platform: "win32",
+      terminal,
+      lan: { get: fn, set: fn, onChange: fn },
+    });
+    expect(broken?.terminal).toBe(terminal);
+    expect(broken?.lan).toBeUndefined();
+  });
 });
