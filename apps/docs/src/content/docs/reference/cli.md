@@ -145,6 +145,8 @@ hive mcp list --provider codex --json
 - `--measure` 会逐个连接 MCP，读取工具列表并估算开局 token；当前只测量 Claude Code。它可能启动本机 MCP 进程或连接远程服务，不是完全离线的文件检查，也不代表实际模型账单。
 - Codex 列表可能包含插件工具或 CLI 已禁用项；`configurable` 为否时不能在 Hive 中开关。列表会排除名为 `hive` 的内置聊天室连接。
 
+`hive mcp check [--timeout 秒]` 从标准输入读一个 MCP 的配置（`{"transport":"stdio|http|sse","config":{...}}`，写法同 Claude Code），连上去读一遍工具列表，输出一行 JSON：能用时是工具数和估算的开局 token，不行时是原因和分类（`auth` 需要登录、`unreachable` 连不上、`failed` 起不来）。网页「MCP 与技能」装完测能不能用时调的就是它；配置走标准输入，里面的密钥不出现在命令行。stdio 会真的运行那条命令，默认 60 秒放弃。
+
 要调整 Agent 下一轮加载哪些工具，使用 [Agent 设置](/guides/agents/)，不要把 `mcp list` 当成安装或启用命令。
 
 ## 打印或安装给 Agent 的协作说明

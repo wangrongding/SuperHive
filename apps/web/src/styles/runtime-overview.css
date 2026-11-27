@@ -776,6 +776,155 @@
   color: var(--danger);
 }
 
+/* 装好后测能不能用：一行状态，有问题时给原因和「再测一次」 */
+.runtime-drawer-try {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.runtime-drawer-try input {
+  margin-top: 3px;
+}
+
+.runtime-drawer-try span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.runtime-drawer-try small {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.runtime-drawer-check {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 12px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+.runtime-drawer-check.idle {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.runtime-drawer-check.problem {
+  border-color: transparent;
+  background: var(--warning-soft);
+}
+
+.runtime-drawer-check p {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.runtime-drawer-check small {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.runtime-check-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-weight: 600;
+}
+
+.runtime-drawer-check.ok .runtime-check-status {
+  color: var(--success);
+}
+
+.runtime-drawer-check.problem .runtime-check-status {
+  color: var(--warning);
+}
+
+.runtime-check-mark {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.runtime-check-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-secondary);
+  border-radius: 50%;
+  animation: runtime-check-spin 0.8s linear infinite;
+}
+
+@keyframes runtime-check-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runtime-check-spinner {
+    animation: none;
+  }
+}
+
+/* 已安装表：只有出了问题的那一行在名字旁边标出来，正常的什么都不显示 */
+.runtime-overview-name-cell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.runtime-overview-problem {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  padding: 0 8px 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 20px;
+}
+
+/* 表格行里的小按钮：和勾选框一样高，有问题的那行不比别的行高 */
+.runtime-overview-name-cell .btn.btn {
+  --btn-height: 20px;
+  --btn-pad: 6px;
+  flex: none;
+}
+
+/* 窄屏：名字单独一行，状态和「再测一次」放在下面，名字不被挤没 */
+@media (max-width: 720px) {
+  .runtime-overview-name-cell {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .runtime-overview-name-cell > .runtime-overview-name {
+    flex-basis: 100%;
+  }
+}
+
+/* 从角标点进来时定位到的那一行：底色叠在不透明底上，粘住的名字列不透出后面的格子 */
+.runtime-overview-table tr.focused th[scope="row"],
+.runtime-overview-table tr.focused td {
+  background:
+    linear-gradient(var(--warning-soft), var(--warning-soft)), var(--bg-panel, var(--bg-main));
+}
+
 @media (max-width: 720px) {
   .runtime-store-grid {
     grid-template-columns: minmax(0, 1fr);

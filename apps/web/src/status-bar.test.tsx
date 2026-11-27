@@ -112,6 +112,12 @@ describe("imSummary", () => {
     });
     expect(imSummary([connection("connected"), connection("connecting")])?.tone).toBe("pending");
     expect(imSummary([connection("connected")])).toEqual({ tone: "ok", label: "飞书" });
+    const broken = connection("connected", { attention: "relogin" });
+    expect(imSummary([connection("connected"), broken, connection("error")])).toMatchObject({
+      tone: "warning",
+      label: "IM 需要处理",
+      problems: [broken, expect.objectContaining({ status: "error" })],
+    });
   });
 });
 
@@ -318,6 +324,68 @@ describe("StatusBar", () => {
     await screen.findByRole("button", { name: "本机 Agent 的网络代理" });
     expect(screen.queryByRole("button", { name: /全局 MCP 和技能/ })).toBeNull();
     expect(remote).not.toHaveBeenCalled();
+  });
+
+  it("有 MCP 测出来用不了时入口带计数角标，点了打开面板并定位到第一个；都正常时不显示", async () => {
+    const health = (ok: boolean) =>
+      ok
+        ? { ok: true as const, tools: 3, tokens: 900, checkedAt: 1 }
+        : { ok: false as const, problem: "auth" as const, reason: "HTTP 401", checkedAt: 1 };
+    const runtimeOverview = vi.fn(async () => ({
+      providers: [],
+      mcp: [
+        { name: "context7", entries: [], health: health(true) },
+        { name: "github", entries: [], health: health(false) },
+        { name: "linear", entries: [], health: { ...health(false), problem: "unreachable" } },
+        { name: "memory", entries: [] },
+      ],
+      skills: [],
+    }));
+    const props = renderBar({
+      local: fakeLocal({ mode: "local", runtimeOverview } as Partial<LocalAgentsState>),
+    });
+    const item = await screen.findByRole("button", { name: "2 个 MCP 用不了：点开查看" });
+    expect(item.className).toContain("warning");
+    expect(item.querySelector(".status-item-badge")?.textContent).toBe("2");
+    fireEvent.click(item);
+    expect(props.openRuntimeHub).toHaveBeenCalledWith("github");
+    cleanup();
+
+    const fine = vi.fn(async () => ({
+      providers: [],
+      mcp: [{ name: "context7", entries: [], health: health(true) }],
+      skills: [],
+    }));
+    renderBar({
+      local: fakeLocal({ mode: "local", runtimeOverview: fine } as Partial<LocalAgentsState>),
+    });
+    const quiet = await screen.findByRole("button", {
+      name: "给这台电脑上的各个 CLI 装 MCP、管理技能",
+    });
+    expect(quiet.querySelector(".status-item-badge")).toBeNull();
+    expect(quiet.className).not.toContain("warning");
+  });
+
+  it("IM 有要处理的连接时带计数角标，点了打开 IM 弹窗并定位到第一个", async () => {
+    const broken = connection("connected", { attention: "relogin" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ connections: [connection("connected"), broken] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const open = vi.fn();
+    try {
+      renderBar({ im: { base: "http://hive.test", token: "t", dialogOpen: false, open } });
+      const item = await screen.findByRole("button", { name: "1 个 IM 连接要处理：点开查看" });
+      expect(item.textContent).toContain("IM 需要处理");
+      expect(item.querySelector(".status-item-badge")?.textContent).toBe("1");
+      fireEvent.click(item);
+      expect(open).toHaveBeenCalledWith(broken.id);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("访客：没有代理、IM、故障这些房主才有的项", () => {

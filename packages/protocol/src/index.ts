@@ -1627,6 +1627,13 @@ export const updateLocalAgentSettingsRequestSchema = z
       value.cacheTtl !== undefined,
   );
 
+/**
+ * 连 MCP 失败的原因分类：auth 需要登录（远程服务回 401/403），unreachable 连不上（地址错、网络不通、
+ * 服务没响应或回了别的错误），failed 起不来（本机命令找不到、进程启动后退出或没响应）
+ */
+export const mcpProblemSchema = z.enum(["auth", "unreachable", "failed"]);
+export type McpProblem = z.infer<typeof mcpProblemSchema>;
+
 /** Agent CLI 在本机会加载的一个 MCP（hive 自己不在其中，始终加载） */
 export const localMcpServerSchema = z.object({
   name: z.string(),
@@ -1640,7 +1647,7 @@ export const localMcpServerSchema = z.object({
   measurement: z
     .discriminatedUnion("ok", [
       z.object({ ok: z.literal(true), tools: z.number().int(), tokens: z.number().int() }),
-      z.object({ ok: z.literal(false), error: z.string() }),
+      z.object({ ok: z.literal(false), error: z.string(), problem: mcpProblemSchema.optional() }),
     ])
     .optional(),
 });
@@ -2114,6 +2121,36 @@ export const runtimeSkillsSchema = z.object({
   note: z.string().optional(),
   noteText: serverTextSchema.optional(),
 });
+/**
+ * 测一个 MCP 能不能用：照 CLI 配置里写的连上去读一遍工具列表。ok 时带工具数和估算的开局 token；
+ * 不行时 problem 分类、reason 一句原因（不含密钥）
+ */
+export const mcpHealthSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    tools: z.number().int(),
+    tokens: z.number().int(),
+    checkedAt: z.number(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    problem: mcpProblemSchema,
+    reason: z.string(),
+    checkedAt: z.number(),
+  }),
+]);
+export type McpHealth = z.infer<typeof mcpHealthSchema>;
+/** 测一个已经写进 CLI 配置的 MCP；provider 不给时取第一个装了它的 CLI */
+export const verifyRuntimeMcpRequestSchema = z.object({
+  name: mcpNameSchema,
+  provider: runtimeCredentialProviderSchema.optional(),
+});
+export type VerifyRuntimeMcpRequest = z.infer<typeof verifyRuntimeMcpRequestSchema>;
+export const verifyRuntimeMcpResultSchema = z.object({
+  health: mcpHealthSchema,
+});
+export type VerifyRuntimeMcpResult = z.infer<typeof verifyRuntimeMcpResultSchema>;
+
 export const runtimeOverviewSchema = z.object({
   /** 这台电脑上有配置目录的运行时 */
   providers: z.array(
@@ -2136,6 +2173,8 @@ export const runtimeOverviewSchema = z.object({
           transport: z.enum(["stdio", "http", "sse"]),
         }),
       ),
+      /** 最近一次测试的结果；配置在那之后改过（对不上）就不带 */
+      health: mcpHealthSchema.optional(),
     }),
   ),
   skills: z.array(

@@ -192,6 +192,8 @@ export function App({
   const isOwner = Boolean(meta?.joinToken);
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [imDialogOpen, setImDialogOpen] = useState(false);
+  /** 从状态栏角标打开时要定位的 IM 连接 */
+  const [imFocus, setImFocus] = useState<string>();
   const [ownerDevicesOpen, setOwnerDevicesOpen] = useState(false);
   const [guestAgentDialogOpen, setGuestAgentDialogOpen] = useState(false);
   const [accessNow, setAccessNow] = useState(() => Date.now());
@@ -333,6 +335,8 @@ export function App({
   const [runtimesFocus, setRuntimesFocus] = useState<SelectableAgentProvider>();
   /** 「MCP 与技能」大面板：状态栏入口、设置里的按钮打开 */
   const [runtimeHubOpen, setRuntimeHubOpen] = useState(false);
+  /** 从状态栏角标打开时要定位的 MCP */
+  const [runtimeHubFocus, setRuntimeHubFocus] = useState<string>();
   const returnToAgentDialogRef = useRef(false);
   const [sendShortcut, setSendShortcut] = useState<SendShortcut>(storedSendShortcut);
   const [autoSaveDraft, setAutoSaveDraft] = useState(() =>
@@ -1227,6 +1231,7 @@ export function App({
     returnToAgentDialogRef.current = false;
     setSettingsOpen(false);
     setRuntimesFocus(undefined);
+    setRuntimeHubFocus(undefined);
     setRuntimeHubOpen(true);
   }, []);
 
@@ -1807,6 +1812,7 @@ export function App({
       done: imConnected,
       onAction: () => {
         setOnboardingOpen(false);
+        setImFocus(undefined);
         setImDialogOpen(true);
       },
     },
@@ -2757,7 +2763,10 @@ export function App({
                   base,
                   token: authToken,
                   dialogOpen: imDialogOpen,
-                  open: () => setImDialogOpen(true),
+                  open: (focusId) => {
+                    setImFocus(focusId);
+                    setImDialogOpen(true);
+                  },
                 }
               : undefined
           }
@@ -2779,7 +2788,10 @@ export function App({
             setSettingsTab(tab);
             setSettingsOpen(true);
           }}
-          openRuntimeHub={() => setRuntimeHubOpen(true)}
+          openRuntimeHub={(focusMcp) => {
+            setRuntimeHubFocus(focusMcp);
+            setRuntimeHubOpen(true);
+          }}
           runtimeHubOpen={runtimeHubOpen}
           openProxySettings={openProxySettings}
           settingsOpen={settingsOpen}
@@ -3026,6 +3038,7 @@ export function App({
           adminToken={authToken}
           roomId={currentRoomId}
           ownerName={username}
+          {...(imFocus ? { focusId: imFocus } : {})}
           rooms={rooms
             .filter((room) => !room.archivedAt)
             .map((room) => ({ id: room.id, name: room.name }))}
@@ -3093,6 +3106,7 @@ export function App({
       {runtimeHubOpen && local.mode === "local" && (
         <RuntimeHubDialog
           api={local}
+          {...(runtimeHubFocus ? { focusMcp: runtimeHubFocus } : {})}
           onJump={jumpFromRuntimeHub}
           onClose={() => setRuntimeHubOpen(false)}
         />

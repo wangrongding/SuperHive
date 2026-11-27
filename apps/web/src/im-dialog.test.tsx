@@ -248,6 +248,32 @@ describe("我的 IM 连接", () => {
     );
   });
 
+  it("从状态栏角标点进来：滚到要处理的那张卡片并标出来", async () => {
+    mockServer((route) => {
+      if (route.url === "/api/im/channels")
+        return { feishu: { enabled: true }, wechat: { enabled: true } };
+      if (route.url === "/api/im/connections") return { connections: [feishu, wechat] };
+      return {};
+    });
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    render(
+      <ImDialog
+        base="http://hive"
+        adminToken="t"
+        roomId="build"
+        ownerName="rd"
+        focusId={wechat.id}
+        onClose={() => undefined}
+      />,
+    );
+    const cards = await screen.findAllByRole("listitem");
+    const target = cards.find((card) => card.getAttribute("data-id") === wechat.id)!;
+    await waitFor(() => expect(target.className).toContain("focused"));
+    expect(cards.find((card) => card !== target)!.className).not.toContain("focused");
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+
   it("关闭个人微信时新增连接只有飞书", async () => {
     mockServer((route) => {
       if (route.url === "/api/im/channels")

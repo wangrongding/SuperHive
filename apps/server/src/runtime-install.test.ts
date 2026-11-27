@@ -399,3 +399,172 @@ describe("runtime install routes", () => {
     }
   });
 });
+
+describe("verifying an installed MCP", () => {
+  async function startWithCheck(
+    credentials: RuntimeCredentialStore,
+    checkMcp: (input: string) => Promise<string>,
+  ) {
+    const logs: string[] = [];
+    const app = await buildApp({
+      databasePath: ":memory:",
+      token: "join-token",
+      staticDir: "/definitely-not-present",
+      runtimeCredentials: credentials,
+      logger: {
+        level: "trace",
+        stream: new Writable({
+          write(chunk, _encoding, done) {
+            logs.push(String(chunk));
+            done();
+          },
+        }),
+      },
+      localAgents: {
+        cli: { command: "/usr/bin/node", args: ["cli.js"] },
+        serverUrl: "http://127.0.0.1:8787",
+        spawn: vi.fn<SpawnAgent>(),
+        probe: async () => ({ installed: true, version: "1.0.0" }),
+        checkMcp,
+      },
+    });
+    const session = (await app.inject({ method: "GET", url: "/api/local/session" })).json() as {
+      ownerToken: string;
+    };
+    const owner = { "x-hive-owner": session.ownerToken };
+    const install = async (body: Record<string, unknown>) => {
+      const preview = await app.inject({
+        method: "POST",
+        url: "/api/local/runtime-install/preview",
+        headers: owner,
+        payload: body,
+      });
+      return app.inject({
+        method: "POST",
+        url: "/api/local/runtime-install/apply",
+        headers: owner,
+        payload: { ...body, planId: preview.json().plan.id },
+      });
+    };
+    const verify = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: "/api/local/runtime-overview/mcp/verify",
+        headers: owner,
+        payload,
+      });
+    const overview = async () =>
+      (
+        await app.inject({ method: "GET", url: "/api/local/runtime-overview", headers: owner })
+      ).json().overview as {
+        mcp: Array<{ name: string; health?: Record<string, unknown> }>;
+      };
+    return { app, owner, logs, install, verify, overview };
+  }
+
+  it("checks the config the CLI actually has, keeps the secret off the command line, and remembers the result", async () => {
+    const { home, credentials } = setup();
+    const inputs: string[] = [];
+    const checkMcp = vi.fn(async (input: string) => {
+      inputs.push(input);
+      return `${JSON.stringify({
+        measurement: { ok: false, problem: "auth", error: "服务要求登录或密钥（HTTP 401）" },
+      })}\n`;
+    });
+    const { app, logs, install, verify, overview } = await startWithCheck(credentials, checkMcp);
+    try {
+      expect((await install(github)).statusCode).toBe(200);
+      // 装完不会自己去测：由网页按人的选择调
+      expect(checkMcp).not.toHaveBeenCalled();
+
+      const result = await verify({ name: "github" });
+      expect(result.statusCode).toBe(200);
+      expect(result.json().health).toMatchObject({
+        ok: false,
+        problem: "auth",
+        reason: "服务要求登录或密钥（HTTP 401）",
+      });
+      // 测量进程拿到的是 CLI 配置里的那一份（含密钥），走标准输入
+      expect(JSON.parse(inputs[0]!)).toEqual({
+        transport: "http",
+        config: {
+          url: "https://api.githubcopilot.com/mcp/",
+          headers: { Authorization: `Bearer ${TOKEN}` },
+        },
+      });
+      expect(result.body).not.toContain(TOKEN);
+      for (const line of logs) expect(line).not.toContain(TOKEN);
+      expect(logs.some((line) => line.includes("runtime config verify"))).toBe(true);
+
+      const row = (await overview()).mcp.find((item) => item.name === "github");
+      expect(row?.health).toMatchObject({ ok: false, problem: "auth" });
+
+      // 在 Hive 外改了配置（换了密钥）：旧结果对不上，不再显示
+      const file = path.join(home, ".claude.json");
+      const claude = JSON.parse(readFileSync(file, "utf8"));
+      claude.mcpServers.github.headers.Authorization = "Bearer ghp_new";
+      writeFileSync(file, JSON.stringify(claude));
+      // Codex 里那一份还是测过的配置，所以照样带
+      expect((await overview()).mcp.find((item) => item.name === "github")?.health).toBeDefined();
+      const codexFile = path.join(home, ".codex", "config.toml");
+      writeFileSync(
+        codexFile,
+        readFileSync(codexFile, "utf8").replace(`Bearer ${TOKEN}`, "Bearer ghp_new"),
+      );
+      expect((await overview()).mcp.find((item) => item.name === "github")?.health).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("records a working server and turns a broken checker into a failure, not a crash", async () => {
+    const { credentials } = setup();
+    let next: () => Promise<string> = async () =>
+      JSON.stringify({ measurement: { ok: true, tools: 12, tokens: 3400 } });
+    const { app, verify, install, overview } = await startWithCheck(credentials, () => next());
+    try {
+      await install({ recipeId: "memory", name: "memory", params: {}, targets: ["claude"] });
+      const ok = await verify({ name: "memory", provider: "claude" });
+      expect(ok.json().health).toMatchObject({ ok: true, tools: 12, tokens: 3400 });
+      expect((await overview()).mcp[0]?.health).toMatchObject({ ok: true, tools: 12 });
+
+      next = async () => {
+        throw Object.assign(new Error("Command failed"), { stderr: "Error: boom\n" });
+      };
+      const crashed = await verify({ name: "memory" });
+      expect(crashed.statusCode).toBe(200);
+      expect(crashed.json().health).toMatchObject({ ok: false, problem: "failed" });
+      expect(crashed.json().health.reason).toContain("boom");
+
+      next = async () => "not json";
+      expect((await verify({ name: "memory" })).json().health).toMatchObject({
+        ok: false,
+        problem: "failed",
+        reason: "测量进程的输出读不懂",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects unknown names and is only for the local owner", async () => {
+    const { credentials } = setup();
+    const checkMcp = vi.fn(async () => "");
+    const { app, verify } = await startWithCheck(credentials, checkMcp);
+    try {
+      expect((await verify({ name: "nothing-here" })).statusCode).toBe(400);
+      expect((await verify({ name: "../x" })).statusCode).toBe(400);
+      const call = {
+        method: "POST" as const,
+        url: "/api/local/runtime-overview/mcp/verify",
+        payload: { name: "github" },
+      };
+      const agent = await app.inject({ ...call, headers: { authorization: "Bearer join-token" } });
+      expect(agent.statusCode).toBe(401);
+      expect((await app.inject({ ...call, remoteAddress: "10.0.0.20" })).statusCode).toBe(403);
+      expect(checkMcp).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+});

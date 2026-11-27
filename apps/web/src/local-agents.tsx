@@ -48,6 +48,8 @@ import type {
   SkillSearchResponse,
   RuntimeMcpServerInput,
   RuntimeOverview,
+  McpHealth,
+  VerifyRuntimeMcpResult,
   RuntimeSkills,
   UpdateIncidentSettingsRequest,
   UpdateRuntimeCredentialsRequest,
@@ -348,6 +350,8 @@ export type LocalAgentsState = {
   applyRuntimeInstall(
     request: RuntimeInstallRequest & { planId: string },
   ): Promise<RuntimeInstallResult>;
+  /** 测一个已写进 CLI 配置的 MCP 能不能用（stdio 会真的运行那条命令，调用前要人同意） */
+  verifyRuntimeMcp(name: string, provider?: RuntimeCredentialProvider): Promise<McpHealth>;
   /** 从网上装 skill：skills.sh 搜索、下载到 Server 内存里预览、按预览的那一份装进勾选的 CLI */
   searchSkillMarket(query: string): Promise<SkillSearchResponse>;
   previewSkillInstall(source: string, skillId: string): Promise<SkillInstallPreview>;
@@ -1337,6 +1341,16 @@ export function useLocalAgents(
     },
     [request],
   );
+  const verifyRuntimeMcp = useCallback(
+    async (name: string, provider?: RuntimeCredentialProvider) => {
+      const response = await request("/api/local/runtime-overview/mcp/verify", {
+        method: "POST",
+        body: JSON.stringify({ name, ...(provider ? { provider } : {}) }),
+      });
+      return ((await response.json()) as VerifyRuntimeMcpResult).health;
+    },
+    [request],
+  );
   const searchSkillMarket = useCallback(
     async (query: string) => {
       const response = await request(
@@ -1515,6 +1529,7 @@ export function useLocalAgents(
     runtimeInstallCatalog,
     previewRuntimeInstall,
     applyRuntimeInstall,
+    verifyRuntimeMcp,
     searchSkillMarket,
     previewSkillInstall,
     applySkillInstall,

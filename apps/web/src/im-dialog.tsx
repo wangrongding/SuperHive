@@ -177,12 +177,15 @@ export function ImDialog({
   roomId,
   ownerName,
   rooms = [],
+  focusId,
   onClose,
 }: {
   base: string;
   adminToken: string;
   roomId: string;
   ownerName: string;
+  /** 从状态栏角标点进来：滚到这个要处理的连接并标出来 */
+  focusId?: string;
   /** 可选的默认房间（房主所在、没归档的） */
   rooms?: RoomOption[];
   onClose: () => void;
@@ -197,6 +200,19 @@ export function ImDialog({
   const [error, setError] = useState<string>();
   const loginRef = useRef<ImLoginView | undefined>(undefined);
   loginRef.current = login;
+  const [focused, setFocused] = useState(focusId);
+  const cardsRef = useRef<HTMLUListElement>(null);
+  // 定位一次：连接列表读到后把那一张滚进视野（只滚弹窗正文），过几秒取消标记
+  const located = useRef(false);
+  useEffect(() => {
+    if (!focused || located.current || !connections) return;
+    located.current = true;
+    [...(cardsRef.current?.querySelectorAll<HTMLElement>("li[data-id]") ?? [])]
+      .find((item) => item.dataset.id === focused)
+      ?.scrollIntoView?.({ block: "nearest" });
+    const timer = window.setTimeout(() => setFocused(undefined), 4000);
+    return () => window.clearTimeout(timer);
+  }, [connections, focused]);
 
   const fail = (reason: unknown) =>
     setError(reason instanceof Error ? reason.message : String(reason));
@@ -357,11 +373,12 @@ export function ImDialog({
             ) : list.length === 0 ? (
               <EmptyState wechatEnabled={wechatEnabled} onAdd={openAdd} />
             ) : (
-              <ul className="im-cards" aria-label={t("我的 IM 连接")}>
+              <ul className="im-cards" aria-label={t("我的 IM 连接")} ref={cardsRef}>
                 {list.map((connection) => (
                   <ConnectionCard
                     key={connection.id}
                     connection={connection}
+                    focused={focused === connection.id}
                     rooms={rooms}
                     onPause={(paused) =>
                       update(setImConnectionPaused(base, adminToken, connection.id, paused))
@@ -467,6 +484,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 
 function ConnectionCard({
   connection,
+  focused,
   rooms,
   onPause,
   onRescan,
@@ -478,6 +496,7 @@ function ConnectionCard({
   onRoom,
 }: {
   connection: ImConnection;
+  focused: boolean;
   rooms: RoomOption[];
   onPause: (paused: boolean) => void;
   onRescan: () => void;
@@ -497,7 +516,7 @@ function ConnectionCard({
     ? rooms
     : [{ id: connection.roomId, name: roomName }, ...rooms];
   return (
-    <li className={`im-card ${health.tone}`}>
+    <li data-id={connection.id} className={`im-card ${health.tone}${focused ? " focused" : ""}`}>
       <div className="im-card-head">
         <ChannelMark channel={connection.channel} />
         <div className="im-card-title">

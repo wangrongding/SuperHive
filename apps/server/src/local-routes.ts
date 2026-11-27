@@ -61,6 +61,7 @@ import { openTerminal, openWithDefaultApp, revealInFolder } from "./open-termina
 import { placeNamedCopy } from "./attachment-open.js";
 import type { LocalAgentSupervisor } from "./local-agents.js";
 import type { RuntimeCredentialStore } from "./runtime-credentials.js";
+import type { McpHealthPersistence } from "./mcp-health.js";
 import type { RuntimeProfileStore } from "./runtime-profiles.js";
 import { registerRuntimeConfigRoutes } from "./runtime-config-routes.js";
 import type { SkillMarket } from "./skill-market.js";
@@ -228,6 +229,8 @@ export type LocalRoomActions = {
   runtimeCredentials?: RuntimeCredentialStore;
   /** 运行时的多套供应商与官方订阅切换 */
   runtimeProfiles?: RuntimeProfileStore;
+  /** MCP 测试结果存在哪（Server 的小设置），重启后状态栏角标还在 */
+  mcpHealth?: McpHealthPersistence;
   /** 从网上搜索、下载 skill；省略用真实网络（测试注入替身） */
   skillMarket?: SkillMarket;
   /** 本机装的 Agent CLI：检测版本与一键升级 */
@@ -846,6 +849,7 @@ export function registerLocalAgentRoutes(
       ...(rooms.skillMarket ? { skillMarket: rooms.skillMarket } : {}),
       ...(rooms.runtimeProfiles ? { profiles: rooms.runtimeProfiles } : {}),
       ...(rooms.openTerminal ? { openTerminal: rooms.openTerminal } : {}),
+      ...(rooms.mcpHealth ? { mcpHealth: rooms.mcpHealth } : {}),
     });
     if (rooms.remoteJoins) {
       registerRemoteJoinRoutes(app, {

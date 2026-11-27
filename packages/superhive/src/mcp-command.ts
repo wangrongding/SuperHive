@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { measureMcpServer, type McpMeasurement } from "./mcp-measure.js";
 import { commandFor } from "./windows-command.js";
 import {
+  type DiscoveredMcpServer,
   discoverClaudeMcpServers,
   discoverCodexMcpServers,
   readAgentSettings,
@@ -15,10 +16,51 @@ import {
 const usage = `
 用法：
   hive mcp list --provider claude|codex [--cwd PATH] [--agent-settings FILE] [--measure] [--json]
+  hive mcp check [--timeout 秒] < server.json
 
-列出该 Agent CLI 在这台电脑上会加载的 MCP，以及按 Agent 设置文件是否启用。
+list：列出该 Agent CLI 在这台电脑上会加载的 MCP，以及按 Agent 设置文件是否启用。
 --measure 会逐个连上 MCP 读取工具列表，估算它在每个会话开局占用的 token（仅 Claude Code）。
+
+check：从标准输入读一个 MCP 的配置（{"transport":"stdio|http|sse","config":{command,args,env,url,headers}}），
+连上去读一遍工具列表，输出一行 JSON：{"measurement":{ok,tools,tokens} | {ok:false,error,problem}}。
+配置走标准输入，里面的密钥不会出现在命令行和进程列表里。stdio 会真的运行那条命令（第一次可能要下载）。
 `;
+
+/** check 默认等多久：第一次运行 npx / uvx 要先下载包，比列表里的测量宽一些 */
+const CHECK_TIMEOUT_SECONDS = 60;
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Buffer));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** 解析 check 的输入；不合格时返回 undefined */
+export function parseCheckInput(text: string): DiscoveredMcpServer | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const { transport, config } = parsed as { transport?: unknown; config?: unknown };
+  if (transport !== "stdio" && transport !== "http" && transport !== "sse") return undefined;
+  if (!config || typeof config !== "object" || Array.isArray(config)) return undefined;
+  return {
+    name: "check",
+    scope: "user",
+    transport,
+    config: config as Record<string, unknown>,
+  };
+}
+
+async function checkCommand(timeoutSeconds: number): Promise<void> {
+  const server = parseCheckInput(await readStdin());
+  if (!server) throw new Error("mcp check 需要从标准输入读一个 {transport, config} JSON。");
+  const measurement = await measureMcpServer(server, timeoutSeconds * 1000);
+  process.stdout.write(`${JSON.stringify({ measurement })}\n`);
+}
 
 export type McpListEntry = {
   name: string;
@@ -108,9 +150,16 @@ export async function mcpCommand(argv: string[]): Promise<void> {
       measure: { type: "boolean" },
       codex: { type: "string", default: "codex" },
       json: { type: "boolean" },
+      timeout: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
+  if (!parsed.values.help && parsed.positionals[0] === "check") {
+    const seconds = Number(parsed.values.timeout ?? CHECK_TIMEOUT_SECONDS);
+    return checkCommand(
+      Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 300) : CHECK_TIMEOUT_SECONDS,
+    );
+  }
   if (parsed.values.help || parsed.positionals[0] !== "list") {
     console.log(usage);
     return;

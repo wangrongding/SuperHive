@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   LocalAgent,
   McpCatalog,
+  McpHealth,
   RuntimeInstallPlan,
   RuntimeInstallRequest,
   RuntimeInstallResult,
@@ -12,6 +13,7 @@ import type {
 } from "@superhive/protocol";
 import { LocalApiError } from "./local-agents";
 import { RuntimeHubDialog, type RuntimeHubApi } from "./runtime-hub";
+import { RuntimeOverviewBlock } from "./runtime-overview";
 import { McpStore } from "./runtime-store";
 
 afterEach(cleanup);
@@ -168,6 +170,12 @@ function storeApi(options: { fail?: "codex"; staleOnce?: boolean } = {}) {
         };
       },
     ),
+    verifyRuntimeMcp: vi.fn(async (): Promise<McpHealth> => ({
+      ok: true,
+      tools: 3,
+      tokens: 1200,
+      checkedAt: 1,
+    })),
     agents,
     refreshAgents: vi.fn(async () => undefined),
     act: vi.fn(async () => undefined),
@@ -366,5 +374,162 @@ describe("MCP 与技能大面板", () => {
 
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("装完测能不能用", () => {
+  it("远程的装完直接测：测出要登录就说原因和怎么办，再测一次通过后显示工具数", async () => {
+    const api = storeApi();
+    api.verifyRuntimeMcp.mockResolvedValueOnce({
+      ok: false,
+      problem: "auth",
+      reason: "服务要求登录或密钥（HTTP 401）",
+      checkedAt: 1,
+    });
+    render(<McpStore api={asApi(api)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "安装 GitHub" }));
+    const drawer = screen.getByRole("dialog", { name: "安装 GitHub" });
+    // 远程的不运行本机命令：没有「试运行」的勾选
+    expect(within(drawer).queryByRole("checkbox")).toBeNull();
+    fireEvent.change(within(drawer).getByLabelText(/GitHub 令牌/), { target: { value: TOKEN } });
+    await act(async () => {
+      fireEvent.click(within(drawer).getByRole("button", { name: "安装" }));
+    });
+    const done = await within(drawer).findByRole("status");
+    await waitFor(() => expect(done.textContent).toContain("需要登录"));
+    // 测的是第一个装好的 CLI 里那一份
+    expect(api.verifyRuntimeMcp).toHaveBeenCalledWith("github", "claude");
+    expect(done.textContent).toContain("服务要求登录或密钥（HTTP 401）");
+    expect(done.textContent).toContain("检查密钥填得对不对");
+    expect(done.textContent).not.toContain("已写配置");
+
+    await act(async () => {
+      fireEvent.click(within(drawer).getByRole("button", { name: "再测一次" }));
+    });
+    await waitFor(() => expect(done.textContent).toContain("能用 · 3 个工具"));
+    expect(done.textContent).toContain("开局约占 1,200 token");
+    expect(within(drawer).queryByRole("button", { name: "再测一次" })).toBeNull();
+    // 测完让外面跟着刷新（「已安装」和状态栏角标）
+    expect(api.runtimeOverview).toHaveBeenCalledTimes(3);
+  });
+
+  it("本机命令要人同意才试运行：默认勾上、看得见，取消后装完不运行，点了才测", async () => {
+    const api = storeApi();
+    api.verifyRuntimeMcp.mockResolvedValueOnce({
+      ok: false,
+      problem: "failed",
+      reason: "找不到要运行的命令",
+      checkedAt: 1,
+    });
+    render(<McpStore api={asApi(api)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "安装 Chrome DevTools" }));
+    const drawer = screen.getByRole("dialog", { name: "安装 Chrome DevTools" });
+    const box = within(drawer).getByRole("checkbox", {
+      name: /装好后试运行一次，看能不能用/,
+    }) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(drawer.textContent).toContain("第一次要先下载");
+    const details = within(drawer).getByText("详细信息").closest("details")!;
+    expect(details.textContent).toContain("装好后会运行一次来测能不能用");
+
+    fireEvent.click(box);
+    expect(details.textContent).toContain("现在不会运行任何东西");
+    await act(async () => {
+      fireEvent.click(within(drawer).getByRole("button", { name: "安装" }));
+    });
+    const done = await within(drawer).findByRole("status");
+    expect(api.verifyRuntimeMcp).not.toHaveBeenCalled();
+    expect(done.textContent).toContain("还没测能不能用");
+
+    await act(async () => {
+      fireEvent.click(within(drawer).getByRole("button", { name: "现在试运行一次" }));
+    });
+    await waitFor(() => expect(done.textContent).toContain("起不来"));
+    expect(api.verifyRuntimeMcp).toHaveBeenCalledWith("chrome-devtools", "claude");
+    // 起不来时提示它需要什么（清单里没写时用通用的一句）
+    expect(done.textContent).toContain("找不到要运行的命令");
+    expect(done.textContent).toContain("看看它需要的软件装好没有");
+  });
+
+  it("测的接口本身失败时说没测成，可以再点", async () => {
+    const api = storeApi();
+    api.verifyRuntimeMcp.mockRejectedValueOnce(new Error("Server 没响应"));
+    render(<McpStore api={asApi(api)} />);
+    fireEvent.click(await screen.findByRole("button", { name: "安装 Chrome DevTools" }));
+    const drawer = screen.getByRole("dialog", { name: "安装 Chrome DevTools" });
+    await act(async () => {
+      fireEvent.click(within(drawer).getByRole("button", { name: "安装" }));
+    });
+    const done = await within(drawer).findByRole("status");
+    await waitFor(() => expect(done.textContent).toContain("没测成"));
+    expect(done.textContent).toContain("Server 没响应");
+    expect(within(drawer).getByRole("button", { name: "再测一次" })).toBeTruthy();
+  });
+});
+
+describe("已安装表里的状态", () => {
+  const withHealth: RuntimeOverview = {
+    ...overview,
+    mcp: [
+      {
+        name: "context7",
+        entries: [{ provider: "claude", enabled: true, transport: "http" }],
+        health: { ok: true, tools: 2, tokens: 800, checkedAt: 1 },
+      },
+      {
+        name: "github",
+        entries: [{ provider: "claude", enabled: true, transport: "http" }],
+        health: { ok: false, problem: "auth", reason: "HTTP 401", checkedAt: 1 },
+      },
+      { name: "memory", entries: [{ provider: "claude", enabled: true, transport: "stdio" }] },
+    ],
+  };
+
+  it("只有出问题的那一行标出来，正常和没测过的不显示；再测一次后按新结果刷新", async () => {
+    const api = storeApi();
+    api.runtimeOverview.mockResolvedValue(withHealth);
+    render(<RuntimeOverviewBlock api={asApi(api)} />);
+    const table = await screen.findByRole("table");
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows.map((row) => row.getAttribute("data-name"))).toEqual([
+      "context7",
+      "github",
+      "memory",
+    ]);
+    expect(rows[0]!.textContent).not.toContain("能用");
+    expect(within(rows[0]!).queryByRole("button", { name: "再测一次" })).toBeNull();
+    expect(rows[1]!.textContent).toContain("需要登录");
+    expect(rows[1]!.querySelector(".runtime-overview-problem")?.getAttribute("title")).toContain(
+      "HTTP 401",
+    );
+    expect(within(rows[2]!).queryByRole("button", { name: "再测一次" })).toBeNull();
+
+    api.runtimeOverview.mockResolvedValue({
+      ...withHealth,
+      mcp: withHealth.mcp.map((row) =>
+        row.name === "github"
+          ? { ...row, health: { ok: true, tools: 5, tokens: 100, checkedAt: 2 } }
+          : row,
+      ),
+    });
+    await act(async () => {
+      fireEvent.click(within(rows[1]!).getByRole("button", { name: "再测一次" }));
+    });
+    expect(api.verifyRuntimeMcp).toHaveBeenCalledWith("github");
+    await waitFor(() => expect(table.textContent).not.toContain("需要登录"));
+  });
+
+  it("从角标点进来时定位并标出那一行", async () => {
+    const api = storeApi();
+    api.runtimeOverview.mockResolvedValue(withHealth);
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    render(<RuntimeOverviewBlock api={asApi(api)} focusMcp="github" />);
+    const table = await screen.findByRole("table");
+    const row = within(table)
+      .getAllByRole("row")
+      .find((item) => item.getAttribute("data-name") === "github")!;
+    await waitFor(() => expect(row.className).toBe("focused"));
+    expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
   });
 });

@@ -25,11 +25,14 @@ export function RuntimeHubDialog({
   api,
   initialTab = "installed",
   initialKind = "mcp",
+  focusMcp,
   onJump,
   onClose,
 }: {
   api: RuntimeHubApi;
   initialTab?: RuntimeHubTab;
+  /** 从状态栏角标点进来：「已安装」里定位到这个出了问题的 MCP */
+  focusMcp?: string;
   /** 「发现 / 安装」先显示 MCP 还是技能 */
   initialKind?: OverviewKind;
   /** 已安装表里点 CLI 名字：去设置里那个 CLI 的配置 */
@@ -75,6 +78,7 @@ export function RuntimeHubDialog({
         <RuntimeOverviewBlock
           api={api}
           initialKind={kind}
+          focusMcp={focusMcp}
           onJump={onJump ? (provider) => onJump(provider) : undefined}
           onDiscover={(next) => {
             setKind(next);

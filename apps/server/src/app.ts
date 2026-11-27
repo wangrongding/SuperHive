@@ -1163,6 +1163,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             credentials: options.runtimeCredentials,
             ...(options.runtimeProfileOptions ?? {}),
           }),
+          mcpHealth: {
+            read: () => database.getSetting("mcpHealth"),
+            write: (value: string) => database.setSetting("mcpHealth", value),
+          },
         }
       : {}),
     ...(options.skillMarket ? { skillMarket: options.skillMarket } : {}),

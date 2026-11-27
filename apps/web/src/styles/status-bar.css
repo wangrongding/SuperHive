@@ -90,6 +90,22 @@
   text-overflow: ellipsis;
 }
 
+/* 出了问题的个数：只在大于 0 时出现 */
+.status-item-badge {
+  flex: none;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--warning);
+  color: var(--bg-main);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .status-item-meta {
   color: var(--text-tertiary);
   opacity: 0.8;

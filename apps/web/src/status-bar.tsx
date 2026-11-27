@@ -38,6 +38,7 @@ import { useUpdateCenter } from "./update-center";
 import { KeyCombo } from "./key-combo";
 import { keepAwakeStatusText } from "./host-settings";
 import { listAllImConnections, IM_CHANNEL_LABELS } from "./im-api";
+import { mcpProblems } from "./mcp-health";
 import { effectiveCompactWindow, memberContextHint } from "./member-context";
 import { formatTokens } from "./usage";
 import { modelDisplayName } from "./agent-models";
@@ -77,16 +78,21 @@ export function contextPercent(participant: Participant | undefined): number | u
 }
 
 /** IM 连接汇总：要人处理的优先，其次在连、已连上；没有连接返回 undefined */
-export function imSummary(
-  connections: readonly ImConnection[] | undefined,
-): { tone: "ok" | "pending" | "warning"; label: string } | undefined {
+export function imSummary(connections: readonly ImConnection[] | undefined):
+  | {
+      tone: "ok" | "pending" | "warning";
+      label: string;
+      /** 要人处理的连接，角标数的就是这些 */
+      problems?: readonly ImConnection[];
+    }
+  | undefined {
   if (!connections) return undefined;
   if (!connections.length) return { tone: "pending", label: t("IM 未连接") };
   const needsAction = connections.filter(
     (connection) => connection.status === "error" || connection.attention,
   );
   if (needsAction.length)
-    return { tone: "warning", label: t("IM 需要处理 {0}", { 0: needsAction.length }) };
+    return { tone: "warning", label: t("IM 需要处理"), problems: needsAction };
   if (connections.some((connection) => connection.status === "connecting"))
     return { tone: "pending", label: t("IM 连接中") };
   const connected = connections.filter((connection) => connection.status === "connected");
@@ -132,8 +138,11 @@ function StatusItem({
   onClick,
   popover,
   align = "start",
+  badge,
 }: {
   label: ReactNode;
+  /** 出了问题的个数：大于 0 才显示 */
+  badge?: number | undefined;
   /** 按钮的读屏名和悬停说明 */
   tooltip: string;
   icon?: ReactNode;
@@ -253,6 +262,11 @@ function StatusItem({
         >
           {icon}
           <span className="status-item-label">{label}</span>
+          {badge !== undefined && badge > 0 && (
+            <span className="status-item-badge" aria-hidden="true">
+              {badge > 99 ? "99+" : badge}
+            </span>
+          )}
         </button>
       </Tooltip>
       {open &&
@@ -368,12 +382,15 @@ export type StatusBarProps = {
   /** 只给这台电脑上的房主：本机 Agent、代理、熄屏保持在线 */
   local: LocalAgentsState;
   /** 访客没有：查 IM 连接要房主令牌 */
-  im?: { base: string; token: string; dialogOpen: boolean; open: () => void } | undefined;
+  /** open 带 id 时打开后定位到那个出了问题的连接 */
+  im?:
+    | { base: string; token: string; dialogOpen: boolean; open: (focusId?: string) => void }
+    | undefined;
   incidents?: { count: number; open: (trigger: HTMLElement | null) => void } | undefined;
   openAgentTasks: (trigger: HTMLElement | null) => void;
   openSettings: (tab: SettingsTab) => void;
-  /** 打开「MCP 与技能」大面板 */
-  openRuntimeHub: () => void;
+  /** 打开「MCP 与技能」大面板；带名字时定位到那个出了问题的 MCP */
+  openRuntimeHub: (focusMcp?: string) => void;
   runtimeHubOpen?: boolean;
   openProxySettings: () => void;
   /** 设置弹窗关上时重新拉一遍代理设置（在设置页里改过也能同步过来） */
@@ -479,7 +496,12 @@ export function StatusBar(props: StatusBarProps) {
 
   // MCP 与技能：只给 Server 所在电脑上的本机房主（和运行时配置同一权限），大面板、设置弹窗关上时重新数一遍
   const runtimeOwner = manageLocal && local.mode === "local";
-  const [runtimeCounts, setRuntimeCounts] = useState<{ mcp: number; skills: number }>();
+  const [runtimeCounts, setRuntimeCounts] = useState<{
+    mcp: number;
+    skills: number;
+    /** 测过、没通过的 MCP 名字 */
+    problems: string[];
+  }>();
   const { runtimeOverview } = local;
   useEffect(() => {
     if (!runtimeOwner || settingsOpen || runtimeHubOpen || !runtimeOverview) return;
@@ -487,7 +509,11 @@ export function StatusBar(props: StatusBarProps) {
     runtimeOverview().then(
       (overview) => {
         if (!cancelled) {
-          setRuntimeCounts({ mcp: overview.mcp.length, skills: overview.skills.length });
+          setRuntimeCounts({
+            mcp: overview.mcp.length,
+            skills: overview.skills.length,
+            problems: mcpProblems(overview).map((row) => row.name),
+          });
         }
       },
       () => undefined,
@@ -666,8 +692,13 @@ export function StatusBar(props: StatusBarProps) {
             tone={imState.tone === "pending" ? undefined : imState.tone}
             icon={<Dot tone={imState.tone} />}
             label={imState.label}
-            tooltip={t("IM 连接：{0}，点开管理", { 0: imState.label })}
-            onClick={im.open}
+            badge={imState.problems?.length}
+            tooltip={
+              imState.problems?.length
+                ? t("{0} 个 IM 连接要处理：点开查看", { 0: imState.problems.length })
+                : t("IM 连接：{0}，点开管理", { 0: imState.label })
+            }
+            onClick={() => im.open(imState.problems?.[0]?.id)}
           />
         )}
       </div>
@@ -726,9 +757,15 @@ export function StatusBar(props: StatusBarProps) {
             className="status-runtimes"
             align="end"
             icon={<Icon name="board" size={13} />}
+            tone={runtimeCounts.problems.length ? "warning" : undefined}
             label={t("MCP {0} · 技能 {1}", { 0: runtimeCounts.mcp, 1: runtimeCounts.skills })}
-            tooltip={t("给这台电脑上的各个 CLI 装 MCP、管理技能")}
-            onClick={openRuntimeHub}
+            badge={runtimeCounts.problems.length}
+            tooltip={
+              runtimeCounts.problems.length
+                ? t("{0} 个 MCP 用不了：点开查看", { 0: runtimeCounts.problems.length })
+                : t("给这台电脑上的各个 CLI 装 MCP、管理技能")
+            }
+            onClick={() => openRuntimeHub(runtimeCounts.problems[0])}
           />
         )}
         {keepAwake && (

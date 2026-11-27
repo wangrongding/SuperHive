@@ -123,7 +123,7 @@ export function parseFormat(format: Format, content: string): Record<string, unk
   return record(parseJsonc(content));
 }
 
-function invalid(reason: string): HiveError {
+export function invalid(reason: string): HiveError {
   return new HiveError(
     "RUNTIME_CONFIG_INVALID",
     serverText("error.runtimeConfig.invalid", { reason }),
@@ -580,6 +580,45 @@ export class RuntimeConfigStore {
         : { url: url ?? "" }),
       envKeys: keys(entry.env),
       enabled,
+    };
+  }
+
+  /**
+   * 测能不能用时要的完整启动配置（含环境变量的值和请求头，只在内存里交给测量进程，不回给网页）。
+   * 统一成 Claude Code 的写法：stdio 是 command/args/env/cwd，远程是 url/headers；没有这一项时 undefined
+   */
+  mcpLaunchConfig(
+    provider: RuntimeCredentialProvider,
+    name: string,
+  ): { transport: RuntimeMcpServer["transport"]; config: Record<string, unknown> } | undefined {
+    const spec = this.spec(provider).mcp;
+    if (!spec) return undefined;
+    const data = parseFormat(spec.format, readText(spec.file) ?? "");
+    const entry = record(record(data?.[this.mcpRoot(spec.kind)])?.[name]);
+    if (!entry) return undefined;
+    const server = this.toServer(spec.kind, name, entry, spec);
+    const strings = (value: unknown) =>
+      Object.fromEntries(
+        Object.entries(record(value) ?? {}).filter(
+          (item): item is [string, string] => typeof item[1] === "string",
+        ),
+      );
+    if (server.transport === "stdio") {
+      const env = strings(entry[spec.kind === "opencode" ? "environment" : "env"]);
+      return {
+        transport: "stdio",
+        config: {
+          command: server.command ?? "",
+          args: server.args ?? [],
+          ...(Object.keys(env).length ? { env } : {}),
+          ...(typeof entry.cwd === "string" ? { cwd: entry.cwd } : {}),
+        },
+      };
+    }
+    const headers = strings(entry[spec.kind === "codex" ? "http_headers" : "headers"]);
+    return {
+      transport: server.transport,
+      config: { url: server.url ?? "", ...(Object.keys(headers).length ? { headers } : {}) },
     };
   }
 

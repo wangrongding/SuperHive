@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RuntimeCredentialProvider, RuntimeOverview } from "@superhive/protocol";
+import type { McpHealth, RuntimeCredentialProvider, RuntimeOverview } from "@superhive/protocol";
 import { Button } from "./button";
 import { ConfirmPopover } from "./confirm-popover";
 import { t } from "./i18n";
@@ -12,6 +12,7 @@ import {
   type McpDraft,
   type RuntimeConfigSection,
 } from "./runtime-config-panel";
+import { MCP_PROBLEM_LABELS, McpHealthMark } from "./mcp-health";
 import "./styles/runtime-overview.css";
 
 /**
@@ -30,6 +31,7 @@ export type RuntimeOverviewApi = Pick<
   | "toggleRuntimeMcp"
   | "deleteRuntimeMcp"
   | "toggleRuntimeSkill"
+  | "verifyRuntimeMcp"
 >;
 
 export type OverviewKind = "mcp" | "skills";
@@ -45,7 +47,7 @@ type Entry = {
   canSync?: boolean;
   note?: string;
 };
-type Row = { name: string; entries: Entry[] };
+type Row = { name: string; entries: Entry[]; health?: McpHealth };
 type Provider = RuntimeOverview["providers"][number];
 
 /** 点一个格子要做什么；none 表示这个格子不能改，reason 说明为什么 */
@@ -89,6 +91,7 @@ export function RuntimeOverviewBlock({
   onJump,
   onDiscover,
   initialKind = "mcp",
+  focusMcp,
 }: {
   api: RuntimeOverviewApi;
   /** 点列头跳到那个 CLI 的配置；不给就不显示跳转 */
@@ -96,6 +99,8 @@ export function RuntimeOverviewBlock({
   /** 去「发现 / 安装」的 MCP 或技能 */
   onDiscover?: (kind: OverviewKind) => void;
   initialKind?: OverviewKind;
+  /** 从状态栏角标点进来：滚到这个 MCP 那一行并标出来 */
+  focusMcp?: string;
 }) {
   const [overview, setOverview] = useState<RuntimeOverview>();
   const [kind, setKind] = useState<OverviewKind>(initialKind);
@@ -103,7 +108,21 @@ export function RuntimeOverviewBlock({
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [focused, setFocused] = useState(focusMcp);
+  const tableRef = useRef<HTMLTableElement>(null);
   const { runtimeOverview } = api;
+  // 定位一次：读到列表后把那一行滚进视野（只滚表格自己的滚动区），过几秒取消标记
+  const located = useRef(false);
+  useEffect(() => {
+    if (!focused || located.current || !overview || kind !== "mcp") return;
+    located.current = true;
+    const row = [...(tableRef.current?.querySelectorAll<HTMLElement>("tr[data-name]") ?? [])].find(
+      (item) => item.dataset.name === focused,
+    );
+    row?.scrollIntoView?.({ block: "nearest" });
+    const timer = window.setTimeout(() => setFocused(undefined), 4000);
+    return () => window.clearTimeout(timer);
+  }, [focused, kind, overview]);
   const load = useCallback(() => {
     runtimeOverview().then(setOverview, (reason: unknown) => setError(errorMessage(reason)));
   }, [runtimeOverview]);
@@ -233,7 +252,7 @@ export function RuntimeOverviewBlock({
         </p>
       ) : (
         <div className="runtime-overview-scroll" role="tabpanel">
-          <table className="runtime-overview-table">
+          <table className="runtime-overview-table" ref={tableRef}>
             <thead>
               <tr>
                 <th scope="col">{t("名称")}</th>
@@ -265,6 +284,7 @@ export function RuntimeOverviewBlock({
                   providers={providers}
                   busy={busy}
                   run={run}
+                  focused={kind === "mcp" && focused === row.name}
                 />
               ))}
             </tbody>
@@ -287,6 +307,7 @@ function OverviewRow({
   providers,
   busy,
   run,
+  focused,
 }: {
   api: RuntimeOverviewApi;
   kind: OverviewKind;
@@ -294,8 +315,16 @@ function OverviewRow({
   providers: Provider[];
   busy: boolean;
   run: (action: () => Promise<unknown>) => Promise<boolean>;
+  focused: boolean;
 }) {
   const [confirming, setConfirming] = useState<RuntimeCredentialProvider>();
+  const [checking, setChecking] = useState(false);
+  const problem = kind === "mcp" && row.health && !row.health.ok ? row.health : undefined;
+  // 再测一次：stdio 会再运行一次那条命令，和装的时候人同意过的是同一条
+  const retest = () => {
+    setChecking(true);
+    void run(() => api.verifyRuntimeMcp(row.name)).finally(() => setChecking(false));
+  };
   const refs = useRef(new Map<RuntimeCredentialProvider, HTMLInputElement | null>());
 
   const apply = (provider: RuntimeCredentialProvider, action: CellAction) => {
@@ -346,10 +375,34 @@ function OverviewRow({
   };
 
   return (
-    <tr>
+    <tr data-name={row.name} className={focused ? "focused" : undefined}>
       <th scope="row">
-        <span className="runtime-overview-name" title={row.name}>
-          {row.name}
+        <span className="runtime-overview-name-cell">
+          <span className="runtime-overview-name" title={row.name}>
+            {row.name}
+          </span>
+          {problem && (
+            <>
+              <span
+                className="runtime-overview-problem"
+                title={`${problem.reason}\n${t(MCP_PROBLEM_LABELS[problem.problem].hint)}`}
+              >
+                <McpHealthMark ok={false} />
+                {t(MCP_PROBLEM_LABELS[problem.problem].label)}
+                <span className="sr-only">{problem.reason}</span>
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="runtime-overview-retest"
+                loading={checking}
+                disabled={busy}
+                onClick={retest}
+              >
+                {t("再测一次")}
+              </Button>
+            </>
+          )}
         </span>
       </th>
       {providers.map((info) => {

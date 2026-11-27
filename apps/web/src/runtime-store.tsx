@@ -10,6 +10,7 @@ import type {
   McpCatalog,
   McpCatalogCategory,
   McpCatalogEntry,
+  McpHealth,
   RuntimeCredentialProvider,
   RuntimeInstallPlan,
   RuntimeInstallResult,
@@ -18,6 +19,7 @@ import type {
 import { Button, IconButton } from "./button";
 import { getLocale, t } from "./i18n";
 import { LocalApiError, type LocalAgentsState } from "./local-agents";
+import { MCP_PROBLEM_LABELS, McpHealthMark } from "./mcp-health";
 import { RUNTIME_LABELS } from "./runtime-credentials";
 
 /**
@@ -27,6 +29,8 @@ import { RUNTIME_LABELS } from "./runtime-credentials";
  * - 后台照旧走服务端的「先预览、再按同一份计划写」：点「安装」时先 preview 再 apply，用户看不到计划这一步；
  *   计划在中间失效（配置文件刚好被改了）就自动重新预览一次。
  * - 会执行的命令、连的网址、要改的文件、要重启的 Agent 都收在默认折叠的「详细信息」里。
+ * - 装好后马上测一次能不能用（能用 · N 个工具 / 需要登录 / 连不上 / 起不来）。远程的直接测；
+ *   本机命令（stdio）测的时候会真的运行它、第一次还要下载，所以只在人勾了「装好后试运行一次」时测。
  * - 装好后可以一键重启用到这些 CLI 的 Agent：逐个调用现有的重启接口，正在干活的跳过并说明。
  * - 填的密钥只在这个抽屉的内存里，装完或关掉就清掉。
  */
@@ -37,6 +41,7 @@ export type RuntimeStoreApi = Pick<
   | "runtimeInstallCatalog"
   | "previewRuntimeInstall"
   | "applyRuntimeInstall"
+  | "verifyRuntimeMcp"
   | "agents"
   | "refreshAgents"
   | "act"
@@ -260,6 +265,11 @@ export function McpStore({ api }: { api: RuntimeStoreApi }) {
 
 type RestartLine = { name: string; text: string; tone: "ok" | "skip" | "error" };
 
+type CheckState =
+  | { state: "checking" }
+  | { state: "done"; health: McpHealth }
+  | { state: "error"; message: string };
+
 export function InstallDrawer({
   api,
   entry,
@@ -286,6 +296,10 @@ export function InstallDrawer({
   const [done, setDone] = useState<{ result: RuntimeInstallResult; plan: RuntimeInstallPlan }>();
   const [restarts, setRestarts] = useState<RestartLine[]>();
   const [restarting, setRestarting] = useState(false);
+  // stdio 测的时候会运行那条命令（第一次要下载）：默认勾上，但要人看得见、能取消
+  const runsCommand = entry.transport === "stdio";
+  const [tryRun, setTryRun] = useState(true);
+  const [check, setCheck] = useState<CheckState>();
   const panelRef = useRef<HTMLDivElement>(null);
   // 重启前刷新过的 Agent 列表要从最新一次渲染里读
   const apiRef = useRef(api);
@@ -329,10 +343,27 @@ export function InstallDrawer({
       onInstalled(result.overview);
       // 写完就清掉内存里的密钥
       setParams({});
+      const first = result.results.find((item) => item.ok)?.provider;
+      if (first && (!runsCommand || tryRun)) void verify(first);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** 测装好的那一份：读回 CLI 配置里写的再连，和以后 CLI 自己用的是同一份 */
+  const verify = async (provider?: RuntimeCredentialProvider) => {
+    const target = provider ?? done?.result.results.find((item) => item.ok)?.provider ?? undefined;
+    setCheck({ state: "checking" });
+    try {
+      const health = await api.verifyRuntimeMcp(entry.name, target);
+      setCheck({ state: "done", health });
+      // 让「已安装」和状态栏的角标跟上
+      void api.runtimeOverview().then(onInstalled, () => undefined);
+    } catch (reason) {
+      // 接口本身失败（不是 MCP 有问题）：说明没测成，可以再点一次
+      setCheck({ state: "error", message: errorMessage(reason) });
     }
   };
 
@@ -430,6 +461,10 @@ export function InstallDrawer({
           {done ? (
             <InstallDone
               result={done.result}
+              check={check}
+              runsCommand={runsCommand}
+              requires={entry.requires ? local(entry.requires) : undefined}
+              onCheck={() => void verify()}
               failed={failed}
               agents={runningToRestart.map((agent) => agent.name)}
               restarts={restarts}
@@ -507,7 +542,25 @@ export function InstallDrawer({
                   </details>
                 )}
               </section>
-              <Details entry={entry} targets={targets} agents={api.agents} />
+              {runsCommand && (
+                <label className="runtime-drawer-try">
+                  <input
+                    type="checkbox"
+                    checked={tryRun}
+                    onChange={(event) => setTryRun(event.target.checked)}
+                  />
+                  <span>
+                    {t("装好后试运行一次，看能不能用")}
+                    <small>{t("会在这台电脑上运行它，第一次要先下载，可能要等几十秒。")}</small>
+                  </span>
+                </label>
+              )}
+              <Details
+                entry={entry}
+                targets={targets}
+                agents={api.agents}
+                tryRun={runsCommand && tryRun}
+              />
             </form>
           )}
           {error && (
@@ -596,10 +649,13 @@ function Details({
   entry,
   targets,
   agents,
+  tryRun,
 }: {
   entry: McpCatalogEntry;
   targets: RuntimeCredentialProvider[];
   agents: LocalAgentsState["agents"];
+  /** 装好后马上运行一次来测 */
+  tryRun: boolean;
 }) {
   // 停着的 Agent 下次启动自然会用上，不算要重启的
   const names = agents
@@ -618,7 +674,11 @@ function Details({
             <dt>{t("以后 CLI 用它时会运行")}</dt>
             <dd>
               <code>{[entry.command, ...(entry.args ?? [])].join(" ")}</code>
-              <small>{t("现在不会运行任何东西；第一次用时会自动下载这个版本。")}</small>
+              <small>
+                {tryRun
+                  ? t("装好后会运行一次来测能不能用；第一次会自动下载这个版本。")
+                  : t("现在不会运行任何东西；第一次用时会自动下载这个版本。")}
+              </small>
             </dd>
           </>
         ) : (
@@ -652,6 +712,10 @@ function Details({
 
 function InstallDone({
   result,
+  check,
+  runsCommand,
+  requires,
+  onCheck,
   failed,
   agents,
   restarts,
@@ -659,6 +723,10 @@ function InstallDone({
   onRestart,
 }: {
   result: RuntimeInstallResult;
+  check: CheckState | undefined;
+  runsCommand: boolean;
+  requires: string | undefined;
+  onCheck: () => void;
   failed: RuntimeInstallResult["results"];
   agents: string[];
   restarts: RestartLine[] | undefined;
@@ -668,6 +736,14 @@ function InstallDone({
   const ok = result.results.filter((item) => item.ok);
   return (
     <div className="runtime-drawer-done" role="status">
+      {ok.length > 0 && (
+        <CheckResult
+          check={check}
+          runsCommand={runsCommand}
+          requires={requires}
+          onCheck={onCheck}
+        />
+      )}
       {ok.length > 0 && (
         <div className="runtime-drawer-success">
           <strong>
@@ -705,6 +781,81 @@ function InstallDone({
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** 装完测出来的结果：一行状态，有问题时再给原因、怎么办和「再测一次」 */
+function CheckResult({
+  check,
+  runsCommand,
+  requires,
+  onCheck,
+}: {
+  check: CheckState | undefined;
+  runsCommand: boolean;
+  requires: string | undefined;
+  onCheck: () => void;
+}) {
+  if (!check) {
+    // 只有 stdio 且人没勾试运行时会到这里
+    return (
+      <div className="runtime-drawer-check idle">
+        <span className="runtime-check-status">{t("还没测能不能用")}</span>
+        <Button size="sm" onClick={onCheck}>
+          {runsCommand ? t("现在试运行一次") : t("测一下")}
+        </Button>
+      </div>
+    );
+  }
+  if (check.state === "checking") {
+    return (
+      <div className="runtime-drawer-check checking">
+        <span className="runtime-check-status">
+          <span className="runtime-check-spinner" aria-hidden="true" />
+          {runsCommand ? t("正在试运行，第一次要下载，稍等…") : t("正在测能不能用…")}
+        </span>
+      </div>
+    );
+  }
+  if (check.state === "error") {
+    return (
+      <div className="runtime-drawer-check problem">
+        <span className="runtime-check-status">
+          <McpHealthMark ok={false} />
+          {t("没测成")}
+        </span>
+        <p>{check.message}</p>
+        <Button size="sm" onClick={onCheck}>
+          {t("再测一次")}
+        </Button>
+      </div>
+    );
+  }
+  const { health } = check;
+  if (health.ok) {
+    return (
+      <div className="runtime-drawer-check ok">
+        <span className="runtime-check-status">
+          <McpHealthMark ok />
+          {t("能用 · {0} 个工具", { 0: health.tools })}
+        </span>
+        <small>{t("开局约占 {0} token", { 0: health.tokens.toLocaleString() })}</small>
+      </div>
+    );
+  }
+  const problem = MCP_PROBLEM_LABELS[health.problem];
+  return (
+    <div className="runtime-drawer-check problem">
+      <span className="runtime-check-status">
+        <McpHealthMark ok={false} />
+        {t(problem.label)}
+      </span>
+      <p>{health.reason}</p>
+      <small>{health.problem === "failed" && requires ? requires : t(problem.hint)}</small>
+      <Button size="sm" onClick={onCheck}>
+        {t("再测一次")}
+      </Button>
     </div>
   );
 }

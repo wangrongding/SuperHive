@@ -132,6 +132,8 @@ export type LocalAgentSupervisorOptions = {
   proxyEnv?: () => ProxyEnvPatch | undefined;
   /** 列出 Agent 会加载的本机 MCP（测试注入）；默认运行 `hive mcp list` */
   listMcp?: McpLister;
+  /** 测一个 MCP 能不能用（测试注入）；默认运行 `hive mcp check`，配置从标准输入传 */
+  checkMcp?: McpChecker;
   /** 列出运行时能用的模型（测试注入）；默认运行 `hive models --provider X --json` */
   listModels?: ModelLister;
   probe?: ProviderProbe;
@@ -195,6 +197,11 @@ export function mcpListError(error: unknown): HiveError {
 export type LocalAgentEndReason = "stopped" | "restarted" | "removed" | "serverStopped";
 
 export type McpLister = (args: string[]) => Promise<string>;
+/** input：`hive mcp check` 的标准输入（含密钥，不进命令行）；返回它的标准输出 */
+export type McpChecker = (input: string) => Promise<string>;
+export type McpMeasurementResult =
+  | { ok: true; tools: number; tokens: number }
+  | { ok: false; error: string; problem?: "auth" | "unreachable" | "failed" };
 /** cwd：Agent 的工作目录（Claude 的项目级配置会盖过全局配置，决定它实际用的接口和密钥） */
 export type ModelLister = (
   provider: LocalAgentProvider,
@@ -210,6 +217,9 @@ const CLAUDE_BASELINE_TOKENS = 40_000;
 const MCP_MEASURE_CACHE_MS = 10 * 60_000;
 /** `hive mcp list`（测量时逐个连上 MCP）最多等这么久 */
 const MCP_LIST_TIMEOUT_MS = 90_000;
+/** `hive mcp check` 自己 60 秒放弃（第一次要下载包）；这里多留一些给进程启动和退出 */
+const MCP_CHECK_TIMEOUT_SECONDS = 60;
+const MCP_CHECK_KILL_MS = 80_000;
 
 export const PROVIDER_COMMANDS: Record<LocalAgentProvider, string> = {
   codex: "codex",
@@ -610,6 +620,7 @@ export class LocalAgentSupervisor {
   private probeCache?: { at: number; result: Promise<LocalProviderInfo[]> };
   private readonly measureCache = new Map<string, { at: number; result: LocalAgentMcpResponse }>();
   private readonly listMcp: McpLister;
+  private readonly runMcpCheck: McpChecker;
   private readonly listModels: ModelLister;
   /** 按 provider 缓存；Claude 再按工作目录分（项目配置可能换了接口和密钥） */
   private readonly modelsCache = new Map<
@@ -653,6 +664,25 @@ export class LocalAgentSupervisor {
               error ? reject(Object.assign(error, { stderr })) : resolve(stdout),
           ),
         ));
+    this.runMcpCheck =
+      options.checkMcp ??
+      ((input) =>
+        new Promise((resolve, reject) => {
+          const child = execFile(
+            options.cli.command,
+            [
+              ...options.cli.args,
+              "mcp",
+              "check",
+              cliOption("timeout", String(MCP_CHECK_TIMEOUT_SECONDS)),
+            ],
+            { timeout: MCP_CHECK_KILL_MS, maxBuffer: 1024 * 1024, windowsHide: true },
+            (error, stdout, stderr) =>
+              error ? reject(Object.assign(error, { stderr })) : resolve(stdout),
+          );
+          child.stdin?.on("error", () => undefined);
+          child.stdin?.end(input);
+        }));
     this.listModels =
       options.listModels ??
       (async (provider, context) => {
@@ -940,6 +970,39 @@ export class LocalAgentSupervisor {
     // 和启动时一样：工作目录用不了就按主目录列，免得设置里的 MCP 列表直接报错
     const cwd = checkCwd(config.cwd, this.options.home?.())?.to ?? config.cwd;
     return this.listMcpFor(id, config.provider, cwd, this.writeSettings(config), measure);
+  }
+
+  /**
+   * 照给的启动配置连上一个 MCP 读一遍工具列表，看它能不能用。在单独的 `hive mcp check` 进程里测：
+   * stdio 会真的运行那条命令（第一次会下载包），调用方要先得到人的同意。配置走标准输入，不进命令行。
+   * 测量进程自己出错（超时、输出读不懂）时按起不来报，不抛错
+   */
+  async checkMcp(launch: {
+    transport: "stdio" | "http" | "sse";
+    config: Record<string, unknown>;
+  }): Promise<McpMeasurementResult> {
+    let stdout: string;
+    try {
+      stdout = await this.runMcpCheck(JSON.stringify(launch));
+    } catch (error) {
+      const failure = error as { killed?: boolean; signal?: string | null };
+      return {
+        ok: false,
+        problem: launch.transport === "stdio" ? "failed" : "unreachable",
+        error:
+          failure?.killed && failure.signal
+            ? `${MCP_CHECK_KILL_MS / 1000} 秒内没有测完`
+            : mcpListError(error).message,
+      };
+    }
+    try {
+      const line = stdout.trim().split("\n").at(-1) ?? "";
+      const parsed = (JSON.parse(line) as { measurement?: McpMeasurementResult }).measurement;
+      if (parsed && typeof parsed.ok === "boolean") return parsed;
+    } catch {
+      // 落到下面
+    }
+    return { ok: false, problem: "failed", error: "测量进程的输出读不懂" };
   }
 
   /** 接入新 Agent 前预览：这个 provider 在该目录下会加载哪些本机 MCP（默认全部启用） */

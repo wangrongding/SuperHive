@@ -206,6 +206,11 @@
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 
+/* 从状态栏角标点进来时定位到的那一张 */
+.im-card.focused {
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+
 .im-card-head {
   display: flex;
   align-items: center;

@@ -24,12 +24,20 @@ import {
   importCcSwitchProvidersRequestSchema,
   switchRuntimeProfileRequestSchema,
   updateRuntimeProfileRequestSchema,
+  verifyRuntimeMcpRequestSchema,
+  type VerifyRuntimeMcpResult,
 } from "@superhive/protocol";
 import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { HiveError } from "./database.js";
 import type { LocalAgentSupervisor } from "./local-agents.js";
-import { RuntimeConfigStore } from "./runtime-config.js";
+import { invalid, RuntimeConfigStore } from "./runtime-config.js";
+import {
+  McpHealthStore,
+  mcpFingerprint,
+  toHealth,
+  type McpHealthPersistence,
+} from "./mcp-health.js";
 import type { RuntimeProfileStore } from "./runtime-profiles.js";
 import {
   RUNTIME_CREDENTIAL_PROVIDERS,
@@ -87,6 +95,9 @@ export function registerRuntimeConfigRoutes(
     profiles?: RuntimeProfileStore;
     /** 在终端里运行登录命令（复用「在终端打开会话」）；测试注入 */
     openTerminal?: (command: string) => Promise<void>;
+    /** MCP 测试结果存在哪（Server 的小设置）；不给就只记在内存里 */
+    mcpHealth?: McpHealthPersistence;
+    now?: () => number;
   },
 ): void {
   const { credentials, supervisor, authorizeLocal } = options;
@@ -95,6 +106,8 @@ export function registerRuntimeConfigRoutes(
   const plans = new InstallPlans();
   const store = credentials ? new RuntimeConfigStore(credentials) : undefined;
   const skills = credentials ? new RuntimeSkillStore(credentials) : undefined;
+  const health = new McpHealthStore(options.mcpHealth);
+  const now = options.now ?? Date.now;
 
   const agentsOf = (provider: RuntimeCredentialProvider) =>
     supervisor
@@ -133,7 +146,8 @@ export function registerRuntimeConfigRoutes(
       | "skill-search"
       | "switch"
       | "import"
-      | "login",
+      | "login"
+      | "verify",
     provider: RuntimeCredentialProvider,
     target: string[],
   ) {
@@ -521,7 +535,7 @@ export function registerRuntimeConfigRoutes(
           `skill:${request.params.id}`,
           ...body.data.targets.map((target) => `to:${target}`),
         ]);
-        return { overview: runtimeOverview(ok.store, ok.skills) };
+        return { overview: runtimeOverview(ok.store, ok.skills, health) };
       } catch (error) {
         return fail(reply, error);
       }
@@ -541,7 +555,7 @@ export function registerRuntimeConfigRoutes(
           `mcp:${request.params.name}`,
           ...body.data.targets.map((target) => `to:${target}`),
         ]);
-        return { overview: runtimeOverview(ok.store, ok.skills) };
+        return { overview: runtimeOverview(ok.store, ok.skills, health) };
       } catch (error) {
         return fail(reply, error);
       }
@@ -561,7 +575,7 @@ export function registerRuntimeConfigRoutes(
       for (const provider of new Set(body.data.targets)) {
         audit(request, "update", provider, [`mcp:${body.data.name}`]);
       }
-      return { overview: runtimeOverview(store, skills) };
+      return { overview: runtimeOverview(store, skills, health) };
     } catch (error) {
       return fail(reply, error);
     }
@@ -690,9 +704,54 @@ export function registerRuntimeConfigRoutes(
       }
       const result: RuntimeInstallResult = {
         results,
-        overview: runtimeOverview(ok.store, ok.skills),
+        overview: runtimeOverview(ok.store, ok.skills, health),
       };
       return result;
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  /**
+   * 测一个已经写进 CLI 配置的 MCP 能不能用：读那个 CLI 配置里的这一项，在单独的进程里连上去读工具列表。
+   * 装完由网页自动调一次（stdio 要人在安装时勾了「装好后试运行一次」才调，因为会真的运行那条命令、
+   * 第一次还要下载）；列表里出了问题的也可以点「再测一次」。结果按名字记下，总览和状态栏角标用
+   */
+  app.post("/api/local/runtime-overview/mcp/verify", async (request, reply) => {
+    const ok = beginInstall(request, reply);
+    if (!ok) return reply;
+    const body = verifyRuntimeMcpRequestSchema.safeParse(request.body);
+    if (!body.success) return badRequest(reply);
+    const { name } = body.data;
+    try {
+      const candidates = body.data.provider
+        ? [body.data.provider]
+        : RUNTIME_CREDENTIAL_PROVIDERS.filter((provider) => ok.skills.installed(provider));
+      let found:
+        | {
+            provider: RuntimeCredentialProvider;
+            launch: NonNullable<ReturnType<RuntimeConfigStore["mcpLaunchConfig"]>>;
+          }
+        | undefined;
+      for (const provider of candidates) {
+        let launch: ReturnType<RuntimeConfigStore["mcpLaunchConfig"]>;
+        try {
+          launch = ok.store.mcpLaunchConfig(provider, name);
+        } catch {
+          launch = undefined;
+        }
+        if (launch) {
+          found = { provider, launch };
+          break;
+        }
+      }
+      if (!found) throw invalid(name);
+      audit(request, "verify", found.provider, [`mcp:${name}`]);
+      const measurement = await supervisor.checkMcp(found.launch);
+      const result = toHealth(measurement, now());
+      health.set(name, mcpFingerprint(found.launch), result);
+      const response: VerifyRuntimeMcpResult = { health: result };
+      return response;
     } catch (error) {
       return fail(reply, error);
     }
@@ -859,7 +918,7 @@ export function registerRuntimeConfigRoutes(
       }
       const result: SkillInstallResult = {
         results,
-        overview: runtimeOverview(ok.store, ok.skills),
+        overview: runtimeOverview(ok.store, ok.skills, health),
       };
       return result;
     } catch (error) {
@@ -874,17 +933,35 @@ export function registerRuntimeConfigRoutes(
       return reply.code(404).send({ ...errorText(serverText("error.feature.disabled")) });
     }
     try {
-      return { overview: runtimeOverview(store, skills) };
+      return { overview: runtimeOverview(store, skills, health) };
     } catch (error) {
       return fail(reply, error);
     }
   });
 }
 
+/** 这个 MCP 在各 CLI 里当前配置的指纹；某个 CLI 读不出来就跳过 */
+function* fingerprintsOf(
+  store: RuntimeConfigStore,
+  name: string,
+  entries: Array<{ provider: RuntimeCredentialProvider }>,
+) {
+  for (const entry of entries) {
+    let launch: ReturnType<RuntimeConfigStore["mcpLaunchConfig"]>;
+    try {
+      launch = store.mcpLaunchConfig(entry.provider, name);
+    } catch {
+      launch = undefined;
+    }
+    if (launch) yield mcpFingerprint(launch);
+  }
+}
+
 /** 一个运行时读不懂（配置写坏了）不影响别的运行时出现在总览里 */
 export function runtimeOverview(
   store: RuntimeConfigStore,
   skills: RuntimeSkillStore,
+  health?: McpHealthStore,
 ): RuntimeOverview {
   const result: RuntimeOverview = { providers: [], mcp: [], skills: [] };
   const mcp = new Map<string, RuntimeOverview["mcp"][number]>();
@@ -936,6 +1013,14 @@ export function runtimeOverview(
   }
   const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
   result.mcp = [...mcp.values()].sort(byName);
+  // 测过的才去读完整配置算指纹；配置在测之后改过就不带旧结果
+  if (health) {
+    for (const row of result.mcp) {
+      if (!health.has(row.name)) continue;
+      const found = health.get(row.name, fingerprintsOf(store, row.name, row.entries));
+      if (found) row.health = found;
+    }
+  }
   result.skills = [...skillMap.values()].sort(byName);
   return result;
 }
