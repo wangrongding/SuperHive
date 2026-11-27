@@ -1,18 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   LocalSessionResponse,
   NpmUpdateBlocker,
+  NpmUpdateCheckResponse,
   NpmUpdateChoice,
   NpmUpdateInfo,
   NpmUpdateJob,
 } from "@superhive/protocol";
 import { AppDialog } from "./app-dialog";
 import { Icon } from "./app-icons";
-import { Button } from "./button";
+import { Button, buttonClass } from "./button";
 import { desktopBridge } from "./desktop-bridge";
 import { getLocale, t } from "./i18n";
 import { noteForLocale } from "./desktop-update";
+import { UpdateCard, UpdateCornerPortal, UpdateProgress } from "./update-card";
+import {
+  collapseUpdateCard,
+  dismissUpdateNotice,
+  expandUpdateCard,
+  registerNpmUpdateCheck,
+  showUpdateNotice,
+  updateCheckPending,
+  useUpdateCenter,
+} from "./update-center";
 import "./styles/npm-update.css";
 
 export function npmUpdateReason(blocker: NpmUpdateBlocker | null): string {
@@ -65,6 +76,33 @@ function activeJob(job: NpmUpdateJob | null): boolean {
   return Boolean(job && !["completed", "failed"].includes(job.phase));
 }
 
+/** /api/update 给的摘要补成弹窗要的完整信息（能不能更新等打开弹窗时再问本机） */
+function summaryInfo(update: NonNullable<NpmUpdateCheckResponse["update"]>): NpmUpdateInfo {
+  return {
+    ...update,
+    canUpdate: false,
+    blocker: null,
+    manualCommand: "",
+    busyAgents: [],
+    canHandover: false,
+  };
+}
+
+/** 状态栏「检查更新」查完后右下角给的一句话；有新版本时返回 undefined（打开更新弹窗） */
+export function npmCheckNotice(
+  value: NpmUpdateCheckResponse,
+): { tone: "ok" | "info" | "danger"; text: string } | undefined {
+  if (value.unavailable === "desktop")
+    return { tone: "info", text: t("这个 Hive 由桌面客户端运行，请在客户端里检查更新。") };
+  if (value.unavailable) return { tone: "info", text: t("这个 Hive 不在网页里检查更新。") };
+  if (value.blocker === "source")
+    return { tone: "info", text: t("当前从源码运行，不检查更新。拉取代码后重新构建即可。") };
+  if (value.update) return undefined;
+  if (value.failed)
+    return { tone: "danger", text: t("没能检查更新，可能是网络问题或 npm 源连不上，稍后再试。") };
+  return { tone: "ok", text: t("已是最新版本 {0}", { 0: value.current ?? "" }) };
+}
+
 export function NpmUpdateEntry({ base, token }: { base: string; token: string }) {
   const [info, setInfo] = useState<NpmUpdateInfo>();
   const [job, setJob] = useState<NpmUpdateJob | null>(null);
@@ -100,15 +138,7 @@ export function NpmUpdateEntry({ base, token }: { base: string; token: string })
         const value = (await response.json()) as {
           update: Pick<NpmUpdateInfo, "current" | "latest" | "notes" | "releaseUrl"> | null;
         };
-        if (!cancelled && value.update)
-          setInfo({
-            ...value.update,
-            canUpdate: false,
-            blocker: null,
-            manualCommand: "",
-            busyAgents: [],
-            canHandover: false,
-          });
+        if (!cancelled && value.update) setInfo(summaryInfo(value.update));
         const saved = sessionStorage.getItem(storageKey);
         if (!cancelled && saved) {
           const previous = JSON.parse(saved) as NpmUpdateJob;
@@ -173,6 +203,40 @@ export function NpmUpdateEntry({ base, token }: { base: string; token: string })
     };
   }, [base, token, job?.id, job?.phase, restoring, desktop, storageKey]);
 
+  const center = useUpdateCenter();
+  // 「检查更新」按钮注册在模块里，用 ref 拿最新的 job 和 show，免得每次渲染都重新注册
+  const latestRef = useRef<{ job: NpmUpdateJob | null; show: () => Promise<void> }>(undefined);
+  useEffect(() => {
+    if (desktop) return;
+    return registerNpmUpdateCheck(async () => {
+      // 正在更新：直接展开右下角的进度卡片
+      if (activeJob(latestRef.current?.job ?? null)) {
+        expandUpdateCard();
+        return;
+      }
+      if (updateCheckPending()) return;
+      const notice = showUpdateNotice("pending", t("正在检查更新…"));
+      try {
+        const response = await fetch(`${base}/api/update?refresh=1`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!response.ok) throw new Error(String(response.status));
+        const value = (await response.json()) as NpmUpdateCheckResponse;
+        const result = npmCheckNotice(value);
+        if (result) {
+          showUpdateNotice(result.tone, result.text);
+          return;
+        }
+        dismissUpdateNotice(notice);
+        if (value.update) setInfo(summaryInfo(value.update));
+        await latestRef.current?.show();
+      } catch {
+        showUpdateNotice("danger", t("没能检查更新：连不上 Hive Server，稍后再试。"));
+      }
+    });
+  }, [base, token, desktop]);
+
   const show = async () => {
     setOpen(true);
     setLoading(true);
@@ -235,6 +299,9 @@ export function NpmUpdateEntry({ base, token }: { base: string; token: string })
       if (!value.job) throw new Error(t("更新未完成"));
       setJob(value.job);
       sessionStorage.setItem(storageKey, JSON.stringify(value.job));
+      // 确认后弹窗关掉，进度改在右下角的卡片里看
+      setOpen(false);
+      expandUpdateCard();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setRestoring(true);
@@ -243,6 +310,7 @@ export function NpmUpdateEntry({ base, token }: { base: string; token: string })
     }
   };
 
+  latestRef.current = { job, show };
   if (desktop || (!info?.latest && !job)) return null;
   const busy = activeJob(job);
   const latest = info?.latest ?? job?.target;
@@ -264,12 +332,26 @@ export function NpmUpdateEntry({ base, token }: { base: string; token: string })
       <button
         className="status-item npm-update-entry"
         type="button"
-        onClick={() => void show()}
+        onClick={() => {
+          // 正在更新时点它展开右下角的进度卡片；其余（还没开始、失败、完成）打开弹窗看说明
+          if (busy) expandUpdateCard();
+          else void show();
+        }}
         aria-label={label}
       >
         <Icon name={busy ? "clock" : "arrow-up"} size={13} />
         <span>{label}</span>
       </button>
+      {job && !open && !center.notice && !center.cardCollapsed && (
+        <UpdateCornerPortal>
+          <NpmUpdateCard
+            job={job}
+            releaseUrl={info?.releaseUrl ?? null}
+            onDetails={() => void show()}
+            onClose={close}
+          />
+        </UpdateCornerPortal>
+      )}
       {open &&
         createPortal(
           <AppDialog
@@ -382,5 +464,59 @@ export function NpmUpdateEntry({ base, token }: { base: string; token: string })
           document.body,
         )}
     </>
+  );
+}
+
+/** 右下角的进度卡片：npm 没有百分比，显示到了哪一步；失败了说明原因，点「查看详情」回弹窗 */
+function NpmUpdateCard({
+  job,
+  releaseUrl,
+  onDetails,
+  onClose,
+}: {
+  job: NpmUpdateJob;
+  releaseUrl: string | null;
+  onDetails: () => void;
+  onClose: () => void;
+}) {
+  const releaseLink = releaseUrl && (
+    <a
+      className={buttonClass({ variant: "link", size: "sm" })}
+      href={releaseUrl}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {t("发布说明")}
+      <Icon name="external" size={12} />
+    </a>
+  );
+  if (job.phase === "failed") {
+    return (
+      <UpdateCard title={t("更新未完成")} tone="danger" onCollapse={collapseUpdateCard}>
+        <p className="update-card-text">{npmUpdateFailure(job.error ?? "")}</p>
+        {job.rolledBack && <p className="update-card-text">{t("已恢复旧包并重启旧版本。")}</p>}
+        <div className="update-card-actions">
+          <Button size="sm" onClick={onDetails}>
+            {t("查看详情")}
+          </Button>
+        </div>
+      </UpdateCard>
+    );
+  }
+  if (job.phase === "completed") {
+    return (
+      <UpdateCard title={npmUpdatePhase(job)} tone="ok" onClose={onClose}>
+        {releaseLink && <div className="update-card-actions">{releaseLink}</div>}
+      </UpdateCard>
+    );
+  }
+  return (
+    <UpdateCard title={t("正在更新到 {0}", { 0: job.target })} onCollapse={collapseUpdateCard}>
+      <UpdateProgress label={t("更新进度")} />
+      <div className="update-card-actions">
+        <span className="update-card-text">{npmUpdatePhase(job)}</span>
+        {releaseLink}
+      </div>
+    </UpdateCard>
   );
 }

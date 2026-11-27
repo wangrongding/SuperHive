@@ -15,6 +15,7 @@ import {
   type TerminalExitEvent,
   type TerminalLayoutAction,
   type TerminalSessionInfo,
+  type UpdateCheckNowResult,
   type UpdateOpenTarget,
   type JoinRequest,
   type RemoteServerView,
@@ -87,6 +88,8 @@ if (allowedOrigin && window.location.origin === allowedOrigin && window.top === 
         ipcRenderer.invoke(IPC.updateInstall, String(version)),
       /** 「重启以更新」 */
       restart: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateRestart),
+      /** 「检查更新」：马上查一次；有新版时详情照常从 onChange 推过来 */
+      checkNow: (): Promise<UpdateCheckNowResult> => ipcRenderer.invoke(IPC.updateCheckNow),
       onChange: (listener: (info: DesktopUpdate | null) => void): (() => void) => {
         const handler = (_event: IpcRendererEvent, info: DesktopUpdate | null) => listener(info);
         ipcRenderer.on(IPC.updateChanged, handler);

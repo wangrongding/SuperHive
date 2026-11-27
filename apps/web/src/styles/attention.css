@@ -100,16 +100,11 @@
   font-size: 11px;
 }
 
-/* 页面内提示：右下角，叠在最上层但不挡输入框 */
+/* 页面内提示：右下角一列（位置见 update-corner.css 的 .corner-dock），下面是更新的提示 / 进度卡片 */
 .attention-toasts {
-  position: fixed;
-  right: 16px;
-  bottom: 96px;
-  z-index: 60;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: min(360px, calc(100vw - 32px));
   pointer-events: none;
 }
 
@@ -247,15 +242,6 @@
 @media (prefers-reduced-motion: reduce) {
   .attention-toast {
     animation: none;
-  }
-}
-
-@media (max-width: 720px) {
-  .attention-toasts {
-    right: 8px;
-    bottom: 88px;
-    left: 8px;
-    width: auto;
   }
 }
 

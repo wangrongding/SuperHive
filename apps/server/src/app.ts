@@ -4756,23 +4756,41 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     // hive restart 据此判断能不能换代交接（旧版 Server 没有这一项，重启会让本机 Agent 下线）
     ...(localAgents && options.handoverFile ? { handover: true } : {}),
   }));
-  app.get("/api/update", async (request, reply) => {
-    if (!guard(request, reply)) return reply;
-    if (!options.npmUpdates || sandbox) return { update: null };
+  app.get<{ Querystring: { refresh?: string } }>("/api/update", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    // 网页「检查更新」按钮：只有房主能让 Server 绕开缓存马上去查，结果里多给判断用的几项
+    const manual = request.query.refresh === "1" && principal.kind === "admin";
+    if (!options.npmUpdates || sandbox) {
+      return manual
+        ? {
+            update: null,
+            unavailable: !sandbox && process.versions.electron ? "desktop" : "unsupported",
+          }
+        : { update: null };
+    }
     try {
-      const info = await options.npmUpdates.inspect();
-      return {
-        update: info.latest
-          ? {
-              current: info.current,
-              latest: info.latest,
-              notes: info.notes,
-              releaseUrl: info.releaseUrl,
-            }
-          : null,
-      };
+      const info = manual
+        ? await options.npmUpdates.checkNow()
+        : await options.npmUpdates.inspect();
+      const update = info.latest
+        ? {
+            current: info.current,
+            latest: info.latest,
+            notes: info.notes,
+            releaseUrl: info.releaseUrl,
+          }
+        : null;
+      return manual
+        ? {
+            update,
+            current: info.current,
+            blocker: info.blocker,
+            ...(info.checkFailed ? { failed: true } : {}),
+          }
+        : { update };
     } catch {
-      return { update: null };
+      return manual ? { update: null, failed: true } : { update: null };
     }
   });
   /**

@@ -6,6 +6,8 @@ import type { AgentCli } from "./local-agents.js";
 
 export interface NpmUpdates {
   inspect(refresh?: boolean): Promise<NpmUpdateInfo>;
+  /** 网页「检查更新」：绕开这里和 CLI 的两层缓存，马上联网查一次 */
+  checkNow(): Promise<NpmUpdateInfo>;
   launch(target: string, choice?: NpmUpdateChoice): Promise<NpmUpdateJob>;
   current(): NpmUpdateJob | null;
 }
@@ -13,6 +15,7 @@ export interface NpmUpdates {
 export class NpmUpdateManager implements NpmUpdates {
   private cached: { value: NpmUpdateInfo; at: number } | undefined;
   private pending: Promise<NpmUpdateInfo> | undefined;
+  private checking: Promise<NpmUpdateInfo> | undefined;
   private launching = false;
 
   constructor(
@@ -66,6 +69,19 @@ export class NpmUpdateManager implements NpmUpdates {
         this.pending = undefined;
       });
     return this.pending;
+  }
+
+  checkNow(): Promise<NpmUpdateInfo> {
+    this.checking ??= this.run([...this.args(), "--refresh"])
+      .then((output) => {
+        const value = JSON.parse(output) as NpmUpdateInfo;
+        this.cached = { value, at: Date.now() };
+        return value;
+      })
+      .finally(() => {
+        this.checking = undefined;
+      });
+    return this.checking;
   }
 
   current(): NpmUpdateJob | null {

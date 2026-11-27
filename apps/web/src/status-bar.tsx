@@ -19,7 +19,7 @@ import type {
   Participant,
 } from "@superhive/protocol";
 import { LOCALE_OPTIONS, setLocalePreference, t, type LocalePreference } from "./i18n";
-import { Icon, ThemeGlyph } from "./app-icons";
+import { Icon, ThemeGlyph, type IconName } from "./app-icons";
 import {
   messageNotificationOptions,
   storedDensityKey,
@@ -31,8 +31,10 @@ import {
   type SettingsTab,
   type ThemePreference,
 } from "./app-storage";
-import { DesktopUpdateEntry } from "./desktop-update";
+import { desktopBridge } from "./desktop-bridge";
+import { checkDesktopUpdatesNow, DesktopUpdateEntry } from "./desktop-update";
 import { NpmUpdateEntry } from "./npm-update";
+import { useUpdateCenter } from "./update-center";
 import { KeyCombo } from "./key-combo";
 import { keepAwakeStatusText } from "./host-settings";
 import { listAllImConnections, IM_CHANNEL_LABELS } from "./im-api";
@@ -329,11 +331,20 @@ function PopoverSection({ title, children }: { title?: string; children: ReactNo
   );
 }
 
-function PopoverLink({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+/** 弹层底部的一行操作；默认带「去别处」的箭头，就地做的事（检查更新）换成对应图标 */
+function PopoverLink({
+  onClick,
+  icon = "arrow-right",
+  children,
+}: {
+  onClick: () => void;
+  icon?: IconName;
+  children: ReactNode;
+}) {
   return (
     <button type="button" className="status-popover-link" onClick={onClick}>
       {children}
-      <Icon name="arrow-right" size={12} />
+      <Icon name={icon} size={12} />
     </button>
   );
 }
@@ -487,6 +498,15 @@ export function StatusBar(props: StatusBarProps) {
   }, [runtimeOwner, runtimeOverview, runtimeHubOpen, settingsOpen]);
   const [keepAwakeError, setKeepAwakeError] = useState<string>();
 
+  // 「检查更新」：桌面端问客户端，网页版（npm）由 NpmUpdateEntry 注册；都没有（访客、老客户端）就不显示
+  const desktopUpdates = desktopBridge()?.updates;
+  const { npmCheck } = useUpdateCenter();
+  const checkUpdates = desktopUpdates?.checkNow
+    ? () => void checkDesktopUpdatesNow(desktopUpdates)
+    : npmCheck
+      ? () => void npmCheck()
+      : undefined;
+
   return (
     <footer className="status-bar" aria-label={t("状态栏")}>
       <div className="status-bar-group start">
@@ -517,50 +537,63 @@ export function StatusBar(props: StatusBarProps) {
             </>
           }
           tooltip={t("Hive 连接：{0}", { 0: connectionLabel(connectionState) })}
-          popover={() => (
-            <PopoverSection>
-              <dl className="status-facts">
-                <dt>{t("状态")}</dt>
-                <dd>
-                  <Dot
-                    tone={
-                      connectionState === "online"
-                        ? "ok"
-                        : connectionState === "connecting"
-                          ? "pending"
-                          : "danger"
-                    }
-                  />
-                  {connectionLabel(connectionState)}
-                </dd>
-                {meta?.httpUrl && (
-                  <>
-                    <dt>{t("地址")}</dt>
-                    <dd className="mono">{meta.httpUrl.replace(/\/$/, "")}</dd>
-                  </>
+          popover={(close) => (
+            <>
+              <PopoverSection>
+                <dl className="status-facts">
+                  <dt>{t("状态")}</dt>
+                  <dd>
+                    <Dot
+                      tone={
+                        connectionState === "online"
+                          ? "ok"
+                          : connectionState === "connecting"
+                            ? "pending"
+                            : "danger"
+                      }
+                    />
+                    {connectionLabel(connectionState)}
+                  </dd>
+                  {meta?.httpUrl && (
+                    <>
+                      <dt>{t("地址")}</dt>
+                      <dd className="mono">{meta.httpUrl.replace(/\/$/, "")}</dd>
+                    </>
+                  )}
+                  {version && (
+                    <>
+                      <dt>{t("版本")}</dt>
+                      <dd className="mono">
+                        {version}
+                        {meta?.feedback?.commit ? ` · ${meta.feedback.commit.slice(0, 7)}` : ""}
+                      </dd>
+                    </>
+                  )}
+                  {meta?.feedback?.runMode && (
+                    <>
+                      <dt>{t("运行方式")}</dt>
+                      <dd>{meta.feedback.runMode === "npm" ? t("npm 安装") : t("源码运行")}</dd>
+                    </>
+                  )}
+                </dl>
+                {connectionState === "offline" && (
+                  <p className="status-popover-note">
+                    {t("连不上 Hive Server，会自动重连；一直连不上请检查 Server 是否还在运行。")}
+                  </p>
                 )}
-                {version && (
-                  <>
-                    <dt>{t("版本")}</dt>
-                    <dd className="mono">
-                      {version}
-                      {meta?.feedback?.commit ? ` · ${meta.feedback.commit.slice(0, 7)}` : ""}
-                    </dd>
-                  </>
-                )}
-                {meta?.feedback?.runMode && (
-                  <>
-                    <dt>{t("运行方式")}</dt>
-                    <dd>{meta.feedback.runMode === "npm" ? t("npm 安装") : t("源码运行")}</dd>
-                  </>
-                )}
-              </dl>
-              {connectionState === "offline" && (
-                <p className="status-popover-note">
-                  {t("连不上 Hive Server，会自动重连；一直连不上请检查 Server 是否还在运行。")}
-                </p>
+              </PopoverSection>
+              {checkUpdates && (
+                <PopoverLink
+                  icon="refresh"
+                  onClick={() => {
+                    close();
+                    checkUpdates();
+                  }}
+                >
+                  {t("检查更新")}
+                </PopoverLink>
               )}
-            </PopoverSection>
+            </>
           )}
         />
         <DesktopUpdateEntry variant="status" />

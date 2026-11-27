@@ -24,7 +24,13 @@ import {
   type ServiceState,
 } from "./service.js";
 import { handoverBlocker, readLocalAgents, waitForIdle } from "./restart-handover.js";
-import { CHECK_CACHE_MS, checkLatest, detectInstall, upgradeCommand } from "./update.js";
+import {
+  CHECK_CACHE_MS,
+  checkLatest,
+  detectInstall,
+  refreshLatest,
+  upgradeCommand,
+} from "./update.js";
 
 type Blocker = "source" | "npx" | "desktop" | "permissions" | "external" | "installer";
 type Context = { packageRoot: string; version: string; dataDir: string; serverPid: number };
@@ -148,7 +154,7 @@ async function releaseNotes(version: string, dataDir: string) {
   return notes;
 }
 
-export async function inspectWebUpdate(context: Context) {
+export async function inspectWebUpdate(context: Context, options: { refresh?: boolean } = {}) {
   const install = detectInstall(context.packageRoot);
   const state = readServiceState(context.dataDir);
   const managed = Boolean(
@@ -171,9 +177,12 @@ export async function inspectWebUpdate(context: Context) {
       process.env.SUPERVISOR_ENABLED,
     ),
   });
-  const latest = await checkLatest(context.version, {
-    file: path.join(context.dataDir, "update-check.json"),
-  });
+  const cacheFile = path.join(context.dataDir, "update-check.json");
+  // 网页点「检查更新」时绕开缓存马上查；没查到要告诉网页，不能当成「已是最新」
+  const checked = options.refresh
+    ? await refreshLatest(context.version, { file: cacheFile })
+    : { latest: await checkLatest(context.version, { file: cacheFile }), failed: false };
+  const latest = checked.latest;
   const canHandover = Boolean(
     managed &&
     state &&
@@ -211,6 +220,7 @@ export async function inspectWebUpdate(context: Context) {
             : `hive update${dataArg}`,
     busyAgents: readLocalAgents(path.join(context.dataDir, "hive.sqlite"))?.busy ?? [],
     canHandover,
+    ...(checked.failed ? { checkFailed: true } : {}),
   };
 }
 
@@ -384,6 +394,7 @@ export async function webUpdateCommand(
       run: { type: "boolean" },
       target: { type: "string" },
       choice: { type: "string" },
+      refresh: { type: "boolean" },
     },
   });
   if (!parsed.values["data-dir"] || !/^\d+$/.test(parsed.values["server-pid"] ?? ""))
@@ -401,7 +412,9 @@ export async function webUpdateCommand(
     await performUpdate(context, job, parsed.values.choice);
     return;
   }
-  const info = await inspectWebUpdate(context);
+  const info = await inspectWebUpdate(context, {
+    refresh: Boolean(parsed.values.refresh && !parsed.values.launch),
+  });
   if (!parsed.values.launch) {
     console.log(JSON.stringify(info));
     return;

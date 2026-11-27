@@ -1,0 +1,189 @@
+/* 右下角一列：上面是任务提醒，下面是更新的提示 / 进度卡片；叠在最上层但不挡输入框 */
+.corner-dock {
+  position: fixed;
+  right: 16px;
+  bottom: 96px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.update-corner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* 有卡片时和上面的任务提醒隔开；没有时不占位 */
+.update-corner:has(.update-card) {
+  margin-top: 8px;
+}
+
+.update-corner-slot:empty {
+  display: none;
+}
+
+/* 单测里单独渲染、或页面没挂右下角位置时，卡片自己摆到右下角 */
+.update-corner.detached {
+  position: fixed;
+  right: 16px;
+  bottom: 96px;
+  z-index: 60;
+  width: min(360px, calc(100vw - 32px));
+  margin: 0;
+}
+
+/* 和任务提醒同一套样子：左边一道色条，浮在上面 */
+.update-card {
+  display: grid;
+  gap: 8px;
+  padding: 8px 8px 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-popover);
+  pointer-events: auto;
+  animation: update-card-in var(--duration) var(--ease-out);
+}
+
+.update-card.ok {
+  border-left-color: var(--success);
+}
+
+.update-card.danger {
+  border-left-color: var(--danger);
+}
+
+.update-card-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+}
+
+.update-card-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.update-card-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.update-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-right: 6px;
+}
+
+.update-card-actions > .update-card-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-card .desktop-update-progress {
+  margin: 0 6px 0 0;
+}
+
+/* 检查更新的轻提示：一行字，左边是转圈 / 结果图标 */
+.update-card.update-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 12px;
+  border-left-color: var(--text-tertiary);
+}
+
+.update-card.update-notice.pending {
+  border-left-color: var(--accent);
+}
+
+.update-card.update-notice.ok {
+  border-left-color: var(--success);
+}
+
+.update-card.update-notice.danger {
+  border-left-color: var(--danger);
+}
+
+.update-notice-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+}
+
+.update-notice.pending .update-notice-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.update-notice.ok .update-notice-icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.update-notice.danger .update-notice-icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.update-notice-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.update-notice-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+@keyframes update-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-card {
+    animation: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .update-card {
+  animation: none;
+}
+
+@media (max-width: 720px) {
+  .corner-dock,
+  .update-corner.detached {
+    right: 8px;
+    bottom: 88px;
+    left: 8px;
+    width: auto;
+  }
+}

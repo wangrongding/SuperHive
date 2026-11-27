@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImConnection, NetworkProxyState, Participant } from "@superhive/protocol";
 import type { LocalAgentsState } from "./local-agents";
@@ -14,10 +14,14 @@ import {
   leadCacheState,
   type StatusBarProps,
 } from "./status-bar";
+import { resetUpdateCenter, updateCenter } from "./update-center";
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.unstubAllGlobals();
+  resetUpdateCenter();
+  delete window.superhiveDesktop;
 });
 
 const now = "2026-11-26T06:00:00.000Z";
@@ -330,6 +334,65 @@ describe("StatusBar", () => {
     renderBar({ incidents: { count: 3, open } });
     fireEvent.click(screen.getByRole("button", { name: /3 个故障还没处理/ }));
     expect(open).toHaveBeenCalled();
+  });
+
+  describe("版本弹层里的「检查更新」", () => {
+    const open = () => fireEvent.click(screen.getByRole("button", { name: "Hive 连接：已连接" }));
+
+    it("网页版房主点了收起弹层，绕开缓存查一次，结果在右下角说", async () => {
+      const fetcher = vi.fn(async (url: string) =>
+        Response.json(
+          url.endsWith("/api/update?refresh=1")
+            ? { update: null, current: "0.4.9", blocker: null }
+            : url.endsWith("/api/update")
+              ? { update: null }
+              : [],
+        ),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      renderBar({
+        im: { base: "http://localhost:9999", token: "owner", dialogOpen: false, open: vi.fn() },
+      });
+      await waitFor(() => expect(updateCenter().npmCheck).toBeTruthy());
+      open();
+      fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+      expect(screen.queryByRole("dialog", { name: /Hive 连接/ })).toBeNull();
+      await waitFor(() => expect(updateCenter().notice?.text).toBe("已是最新版本 0.4.9"));
+      expect(fetcher.mock.calls.some((call) => call[0].endsWith("?refresh=1"))).toBe(true);
+    });
+
+    it("访客、没有更新渠道时不显示", () => {
+      renderBar({ isOwner: false });
+      open();
+      expect(screen.queryByRole("button", { name: "检查更新" })).toBeNull();
+    });
+
+    it("桌面端问客户端马上查一次", async () => {
+      const fn = vi.fn();
+      const checkNow = vi.fn(async () => ({ status: "latest" as const, currentVersion: "0.4.9" }));
+      window.superhiveDesktop = {
+        version: 1,
+        platform: "darwin",
+        terminal: Object.fromEntries(
+          ["create", "write", "resize", "kill", "onData", "onExit", "onNewRequest"].map((name) => [
+            name,
+            fn,
+          ]),
+        ),
+        updates: {
+          get: vi.fn(async () => null),
+          open: fn,
+          dismiss: fn,
+          onChange: vi.fn(() => () => undefined),
+          checkNow,
+        },
+      };
+      renderBar();
+      open();
+      fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+      await waitFor(() => expect(updateCenter().notice?.text).toBe("已是最新版本 0.4.9"));
+      expect(checkNow).toHaveBeenCalledOnce();
+    });
   });
 
   it("断开时连接项标红并在弹窗里说明", () => {

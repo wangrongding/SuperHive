@@ -34,6 +34,8 @@ export const IPC = {
   updateInstall: "superhive:update:install",
   /** 「重启以更新」 */
   updateRestart: "superhive:update:restart",
+  /** 网页「检查更新」：马上查一次，结果交给网页自己显示（不弹系统对话框） */
+  updateCheckNow: "superhive:update:check-now",
   /** 主进程查到新版、安装进度变了（或提示该收起）时通知页面 */
   updateChanged: "superhive:update:changed",
   /** 打开过的别人的服务器 */
@@ -59,6 +61,15 @@ export type RemoteServerView = {
 
 export type JoinRequest =
   { kind: "room" } | { kind: "agent"; server: string; roomId: string; name: string; token: string };
+
+/**
+ * 网页「检查更新」的结果：available=有新版（详情照常从 updateChanged 推过去）；latest=已是最新；
+ * failed=没查成（断网、GitHub 限流）；disabled=这个版本不检查更新（开发版）
+ */
+export type UpdateCheckNowResult = {
+  status: "available" | "latest" | "failed" | "disabled";
+  currentVersion: string;
+};
 
 /** 网页点新版提示里的哪个按钮 */
 export type UpdateOpenTarget = "download" | "release";

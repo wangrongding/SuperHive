@@ -1,13 +1,14 @@
 /**
- * 桌面端「有新版本」提示：侧栏底部一个不打扰的入口，点开看版本号、发布说明摘要。
- * 能在应用里直接更新时给「下载并更新」：后台下载（显示进度）→「重启以更新」，不重启就等下次退出 / 打开时生效；
- * 不能（位置只读、老版本桌面端、Release 没传更新包）或失败时退回「下载」安装包，并说明原因。
+ * 桌面端「有新版本」提示：侧栏底部、状态栏里各一个不打扰的入口，点开弹窗看版本号、发布说明摘要。
+ * 能在应用里直接更新时给「下载并更新」：确认后弹窗关掉，右下角出一张进度卡片（可以收起到状态栏）→
+ * 「重启以更新」，不重启就等下次退出 / 打开时生效；不能（位置只读、老版本桌面端、Release 没传更新包）
+ * 或失败时退回「下载」安装包，并说明原因。状态栏弹层里的「检查更新」马上查一次，结果在右下角提示。
  * 只在桌面端出现（浏览器里没有 window.superhiveDesktop.updates）。
  *
  * 网页拿不到任何链接：「下载」「完整发布说明」只告诉桌面端打开哪一个，地址由桌面端从自己的检查结果里取，
  * 并且只会是 github.com 上本仓库 Release 下的地址。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AppDialog } from "./app-dialog";
 import { Icon } from "./app-icons";
@@ -15,10 +16,23 @@ import { Button } from "./button";
 import {
   desktopBridge,
   type DesktopInstallFailure,
+  type DesktopInstallState,
   type DesktopUpdateInfo,
   type DesktopUpdatesApi,
 } from "./desktop-bridge";
 import { getLocale, t, type Locale } from "./i18n";
+import { UpdateCard, UpdateCornerPortal, UpdateProgress } from "./update-card";
+import {
+  closeDesktopUpdateDialog,
+  collapseUpdateCard,
+  dismissUpdateNotice,
+  expandUpdateCard,
+  openDesktopUpdateDialog,
+  setDesktopDismissed,
+  showUpdateNotice,
+  updateCheckPending,
+  useUpdateCenter,
+} from "./update-center";
 
 /** 发布说明一条里中英文用「 / 」隔开（见 Release 说明的写法），按界面语言取一半；没有分隔就原样 */
 export function noteForLocale(note: string, locale: Locale): string {
@@ -101,41 +115,254 @@ function percent(received: number, total: number): number | undefined {
   return Math.min(100, Math.floor((received / total) * 100));
 }
 
+/** 应用内更新的状态；老版本桌面端没有 install / restart 时当作没有（只能下载安装包） */
+function installOf(info: DesktopUpdateInfo, api: DesktopUpdatesApi) {
+  return api.install && api.restart ? info.install : undefined;
+}
+
+/** 这几个阶段在右下角用进度卡片表现（点入口展开卡片），其余（还没开始、失败）点入口打开弹窗 */
+function inProgress(state: DesktopInstallState | undefined): boolean {
+  return state?.phase === "downloading" || state?.phase === "verifying" || state?.phase === "ready";
+}
+
+function entryLabelOf(info: DesktopUpdateInfo, state: DesktopInstallState): string {
+  if (state.phase === "ready") return t("重启以更新到 {0}", { 0: info.version });
+  if (state.phase === "downloading" || state.phase === "verifying") {
+    const progress =
+      state.phase === "downloading" ? percent(state.received, state.total) : undefined;
+    return progress !== undefined
+      ? t("正在下载新版本 {0}%", { 0: progress })
+      : t("正在下载新版本…");
+  }
+  return t("有新版本 {0}", { 0: info.version });
+}
+
+/** 侧栏、状态栏里的「有新版本」入口：只是个按钮，弹窗和进度卡片由 DesktopUpdateLayer 统一管 */
 export function DesktopUpdateEntry({
   api: injected,
-  platform = desktopBridge()?.platform,
   variant = "sidebar",
 }: {
   api?: DesktopUpdatesApi;
-  platform?: string;
   /** sidebar=左栏底部的入口；status=底部状态栏里的一小项 */
   variant?: "sidebar" | "status";
 }) {
   const { info, api } = useDesktopUpdate(injected ?? desktopBridge()?.updates);
-  const [open, setOpen] = useState(false);
-  const [dismissedLocally, setDismissedLocally] = useState<string>();
-  if (!api || !info || dismissedLocally === info.version) return null;
+  const { desktopDismissed } = useUpdateCenter();
+  if (!api || !info || desktopDismissed === info.version) return null;
+  const state = installOf(info, api)?.state ?? { phase: "idle" as const };
+  return (
+    <button
+      type="button"
+      className={
+        variant === "status"
+          ? "status-item ok desktop-update-status"
+          : "sidebar-action desktop-update-entry"
+      }
+      aria-haspopup="dialog"
+      onClick={() => {
+        // 下载中、下好了：展开右下角的进度卡片；还没开始、失败：打开弹窗看说明
+        if (inProgress(state)) expandUpdateCard();
+        else openDesktopUpdateDialog();
+      }}
+    >
+      <span className="desktop-update-dot" aria-hidden="true">
+        <Icon name="arrow-up" size={12} />
+      </span>
+      <span>{entryLabelOf(info, state)}</span>
+    </button>
+  );
+}
+
+/**
+ * 状态栏弹层「检查更新」：桌面端马上查一次（不弹系统对话框），结果在右下角提示。
+ * 已经在下载或下好了就直接展开进度卡片；有新版本时打开更新弹窗。
+ */
+export async function checkDesktopUpdatesNow(api: DesktopUpdatesApi): Promise<void> {
+  if (!api.checkNow || updateCheckPending()) return;
+  const known = await api.get().catch(() => null);
+  if (known && inProgress(installOf(known, api)?.state)) {
+    expandUpdateCard();
+    return;
+  }
+  const notice = showUpdateNotice("pending", t("正在检查更新…"));
+  try {
+    const result = await api.checkNow();
+    switch (result.status) {
+      case "available": {
+        dismissUpdateNotice(notice);
+        // 之前在这个页面里点过「忽略这个版本」：人主动来查，重新提示
+        setDesktopDismissed(undefined);
+        const next = await api.get().catch(() => null);
+        if (next && inProgress(installOf(next, api)?.state)) expandUpdateCard();
+        else openDesktopUpdateDialog();
+        return;
+      }
+      case "latest":
+        showUpdateNotice("ok", t("已是最新版本 {0}", { 0: result.currentVersion }));
+        return;
+      case "disabled":
+        showUpdateNotice("info", t("这是开发版，不检查更新。"));
+        return;
+      default:
+        showUpdateNotice("danger", t("没能检查更新，可能是网络问题，稍后再试。"));
+    }
+  } catch {
+    showUpdateNotice("danger", t("没能检查更新，可能是网络问题，稍后再试。"));
+  }
+}
+
+/**
+ * 桌面端更新的弹窗和右下角进度卡片：只挂一份（UpdateCorner 里），侧栏、状态栏的入口共用。
+ * 下载完成或失败时，收起的卡片自己再展开一次，免得错过「重启以更新」。
+ */
+export function DesktopUpdateLayer({
+  api: injected,
+  platform = desktopBridge()?.platform,
+}: {
+  api?: DesktopUpdatesApi | undefined;
+  platform?: string | undefined;
+}) {
+  const { info, api } = useDesktopUpdate(injected ?? desktopBridge()?.updates);
+  const center = useUpdateCenter();
+  const install = info && api ? installOf(info, api) : undefined;
+  const phase = install?.state.phase;
+  const previous = useRef(phase);
+  useEffect(() => {
+    const before = previous.current;
+    previous.current = phase;
+    if ((before === "downloading" || before === "verifying") && phase !== before) {
+      expandUpdateCard();
+    }
+  }, [phase]);
+  if (!api || !info || center.desktopDismissed === info.version) return null;
+  const state = install?.state ?? { phase: "idle" as const };
+  const showCard =
+    !center.notice && !center.cardCollapsed && (inProgress(state) || state.phase === "failed");
+  return (
+    <>
+      {showCard && (
+        <UpdateCornerPortal>
+          <DesktopUpdateCard
+            info={info}
+            api={api}
+            state={state}
+            canRetry={Boolean(install?.available)}
+            platform={platform}
+          />
+        </UpdateCornerPortal>
+      )}
+      {center.desktopDialog &&
+        createPortal(
+          <DesktopUpdateDialog info={info} api={api} platform={platform} />,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/** 右下角的进度卡片：下载进度 →「重启以更新」；失败时说明原因，可以重试或下载安装包 */
+function DesktopUpdateCard({
+  info,
+  api,
+  state,
+  canRetry,
+  platform,
+}: {
+  info: DesktopUpdateInfo;
+  api: DesktopUpdatesApi;
+  state: DesktopInstallState;
+  canRetry: boolean;
+  platform: string | undefined;
+}) {
+  const releaseLink = (
+    <Button variant="link" size="sm" onClick={() => void api.open("release")}>
+      {t("发布说明")}
+      <Icon name="external" size={12} />
+    </Button>
+  );
+  if (state.phase === "ready") {
+    return (
+      <UpdateCard
+        title={t("新版本 {0} 已下载好", { 0: info.version })}
+        tone="ok"
+        onCollapse={collapseUpdateCard}
+      >
+        <p className="update-card-text">
+          {platform === "win32"
+            ? t("不重启的话，下次打开时换上新版本。")
+            : t("不重启的话，下次退出时换上新版本。")}
+        </p>
+        <div className="update-card-actions">
+          <Button variant="primary" size="sm" onClick={() => void api.restart?.()}>
+            {t("重启以更新")}
+          </Button>
+          {releaseLink}
+        </div>
+      </UpdateCard>
+    );
+  }
+  if (state.phase === "failed") {
+    return (
+      <UpdateCard title={t("没能直接更新")} tone="danger" onCollapse={collapseUpdateCard}>
+        <p className="update-card-text">{installReasonText(state.reason)}</p>
+        <div className="update-card-actions">
+          {canRetry && (
+            <Button variant="primary" size="sm" onClick={() => void api.install?.(info.version)}>
+              {t("重试")}
+            </Button>
+          )}
+          <Button size="sm" onClick={() => void api.open("download")}>
+            {t("下载安装包")}
+          </Button>
+        </div>
+      </UpdateCard>
+    );
+  }
+  const progress = state.phase === "downloading" ? percent(state.received, state.total) : undefined;
+  return (
+    <UpdateCard title={t("正在下载 {0}", { 0: info.version })} onCollapse={collapseUpdateCard}>
+      <UpdateProgress label={t("下载进度")} value={progress} />
+      <div className="update-card-actions">
+        <span className="update-card-text">
+          {state.phase === "verifying"
+            ? t("正在校验…")
+            : progress !== undefined
+              ? t("下载中 {0}%", { 0: progress })
+              : t("下载中…")}
+        </span>
+        {releaseLink}
+      </div>
+    </UpdateCard>
+  );
+}
+
+/** 有新版本的弹窗：看版本号、发布说明摘要，确认「下载并更新」后关掉，进度改在右下角看 */
+function DesktopUpdateDialog({
+  info,
+  api,
+  platform,
+}: {
+  info: DesktopUpdateInfo;
+  api: DesktopUpdatesApi;
+  platform: string | undefined;
+}) {
   const locale = getLocale();
   const published = formatDate(info.publishedAt, locale);
   const notes = info.notes.map((note) => noteForLocale(note, locale)).filter(Boolean);
-  const close = () => setOpen(false);
-  // 老版本桌面端没有 install / restart，或者没有 install 状态：照旧只给「下载」
-  const install = api.install && api.restart ? info.install : undefined;
+  const close = closeDesktopUpdateDialog;
+  const install = installOf(info, api);
   const state = install?.state ?? { phase: "idle" as const };
   const canInstall = Boolean(install?.available) && state.phase === "idle";
   const busy = state.phase === "downloading" || state.phase === "verifying";
   const size = formatSize(canInstall ? install!.size : info.assetSize);
   const progress = state.phase === "downloading" ? percent(state.received, state.total) : undefined;
   const isWindows = platform === "win32";
-
-  const entryLabel =
-    state.phase === "ready"
-      ? t("重启以更新到 {0}", { 0: info.version })
-      : busy
-        ? progress !== undefined
-          ? t("正在下载新版本 {0}%", { 0: progress })
-          : t("正在下载新版本…")
-        : t("有新版本 {0}", { 0: info.version });
+  /** 开始下载：弹窗关掉，右下角出进度卡片 */
+  const startInstall = () => {
+    void api.install?.(info.version);
+    close();
+    expandUpdateCard();
+  };
 
   // 不能直接更新或失败时的主按钮：下载安装包
   const download = (
@@ -170,7 +397,7 @@ export function DesktopUpdateEntry({
     );
   } else if (canInstall) {
     primary = (
-      <Button variant="primary" onClick={() => void api.install?.(info.version)}>
+      <Button variant="primary" onClick={startInstall}>
         {t("下载并更新")}
         {size && <span className="desktop-update-size">{size}</span>}
       </Button>
@@ -214,96 +441,61 @@ export function DesktopUpdateEntry({
         : undefined;
 
   return (
-    <>
-      <button
-        type="button"
-        className={
-          variant === "status"
-            ? "status-item ok desktop-update-status"
-            : "sidebar-action desktop-update-entry"
-        }
-        aria-haspopup="dialog"
-        onClick={() => setOpen(true)}
-      >
-        <span className="desktop-update-dot" aria-hidden="true">
-          <Icon name="arrow-up" size={12} />
-        </span>
-        <span>{entryLabel}</span>
-      </button>
-      {open &&
-        createPortal(
-          <AppDialog
-            size="sm"
-            title={
-              state.phase === "ready"
-                ? t("新版本 {0} 已下载好", { 0: info.version })
-                : t("有新版本 {0}", { 0: info.version })
-            }
-            className="desktop-update-dialog"
-            onClose={close}
-            footer={
-              <>
-                {primary}
-                {state.phase === "failed" && install?.available && (
-                  <Button onClick={() => void api.install?.(info.version)}>{t("重试")}</Button>
-                )}
-                {(state.phase === "idle" || state.phase === "failed") && (
-                  <Button
-                    onClick={() => {
-                      setDismissedLocally(info.version);
-                      close();
-                      void api.dismiss(info.version);
-                    }}
-                  >
-                    {t("忽略这个版本")}
-                  </Button>
-                )}
-                <Button variant="link" onClick={() => void api.open("release")}>
-                  {t("完整发布说明")}
-                  <Icon name="external" size={13} />
-                </Button>
-              </>
-            }
-          >
-            <p className="desktop-update-meta">
-              {published
-                ? t("你现在用的是 {0}，新版发布于 {1}。", { 0: info.currentVersion, 1: published })
-                : t("你现在用的是 {0}。", { 0: info.currentVersion })}
-            </p>
-            {notes.length > 0 && (
-              <>
-                <h3 className="desktop-update-heading">{t("本版改动")}</h3>
-                <ul className="desktop-update-notes">
-                  {notes.map((note, index) => (
-                    <li key={index}>{note}</li>
-                  ))}
-                </ul>
-              </>
-            )}
-            {busy && (
-              <div
-                className="desktop-update-progress"
-                role="progressbar"
-                aria-label={t("下载进度")}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                {...(progress !== undefined ? { "aria-valuenow": progress } : {})}
-              >
-                <span
-                  className={progress === undefined ? "indeterminate" : undefined}
-                  style={progress !== undefined ? { width: `${progress}%` } : undefined}
-                />
-              </div>
-            )}
-            {reasonText && (
-              <p className="desktop-update-reason" role="status">
-                {reasonText}
-              </p>
-            )}
-            <p className="desktop-update-hint">{hint}</p>
-          </AppDialog>,
-          document.body,
-        )}
-    </>
+    <AppDialog
+      size="sm"
+      title={
+        state.phase === "ready"
+          ? t("新版本 {0} 已下载好", { 0: info.version })
+          : t("有新版本 {0}", { 0: info.version })
+      }
+      className="desktop-update-dialog"
+      onClose={close}
+      footer={
+        <>
+          {primary}
+          {state.phase === "failed" && install?.available && (
+            <Button onClick={startInstall}>{t("重试")}</Button>
+          )}
+          {(state.phase === "idle" || state.phase === "failed") && (
+            <Button
+              onClick={() => {
+                setDesktopDismissed(info.version);
+                close();
+                void api.dismiss(info.version);
+              }}
+            >
+              {t("忽略这个版本")}
+            </Button>
+          )}
+          <Button variant="link" onClick={() => void api.open("release")}>
+            {t("完整发布说明")}
+            <Icon name="external" size={13} />
+          </Button>
+        </>
+      }
+    >
+      <p className="desktop-update-meta">
+        {published
+          ? t("你现在用的是 {0}，新版发布于 {1}。", { 0: info.currentVersion, 1: published })
+          : t("你现在用的是 {0}。", { 0: info.currentVersion })}
+      </p>
+      {notes.length > 0 && (
+        <>
+          <h3 className="desktop-update-heading">{t("本版改动")}</h3>
+          <ul className="desktop-update-notes">
+            {notes.map((note, index) => (
+              <li key={index}>{note}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {busy && <UpdateProgress label={t("下载进度")} value={progress} />}
+      {reasonText && (
+        <p className="desktop-update-reason" role="status">
+          {reasonText}
+        </p>
+      )}
+      <p className="desktop-update-hint">{hint}</p>
+    </AppDialog>
   );
 }

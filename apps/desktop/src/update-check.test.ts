@@ -347,6 +347,23 @@ describe("UpdateChecker", () => {
     expect(await env.checker.check(true)).toMatchObject({ version: "0.4.9" });
   });
 
+  it("手动检查马上联网，之前忽略过的版本重新提示；查不到时 lastCheckFailed", async () => {
+    const env = setup({
+      replies: [response(200, release("0.4.8")), response(304, {}), new Error("offline")],
+    });
+    await env.checker.check();
+    env.checker.dismiss("0.4.8");
+    expect(env.checker.current()).toBeNull();
+    // 刚查过、还在 6 小时内也照样发请求
+    expect(await env.checker.checkNow()).toMatchObject({ version: "0.4.8" });
+    expect(env.fetch).toHaveBeenCalledTimes(2);
+    expect(env.cache().dismissed).toEqual([]);
+    expect(env.checker.lastCheckFailed).toBe(false);
+    // 断网：照旧给上次查到的结果，并标出这次没查成
+    expect(await env.checker.checkNow()).toMatchObject({ version: "0.4.8" });
+    expect(env.checker.lastCheckFailed).toBe(true);
+  });
+
   it("要打开的地址只从检查结果里取：下载给本平台安装包，发布页给 Release 页；别的一律不给", async () => {
     const env = setup({
       platform: "win32",

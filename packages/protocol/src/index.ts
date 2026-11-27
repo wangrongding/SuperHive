@@ -2570,6 +2570,7 @@ export * from "./plugin-manifest.js";
 export * from "./skill-market.js";
 export type {
   NpmUpdateInfo,
+  NpmUpdateCheckResponse,
   NpmUpdateBlocker,
   NpmUpdateChoice,
   NpmUpdateJob,

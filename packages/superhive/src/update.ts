@@ -12,6 +12,8 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
 export const QUICK_CHECK_TIMEOUT_MS = 1_500;
 /** 查到的结果缓存这么久，连着敲几个命令不用每次都等网络 */
 export const CHECK_CACHE_MS = 60 * 60 * 1000;
+/** 网页里点「检查更新」时最多等这么久：人在等结果，比终端里顺手查宽一些 */
+export const MANUAL_CHECK_TIMEOUT_MS = 8_000;
 
 /** 这份 superhive 是怎么装的，决定 hive update 用哪个包管理器 */
 export type InstallKind =
@@ -184,14 +186,46 @@ export async function checkLatest(
     latest = await (options.fetchLatest ?? fetchLatestVersion)(
       options.timeoutMs ?? QUICK_CHECK_TIMEOUT_MS,
     );
-    try {
-      mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, `${JSON.stringify({ checkedAt: now, latest: latest ?? null })}\n`);
-    } catch {
-      // 写不了缓存下次再查
-    }
+    writeCache(file, { checkedAt: now, latest: latest ?? null });
   }
   return latest && compareVersions(latest, current) > 0 ? latest : undefined;
+}
+
+function writeCache(file: string, cache: CheckCache) {
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(cache)}\n`);
+  } catch {
+    // 写不了缓存下次再查
+  }
+}
+
+/**
+ * 网页里点「检查更新」：不看缓存，马上联网查（限时）。查到了顺手更新缓存；
+ * 没查到时 failed=true（不能当成「已是最新」），并退回缓存里上次查到的新版，缓存不动。
+ */
+export async function refreshLatest(
+  current: string,
+  options: {
+    now?: number;
+    file?: string;
+    timeoutMs?: number;
+    fetchLatest?: (timeoutMs: number) => Promise<string | undefined>;
+  } = {},
+): Promise<{ latest?: string; failed: boolean }> {
+  const file = options.file ?? cachePath();
+  const newer = (version: string | null | undefined) =>
+    version && compareVersions(version, current) > 0 ? version : undefined;
+  const latest = await (options.fetchLatest ?? fetchLatestVersion)(
+    options.timeoutMs ?? MANUAL_CHECK_TIMEOUT_MS,
+  );
+  if (!latest) {
+    const previous = newer(readCache(file)?.latest);
+    return { ...(previous ? { latest: previous } : {}), failed: true };
+  }
+  writeCache(file, { checkedAt: options.now ?? Date.now(), latest });
+  const found = newer(latest);
+  return { ...(found ? { latest: found } : {}), failed: false };
 }
 
 /** 终端里给人看的才查：管道、CI、关掉提示时不查，不拖慢脚本 */

@@ -9,6 +9,7 @@ import {
   detectInstall,
   fetchLatestVersion,
   npmRegistry,
+  refreshLatest,
   shouldCheckForUpdate,
   updateNotice,
   upgradeCommand,
@@ -165,6 +166,36 @@ describe("checkLatest", () => {
       checkLatest("0.3.1", { file, now: 1_000 + CHECK_CACHE_MS, fetchLatest: offline }),
     ).resolves.toBeUndefined();
     expect(offline).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("refreshLatest", () => {
+  it("手动检查不看缓存马上查，查到了更新缓存，已是最新时不报新版", async () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "hive-refresh-")), "update-check.json");
+    writeFileSync(file, JSON.stringify({ checkedAt: 1_000, latest: "0.4.8" }));
+    const fetchLatest = vi.fn(async () => "0.4.9");
+    await expect(refreshLatest("0.4.8", { file, now: 1_001, fetchLatest })).resolves.toEqual({
+      latest: "0.4.9",
+      failed: false,
+    });
+    expect(fetchLatest).toHaveBeenCalledOnce();
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ checkedAt: 1_001, latest: "0.4.9" });
+    await expect(refreshLatest("0.4.9", { file, fetchLatest })).resolves.toEqual({
+      failed: false,
+    });
+  });
+  it("没查到时报 failed，退回缓存里上次查到的新版，缓存不动", async () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "hive-refresh-")), "update-check.json");
+    const offline = vi.fn(async () => undefined);
+    await expect(refreshLatest("0.4.8", { file, fetchLatest: offline })).resolves.toEqual({
+      failed: true,
+    });
+    writeFileSync(file, JSON.stringify({ checkedAt: 1_000, latest: "0.4.9" }));
+    await expect(refreshLatest("0.4.8", { file, fetchLatest: offline })).resolves.toEqual({
+      latest: "0.4.9",
+      failed: true,
+    });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ checkedAt: 1_000, latest: "0.4.9" });
   });
 });
 

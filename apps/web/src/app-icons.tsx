@@ -22,10 +22,12 @@ export type IconName =
   | "files"
   | "hash"
   | "help"
+  | "info"
   | "logout"
   | "maximize"
   | "minimize"
   | "message"
+  | "minus"
   | "more"
   | "panel-bottom"
   | "panel-left"
@@ -33,6 +35,7 @@ export type IconName =
   | "plug"
   | "plus"
   | "quote"
+  | "refresh"
   | "send"
   | "search"
   | "settings"
@@ -118,6 +121,16 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     help: (
       <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-2.6-11.6a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.4-2.6 4M12 17v.1" />
     ),
+    info: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M12 11v5.5M12 7.8v.1" />
+      </>
+    ),
+    // 收起：一道横线
+    minus: <path d="M6 12h12" />,
+    // 检查更新：转一圈的箭头
+    refresh: <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" />,
     bell: <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2H4.5L6 16Zm4 4a2 2 0 0 0 4 0" />,
     undo: <path d="M9 14 4 9l5-5M4 9h9.5a6.5 6.5 0 0 1 0 13H11" />,
     // 引用回复：折回去的箭头

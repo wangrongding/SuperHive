@@ -156,6 +156,7 @@ import { useAppLoadingStatus, useAppReady } from "./boot-splash";
 import type { LoadingStatus } from "./loading-status";
 import { Button } from "./button";
 import { StatusBar } from "./status-bar";
+import { UpdateCorner } from "./update-corner";
 
 export function App({
   guest,
@@ -3188,13 +3189,17 @@ export function App({
           submitRenameRoom={submitRenameRoom}
         />
       )}
-      <AttentionToasts
-        toasts={attention.toasts}
-        roomName={roomNameOf}
-        onOpen={attention.open}
-        onDismiss={attention.dismissToast}
-        onDismissAll={attention.dismissAllToasts}
-      />
+      {/* 右下角一列：任务提醒在上，更新的提示 / 进度卡片在下 */}
+      <div className="corner-dock">
+        <AttentionToasts
+          toasts={attention.toasts}
+          roomName={roomNameOf}
+          onOpen={attention.open}
+          onDismiss={attention.dismissToast}
+          onDismissAll={attention.dismissAllToasts}
+        />
+        <UpdateCorner />
+      </div>
       {showOnboarding && onboardingOpen && (
         <OnboardingGuide steps={onboardingSteps} onClose={closeOnboarding} />
       )}

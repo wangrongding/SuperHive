@@ -92,4 +92,27 @@ describe("desktopBridge", () => {
     expect(broken && "install" in broken).toBe(false);
     expect(broken && "restart" in broken).toBe(false);
   });
+
+  it("drops only a malformed checkNow, so the check-for-updates button just stays hidden", () => {
+    const full = { get: fn, open: fn, dismiss: fn, onChange: fn, checkNow: fn };
+    expect(
+      desktopBridge({ version: 1, platform: "darwin", terminal, updates: full })?.updates,
+    ).toBe(full);
+    const broken = desktopBridge({
+      version: 1,
+      platform: "darwin",
+      terminal,
+      updates: {
+        get: fn,
+        open: fn,
+        dismiss: fn,
+        onChange: fn,
+        install: fn,
+        restart: fn,
+        checkNow: 1,
+      },
+    })?.updates;
+    expect(broken?.install).toBe(fn);
+    expect(broken && "checkNow" in broken).toBe(false);
+  });
 });

@@ -422,6 +422,21 @@ export class UpdateChecker {
     return this.inflight;
   }
 
+  /**
+   * 人主动点「检查更新」：不管间隔马上查；查到的新版之前被「忽略这个版本」过也重新提示——
+   * 人特意来查，就不能回一句「已是最新」
+   */
+  async checkNow(): Promise<UpdateInfo | null> {
+    await this.check(true);
+    const version = this.cache.release?.version;
+    if (version && this.cache.dismissed?.includes(version)) {
+      const dismissed = this.cache.dismissed.filter((item) => item !== version);
+      this.cache = { ...this.cache, dismissed };
+      this.options.save(this.cache);
+    }
+    return this.current();
+  }
+
   isStale(): boolean {
     const checkedAt = this.cache.checkedAt;
     if (checkedAt === undefined) return true;

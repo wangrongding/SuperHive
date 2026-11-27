@@ -33,6 +33,7 @@ afterEach(async () => {
 async function setup(change: Partial<NpmUpdateInfo> = {}) {
   const manager = {
     inspect: vi.fn(async () => ({ ...info, ...change })),
+    checkNow: vi.fn(async () => ({ ...info, ...change })),
     launch: vi.fn(async () => job),
     current: vi.fn(() => null),
   };
@@ -102,6 +103,65 @@ describe("npm update routes", () => {
         releaseUrl: info.releaseUrl,
       },
     });
+  });
+  it("lets only the owner force a fresh check, reporting the version, blocker and failures", async () => {
+    const { app, manager } = await setup({ blocker: "source", checkFailed: true });
+    const owner = await app.inject({
+      url: "/api/update?refresh=1",
+      headers: { authorization: "Bearer owner" },
+      remoteAddress: "192.0.2.1",
+    });
+    expect(manager.checkNow).toHaveBeenCalledOnce();
+    expect(manager.inspect).not.toHaveBeenCalled();
+    expect(owner.json()).toEqual({
+      update: {
+        current: info.current,
+        latest: info.latest,
+        notes: info.notes,
+        releaseUrl: info.releaseUrl,
+      },
+      current: info.current,
+      blocker: "source",
+      failed: true,
+    });
+    manager.checkNow.mockRejectedValueOnce(new Error("timeout"));
+    expect(
+      (
+        await app.inject({
+          url: "/api/update?refresh=1",
+          headers: { authorization: "Bearer owner" },
+        })
+      ).json(),
+    ).toEqual({ update: null, failed: true });
+  });
+  it("tells the owner when this Server does not check npm releases at all", async () => {
+    const app = await buildApp({ databasePath: ":memory:", token: "owner" });
+    apps.push(app);
+    expect(
+      (
+        await app.inject({
+          url: "/api/update?refresh=1",
+          headers: { authorization: "Bearer owner" },
+        })
+      ).json(),
+    ).toEqual({ update: null, unavailable: "unsupported" });
+    expect(
+      (await app.inject({ url: "/api/update", headers: { authorization: "Bearer owner" } })).json(),
+    ).toEqual({ update: null });
+  });
+  it("coalesces concurrent forced checks and refreshes the hourly cache", async () => {
+    const run = vi.fn(async (args: string[]) =>
+      JSON.stringify({ ...info, latest: args.includes("--refresh") ? "0.5.0" : "0.4.9" }),
+    );
+    const manager = new NpmUpdateManager({ command: "node", args: ["cli"] }, "/isolated", run);
+    await manager.inspect();
+    const [first, second] = await Promise.all([manager.checkNow(), manager.checkNow()]);
+    expect(first.latest).toBe("0.5.0");
+    expect(second.latest).toBe("0.5.0");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]![0]).toContain("--refresh");
+    await expect(manager.inspect()).resolves.toMatchObject({ latest: "0.5.0" });
+    expect(run).toHaveBeenCalledTimes(2);
   });
   it("requires renewed confirmation if busy Agents cannot be handed over", async () => {
     const { app, headers, manager } = await setup({ canHandover: false, busyAgents: ["agent"] });

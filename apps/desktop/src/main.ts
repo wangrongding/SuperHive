@@ -40,7 +40,12 @@ import {
   type ForkServer,
   type OwnedServer,
 } from "./hive-server.js";
-import { IPC, type TerminalCreateRequest, type TerminalLayoutAction } from "./ipc-contract.js";
+import {
+  IPC,
+  type TerminalCreateRequest,
+  type TerminalLayoutAction,
+  type UpdateCheckNowResult,
+} from "./ipc-contract.js";
 import { imageContextMenu } from "./image-context-menu.js";
 import { keychainSwitches } from "./keychain.js";
 import { createPickFilesHandler, createWorkspaceLookup, readPickedFiles } from "./file-picker.js";
@@ -415,12 +420,28 @@ function runApp(): void {
     if (!trusted(event) || !updateCheckEnabled) return false;
     return installer?.restart() ?? false;
   });
+  /** 人主动检查（菜单、网页按钮）：马上查，忽略过的版本重新提示，并把结果推给网页 */
+  const manualUpdateCheck = async () => {
+    const checker = updateChecker();
+    const info = await checker.checkNow().catch(() => null);
+    pushUpdate();
+    return { checker, info };
+  };
+  // 网页状态栏「检查更新」：结果由网页在右下角提示，不弹系统对话框
+  ipcMain.handle(IPC.updateCheckNow, async (event): Promise<UpdateCheckNowResult> => {
+    if (!trusted(event)) throw new Error("Forbidden");
+    const currentVersion = app.getVersion();
+    if (!updateCheckEnabled) return { status: "disabled", currentVersion };
+    const { checker, info } = await manualUpdateCheck();
+    return {
+      status: info ? "available" : checker.lastCheckFailed ? "failed" : "latest",
+      currentVersion,
+    };
+  });
 
   /** 菜单「检查新版本…」：不管上次什么时候查过，马上查一次，并且一定给个答复 */
   async function checkUpdatesNow(): Promise<void> {
-    const checker = updateChecker();
-    const info = await checker.check(true).catch(() => null);
-    pushUpdate();
+    const { checker, info } = await manualUpdateCheck();
     const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
     const show = (options: Electron.MessageBoxOptions) =>
       owner ? dialog.showMessageBox(owner, options) : dialog.showMessageBox(options);

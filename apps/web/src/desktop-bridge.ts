@@ -100,6 +100,13 @@ export type DesktopInstallView = {
   state: DesktopInstallState;
 };
 
+/** 「检查更新」的结果：有新版时详情照常从 onChange 推过来 */
+export type DesktopUpdateCheckResult = {
+  /** available=有新版；latest=已是最新；failed=没查成（断网、限流）；disabled=这个版本不检查（开发版） */
+  status: "available" | "latest" | "failed" | "disabled";
+  currentVersion: string;
+};
+
 /** 新版提示：打开下载地址或发布页时网页只说打开哪个，地址由桌面端自己取 */
 export type DesktopUpdatesApi = {
   get(): Promise<DesktopUpdateInfo | null>;
@@ -110,6 +117,8 @@ export type DesktopUpdatesApi = {
   install?(version: string): Promise<boolean>;
   /** 「重启以更新」（老版本桌面端没有） */
   restart?(): Promise<boolean>;
+  /** 状态栏「检查更新」：马上查一次，不弹系统对话框（老版本桌面端没有，不显示这个按钮） */
+  checkNow?(): Promise<DesktopUpdateCheckResult>;
 };
 
 /** 客户端里打开过的别人的服务器 */
@@ -210,6 +219,12 @@ export function desktopBridge(
     const cleaned: Partial<DesktopUpdatesApi> = { ...updates };
     delete cleaned.install;
     delete cleaned.restart;
+    return desktopBridge({ ...value, updates: cleaned });
+  }
+  if (updates && "checkNow" in updates && typeof updates.checkNow !== "function") {
+    // 检查更新的方法形状不对：只去掉它，不显示「检查更新」按钮
+    const cleaned: Partial<DesktopUpdatesApi> = { ...updates };
+    delete cleaned.checkNow;
     return desktopBridge({ ...value, updates: cleaned });
   }
   const remote = value.remote as Partial<DesktopRemoteApi> | undefined;
