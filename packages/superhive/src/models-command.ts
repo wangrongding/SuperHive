@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -33,9 +33,10 @@ const usage = `
 codex 走自定义网关（当前 provider 有 base_url）时按它实际生效的配置（--cwd 是 Agent 的工作目录，
 项目里的 .codex/config.toml 会盖过全局配置）请求 {base_url}/models，拉不到或用官方接口、账号登录时用 app-server 的
 model/list，配置里的 model 不在列表里也补在最前；opencode 用 opencode models，omp 用 omp models --json，
-openclaw 用 openclaw models list --json，gemini、agy 经 ACP 开一个空会话读它给的模型；
+openclaw 用 openclaw models list --json，gemini、agy、copilot 经 ACP 开一个空会话读它给的模型
+（copilot 的 auto 在最前；没登录 GitHub、ACP 起不来或超时就给常用选项并说明原因）；
 claude 按它实际生效的接口地址和密钥（--cwd 是 Agent 的工作目录，项目配置会盖过全局配置）请求 /v1/models，
-只列具体模型（opusplan 在最后）；用账号登录（没有 key）或拉取失败时给出常用别名；copilot 给出常用选项。网页上都能手填。
+只列具体模型（opusplan 在最后）；用账号登录（没有 key）或拉取失败时给出常用别名。网页上都能手填。
 同时列出能选的思考强度（claude、codex、copilot、omp 支持；codex、omp 按模型列出）。
 `;
 
@@ -66,8 +67,11 @@ export type ModelList = {
   efforts: string[];
   /** 拉取失败的原因（这时 models 是常用选项） */
   error?: string;
-  /** 为什么只给常用选项（不算失败）：oauth=Claude 用账号登录、没有 API key；cloud=走 Bedrock / Vertex 等云平台 */
-  presetReason?: "oauth" | "cloud";
+  /**
+   * 为什么只给常用选项（不算失败）：oauth=Claude 用账号登录、没有 API key；cloud=走 Bedrock / Vertex 等云平台；
+   * login=Copilot 没登录 GitHub
+   */
+  presetReason?: "oauth" | "cloud" | "login";
 };
 
 /** 跑一个命令拿标准输出（测试注入） */
@@ -75,7 +79,10 @@ export type ModelRunner = (command: string, args: string[]) => Promise<string>;
 /** 和 Codex app-server 说一次 model/list（测试注入） */
 export type CodexModelLister = (command: string) => Promise<unknown>;
 /** 起 ACP Agent 开一个空会话，返回 session/new 的结果（测试注入） */
-export type AcpModelLister = (provider: "gemini" | "agy", command: string) => Promise<unknown>;
+export type AcpModelLister = (
+  provider: "gemini" | "agy" | "copilot",
+  command: string,
+) => Promise<unknown>;
 
 const TIMEOUT_MS = 20_000;
 const MAX_MODELS = 300;
@@ -185,15 +192,22 @@ const defaultCodexLister: CodexModelLister = (command) =>
   });
 
 /**
- * gemini、agy 的模型只能从 ACP 会话里拿（agy models 要求登录 Google 账号）：握手、开一个不带 MCP 的空会话，
- * 读 configOptions / models 后结束进程。agy 没登录账号而环境里有 GEMINI_API_KEY 时先用它登录，与 Bridge 一致
+ * gemini、agy、copilot 的模型只能从 ACP 会话里拿（agy models 要求登录 Google 账号，copilot 没有列模型的命令）：
+ * 握手、开一个不带 MCP 的空会话，读 configOptions / models 后结束进程。agy 没登录账号而环境里有 GEMINI_API_KEY
+ * 时先用它登录，与 Bridge 一致。copilot 每开一个会话都会在 session-state 里留一个目录：读完先 session/close，
+ * 进程结束后把这个还没有任何内容的目录删掉，免得每次打开下拉都多一条空会话
  */
 const defaultAcpLister: AcpModelLister = (provider, command) =>
   new Promise((resolve, reject) => {
-    const env = geminiHomeEnv();
+    const env = provider === "copilot" ? {} : geminiHomeEnv();
     const cwd = path.join(superhiveHome(), "models-probe");
     mkdirSync(cwd, { recursive: true });
-    const args = provider === "gemini" ? ["--acp", "--skip-trust"] : ["acp"];
+    const args =
+      provider === "gemini"
+        ? ["--acp", "--skip-trust"]
+        : provider === "copilot"
+          ? ["--acp", "--no-custom-instructions"]
+          : ["acp"];
     const transport = spawnStdioTransport(command, args, {
       cwd,
       ...(Object.keys(env).length ? { env } : {}),
@@ -206,6 +220,7 @@ const defaultAcpLister: AcpModelLister = (provider, command) =>
       done = true;
       clearTimeout(timer);
       transport.kill();
+      if (provider === "copilot") removeCopilotProbeSession(result);
       if (error) reject(error);
       else resolve(result);
     };
@@ -262,7 +277,13 @@ const defaultAcpLister: AcpModelLister = (provider, command) =>
       });
       const params = { cwd, mcpServers: [] };
       try {
-        return await call("session/new", params);
+        const session = await call("session/new", params);
+        if (provider === "copilot" && typeof session?.sessionId === "string")
+          await Promise.race([
+            call("session/close", { sessionId: session.sessionId }).catch(() => undefined),
+            new Promise((done) => setTimeout(done, 2_000)),
+          ]);
+        return session;
       } catch (error) {
         const methods: Array<{ id?: unknown }> = Array.isArray(init?.authMethods)
           ? init.authMethods
@@ -281,6 +302,95 @@ const defaultAcpLister: AcpModelLister = (provider, command) =>
       (error: Error) => finish(error),
     );
   });
+
+/** Copilot 的 session-state 目录（COPILOT_HOME，默认 ~/.copilot） */
+function copilotHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env.COPILOT_HOME?.trim() || path.join(os.homedir(), ".copilot");
+}
+
+/** 删掉列模型时开的那个空会话目录：只删 session/new 返回的那一个，里面已经有对话记录的不动 */
+function removeCopilotProbeSession(result: unknown): void {
+  const id = (result as { sessionId?: unknown } | undefined)?.sessionId;
+  if (typeof id !== "string" || !/^[\w-]{8,}$/.test(id)) return;
+  const dir = path.join(copilotHome(), "session-state", id);
+  try {
+    if (existsSync(path.join(dir, "events.jsonl"))) return;
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // 删不掉只是多一个空目录
+  }
+}
+
+/**
+ * Copilot 没指定模型时用的：COPILOT_MODEL，其次 settings.json / config.json（COPILOT_HOME 或 ~/.copilot）里的 model；
+ * 都没有就是 Copilot 自己的默认
+ */
+export function copilotConfiguredModel(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const fromEnv = env.COPILOT_MODEL?.trim();
+  if (fromEnv) return fromEnv;
+  for (const name of ["settings.json", "config.json"]) {
+    try {
+      const value = (
+        JSON.parse(readFileSync(path.join(copilotHome(env), name), "utf8")) as {
+          model?: unknown;
+        }
+      ).model;
+      if (typeof value === "string" && value.trim()) return value.trim();
+    } catch {
+      // 没有或不是 JSON：看下一个
+    }
+  }
+  return undefined;
+}
+
+/** Copilot 自动选模型的那一项，始终在第一个 */
+const COPILOT_AUTO = PRESETS.copilot![0]!;
+
+/**
+ * Copilot 的 session/new：models.availableModels（configOptions 的 model 是同一份）。auto 会出现两次，留一个放最前，
+ * 其余按名字排；说明用 Copilot 给的「Versatile · Medium cost」，额度倍数不是 1x 时加在后面；被组织停用的不列
+ */
+export function parseCopilotSession(result: unknown): ModelEntry[] {
+  const record = result as {
+    models?: {
+      currentModelId?: unknown;
+      availableModels?: Array<{
+        modelId?: unknown;
+        name?: unknown;
+        description?: unknown;
+        _meta?: { copilotUsage?: unknown; copilotEnablement?: unknown } | null;
+      }>;
+    };
+  };
+  const available = record?.models?.availableModels;
+  if (!Array.isArray(available)) return parseAcpSession(result);
+  const current = text(record.models?.currentModelId);
+  const models: ModelEntry[] = [];
+  for (const item of available) {
+    const id = text(item?.modelId);
+    if (!id || id === COPILOT_AUTO.id || item?._meta?.copilotEnablement === "disabled") continue;
+    // 额度倍数只在不是 1x 时写（大多数都是 1x，写上只是多一截字）
+    const usage = text(item?._meta?.copilotUsage);
+    const description = [text(item?.description), usage === "1x" ? undefined : usage]
+      .filter(Boolean)
+      .join(" · ");
+    models.push({
+      ...entry(id, text(item?.name), id === current),
+      ...(description ? { description } : {}),
+    });
+  }
+  models.sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
+  return unique([
+    { ...COPILOT_AUTO, ...(current === COPILOT_AUTO.id ? { isDefault: true } : {}) },
+    ...models,
+  ]);
+}
+
+/** Copilot 没登录 GitHub 时 session/new 报的错 */
+function isCopilotLoginError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /auth|log ?in|sign ?in|not logged|unauthori[sz]ed|401/i.test(message);
+}
 
 /** ACP session/new 的结果：configOptions 的 model 或 models.availableModels */
 function parseAcpSession(result: unknown): ModelEntry[] {
@@ -467,6 +577,7 @@ export function configuredDefaultModel(provider: ModelProvider): string | undefi
   if (provider === "claude") return claudeConfiguredModel();
   if (provider === "opencode") return opencodeConfiguredModel();
   if (provider === "omp") return ompConfiguredModel();
+  if (provider === "copilot") return copilotConfiguredModel();
   return undefined;
 }
 
@@ -504,6 +615,7 @@ export async function listModels(options: {
   const fallback = () => (options.configuredDefault ?? configuredDefaultModel)(provider);
   if (provider === "claude") return listClaude(options, efforts, fallback);
   if (provider === "codex") return listCodex(options, efforts);
+  if (provider === "copilot") return listCopilot(options, command, efforts, fallback);
   if (preset)
     return { provider, source: "preset", models: withDefault(preset, fallback()), efforts };
   try {
@@ -674,6 +786,41 @@ async function listCodex(
     efforts,
     error: gatewayError ?? errorText((listed as PromiseRejectedResult).reason),
   };
+}
+
+/**
+ * Copilot：经 ACP 开一个空会话读它给的模型（会跟着账号、组织策略和 /model 里加的自带模型变）。auto 在最前；
+ * 配置的默认模型不在列表里时补在 auto 后面。没登录 GitHub、ACP 起不来或超时就给常用选项并说明原因
+ */
+async function listCopilot(
+  options: Parameters<typeof listModels>[0],
+  command: string,
+  efforts: string[],
+  fallback: () => string | undefined,
+): Promise<ModelList> {
+  const withConfigured = (models: ModelEntry[]): ModelEntry[] => {
+    const configured = fallback();
+    if (!configured || models.some((model) => model.id === configured)) return models;
+    const [auto, ...rest] = models;
+    return [auto!, { id: configured, isDefault: true }, ...rest];
+  };
+  const preset = (extra: Pick<ModelList, "error" | "presetReason">): ModelList => ({
+    provider: "copilot",
+    source: "preset",
+    models: withConfigured([COPILOT_AUTO]),
+    efforts,
+    ...extra,
+  });
+  try {
+    const models = parseCopilotSession(
+      await (options.listAcp ?? defaultAcpLister)("copilot", command),
+    );
+    if (models.length <= 1) return preset({ error: "Copilot 没有给出可选模型" });
+    return { provider: "copilot", source: "runtime", models: withConfigured(models), efforts };
+  } catch (error) {
+    if (isCopilotLoginError(error)) return preset({ presetReason: "login" });
+    return preset({ error: errorText(error) });
+  }
 }
 
 const PROVIDERS: readonly ModelProvider[] = [

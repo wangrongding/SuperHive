@@ -219,6 +219,11 @@ describe("ModelPicker hint", () => {
       "Bedrock / Vertex",
     );
     expect(
+      hint({ source: "preset", models: [{ id: "auto" }], efforts, presetReason: "login" }),
+    ).toBe(
+      "Copilot 还没登录 GitHub（在终端运行 copilot login），拉不到完整列表，下面是常用选项，也可以手动输入。",
+    );
+    expect(
       hint({ source: "preset", models: aliases, efforts, error: "api.example.com 返回 401" }),
     ).toBe("没能拉到完整的模型列表（api.example.com 返回 401），下面是常用选项，也可以手动输入。");
     expect(hint({ source: "preset", models: [], efforts, error: "spawn ENOENT" })).toBe(

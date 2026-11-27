@@ -1635,8 +1635,11 @@ export const localAgentModelsResponseSchema = z.object({
   efforts: z.array(z.string()).default([]),
   /** 拉取失败的原因 */
   error: z.string().optional(),
-  /** 为什么只给常用选项（不算失败）：oauth=Claude 用账号登录、没有 API key；cloud=走 Bedrock / Vertex 等云平台 */
-  presetReason: z.enum(["oauth", "cloud"]).optional(),
+  /**
+   * 为什么只给常用选项（不算失败）：oauth=Claude 用账号登录、没有 API key；cloud=走 Bedrock / Vertex 等云平台；
+   * login=Copilot 没登录 GitHub
+   */
+  presetReason: z.enum(["oauth", "cloud", "login"]).optional(),
 });
 
 export const localAgentMcpResponseSchema = z.object({

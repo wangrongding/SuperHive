@@ -679,7 +679,9 @@ export class LocalAgentSupervisor {
             ? parsed.efforts
             : [...runtimeReasoningEfforts(provider)],
           ...(parsed.error ? { error: parsed.error } : {}),
-          ...(parsed.presetReason === "oauth" || parsed.presetReason === "cloud"
+          ...(parsed.presetReason === "oauth" ||
+          parsed.presetReason === "cloud" ||
+          parsed.presetReason === "login"
             ? { presetReason: parsed.presetReason }
             : {}),
         };

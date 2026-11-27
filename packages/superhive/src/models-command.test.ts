@@ -161,9 +161,6 @@ describe("listModels", () => {
     expect(claude.error).toBeUndefined();
     expect(claude.models.map((model) => model.id)).toEqual(["opus", "sonnet", "haiku", "opusplan"]);
     expect(claude.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    const copilot = await listModels({ provider: "copilot", run });
-    expect(copilot.models[0]!.id).toBe("auto");
-    expect(copilot.efforts).toContain("none");
     expect(run).not.toHaveBeenCalled();
   });
 

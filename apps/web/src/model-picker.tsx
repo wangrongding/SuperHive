@@ -484,6 +484,10 @@ function ModelListHint({ data }: { data: LocalAgentModelsResponse }) {
     text = t(
       "Claude 走 Bedrock / Vertex 等云平台，拉不到完整列表，下面是常用选项，也可以手动输入。",
     );
+  else if (data.presetReason === "login")
+    text = t(
+      "Copilot 还没登录 GitHub（在终端运行 copilot login），拉不到完整列表，下面是常用选项，也可以手动输入。",
+    );
   else if (data.source === "preset")
     text = t("这个运行时没有列模型的命令，下面是常用选项，也可以手动输入。");
   return text ? <p className="agent-mcp-hint">{text}</p> : null;
