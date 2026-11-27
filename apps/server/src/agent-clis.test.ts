@@ -15,6 +15,7 @@ import {
   AgentCliManager,
   compareVersions,
   inferSource,
+  inferWindowsSource,
   isConflicting,
   lastLine,
   mergePath,
@@ -101,6 +102,86 @@ describe("inferSource", () => {
     ["/Users/a/.local/bin/omp", "/Users/a/.local/bin/omp", "unknown"],
   ])("%s → %s", (launcher, real, source) => {
     expect(inferSource(launcher, real)).toBe(source);
+  });
+});
+
+describe("inferWindowsSource", () => {
+  const clis = "C:\\Users\\me\\AppData\\Roaming\\SuperHive\\agent-clis";
+  it.each([
+    // 桌面端用自带 npm 装进 agent-clis 的：以前一律显示「来源不明」
+    [
+      `${clis}\\codex.cmd`,
+      `${clis}\\codex.cmd`,
+      `${clis}\\node_modules\\@openai\\codex\\bin\\codex.js`,
+      "npm",
+    ],
+    // 不分大小写、目录末尾带不带反斜杠都认
+    [`${clis.toLowerCase()}\\claude.cmd`, `${clis}\\claude.cmd`, `${clis}\\claude.cmd`, "npm"],
+    [
+      "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+      "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd",
+      "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js",
+      "npm",
+    ],
+    [
+      "C:\\Program Files\\nodejs\\codex.cmd",
+      "C:\\Program Files\\nodejs\\codex.cmd",
+      "C:\\Program Files\\nodejs\\node_modules\\@openai\\codex\\bin\\codex.js",
+      "npm",
+    ],
+    // nvm-windows：PATH 上是 C:\nvm4w\nodejs 软链，解开后在 …\nvm\v22.x
+    [
+      "C:\\nvm4w\\nodejs\\codex.cmd",
+      "C:\\Users\\me\\AppData\\Local\\nvm\\v22.22.3\\codex.cmd",
+      "C:\\nvm4w\\nodejs\\node_modules\\@openai\\codex\\bin\\codex.js",
+      "nvm",
+    ],
+    [
+      "C:\\Program Files\\nodejs\\gemini.cmd",
+      "C:\\Users\\me\\AppData\\Roaming\\nvm\\v20.11.0\\gemini.cmd",
+      "C:\\Program Files\\nodejs\\node_modules\\@google\\gemini-cli\\dist\\index.js",
+      "nvm",
+    ],
+    [
+      "C:\\Users\\me\\AppData\\Local\\pnpm\\codex.cmd",
+      "C:\\Users\\me\\AppData\\Local\\pnpm\\codex.cmd",
+      "C:\\Users\\me\\AppData\\Local\\pnpm\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js",
+      "pnpm",
+    ],
+    [
+      "C:\\Users\\me\\AppData\\Local\\Volta\\bin\\claude.exe",
+      "C:\\Users\\me\\AppData\\Local\\Volta\\bin\\claude.exe",
+      "C:\\Users\\me\\AppData\\Local\\Volta\\bin\\claude.exe",
+      "volta",
+    ],
+    [
+      "C:\\Users\\me\\.bun\\bin\\omp.exe",
+      "C:\\Users\\me\\.bun\\bin\\omp.exe",
+      "C:\\Users\\me\\.bun\\bin\\omp.exe",
+      "bun",
+    ],
+    [
+      "C:\\Users\\me\\.local\\bin\\claude.exe",
+      "C:\\Users\\me\\.local\\bin\\claude.exe",
+      "C:\\Users\\me\\.local\\bin\\claude.exe",
+      "native",
+    ],
+    ["C:\\tools\\opencode.exe", "C:\\tools\\opencode.exe", "C:\\tools\\opencode.exe", "unknown"],
+  ])("%s → %s", (launcher, real, target, source) => {
+    expect(inferWindowsSource(launcher, real, target, `${clis}\\`)).toBe(source);
+  });
+
+  it("without the desktop's agent-clis dir still tells npm installs by their node_modules target", () => {
+    expect(
+      inferWindowsSource(
+        `${clis}\\codex.cmd`,
+        `${clis}\\codex.cmd`,
+        `${clis}\\node_modules\\@openai\\codex\\bin\\codex.js`,
+      ),
+    ).toBe("npm");
+    expect(
+      inferWindowsSource("C:\\tools\\codex.cmd", "C:\\tools\\codex.cmd", "C:\\tools\\codex.cmd"),
+    ).toBe("unknown");
   });
 });
 

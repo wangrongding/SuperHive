@@ -76,7 +76,25 @@ const pending = (job: AgentCliJob) =>
   job.state === "running" || (job.state === "succeeded" && job.versionAfter === undefined);
 
 /** 正在进行的是哪个工具的什么操作：已经拿到任务，或者刚点了确认、还在等服务端核对命令 */
-type Activity = { tool: string; name: string; action: AgentCliAction };
+/** reinstall：装了但跑不起来时走升级流程，文案按「重新安装」说 */
+type Activity = { tool: string; name: string; action: AgentCliAction; reinstall?: boolean };
+
+/** 正在做的事，给列表上方的提示和其它卡片按钮的悬停提示用 */
+function activityText(activity: Activity, kind: "note" | "retry"): string {
+  const name = { 0: activity.name };
+  if (kind === "note") {
+    return activity.action === "install"
+      ? t("正在安装 {0}，完成后才能操作其它 CLI。", name)
+      : activity.reinstall
+        ? t("正在重新安装 {0}，完成后才能操作其它 CLI。", name)
+        : t("正在升级 {0}，完成后才能操作其它 CLI。", name);
+  }
+  return activity.action === "install"
+    ? t("正在安装 {0}，完成后再试", name)
+    : activity.reinstall
+      ? t("正在重新安装 {0}，完成后再试", name)
+      : t("正在升级 {0}，完成后再试", name);
+}
 
 export function AgentClisGroup({
   api,
@@ -184,11 +202,18 @@ export function AgentClisGroup({
           tool: running.tool,
           name: tools?.find((tool) => tool.tool === running.tool)?.name ?? TOOL_NAMES[running.tool],
           action: running.action,
+          // 升级前查不到版本就是重新安装（和进度行的判断一致）
+          reinstall: running.action === "upgrade" && running.versionBefore === null,
         }
       : undefined);
 
   const start = async (info: AgentCliWithAgents, action: AgentCliAction, command: string) => {
-    setStarting({ tool: info.tool, name: info.name, action });
+    setStarting({
+      tool: info.tool,
+      name: info.name,
+      action,
+      reinstall: action === "upgrade" && info.status === "broken",
+    });
     try {
       const next =
         action === "install"
@@ -217,9 +242,7 @@ export function AgentClisGroup({
       </div>
       {activity && (
         <p className="settings-note" role="status">
-          {activity.action === "install"
-            ? t("正在安装 {0}，完成后才能操作其它 CLI。", { 0: activity.name })
-            : t("正在升级 {0}，完成后才能操作其它 CLI。", { 0: activity.name })}
+          {activityText(activity, "note")}
         </p>
       )}
       {!tools && loading && <p className="settings-note">{t("正在检测…")}</p>}
@@ -344,15 +367,7 @@ function AgentCliCard({
             </Button>
           )}
           {(offered || mine) && (
-            <Tooltip
-              content={
-                other
-                  ? other.action === "install"
-                    ? t("正在安装 {0}，完成后再试", { 0: other.name })
-                    : t("正在升级 {0}，完成后再试", { 0: other.name })
-                  : undefined
-              }
-            >
+            <Tooltip content={other ? activityText(other, "retry") : undefined}>
               <Button
                 ref={buttonRef}
                 size="sm"

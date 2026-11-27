@@ -218,6 +218,33 @@ export function inferSource(launcher: string, real: string): AgentCliSource {
   return "unknown";
 }
 
+/**
+ * Windows 上推断安装来源。PATH 上找到的多是 npm 垫片（codex.cmd），真正的程序是垫片指向的脚本（target），
+ * 装在 <前缀>\node_modules 下；real 是解开软链后的路径（nvm-windows 的 C:\nvm4w\nodejs 指向 …\nvm\v22.x）。
+ * 桌面端用自带 npm 装进 agent-clis 的那份也是 npm 装的。
+ */
+export function inferWindowsSource(
+  launcher: string,
+  real: string,
+  target: string,
+  agentClisDir?: string,
+): AgentCliSource {
+  if (agentClisDir && isInside(launcher, agentClisDir, "win32")) return "npm";
+  const l = lower(launcher);
+  const r = lower(real);
+  const has = (part: string) => l.includes(part) || r.includes(part);
+  if (has("/volta/")) return "volta";
+  if (has("/fnm_multishells/") || has("/fnm/")) return "fnm";
+  if (has("/mise/")) return "mise";
+  if (has("/.bun/")) return "bun";
+  if (has("/pnpm/")) return "pnpm";
+  if (has("/nvm/") || has("/nvm4w/")) return "nvm";
+  // Claude Code、agy 官方脚本放到 %USERPROFILE%\.local\bin 的原生程序
+  if (/\/\.local\/bin\/(?:claude|agy)\.exe$/.test(r)) return "native";
+  if (lower(target).includes("/node_modules/")) return "npm";
+  return "unknown";
+}
+
 /** /opt/homebrew/Cellar/<formula>/… 或 /opt/homebrew/Caskroom/<cask>/… 里的名字 */
 export function brewToken(real: string, marker: "Cellar" | "Caskroom"): string | undefined {
   const segments = real.split("/");
@@ -1006,11 +1033,13 @@ export class AgentCliManager {
     };
     let command = file;
     let args = ["--version"];
+    let source = inferSource(file, real);
     if (this.platform === "win32") {
+      // 自带 Node、agent-clis 目录也可能是构造时传进来的（不一定在 env 里）
+      const agentClisDir = this.agentClisDir();
+      source = inferWindowsSource(file, real, file, agentClisDir);
       try {
-        // 自带 Node、agent-clis 目录也可能是构造时传进来的（不一定在 env 里）
         const bundledNode = this.bundledNodePath();
-        const agentClisDir = this.agentClisDir();
         const resolved = resolveCommand(file, {
           env,
           ...(bundledNode ? { bundledNode } : {}),
@@ -1018,6 +1047,7 @@ export class AgentCliManager {
         });
         command = resolved.command;
         args = [...resolved.args, "--version"];
+        source = inferWindowsSource(file, real, resolved.args[0] ?? command, agentClisDir);
       } catch (error) {
         return {
           path: file,
@@ -1025,7 +1055,7 @@ export class AgentCliManager {
           version: null,
           runnable: false,
           error: String(error),
-          source: inferSource(file, real),
+          source,
           pathDefault,
         };
       }
@@ -1046,7 +1076,7 @@ export class AgentCliManager {
       version,
       runnable,
       ...(error ? { error } : {}),
-      source: inferSource(file, real),
+      source,
       pathDefault,
     };
   }
