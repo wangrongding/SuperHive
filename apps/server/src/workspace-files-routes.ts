@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { userFsPromises } from "./user-fs.js";
 import path from "node:path";
 import {
   serverText,
@@ -24,6 +24,8 @@ import {
 } from "./workspace-files.js";
 import { slowOps } from "./slow-ops.js";
 import { errorText } from "./texts.js";
+
+const { realpath } = userFsPromises;
 
 /**
  * 房间工作区只读浏览的接口（GET /api/rooms/:roomId/workspace/...）。

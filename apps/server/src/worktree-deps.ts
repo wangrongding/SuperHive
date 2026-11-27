@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import { lstat, mkdir, readdir, readlink, rm, stat, symlink } from "node:fs/promises";
+import { userFsPromises } from "./user-fs.js";
 import path from "node:path";
 import type { WorktreeDependencies } from "@superhive/protocol";
 import { commandFor } from "./windows-command.js";
+
+const { lstat, mkdir, readdir, readlink, rm, stat, symlink } = userFsPromises;
 
 /**
  * 新任务目录的依赖准备：先按锁文件安装（pnpm 用共享 store，几秒就好）；装不上就退回软链主目录的

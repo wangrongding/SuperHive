@@ -1,7 +1,9 @@
-import { realpath, stat } from "node:fs/promises";
+import { userFsPromises } from "./user-fs.js";
 import type { HiveMcpConnection } from "./hive-mcp-config.js";
 import { hiveMcpHeaders } from "./hive-mcp-config.js";
 import { AgentNonRetryableError, AgentTransientError } from "./responder.js";
+
+const { realpath, stat } = userFsPromises;
 
 export class TaskWorkspaceRemovedError extends Error {
   constructor(readonly path: string) {

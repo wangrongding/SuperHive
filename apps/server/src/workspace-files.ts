@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { createReadStream } from "node:fs";
-import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
+import { userFs, userFsPromises } from "./user-fs.js";
 import { PassThrough, type Readable } from "node:stream";
 import path from "node:path";
 import type {
@@ -17,6 +16,9 @@ import type {
 } from "@superhive/protocol";
 import { HiveError } from "./database.js";
 import { gitOperationName, slowOps } from "./slow-ops.js";
+
+const { createReadStream } = userFs;
+const { lstat, open, readdir, realpath, stat } = userFsPromises;
 
 /**
  * 房间工作区的只读浏览：文件树、预览、git 状态、diff、提交。

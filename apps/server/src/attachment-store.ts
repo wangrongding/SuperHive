@@ -1,6 +1,6 @@
 import { serverText } from "@superhive/protocol";
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { userFs } from "./user-fs.js";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -13,6 +13,8 @@ import {
   type AttachmentKind,
 } from "@superhive/protocol";
 import { HiveError } from "./database.js";
+
+const { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } = userFs;
 
 /**
  * 附件存储：文件按 SHA-256 内容寻址落在 dir 下，数据库里每次上传一行引用。

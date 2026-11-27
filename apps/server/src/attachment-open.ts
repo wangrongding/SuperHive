@@ -1,8 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { constants, copyFile, link, lstat, mkdir, rm } from "node:fs/promises";
+import { userFs, userFsPromises } from "./user-fs.js";
 import path from "node:path";
 import { sanitizeFileName } from "./attachment-store.js";
+
+const { createReadStream } = userFs;
+const { constants, copyFile, link, lstat, mkdir, rm } = userFsPromises;
 
 /** 磁盘上的文件名：在附件名清理的基础上，再去掉 Windows 不允许的字符 */
 function diskName(name: string): string {

@@ -1,17 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import {
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { userFs } from "./user-fs.js";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { MAX_ATTACHMENT_BYTES, type Attachment } from "./hive-protocol.js";
+
+const { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } =
+  userFs;
 
 export type AttachmentLocation = { path: string } | { error: string };
 

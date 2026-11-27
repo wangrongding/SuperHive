@@ -1,5 +1,7 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { userFs } from "./user-fs.js";
 import path from "node:path";
+
+const { existsSync, readFileSync, statSync } = userFs;
 
 /**
  * 目录所在 git 仓库的当前分支（直接读 .git/HEAD，不起 git 进程）。

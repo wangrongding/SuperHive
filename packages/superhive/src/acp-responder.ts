@@ -1,4 +1,4 @@
-import { lstatSync, readlinkSync } from "node:fs";
+import { userFs } from "./user-fs.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { acpHiveMcpServer, type HiveMcpConnection } from "./hive-mcp-config.js";
@@ -22,6 +22,8 @@ import {
   type StdioTransport,
   type StdioTransportFactory,
 } from "./stdio-transport.js";
+
+const { lstatSync, readlinkSync } = userFs;
 
 /**
  * 基于 Agent Client Protocol（ACP，stdio 上的换行分隔 JSON-RPC）的通用 Responder。

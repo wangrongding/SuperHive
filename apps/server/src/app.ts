@@ -20,8 +20,8 @@ import { observeRuntime } from "./runtime-observation.js";
 import { feedbackInfo } from "./feedback-info.js";
 import type { NpmUpdates } from "./npm-updates.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { open, readFile, realpath } from "node:fs/promises";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { userFs, userFsPromises } from "./user-fs.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -1098,7 +1098,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           "WORKSPACE_PATH_NOT_FOUND",
           serverText("error.workspaceFiles.sourceNotFound"),
         );
-      return resolveInside(await realpath(root), file);
+      return resolveInside(await userFsPromises.realpath(root), file);
     },
     agentSession: (roomId, agentName) => {
       const agent = database.findParticipant(roomId, agentName);
@@ -4489,7 +4489,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         name: item.name,
         mime: item.mime,
         kind: item.kind,
-        data: await readFile(item.filePath),
+        data: await userFsPromises.readFile(item.filePath),
       };
     },
     // IM 收到的文件存成房主（本机管理员）的待发附件，随这条消息一起认领
@@ -5219,7 +5219,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return {
         kind: "image",
         attachment,
-        data: (await readFile(item.filePath)).toString("base64"),
+        data: (await userFsPromises.readFile(item.filePath)).toString("base64"),
       };
     }
     if (item.kind !== "text") {
@@ -5229,7 +5229,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         note: "二进制文件，无法以文本读取；如果你能读取本机文件，请用提示里给出的本地路径。",
       };
     }
-    const handle = await open(item.filePath, "r");
+    const handle = await userFsPromises.open(item.filePath, "r");
     try {
       const buffer = Buffer.alloc(Math.min(input.maxBytes, Math.max(0, item.size - input.offset)));
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, input.offset);
@@ -5420,7 +5420,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return reply.code(result.status).send({ error: result.error, code: result.code });
     }
     const { item } = result;
-    if (!existsSync(item.filePath)) {
+    if (!userFs.existsSync(item.filePath)) {
       return reply
         .code(410)
         .send({ ...errorText(serverText("error.attachment.gone")), code: "ATTACHMENT_GONE" });
@@ -5437,7 +5437,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       .header("Content-Security-Policy", "default-src 'none'; sandbox")
       .header("Cache-Control", "private, no-store")
       .header("X-Hive-Attachment-Sha256", item.sha256);
-    return reply.send(createReadStream(item.filePath));
+    return reply.send(userFs.createReadStream(item.filePath));
   });
 
   /**
@@ -5517,7 +5517,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       const entry = previewTokens.get(request.params.token);
       const item =
         entry && entry.expiresAt > clock() ? attachments.get(entry.attachmentId) : undefined;
-      if (!entry || !item || item.revokedAt || !existsSync(item.filePath)) {
+      if (!entry || !item || item.revokedAt || !userFs.existsSync(item.filePath)) {
         if (entry && entry.expiresAt <= clock()) previewTokens.delete(request.params.token);
         return reply
           .code(404)
@@ -5547,7 +5547,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
             "base-uri 'none'",
           ].join("; "),
         );
-      return reply.send(createReadStream(item.filePath));
+      return reply.send(userFs.createReadStream(item.filePath));
     },
   );
 
@@ -5574,7 +5574,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!("item" in result)) {
       return reply.code(result.status).send({ error: result.error, code: result.code });
     }
-    if (!result.item.messageId || !existsSync(result.item.filePath)) {
+    if (!result.item.messageId || !userFs.existsSync(result.item.filePath)) {
       return reply.code(404).send({
         ...errorText(serverText("error.attachment.notFound")),
         code: "ATTACHMENT_NOT_FOUND",

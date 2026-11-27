@@ -1,7 +1,9 @@
-import { realpathSync, statSync } from "node:fs";
+import { userFs } from "./user-fs.js";
 import { homedir } from "node:os";
 import nodePath from "node:path";
 import type { AgentAccessMode } from "./responder.js";
+
+const { realpathSync, statSync } = userFs;
 
 export type RoomWorkspace = {
   /** 这个房间里实际使用的工作目录 */

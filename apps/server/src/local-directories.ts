@@ -1,9 +1,11 @@
 import { serverText } from "@superhive/protocol";
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { userFs } from "./user-fs.js";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { LocalDirectoryListing } from "@superhive/protocol";
 import { HiveError } from "./database.js";
+
+const { readdirSync, realpathSync, statSync } = userFs;
 
 /**
  * 本机目录浏览：浏览器的文件选择器拿不到真实路径（File System Access API 只给目录名），

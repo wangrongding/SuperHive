@@ -1,9 +1,11 @@
-import { openAsBlob } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { userFs, userFsPromises } from "./user-fs.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_ATTACHMENT_BYTES } from "./hive-protocol.js";
 import type { AgentAccessMode } from "./responder.js";
+
+const { openAsBlob } = userFs;
+const { realpath, stat } = userFsPromises;
 
 /**
  * Agent 在最终回复末尾显式声明要随回复发出的文件：开始和结束标记各占一行，中间每行一个路径。

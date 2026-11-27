@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, realpath } from "node:fs/promises";
+import { userFsPromises } from "./user-fs.js";
 import path from "node:path";
 import {
   managedWorktreeSchema,
@@ -24,6 +24,8 @@ import {
   prepareDependencies,
   type DependencyOutcome,
 } from "./worktree-deps.js";
+
+const { lstat, mkdir, realpath } = userFsPromises;
 
 type GitResult = { code: number; stdout: string; stderr: string };
 
