@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createRef, type ComponentProps } from "react";
+import { createRef, useState, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCS_BASE_URL } from "@superhive/protocol";
 import { setLocalePreference } from "./i18n";
@@ -9,6 +9,12 @@ import { DESKTOP_DOWNLOAD_URL, RoomSidebar } from "./room-sidebar";
 afterEach(cleanup);
 
 type Props = ComponentProps<typeof RoomSidebar>;
+
+/** 菜单开关交给真实 state，测点击、点外面、Esc 的效果 */
+function StatefulSidebar(patch: Partial<Props>) {
+  const [open, setOpen] = useState(false);
+  return <RoomSidebar {...props({ ...patch, userMenuOpen: open, setUserMenuOpen: setOpen })} />;
+}
 
 function props(patch: Partial<Props> = {}): Props {
   return {
@@ -51,9 +57,8 @@ function props(patch: Partial<Props> = {}): Props {
     thawRoomList: vi.fn(),
     themePreference: "system",
     unreadMentionCount: 0,
-    userMenuHoverTimer: { current: undefined },
     userMenuOpen: false,
-    userMenuRef: createRef(),
+    userMenuTriggerRef: createRef(),
     username: "rd",
     ...patch,
   };
@@ -77,22 +82,66 @@ describe("sidebar incident entry", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "反馈问题 / 建议功能" }));
     expect(openFeedback).toHaveBeenCalledTimes(2);
   });
-  it("keeps the menu open when the click right after hovering would otherwise close it", () => {
+  it("opens the menu only by clicking: hover does nothing, click toggles, outside click and Esc close", () => {
     const matchMedia = vi
       .spyOn(window, "matchMedia")
       .mockImplementation((query) => ({ matches: query === "(hover: hover)" }) as MediaQueryList);
     try {
-      const setUserMenuOpen = vi.fn();
-      const { container, rerender } = render(<RoomSidebar {...props({ setUserMenuOpen })} />);
+      const { container } = render(<StatefulSidebar />);
+      const chip = screen.getByRole("button", { name: "用户菜单" });
       fireEvent.mouseEnter(container.querySelector(".sidebar-user")!);
-      expect(setUserMenuOpen).toHaveBeenLastCalledWith(true);
-      rerender(<RoomSidebar {...props({ setUserMenuOpen, userMenuOpen: true })} />);
-      // 鼠标移上来就展开了，用户顺手再点一下头像：仍然开着，不是 toggle 关掉
-      fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
-      expect(setUserMenuOpen).toHaveBeenLastCalledWith(true);
+      fireEvent.mouseOver(chip);
+      expect(screen.queryByRole("menu")).toBeNull();
+
+      fireEvent.click(chip);
+      expect(screen.getByRole("menu")).toBeTruthy();
+      expect(chip.getAttribute("aria-expanded")).toBe("true");
+      // 点菜单里面（主题那一行）不关
+      fireEvent.mouseDown(screen.getByRole("menu"));
+      expect(screen.getByRole("menu")).toBeTruthy();
+      fireEvent.click(chip);
+      expect(screen.queryByRole("menu")).toBeNull();
+
+      fireEvent.click(chip);
+      fireEvent.mouseDown(document.body);
+      expect(screen.queryByRole("menu")).toBeNull();
+
+      fireEvent.click(chip);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(chip);
     } finally {
       matchMedia.mockRestore();
     }
+  });
+
+  it("puts 「设置」 next to feedback as its own button, not in the menu", () => {
+    const setSettingsOpen = vi.fn();
+    const settingsTriggerRef = createRef<HTMLButtonElement>();
+    const { rerender } = render(
+      <StatefulSidebar
+        openFeedback={vi.fn()}
+        setSettingsOpen={setSettingsOpen}
+        settingsTriggerRef={settingsTriggerRef}
+      />,
+    );
+    const settings = screen.getByRole("button", { name: "设置" });
+    expect(settingsTriggerRef.current).toBe(settings);
+    const feedback = screen.getByRole("button", { name: "反馈问题 / 建议功能" });
+    expect(feedback.nextElementSibling).toBe(settings);
+
+    fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
+    expect(screen.queryByRole("menuitem", { name: "设置" })).toBeNull();
+    fireEvent.click(settings);
+    expect(setSettingsOpen).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    // 没有反馈按钮时照样在头像栏右侧
+    rerender(<StatefulSidebar setSettingsOpen={setSettingsOpen} />);
+    expect(screen.queryByRole("button", { name: "反馈问题 / 建议功能" })).toBeNull();
+    expect(screen.getByRole("button", { name: "用户菜单" }).nextElementSibling).toBe(
+      screen.getByRole("button", { name: "设置" }),
+    );
   });
 
   it("isn't there unless the page is the owner's on this computer", () => {
@@ -180,7 +229,6 @@ describe("sidebar user menu", () => {
     const openOwnerDevices = vi.fn();
     const setUserMenuOpen = vi.fn();
     const { rerender } = render(<RoomSidebar {...props({ userMenuOpen: true })} />);
-    expect(screen.getByRole("menuitem", { name: "设置" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "在其他设备登录" })).toBeNull();
 
     rerender(<RoomSidebar {...props({ userMenuOpen: true, openOwnerDevices, setUserMenuOpen })} />);

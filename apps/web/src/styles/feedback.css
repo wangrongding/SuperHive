@@ -9,7 +9,8 @@
   min-width: 0;
 }
 
-.sidebar-feedback {
+.sidebar-feedback,
+.sidebar-settings {
   flex-shrink: 0;
 }
 

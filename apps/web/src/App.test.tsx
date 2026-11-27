@@ -1245,10 +1245,9 @@ describe("App mention autocomplete", () => {
       content: "默认快捷键",
     });
 
-    const settingsTrigger = screen.getByRole("button", { name: "用户菜单" });
+    // 「设置」是头像栏右侧单独的图标按钮，不在用户菜单里
+    const settingsTrigger = screen.getByRole("button", { name: "设置" });
     await user.click(settingsTrigger);
-    const userMenu = screen.getByRole("menu", { name: "用户菜单" });
-    await user.click(within(userMenu).getByRole("menuitem", { name: /设置/ }));
     const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
     // 不是本机页面、也没以房主登录过：没有「设备」（和头像菜单「在其他设备登录」一致）
     expect(within(settingsDialog).queryByRole("tab", { name: /^设备/ })).toBeNull();
@@ -1345,11 +1344,6 @@ describe("App mention autocomplete", () => {
       value: "visible",
     });
     await user.click(settingsTrigger);
-    await user.click(
-      within(screen.getByRole("menu", { name: "用户菜单" })).getByRole("menuitem", {
-        name: /设置/,
-      }),
-    );
     const reopenedSettings = screen.getByRole("dialog", { name: "偏好设置" });
     await user.click(within(reopenedSettings).getByRole("tab", { name: /^通知/ }));
     await user.click(within(reopenedSettings).getByRole("radio", { name: /^当前房间任意消息/ }));
@@ -2868,8 +2862,7 @@ describe("App mention autocomplete", () => {
     expect(localStorage.getItem("superhive.notify-messages")).toBeNull();
 
     // 设置面板仍能补授权
-    await user.click(screen.getByRole("button", { name: "用户菜单" }));
-    await user.click(screen.getByRole("menuitem", { name: /设置/ }));
+    await user.click(screen.getByRole("button", { name: "设置" }));
     const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
     await user.click(within(settingsDialog).getByRole("tab", { name: /^通知/ }));
     expect(
@@ -3259,7 +3252,7 @@ describe("App mention autocomplete", () => {
     const userMenu = screen.getByRole("menu", { name: "用户菜单" });
     // 头像菜单入口还在
     expect(within(userMenu).getByRole("menuitem", { name: "在其他设备登录" })).toBeTruthy();
-    await user.click(within(userMenu).getByRole("menuitem", { name: /设置/ }));
+    await user.click(screen.getByRole("button", { name: "设置" }));
     const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
     const tab = await within(settingsDialog).findByRole("tab", { name: /^设备/ });
     await user.click(tab);

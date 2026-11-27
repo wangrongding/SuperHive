@@ -134,6 +134,7 @@ import {
   type PluginPanelKey,
 } from "./plugins";
 import { matchPluginCommand } from "./plugin-host";
+import { returnFocus } from "./focus-return";
 import { RoomSidebar } from "./room-sidebar";
 import { useRoomData } from "./use-room-data";
 import { useRoomList } from "./use-room-list";
@@ -325,7 +326,6 @@ export function App({
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [clearWhiteboard, setClearWhiteboard] = useState(true);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const userMenuHoverTimer = useRef<number | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("chat");
   /** 从接入 Agent 弹窗跳到「Agent 运行时」时要看的 CLI；关掉设置后回到接入弹窗 */
@@ -413,7 +413,7 @@ export function App({
   const settingsDialogRef = useRef<HTMLDivElement>(null);
   const settingsCloseRef = useRef<HTMLButtonElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
-  const userMenuRef = useRef<HTMLDivElement>(null);
+  const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const lastPanelTriggerRef = useRef<HTMLButtonElement>(null);
   // Hive Server 就在这台电脑上时，可以直接在网页上拉起 Agent
   const local = useLocalAgents(base, agentDialogOpen, authToken);
@@ -1208,7 +1208,7 @@ export function App({
       setAgentDialogOpen(true);
       return;
     }
-    window.requestAnimationFrame(() => settingsTriggerRef.current?.focus());
+    window.requestAnimationFrame(() => returnFocus(settingsTriggerRef.current));
   }, []);
 
   /** 接入 Agent 弹窗里的「安装、升级或调整配置」：先收起接入弹窗，打开设置的「Agent 运行时」 */
@@ -1284,25 +1284,6 @@ export function App({
     // 网络代理的设置要先从 Server 读回来才显示，多等几帧
     window.requestAnimationFrame(() => focusProxy(60));
   }, []);
-
-  useEffect(() => {
-    if (!userMenuOpen) return;
-    const closeOnOutside = (event: MouseEvent) => {
-      if (!userMenuRef.current?.contains(event.target as Node)) setUserMenuOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setUserMenuOpen(false);
-        settingsTriggerRef.current?.focus();
-      }
-    };
-    document.addEventListener("mousedown", closeOnOutside);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("mousedown", closeOnOutside);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [userMenuOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -2460,9 +2441,8 @@ export function App({
           thawRoomList={thawRoomList}
           themePreference={themePreference}
           unreadMentionCount={unreadMentionCount}
-          userMenuHoverTimer={userMenuHoverTimer}
           userMenuOpen={userMenuOpen}
-          userMenuRef={userMenuRef}
+          userMenuTriggerRef={userMenuTriggerRef}
           username={username}
         />
 
@@ -3104,7 +3084,7 @@ export function App({
           local={local}
           onClose={() => {
             setOwnerDevicesOpen(false);
-            settingsTriggerRef.current?.focus();
+            returnFocus(userMenuTriggerRef.current);
           }}
         />
       )}

@@ -10,7 +10,14 @@ import {
 } from "./app-storage";
 import { avatarHueStyle } from "./avatar";
 import { docsHref } from "./docs-link";
-import { useRef, type RefObject, type Dispatch, type SetStateAction, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  type RefObject,
+  type Dispatch,
+  type SetStateAction,
+  type ReactNode,
+} from "react";
 import type { RoomSummary } from "@superhive/protocol";
 import type { ActivityView } from "./activity";
 import type { IncidentAttentionItem } from "./incidents-panel";
@@ -19,10 +26,9 @@ import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
 import { DesktopUpdateEntry } from "./desktop-update";
 import { desktopBridge } from "./desktop-bridge";
+import { returnFocus } from "./focus-return";
 import { openJoinDialog, RemoteServerList } from "./join-remote";
 
-/** 悬停展开用户菜单后这么久之内的点击算「打开」，不当成「关上」 */
-const HOVER_CLICK_GRACE_MS = 600;
 /** 浏览器里「下载客户端」指向的地方：GitHub Releases 最新版（有 Windows 安装包和 macOS dmg） */
 export const DESKTOP_DOWNLOAD_URL = "https://github.com/wangrongding/SuperHive/releases/latest";
 
@@ -65,9 +71,8 @@ export function RoomSidebar({
   thawRoomList,
   themePreference,
   unreadMentionCount,
-  userMenuHoverTimer,
   userMenuOpen,
-  userMenuRef,
+  userMenuTriggerRef,
   username,
 }: {
   activeRoomCount: number;
@@ -115,12 +120,29 @@ export function RoomSidebar({
   thawRoomList: (element: HTMLElement) => void;
   themePreference: ThemePreference;
   unreadMentionCount: number;
-  userMenuHoverTimer: RefObject<number | undefined>;
   userMenuOpen: boolean;
-  userMenuRef: RefObject<HTMLDivElement | null>;
+  userMenuTriggerRef: RefObject<HTMLButtonElement | null>;
   username: string;
 }) {
-  const hoverOpenedAt = useRef(0);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  // 菜单只靠点击开关：点头像栏切换，点菜单外任何地方、按 Esc 关上
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const closeOnOutside = (event: MouseEvent) => {
+      if (!userMenuRef.current?.contains(event.target as Node)) setUserMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setUserMenuOpen(false);
+      returnFocus(userMenuTriggerRef.current);
+    };
+    document.addEventListener("mousedown", closeOnOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [setUserMenuOpen, userMenuOpen, userMenuTriggerRef]);
   return (
     <aside
       className={`rooms-panel panel ${mobilePanel === "rooms" ? "mobile-open" : ""}`}
@@ -358,22 +380,7 @@ export function RoomSidebar({
         {showArchivedRooms ? t("隐藏已归档房间") : t("显示已归档房间")}
       </Button>
       <DesktopUpdateEntry />
-      <div
-        className="sidebar-user"
-        ref={userMenuRef}
-        onMouseEnter={() => {
-          // 鼠标设备悬停头像即展开菜单；触屏仍通过点击切换
-          if (!window.matchMedia?.("(hover: hover)").matches) return;
-          window.clearTimeout(userMenuHoverTimer.current);
-          if (!userMenuOpen) hoverOpenedAt.current = Date.now();
-          setUserMenuOpen(true);
-        }}
-        onMouseLeave={() => {
-          if (!window.matchMedia?.("(hover: hover)").matches) return;
-          window.clearTimeout(userMenuHoverTimer.current);
-          userMenuHoverTimer.current = window.setTimeout(() => setUserMenuOpen(false), 180);
-        }}
-      >
+      <div className="sidebar-user" ref={userMenuRef}>
         {userMenuOpen && (
           <div className="user-menu" role="menu" aria-label={t("用户菜单")}>
             <div className="user-menu-theme">
@@ -386,18 +393,6 @@ export function RoomSidebar({
                 }}
               />
             </div>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setUserMenuOpen(false);
-                setMobilePanel(undefined);
-                setSettingsOpen(true);
-              }}
-            >
-              <Icon name="settings" size={15} />
-              <span>{t("设置")}</span>
-            </button>
             {openOwnerDevices && (
               <button
                 type="button"
@@ -475,20 +470,13 @@ export function RoomSidebar({
         )}
         <div className="sidebar-identity-row">
           <button
-            ref={settingsTriggerRef}
+            ref={userMenuTriggerRef}
             type="button"
             className="sidebar-user-chip"
             aria-label={t("用户菜单")}
             aria-haspopup="menu"
             aria-expanded={userMenuOpen}
-            onClick={() => {
-              // 鼠标移上来菜单已经展开，紧接着的这一下点击是想打开，不能又把它关上
-              if (Date.now() - hoverOpenedAt.current < HOVER_CLICK_GRACE_MS) {
-                setUserMenuOpen(true);
-                return;
-              }
-              setUserMenuOpen((current) => !current);
-            }}
+            onClick={() => setUserMenuOpen((current) => !current)}
           >
             <span className="identity-avatar" style={avatarHueStyle(username)} aria-hidden="true">
               {username.slice(0, 1).toUpperCase()}
@@ -508,6 +496,19 @@ export function RoomSidebar({
               <Icon name="message" size={18} />
             </IconButton>
           )}
+          <IconButton
+            ref={settingsTriggerRef}
+            className="sidebar-settings"
+            label={t("设置")}
+            aria-haspopup="dialog"
+            onClick={() => {
+              setUserMenuOpen(false);
+              setMobilePanel(undefined);
+              setSettingsOpen(true);
+            }}
+          >
+            <Icon name="settings" size={18} />
+          </IconButton>
         </div>
       </div>
     </aside>
