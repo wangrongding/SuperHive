@@ -76,7 +76,7 @@ SUPERHIVE_DESKTOP_APP=out/SuperHive-darwin-arm64/SuperHive.app/Contents/MacOS/Su
 - Mac：`SuperHive-<版本>-arm64.dmg`（安装）和 `SuperHive-darwin-arm64-<版本>.zip`（应用内更新）；
 - Windows：`SuperHive-<版本>-win-x64-Setup.exe`（安装）、`RELEASES` 和 `SuperHive-<版本>-full.nupkg`（应用内更新）。
 
-推送 `v*` 标签时，`Desktop release assets` GitHub Actions 工作流会在 Windows runner 上构建并保存上述 Windows 文件为 artifact；下载并核对校验和后，再上传到同版本 GitHub Release。macOS 文件仍按上面的本机打包流程生成。
+推送 `v*` 标签时，`Desktop release assets` GitHub Actions 工作流会在 Windows runner 上构建并保存上述 Windows 文件为 artifact；下载并核对校验和后，再上传到同版本 GitHub Release。本机下载大文件不便时，可手动运行此工作流并填写 `source_run_id`，让 CI 把该 run 的同版本 Windows artifact 上传到已经创建的 Release（不重新构建、不覆盖同名文件）；留空则只构建。macOS 文件仍按上面的本机打包流程生成。
 
 没传更新包时那个平台只能手动下载安装包。客户端只认正式版（不是 draft、prerelease）里的这些文件名，Mac 的 zip 靠 GitHub 给的 sha256 校验。
 
