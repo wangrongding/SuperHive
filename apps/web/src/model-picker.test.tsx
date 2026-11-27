@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Invocation } from "@superhive/protocol";
 import { InvocationChips } from "./invocations";
-import { ModelPicker, RetryModelDialog } from "./model-picker";
+import { FILTER_PANEL_MAX_HEIGHT, ModelPicker, RetryModelDialog } from "./model-picker";
 
 afterEach(cleanup);
 
@@ -272,6 +272,20 @@ describe("ModelPicker with many models", () => {
     expect(screen.getAllByRole("option")).toHaveLength(61);
     // 不再有单独的「手动输入…」
     expect(screen.queryByRole("option", { name: /手动输入/ })).toBeNull();
+  });
+
+  it("gives the filter panel more room than a plain select and says how many models there are", () => {
+    const innerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1000 });
+    try {
+      const { filter } = open();
+      const panel = filter.closest<HTMLElement>(".model-filter-panel")!;
+      // jsdom 里触发框在 (0,0)：下方可用约 988px，面板按 520 封顶（普通下拉是 300）
+      expect(panel.style.maxHeight).toBe(`${FILTER_PANEL_MAX_HEIGHT}px`);
+      expect(filter.getAttribute("placeholder")).toBe("过滤 60 个模型，或输入模型名");
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: innerHeight });
+    }
   });
 
   it("filters by id or display name ignoring case, and picks with the arrow keys and Enter", () => {

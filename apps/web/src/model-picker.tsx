@@ -16,6 +16,8 @@ import { Button, IconButton } from "./button";
 const CUSTOM = "\u0000custom";
 /** 选项超过这么多就在面板顶上给过滤框（和状态栏「切换主 Agent」一致） */
 export const MODEL_FILTER_THRESHOLD = 8;
+/** 过滤面板最高多少：比普通下拉（300）高，模型多时一眼看得出能往下滚；屏幕放不下时按可用空间缩 */
+export const FILTER_PANEL_MAX_HEIGHT = 520;
 
 /**
  * 选模型：列表从运行时拉（Server 的 /models），拉不到或列表里没有的可以手填。
@@ -222,7 +224,7 @@ function FilterCombobox({
   }, []);
   const show = () => {
     if (disabled || !triggerRef.current) return;
-    setPlacement(place(triggerRef.current, 320));
+    setPlacement(place(triggerRef.current, 320, FILTER_PANEL_MAX_HEIGHT));
     setQuery("");
     setActive(
       Math.max(
@@ -266,7 +268,7 @@ function FilterCombobox({
     };
     const reposition = (event: Event) => {
       if (event.target instanceof Node && panelRef.current?.contains(event.target)) return;
-      if (triggerRef.current) setPlacement(place(triggerRef.current, 320));
+      if (triggerRef.current) setPlacement(place(triggerRef.current, 320, FILTER_PANEL_MAX_HEIGHT));
     };
     document.addEventListener("pointerdown", onPointer, true);
     window.addEventListener("resize", reposition);
@@ -366,7 +368,9 @@ function FilterCombobox({
                 ? { "aria-activedescendant": optionId(active) }
                 : {})}
               value={query}
-              placeholder={t("过滤或输入模型名")}
+              placeholder={t("过滤 {0} 个模型，或输入模型名", {
+                0: options.filter((option) => option.value !== "").length,
+              })}
               spellCheck={false}
               autoComplete="off"
               onChange={(event) => {

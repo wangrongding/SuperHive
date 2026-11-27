@@ -60,8 +60,12 @@ const PANEL_MAX_HEIGHT = 300;
 const GAP = 4;
 const EDGE = 8;
 
-/** 面板贴着触发框放：下面放不下就向上弹（模型下拉的过滤面板也用它） */
-export function place(trigger: HTMLElement, menuMinWidth = 0): Placement {
+/** 面板贴着触发框放：下面放不下就向上弹（模型下拉的过滤面板也用它，并传更高的上限） */
+export function place(
+  trigger: HTMLElement,
+  menuMinWidth = 0,
+  panelMaxHeight = PANEL_MAX_HEIGHT,
+): Placement {
   const rect = trigger.getBoundingClientRect();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
@@ -70,8 +74,8 @@ export function place(trigger: HTMLElement, menuMinWidth = 0): Placement {
   const below = viewportHeight - rect.bottom - GAP - EDGE;
   const above = rect.top - GAP - EDGE;
   // 下面放不下而上面空间更大时改成向上弹
-  const up = below < Math.min(PANEL_MAX_HEIGHT, 160) && above > below;
-  const maxHeight = Math.max(96, Math.min(PANEL_MAX_HEIGHT, up ? above : below));
+  const up = below < Math.min(panelMaxHeight, 160) && above > below;
+  const maxHeight = Math.max(96, Math.min(panelMaxHeight, up ? above : below));
   return {
     left,
     top: up ? rect.top - GAP : rect.bottom + GAP,
