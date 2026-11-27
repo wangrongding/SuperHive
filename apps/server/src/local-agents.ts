@@ -1,5 +1,6 @@
 import { serverText } from "@superhive/protocol";
-import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import { spawnBackground } from "./background-process.js";
 import {
   closeSync,
@@ -57,6 +58,8 @@ export type ChildHandle = {
   kill(signal: NodeJS.Signals): void;
   /** 交接给下一个 Server：停止跟踪输出和退出，但不结束进程 */
   release?(): void;
+  /** 接管时读到的进程命令行（默认接管才有）：用它判断启动参数，不必再查一次进程 */
+  commandLine?: string;
 };
 
 export type SpawnAgent = (
@@ -76,7 +79,7 @@ export type SpawnAgent = (
 export type AdoptAgent = (
   pid: number,
   options: { name: string; logFile?: string },
-) => ChildHandle | undefined;
+) => Promise<ChildHandle | undefined>;
 
 export type ProviderProbe = (
   command: string,
@@ -116,7 +119,7 @@ export type LocalAgentSupervisorOptions = {
    * 找没被跟踪的同一个本机 Agent 进程（命令行里带着它的设置文件，测试注入）：Server 交接没接上时
    * 旧进程会留下来占着名字；默认按 ps / Win32_Process 的命令行找
    */
-  findStrays?: (settingsFile: string) => number[];
+  findStrays?: (settingsFile: string) => Promise<number[]>;
   /** 残留进程是否还活着（测试注入）；默认 process.kill(pid, 0) */
   isStrayAlive?: (pid: number) => boolean;
   /** 结束找到的残留进程（测试注入）；默认 SIGTERM，Windows 上结束进程树 */
@@ -231,8 +234,13 @@ type Runtime = {
   failures: number[];
   consecutiveFailures: number;
   phase: "running" | "restarting" | "stopped" | "crashed";
-  /** 启动前在等上一个 Server 留下的旧进程退出（见 launchAfterStrays） */
+  /** 启动前在查、或在等上一个 Server 留下的旧进程退出（见 launch、launchAfterStrays），期间不再另起 */
   waitingStrays?: boolean;
+  /**
+   * 正在进行的那次异步查询（查残留进程、接管旧进程）：查完对一下还是不是它，
+   * 期间被停止、重启、删除过（terminate 会清掉）就作废，不再按查询结果启动
+   */
+  pendingQuery?: object | undefined;
   /** 主动停止中：退出不算失败 */
   stopping: boolean;
   timer?: { cancel(): void } | undefined;
@@ -510,10 +518,10 @@ export function joinArgumentName(args: readonly string[]): string | undefined {
  * 按 pid 接管：进程还在，并且命令行确实是这个名字的 `hive join`（防止 pid 被别的进程复用），
  * 之后靠轮询发现它退出、靠信号结束它，输出从日志文件末尾接着读。
  */
-export const defaultAdoptAgent: AdoptAgent = (pid, options) => {
+export const defaultAdoptAgent: AdoptAgent = async (pid, options) => {
   if (!isAlive(pid)) return undefined;
-  const commandLine = processCommandLine(pid);
-  if (!commandLine) return undefined;
+  const commandLine = await processCommandLine(pid);
+  if (!commandLine || !isAlive(pid)) return undefined;
   const args = commandLine.trim().split(/\s+/);
   if (!args.includes("join") || joinArgumentName(args) !== options.name) return undefined;
   const exitListeners: Array<(code: number | null, error?: Error) => void> = [];
@@ -535,6 +543,7 @@ export const defaultAdoptAgent: AdoptAgent = (pid, options) => {
   poll.unref();
   return {
     pid,
+    commandLine,
     onOutput(listener) {
       outputListeners.push(listener);
     },
@@ -695,16 +704,46 @@ export class LocalAgentSupervisor {
    * 上一个 Server 交接时留下的进程还在跑的，直接接管（它手上的任务不中断），不再另起一个；
    * 需要重新拉起的按顺序错开 RESTORE_STAGGER_MS 逐个启动，排队期间显示「启动中」。
    */
-  start(): void {
-    let queued = 0;
-    for (const config of this.options.database.listLocalAgents()) {
+  async start(): Promise<void> {
+    const configs = this.options.database.listLocalAgents();
+    // 先都登记上（列表里看得到），再并行查上次留下的进程：Windows 上每查一个要起一次 PowerShell，
+    // 逐个同步查会把 Server 卡住好几秒；查询期间 launch 不会另起一个（waitingStrays）
+    const entries = configs.map((config) => {
       const runtime = this.track(config);
-      const previous = config.pid
-        ? this.adoptAgent(config.pid, {
-            name: config.name,
-            ...(this.logFile(config) ? { logFile: this.logFile(config)! } : {}),
-          })
-        : undefined;
+      if (!config.pid) return { config, runtime, previous: undefined };
+      const query = {};
+      runtime.pendingQuery = query;
+      runtime.waitingStrays = true;
+      const previous = this.adoptAgent(config.pid, {
+        name: config.name,
+        ...(this.logFile(config) ? { logFile: this.logFile(config)! } : {}),
+      })
+        .catch(() => undefined)
+        .then((handle) => {
+          const current = runtime.pendingQuery === query;
+          if (current) {
+            runtime.pendingQuery = undefined;
+            runtime.waitingStrays = false;
+          }
+          return { handle, current };
+        });
+      return { config, runtime, previous };
+    });
+    let queued = 0;
+    for (const entry of entries) {
+      const { config, runtime } = entry;
+      const result = await entry.previous;
+      const previous = result?.handle;
+      if (this.shuttingDown) {
+        previous?.release?.();
+        continue;
+      }
+      // 查询期间这个 Agent 被停止、重启或删除过：按人最新的操作来，接管到的旧进程结束掉
+      if (result && !result.current) {
+        previous?.release?.();
+        if (previous && runtime.child?.pid !== previous.pid) previous.kill("SIGTERM");
+        continue;
+      }
       if (previous && config.autostart) {
         this.appendLog(runtime, `[hive] 接管仍在运行的 ${config.name}（pid ${previous.pid}）\n`);
         this.attach(
@@ -712,7 +751,10 @@ export class LocalAgentSupervisor {
           previous,
           config.pidStartedAt ? Date.parse(config.pidStartedAt) : this.now(),
         );
-        runtime.settingsApplied = processHasArgument(previous.pid, "--agent-settings");
+        runtime.settingsApplied =
+          previous.commandLine !== undefined
+            ? previous.commandLine.includes("--agent-settings")
+            : await processHasArgument(previous.pid, "--agent-settings");
         continue;
       }
       // 不该再运行的（已手动停止）结束掉；已经不在的清掉记录
@@ -722,14 +764,14 @@ export class LocalAgentSupervisor {
       const delay = queued * RESTORE_STAGGER_MS;
       queued += 1;
       if (delay === 0) {
-        this.launch(runtime);
+        void this.launch(runtime);
         continue;
       }
       this.appendLog(runtime, `[hive] 恢复上次在运行的 Agent，${delay / 1000} 秒后启动\n`);
       // 停止、启动、重启、删除都会先取消这个定时器
       runtime.timer = this.setTimer(() => {
         runtime.timer = undefined;
-        if (runtime.phase === "running") this.launch(runtime);
+        if (runtime.phase === "running") void this.launch(runtime);
       }, delay);
     }
     // 能拿到 Agent 上报的版本才做自动更新
@@ -1031,7 +1073,7 @@ export class LocalAgentSupervisor {
         : {}),
     });
     const runtime = this.track(config);
-    this.launch(runtime);
+    void this.launch(runtime);
     return this.view(runtime);
   }
 
@@ -1042,7 +1084,7 @@ export class LocalAgentSupervisor {
       runtime.failures = [];
       runtime.consecutiveFailures = 0;
       this.options.database.setLocalAgentAutostart(id, true);
-      this.launch(runtime);
+      void this.launch(runtime);
     }
     return this.view(runtime);
   }
@@ -1080,7 +1122,8 @@ export class LocalAgentSupervisor {
       runtime.failures = [];
       runtime.consecutiveFailures = 0;
       this.options.database.setLocalAgentAutostart(id, true);
-      this.launch(runtime);
+      // 等查完残留进程再放开设置改动：核对过的配置就是要启动的配置
+      await this.launch(runtime);
     } finally {
       runtime.transitioning = false;
     }
@@ -1308,16 +1351,18 @@ export class LocalAgentSupervisor {
   }
 
   /** 找到没被跟踪的同一 Agent 进程并发 SIGTERM，返回它们的 pid */
-  private signalStrays(runtime: Runtime): number[] {
+  private async signalStrays(runtime: Runtime): Promise<number[]> {
     const file = this.settingsFile(runtime.config);
     if (!file) return [];
-    const own = runtime.child?.pid;
     let strays: number[];
     try {
-      strays = (this.options.findStrays ?? defaultFindStrays)(file);
+      strays = await (this.options.findStrays ?? defaultFindStrays)(file);
     } catch {
+      // 列不出进程（超时、PowerShell 起不来）：按没找到处理
       return [];
     }
+    // 自己的进程按查完时算：查询期间刚起来的那个不能当成残留结束掉
+    const own = runtime.child?.pid;
     strays = strays.filter((pid) => pid !== own && pid !== process.pid);
     const kill = this.options.killStray ?? defaultKillStray;
     for (const pid of strays) {
@@ -1334,7 +1379,7 @@ export class LocalAgentSupervisor {
    * 命令行找得到的先 SIGTERM、宽限期后 SIGKILL；找不到（比如列不出进程）也经连接请同名 Agent 自己退出
    */
   private async stopStrays(runtime: Runtime): Promise<void> {
-    const strays = this.signalStrays(runtime);
+    const strays = await this.signalStrays(runtime);
     const kill = this.options.killStray ?? defaultKillStray;
     if (!runtime.child) this.options.requestShutdown?.(runtime.config.name);
     if (!strays.length) return;
@@ -1376,7 +1421,7 @@ export class LocalAgentSupervisor {
       } catch (error) {
         this.log(`[local-agents] ${runtime.config.name}：标记中断的调用失败：${String(error)}`);
       }
-      this.launch(runtime, true);
+      void this.launch(runtime, true);
     };
     runtime.timer = this.setTimer(check, STRAY_POLL_MS);
   }
@@ -1470,8 +1515,32 @@ export class LocalAgentSupervisor {
     };
   }
 
-  private launch(runtime: Runtime, straysCleared = false): void {
+  /**
+   * 启动。有设置文件时先异步查一遍占着名字的旧进程（不堵事件循环），查完才真正拉起；
+   * 返回的 Promise 在查完、拉起（或转去等旧进程退出）后完成，不需要等的调用方直接 void
+   */
+  private async launch(runtime: Runtime, straysCleared = false): Promise<void> {
     if (this.shuttingDown || runtime.child || runtime.waitingStrays) return;
+    // 旧进程还占着名字的话新进程上不了线（一直报「名字已在线」）：先请它退出，还活着就等它退出再启动
+    if (!straysCleared && this.settingsFile(runtime.config)) {
+      const query = {};
+      runtime.pendingQuery = query;
+      runtime.waitingStrays = true;
+      // 查询期间显示「启动中」
+      runtime.phase = "running";
+      const signalled = await this.signalStrays(runtime);
+      // 查询期间被停止、重启、删除过（terminate 清掉了 pendingQuery）：作废，不再启动
+      if (runtime.pendingQuery !== query) return;
+      runtime.pendingQuery = undefined;
+      runtime.waitingStrays = false;
+      if (this.shuttingDown || runtime.child || this.runtimes.get(runtime.config.id) !== runtime)
+        return;
+      const strays = signalled.filter((pid) => this.strayAlive(pid));
+      if (strays.length) {
+        this.launchAfterStrays(runtime, strays);
+        return;
+      }
+    }
     const { config } = runtime;
     // 新进程跑的就是现在的代码：之前等着的重启不用再做了
     runtime.pendingRestart = undefined;
@@ -1490,14 +1559,6 @@ export class LocalAgentSupervisor {
       }
     }
     const cwd = fallback ? fallback.to : config.cwd;
-    // 旧进程还占着名字的话新进程上不了线（一直报「名字已在线」）：先请它退出，还活着就等它退出再启动
-    if (!straysCleared) {
-      const strays = this.signalStrays(runtime).filter((pid) => this.strayAlive(pid));
-      if (strays.length) {
-        this.launchAfterStrays(runtime, strays);
-        return;
-      }
-    }
     const settingsFile = this.writeSettings(runtime.config);
     runtime.settingsApplied = settingsFile !== undefined;
     const args = [
@@ -1610,7 +1671,7 @@ export class LocalAgentSupervisor {
       runtime.timer = undefined;
       if (runtime.phase !== "restarting") return;
       runtime.restarts += 1;
-      this.launch(runtime);
+      void this.launch(runtime);
     }, delay);
   }
 
@@ -1618,6 +1679,7 @@ export class LocalAgentSupervisor {
     runtime.timer?.cancel();
     runtime.timer = undefined;
     runtime.waitingStrays = false;
+    runtime.pendingQuery = undefined;
     const child = runtime.child;
     if (!child) return;
     runtime.stopping = true;
@@ -1665,38 +1727,39 @@ export class LocalAgentSupervisor {
   }
 }
 
-/** workspace / full 的目录必须真实存在且是绝对路径；取 realpath 存储，拒绝文件系统根目录 */
+const execFileAsync = promisify(execFile);
+
 /** 进程的命令行里是否带某个参数（读不到时按没有处理） */
-function processHasArgument(pid: number | undefined, argument: string): boolean {
-  return pid ? (processCommandLine(pid)?.includes(argument) ?? false) : false;
+async function processHasArgument(pid: number | undefined, argument: string): Promise<boolean> {
+  return pid ? ((await processCommandLine(pid))?.includes(argument) ?? false) : false;
 }
 
-/** 读进程的完整命令行：macOS / Linux 用 ps，Windows 用 PowerShell 查 Win32_Process；读不到返回 undefined */
-/** 命令行里带着这个设置文件的进程（就是这个本机 Agent 的 hive join） */
-function defaultFindStrays(settingsFile: string): number[] {
+/**
+ * 命令行里带着这个设置文件的进程（就是这个本机 Agent 的 hive join）。
+ * 异步执行：Windows 上 PowerShell 冷启动加 Get-CimInstance 常要 1～3 秒，同步跑会堵住 Server 事件循环
+ */
+async function defaultFindStrays(settingsFile: string): Promise<number[]> {
   const marker = `--agent-settings=${settingsFile}`;
-  let listing: string;
-  if (process.platform === "win32") {
-    listing = execFileSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }',
-      ],
-      { encoding: "utf8", timeout: 15_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
-    );
-  } else {
-    listing = execFileSync("ps", ["-ax", "-o", "pid=,args="], {
-      encoding: "utf8",
-      timeout: 5_000,
-      windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024,
-    });
-  }
+  const { stdout } =
+    process.platform === "win32"
+      ? await execFileAsync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }',
+          ],
+          { encoding: "utf8", timeout: 15_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+        )
+      : await execFileAsync("ps", ["-ax", "-o", "pid=,args="], {
+          encoding: "utf8",
+          timeout: 5_000,
+          windowsHide: true,
+          maxBuffer: 16 * 1024 * 1024,
+        });
   const pids: number[] = [];
-  for (const line of listing.split(/\r?\n/)) {
+  for (const line of stdout.split(/\r?\n/)) {
     const match = /^\s*(\d+)\s+(.*)$/.exec(line);
     if (!match || !match[2]!.includes(marker)) continue;
     // 命令行里的路径后面要么结束、要么是空格或引号，免得 a.json 匹配到 a.json.bak
@@ -1719,27 +1782,31 @@ function defaultKillStray(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
-function processCommandLine(pid: number): string | undefined {
+/**
+ * 读进程的完整命令行：macOS / Linux 用 ps，Windows 用 PowerShell 查 Win32_Process；
+ * 读不到、超时返回 undefined。异步执行，原因同 defaultFindStrays
+ */
+async function processCommandLine(pid: number): Promise<string | undefined> {
   try {
     if (process.platform === "win32") {
-      return (
-        execFileSync(
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            `(Get-CimInstance Win32_Process -Filter "ProcessId=${Math.trunc(pid)}").CommandLine`,
-          ],
-          { encoding: "utf8", timeout: 10_000, windowsHide: true },
-        ).trim() || undefined
+      const { stdout } = await execFileAsync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `(Get-CimInstance Win32_Process -Filter "ProcessId=${Math.trunc(pid)}").CommandLine`,
+        ],
+        { encoding: "utf8", timeout: 10_000, windowsHide: true },
       );
+      return stdout.trim() || undefined;
     }
-    return execFileSync("ps", ["-o", "args=", "-p", String(pid)], {
+    const { stdout } = await execFileAsync("ps", ["-o", "args=", "-p", String(pid)], {
       encoding: "utf8",
       timeout: 5_000,
       windowsHide: true,
     });
+    return stdout;
   } catch {
     return undefined;
   }
@@ -1755,6 +1822,7 @@ function killTree(pid: number): void {
   });
 }
 
+/** workspace / full 的目录必须真实存在且是绝对路径；取 realpath 存储，拒绝文件系统根目录 */
 export function resolveWorkspace(input: string | undefined): string {
   if (!input?.trim())
     throw new HiveError("LOCAL_AGENT_CWD_REQUIRED", serverText("error.localAgent.cwdRequired"));

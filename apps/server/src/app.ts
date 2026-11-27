@@ -7406,7 +7406,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   invocationTimer.unref();
 
   app.addHook("onReady", async () => {
-    localAgents?.start();
+    await localAgents?.start();
     if (!sandbox) imHub.start();
     supersedeStale();
     for (const invocation of database.listPendingContinuations())

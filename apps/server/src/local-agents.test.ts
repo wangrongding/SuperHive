@@ -788,6 +788,8 @@ describe("local agent routes", () => {
       payload: { provider: "claude", name: "rd-claude", access: "read-only" },
     });
     const id = created.json().agent.id as string;
+    // 有设置文件时先异步查残留进程，查完才拉起
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
     const args = spawner.children[0]!.args;
     const file = args
       .find((arg) => arg.startsWith("--agent-settings="))!
@@ -835,6 +837,7 @@ describe("local agent routes", () => {
       headers: owner,
       payload: { provider: "opencode", name: "rd-opencode", access: "read-only" },
     });
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(2));
     // 其他 provider 也有设置文件（模型从这里读），只是没有 MCP 可勾选
     expect(spawner.children[1]!.args.some((arg) => arg.startsWith("--agent-settings="))).toBe(true);
     expect(
@@ -869,6 +872,8 @@ describe("local agent routes", () => {
       },
     });
     const id = created.json().agent.id as string;
+    // 有设置文件时先异步查残留进程，查完才拉起
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
     const args = spawner.children[0]!.args;
     // 模型只从设置文件读：改回默认时才能真的回到默认
     expect(args).not.toContain("--model");
@@ -953,6 +958,8 @@ describe("local agent routes", () => {
       payload: { provider: "claude", name: "rd-claude", access: "read-only" },
     });
     const id = created.json().agent.id as string;
+    // 有设置文件时先异步查残留进程，查完才拉起
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
     // 没设过：null（Bridge 按默认 40 万），设置文件里也不写
     expect(created.json().agent).toMatchObject({ compactWindow: null, cacheTtl: null });
     const file = spawner.children[0]!.args.find((arg) =>
@@ -1020,6 +1027,8 @@ describe("local agent routes", () => {
       payload: { provider: "claude", name: "rd-claude", access: "read-only" },
     });
     const id = created.json().agent.id as string;
+    // 有设置文件时先异步查残留进程，查完才拉起
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
     expect(created.json().agent.effort).toBeNull();
     const file = spawner.children[0]!.args.find((arg) =>
       arg.startsWith("--agent-settings="),
@@ -1175,6 +1184,8 @@ describe("local agent routes", () => {
       payload: { provider: "claude", name: "rd-claude", access: "read-only", mcpDisabled: ["rea"] },
     });
     expect(created.json().agent.mcpDisabled).toEqual(["rea"]);
+    // 有设置文件时先异步查残留进程，查完才拉起
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
     const args = spawner.children[0]!.args;
     const file = args
       .find((arg) => arg.startsWith("--agent-settings="))!
@@ -1418,7 +1429,7 @@ describe("LocalAgentSupervisor", () => {
     expect(database.listLocalAgents()[0]?.pid).toBe(4321);
   });
 
-  it("hands its agents over to the next Server and the next Server adopts them by pid", () => {
+  it("hands its agents over to the next Server and the next Server adopts them by pid", async () => {
     const database = new HiveDatabase(":memory:");
     const first = supervisorWith(database);
     const agent = first.supervisor.create({ provider: "omp", name: "rd-omp", access: "read-only" });
@@ -1430,9 +1441,9 @@ describe("LocalAgentSupervisor", () => {
     expect(database.listLocalAgents()[0]?.pid).toBe(child.pid);
 
     const adopted = new FakeChild(child.pid, "node", [], {});
-    const adopt = vi.fn(() => adopted);
+    const adopt = vi.fn(async () => adopted);
     const second = supervisorWith(database, { adopt });
-    second.supervisor.start();
+    await second.supervisor.start();
     expect(adopt).toHaveBeenCalledWith(child.pid, { name: "rd-omp" });
     expect(second.spawner.spawn).not.toHaveBeenCalled();
     expect(second.supervisor.get(agent.id).pid).toBe(child.pid);
@@ -1446,7 +1457,7 @@ describe("LocalAgentSupervisor", () => {
     database.close();
   });
 
-  it("starts a fresh process when the recorded one is gone, and stops a leftover that should not run", () => {
+  it("starts a fresh process when the recorded one is gone, and stops a leftover that should not run", async () => {
     const database = new HiveDatabase(":memory:");
     const first = supervisorWith(database);
     const running = first.supervisor.create({ provider: "omp", name: "a", access: "read-only" });
@@ -1456,9 +1467,9 @@ describe("LocalAgentSupervisor", () => {
 
     const leftover = new FakeChild(1001, "node", [], {});
     const second = supervisorWith(database, {
-      adopt: (pid) => (pid === 1001 ? leftover : undefined),
+      adopt: async (pid) => (pid === 1001 ? leftover : undefined),
     });
-    second.supervisor.start();
+    await second.supervisor.start();
     // a 的旧进程已经不在：另起一个，并清掉旧进程号
     expect(second.spawner.spawn).toHaveBeenCalledTimes(1);
     expect(second.supervisor.get(running.id).pid).toBe(second.spawner.children[0]!.pid);
@@ -1563,7 +1574,7 @@ describe("LocalAgentSupervisor", () => {
     await first.supervisor.shutdown();
 
     const second = supervisorWith(database);
-    second.supervisor.start();
+    await second.supervisor.start();
     expect(second.spawner.children.map((child) => joinArgumentName(child.args))).toEqual([
       "rd-omp",
     ]);
@@ -1572,7 +1583,7 @@ describe("LocalAgentSupervisor", () => {
     database.close();
   });
 
-  it("moves an agent off a desktop install directory to home, and only borrows home for a missing one", () => {
+  it("moves an agent off a desktop install directory to home, and only borrows home for a missing one", async () => {
     const database = new HiveDatabase(":memory:");
     const home = mkdtempSync(path.join(tmpdir(), "hive-home-"));
     try {
@@ -1600,7 +1611,7 @@ describe("LocalAgentSupervisor", () => {
       });
       const log = vi.fn();
       const { supervisor, spawner, timers } = supervisorWith(database, { home: () => home, log });
-      supervisor.start();
+      await supervisor.start();
       while (spawner.children.length < 3) timers.fireNext();
 
       const cwdOf = (name: string) =>
@@ -1658,7 +1669,7 @@ describe("LocalAgentSupervisor", () => {
     await first.supervisor.shutdown();
 
     const second = supervisorWith(database);
-    second.supervisor.start();
+    await second.supervisor.start();
     const names = () => second.spawner.children.map((child) => joinArgumentName(child.args));
     // 第一个立即启动，其余排队，排队中也显示「启动中」
     expect(names()).toEqual(["a"]);
@@ -1701,6 +1712,7 @@ describe("LocalAgentSupervisor", () => {
       access: "full",
       cwd: directory,
     });
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
     // 等旧进程退出期间改 MCP：拒绝，新进程用的仍是批准时的配置
     const restarting = supervisor.restart(agent.id, (current) => current.mcpDisabled.length === 0);
     expect(() => supervisor.updateSettings(agent.id, { mcpDisabled: ["x"] })).toThrow(
@@ -1744,7 +1756,7 @@ describe("LocalAgentSupervisor", () => {
       probe,
       setTimer: timers.setTimer,
       settingsDir,
-      findStrays: (file) => {
+      findStrays: async (file) => {
         expect(file.startsWith(settingsDir)).toBe(true);
         return strays;
       },
@@ -1756,9 +1768,11 @@ describe("LocalAgentSupervisor", () => {
       access: "full",
       cwd: mkdtempSync(path.join(tmpdir(), "hive-stray-")),
     });
-    // 启动前先请占着名字的旧进程退出
+    // 启动前先请占着名字的旧进程退出；查询是异步的，查的时候还没拉起，状态显示「启动中」
+    expect(spawner.children).toHaveLength(0);
+    expect(supervisor.get(agent.id).status).toBe("starting");
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
     expect(killed).toEqual([[424242, "SIGTERM"]]);
-    expect(spawner.children).toHaveLength(1);
     // 删除：自己的进程结束后，再结束旧进程、请同名连接下线，宽限期后还在就 SIGKILL（假 pid 早已不在，不再补刀）
     killed.length = 0;
     strays = [424243];
@@ -1790,7 +1804,7 @@ describe("LocalAgentSupervisor", () => {
       probe,
       setTimer: timers.setTimer,
       settingsDir,
-      findStrays: () => [...alive],
+      findStrays: async () => [...alive],
       killStray: (pid, signal) => {
         killed.push([pid, signal]);
         if (signal === "SIGKILL") alive.delete(pid);
@@ -1806,6 +1820,7 @@ describe("LocalAgentSupervisor", () => {
     });
     // 上一个 Server 留下的旧进程还在收尾（停下回合、把没送达的停止回报写进状态文件）：
     // 这时就起新进程，两个进程会同时读写同一份状态文件，旧进程的停止回报被新进程覆盖掉
+    await vi.waitFor(() => expect(killed).toHaveLength(2));
     expect(killed).toEqual([
       [515151, "SIGTERM"],
       [525252, "SIGTERM"],
@@ -1838,7 +1853,7 @@ describe("LocalAgentSupervisor", () => {
       probe,
       setTimer: timers.setTimer,
       settingsDir: mkdtempSync(path.join(tmpdir(), "hive-settings-")),
-      findStrays: () => [...alive],
+      findStrays: async () => [...alive],
       killStray: (pid, signal) => {
         if (signal === "SIGKILL") alive.delete(pid);
       },
@@ -1850,6 +1865,7 @@ describe("LocalAgentSupervisor", () => {
       access: "full",
       cwd: mkdtempSync(path.join(tmpdir(), "hive-stray-")),
     });
+    await vi.waitFor(() => expect(timers.timers.some((timer) => !timer.cancelled)).toBe(true));
     expect(spawner.children).toHaveLength(0);
     // 还在等旧进程退出时人点了停止
     const stopping = supervisor.stop(agent.id);
@@ -1864,6 +1880,134 @@ describe("LocalAgentSupervisor", () => {
     await stopping;
     expect(spawner.children).toHaveLength(0);
     expect(supervisor.get(agent.id).status).toBe("stopped");
+    database.close();
+  });
+
+  it("looks for leftover processes without blocking the event loop, and launches once the lookup settles", async () => {
+    const database = new HiveDatabase(":memory:");
+    const spawner = fakeSpawner();
+    const timers = manualTimers();
+    const lookups: Array<{ resolve: (pids: number[]) => void; reject: (error: Error) => void }> =
+      [];
+    const supervisor = new LocalAgentSupervisor({
+      database,
+      cli,
+      serverUrl: "http://127.0.0.1:8787",
+      joinToken: "join-token",
+      isAgentOnline: () => false,
+      isNameInUse: () => false,
+      spawn: spawner.spawn,
+      probe,
+      setTimer: timers.setTimer,
+      settingsDir: mkdtempSync(path.join(tmpdir(), "hive-settings-")),
+      findStrays: () => new Promise((resolve, reject) => lookups.push({ resolve, reject })),
+      killStray: () => {},
+      isStrayAlive: () => false,
+    });
+    const agent = supervisor.create({
+      provider: "claude",
+      name: "rd-claude5",
+      access: "full",
+      cwd: mkdtempSync(path.join(tmpdir(), "hive-stray-")),
+    });
+    // 查询还没回来：事件循环照常转，没有拉起，显示「启动中」
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(lookups).toHaveLength(1);
+    expect(spawner.children).toHaveLength(0);
+    expect(supervisor.get(agent.id).status).toBe("starting");
+    // 查询期间再点「启动」：不会另起一个，也不会再查一次
+    supervisor.startAgent(agent.id);
+    expect(lookups).toHaveLength(1);
+    // 查询失败（超时、PowerShell 起不来）按没找到处理，照常启动，只起一个
+    lookups[0]!.reject(new Error("timed out"));
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawner.children).toHaveLength(1);
+    expect(supervisor.get(agent.id).status).toBe("starting");
+    await supervisor.shutdown();
+    database.close();
+  });
+
+  it("does not launch when the agent is stopped, restarted or removed while the leftover lookup is pending", async () => {
+    const database = new HiveDatabase(":memory:");
+    const spawner = fakeSpawner();
+    const lookups: Array<(pids: number[]) => void> = [];
+    const supervisor = new LocalAgentSupervisor({
+      database,
+      cli,
+      serverUrl: "http://127.0.0.1:8787",
+      joinToken: "join-token",
+      isAgentOnline: () => false,
+      isNameInUse: () => false,
+      spawn: spawner.spawn,
+      probe,
+      setTimer: manualTimers().setTimer,
+      settingsDir: mkdtempSync(path.join(tmpdir(), "hive-settings-")),
+      findStrays: () => new Promise((resolve) => lookups.push(resolve)),
+      killStray: () => {},
+      isStrayAlive: () => false,
+    });
+    const cwd = mkdtempSync(path.join(tmpdir(), "hive-stray-"));
+    // 停止：查询回来后不再启动
+    const stoppedAgent = supervisor.create({ provider: "claude", name: "a", access: "full", cwd });
+    const stopping = supervisor.stop(stoppedAgent.id);
+    await vi.waitFor(() => expect(lookups).toHaveLength(2));
+    for (const resolve of lookups.splice(0)) resolve([]);
+    await stopping;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawner.children).toHaveLength(0);
+    expect(supervisor.get(stoppedAgent.id).status).toBe("stopped");
+
+    // 重启：作废前一次查询，只按最新那次起一个
+    const restarted = supervisor.create({ provider: "claude", name: "b", access: "full", cwd });
+    const restarting = supervisor.restart(restarted.id);
+    await vi.waitFor(() => expect(lookups).toHaveLength(2));
+    for (const resolve of lookups.splice(0)) resolve([]);
+    await restarting;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawner.children.map((child) => joinArgumentName(child.args))).toEqual(["b"]);
+
+    // 删除：查询回来时已经没有这个 Agent，不再拉起
+    const removed = supervisor.create({ provider: "claude", name: "c", access: "full", cwd });
+    const removing = supervisor.remove(removed.id);
+    await vi.waitFor(() => expect(lookups).toHaveLength(2));
+    for (const resolve of lookups.splice(0)) resolve([]);
+    await removing;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawner.children.map((child) => joinArgumentName(child.args))).toEqual(["b"]);
+    await supervisor.shutdown();
+    database.close();
+  });
+
+  it("runs the default process lookup asynchronously instead of blocking on ps", async () => {
+    const database = new HiveDatabase(":memory:");
+    const { supervisor, spawner } = supervisorWith(database, {
+      settingsDir: mkdtempSync(path.join(tmpdir(), "hive-settings-")),
+    });
+    supervisor.create({
+      provider: "claude",
+      name: "rd-claude5",
+      access: "full",
+      cwd: mkdtempSync(path.join(tmpdir(), "hive-stray-")),
+    });
+    // 同步跑 ps 的话 create 返回时已经拉起；现在要等 ps 异步返回
+    expect(spawner.children).toHaveLength(0);
+    await vi.waitFor(() => expect(spawner.children).toHaveLength(1));
+    await supervisor.shutdown();
+    database.close();
+  });
+
+  it("treats a failed adoption lookup as gone and starts a fresh process", async () => {
+    const database = new HiveDatabase(":memory:");
+    const first = supervisorWith(database);
+    const agent = first.supervisor.create({ provider: "omp", name: "rd-omp", access: "read-only" });
+    first.supervisor.detach();
+    const second = supervisorWith(database, {
+      adopt: () => Promise.reject(new Error("powershell timed out")),
+    });
+    await second.supervisor.start();
+    expect(second.spawner.spawn).toHaveBeenCalledTimes(1);
+    expect(second.supervisor.get(agent.id).pid).toBe(second.spawner.children[0]!.pid);
     database.close();
   });
 

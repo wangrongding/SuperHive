@@ -61,7 +61,7 @@ async function hive(
             serverUrl: "http://127.0.0.1",
             spawn: fakeSpawn,
             probe: async () => ({ installed: true, version: "test" }),
-            findStrays: () => [],
+            findStrays: async () => [],
           },
         }
       : {}),
