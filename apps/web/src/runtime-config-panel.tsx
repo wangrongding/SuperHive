@@ -13,6 +13,7 @@ import { CredentialRow, RestartNotice, RUNTIME_LABELS } from "./runtime-credenti
 import "./styles/runtime-config.css";
 import { Button } from "./button";
 import { SkillsSection, type RuntimeSkillsApi } from "./runtime-skills-panel";
+import { ProfilesSection, type RuntimeProfilesApi } from "./runtime-profiles";
 
 /**
  * Agent CLI 卡片上「配置」点开的面板（只给 Server 所在电脑上的本机房主）：分接入、行为、MCP、提示词、
@@ -33,7 +34,8 @@ export type RuntimeConfigApi = Pick<
   | "updateRuntimeCredentials"
   | "act"
 > &
-  RuntimeSkillsApi;
+  RuntimeSkillsApi &
+  RuntimeProfilesApi;
 
 export type RuntimeConfigSection = "access" | "behavior" | "mcp" | "skills" | "prompt" | "advanced";
 type Section = RuntimeConfigSection;
@@ -162,6 +164,15 @@ function AccessSection(props: SectionProps) {
   const credentials = config.credentials;
   return (
     <>
+      <ProfilesSection
+        // 下面直接改了地址或 key 之后重新读一遍，「当前」标记跟着变
+        revision={`${credentials.baseUrl.masked}|${credentials.apiKey.masked}`}
+        api={api}
+        provider={provider}
+        label={label}
+        file={credentials.files[0] ?? ""}
+        onSaved={onSaved}
+      />
       {credentials.configured ? (
         <div className="runtime-config-block">
           <small className="runtime-credentials-files">

@@ -1857,21 +1857,21 @@ export const runtimeCredentialsSchema = z.object({
   baseUrl: runtimeCredentialFieldInfoSchema,
   apiKey: runtimeCredentialFieldInfoSchema,
 });
+const runtimeBaseUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .regex(/^https?:\/\/[^\s]+$/);
+const runtimeApiKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4096)
+  .regex(/^[\x21-\x7e]+$/);
 export const updateRuntimeCredentialsRequestSchema = z
   .object({
-    baseUrl: z
-      .string()
-      .trim()
-      .max(2048)
-      .regex(/^https?:\/\/[^\s]+$/)
-      .optional(),
-    apiKey: z
-      .string()
-      .trim()
-      .min(1)
-      .max(4096)
-      .regex(/^[\x21-\x7e]+$/)
-      .optional(),
+    baseUrl: runtimeBaseUrlSchema.optional(),
+    apiKey: runtimeApiKeySchema.optional(),
   })
   .refine((value) => value.baseUrl !== undefined || value.apiKey !== undefined);
 export type RuntimeCredentialProvider = z.infer<typeof runtimeCredentialProviderSchema>;
@@ -1880,6 +1880,98 @@ export type RuntimeCredentialFieldInfo = z.infer<typeof runtimeCredentialFieldIn
 export type RuntimeCredentials = z.infer<typeof runtimeCredentialsSchema>;
 export type RuntimeCredentialEffect = z.infer<typeof runtimeCredentialEffectSchema>;
 export type UpdateRuntimeCredentialsRequest = z.infer<typeof updateRuntimeCredentialsRequestSchema>;
+
+/**
+ * 运行时的供应商（只限本机房主）：每个运行时可以存多套「接口地址 + key」，外加一档「官方订阅」
+ * （Claude Code、Codex 用账号登录，不配地址和 key），一键切换。存的 key 在 Server 数据库里加密，
+ * 列表只给打码后的值；切换时只改 CLI 自己的配置（先备份、原子替换），生效规则同运行时地址与密钥。
+ */
+export const runtimeProfileSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  baseUrl: z.string().nullable(),
+  /** 打码后的 key */
+  apiKey: z.string().nullable(),
+  /** 地址和 key 跟 CLI 现在的配置一致 */
+  active: z.boolean(),
+  /** 从哪来：hive=在这里添加，current=切换前自动存下的原配置，cc-switch=从 cc-switch 导入 */
+  source: z.enum(["hive", "current", "cc-switch"]),
+  /** Codex：切到这套时用的 [model_providers.<id>] */
+  providerId: z.string().optional(),
+  updatedAt: z.string(),
+});
+/** cc-switch（另一个切换工具）里存的供应商：只读列出，可以导入 */
+export const ccSwitchProviderSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  baseUrl: z.string().nullable(),
+  apiKey: z.string().nullable(),
+  /** cc-switch 认为当前在用的那一套 */
+  current: z.boolean(),
+  /** 地址和 key 已经存在这里了 */
+  imported: z.boolean(),
+});
+export const runtimeProfilesSchema = z.object({
+  provider: runtimeCredentialProviderSchema,
+  profiles: z.array(runtimeProfileSchema),
+  /** 官方订阅（账号登录）：只有 Claude Code、Codex 有 */
+  official: z
+    .object({
+      active: z.boolean(),
+      /** 登录了没有；unknown=看不出来（例如凭据在系统钥匙串的非默认位置） */
+      login: z.enum(["yes", "no", "unknown"]),
+      /** 在终端里登录用的命令 */
+      loginCommand: z.string(),
+      /** 切到官方后仍会生效、可能不认的设置（例如 ANTHROPIC_MODEL） */
+      leftover: z.array(z.string()),
+    })
+    .nullable(),
+  /** 当前配置不属于任何一套（也不是官方）：切换前会先自动存成一套 */
+  unsaved: z.boolean(),
+  /** 不能切换的原因（配置读不懂、地址或 key 由环境变量提供等） */
+  note: z.string().optional(),
+  noteText: serverTextSchema.optional(),
+  /** cc-switch 也在管这个运行时：切换后 cc-switch 显示的当前供应商不会跟着变 */
+  ccSwitch: z
+    .object({
+      /** cc-switch 认为当前在用的那一套的名字 */
+      current: z.string().nullable(),
+      /** 这里存的、和 cc-switch 当前那一套地址和 key 相同的那一套的名字（要切回去的就是它） */
+      currentProfile: z.string().nullable(),
+      providers: z.array(ccSwitchProviderSchema),
+    })
+    .nullable(),
+});
+const profileNameSchema = z.string().trim().min(1).max(60);
+export const createRuntimeProfileRequestSchema = z.union([
+  z.object({
+    name: profileNameSchema,
+    baseUrl: runtimeBaseUrlSchema,
+    apiKey: runtimeApiKeySchema,
+  }),
+  /** 把 CLI 现在的地址和 key 存成一套 */
+  z.object({ name: profileNameSchema, fromCurrent: z.literal(true) }),
+]);
+export const updateRuntimeProfileRequestSchema = z
+  .object({
+    name: profileNameSchema.optional(),
+    baseUrl: runtimeBaseUrlSchema.optional(),
+    apiKey: runtimeApiKeySchema.optional(),
+  })
+  .refine((value) => Object.values(value).some((item) => item !== undefined));
+export const switchRuntimeProfileRequestSchema = z.union([
+  z.object({ official: z.literal(true) }),
+  z.object({ profileId: z.string().min(1).max(100) }),
+]);
+export const importCcSwitchProvidersRequestSchema = z.object({
+  ids: z.array(z.string().min(1).max(200)).min(1).max(50),
+});
+export type RuntimeProfile = z.infer<typeof runtimeProfileSchema>;
+export type CcSwitchProvider = z.infer<typeof ccSwitchProviderSchema>;
+export type RuntimeProfiles = z.infer<typeof runtimeProfilesSchema>;
+export type CreateRuntimeProfileRequest = z.infer<typeof createRuntimeProfileRequestSchema>;
+export type UpdateRuntimeProfileRequest = z.infer<typeof updateRuntimeProfileRequestSchema>;
+export type SwitchRuntimeProfileRequest = z.infer<typeof switchRuntimeProfileRequestSchema>;
 
 /**
  * Agent CLI 的配置面板（只限本机房主）：在接入地址与密钥之外，补上模型等附加项、常用行为设置、

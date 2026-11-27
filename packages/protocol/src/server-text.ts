@@ -1257,6 +1257,34 @@ export const serverTexts = {
     zh: "{file} 用了 JSON5 写法（如不带引号的键），为免改坏不在网页上改，请手动修改",
     en: "{file} uses JSON5 syntax (such as unquoted keys); change it by hand so nothing breaks",
   },
+  "error.runtimeProfiles.notSwitchable": {
+    zh: "不能在网页上切换：{reason}",
+    en: "Can't switch here: {reason}",
+  },
+  "error.runtimeProfiles.notFound": {
+    zh: "没有这套供应商，可能已经删掉了。",
+    en: "That provider profile no longer exists.",
+  },
+  "error.runtimeProfiles.nothingToSave": {
+    zh: "CLI 现在没有配接口地址和 key，没有可存的。",
+    en: "The CLI has no URL and key configured right now, so there's nothing to save.",
+  },
+  "error.runtimeProfiles.ccSwitch": {
+    zh: "读不到 cc-switch 的数据。",
+    en: "Couldn't read cc-switch's data.",
+  },
+  "error.runtimeProfiles.terminal": {
+    zh: "没能打开终端，请自己在终端里运行：{command}",
+    en: "Couldn't open a terminal; run this in a terminal yourself: {command}",
+  },
+  "runtimeProfiles.note.ccSwitchProxy": {
+    zh: "cc-switch 正在用本机代理接管这个运行时，请先在 cc-switch 里关掉代理接管再切换",
+    en: "cc-switch is routing this runtime through its local proxy; turn off proxy takeover in cc-switch before switching",
+  },
+  "runtimeProfiles.note.noOfficial": {
+    zh: "这个运行时没有「官方订阅」这一档",
+    en: "This runtime has no official subscription option",
+  },
   "error.runtimeConfig.invalid": {
     zh: "配置值不合法：{reason}",
     en: "Invalid config value: {reason}",

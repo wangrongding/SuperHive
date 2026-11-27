@@ -145,6 +145,7 @@ import { IncidentDesk, type IncidentGit } from "./incident-desk.js";
 import { ImHub } from "./im/im-hub.js";
 import { ImStore } from "./im/im-store.js";
 import { SecretBox } from "./im/secret-box.js";
+import { RuntimeProfileStore, type RuntimeProfileStoreOptions } from "./runtime-profiles.js";
 import type { ImChannelDriver } from "./im/types.js";
 
 /**
@@ -224,6 +225,11 @@ export type BuildAppOptions = {
   remoteJoins?: { dir: string; runJoinCli?: RunJoinCli };
   /** 运行时全局配置里的地址和密钥；省略即不提供（测试默认关闭，免得读写真实的 ~/.claude、~/.codex），由 index.ts 注入 */
   runtimeCredentials?: RuntimeCredentialStore;
+  /** 多套供应商：测试注入 cc-switch 目录、钥匙串查询等 */
+  runtimeProfileOptions?: Pick<
+    RuntimeProfileStoreOptions,
+    "ccSwitchDir" | "keychainHas" | "platform" | "now"
+  >;
   /** 从网上搜索、下载 skill；省略用真实网络，测试注入替身 */
   skillMarket?: SkillMarket;
   /** 本机 Agent CLI 的检测与升级；省略即不提供（测试默认关闭，免得真的跑登录 shell、查 npm），由 index.ts 注入 */
@@ -546,7 +552,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     changed: () => pushIncidentAttention(),
     log: app.log,
   });
-  const imStore = new ImStore(database.connection(), SecretBox.open(options.imKeyPath));
+  // 本机凭据（IM 的 App Secret、运行时供应商的 key）共用一把本机密钥加密
+  const secretBox = SecretBox.open(options.imKeyPath);
+  const imStore = new ImStore(database.connection(), secretBox);
   const ownerDevices = new OwnerDevices(database.connection(), {
     secret: (() => {
       const stored = database.getSetting("ownerLoginSecret");
@@ -1147,7 +1155,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
     notifyOwner: (text) => void imHub.notifyOwner(text),
     ...(options.runtimeCredentials && !sandbox
-      ? { runtimeCredentials: options.runtimeCredentials }
+      ? {
+          runtimeCredentials: options.runtimeCredentials,
+          runtimeProfiles: new RuntimeProfileStore({
+            db: database.connection(),
+            box: secretBox,
+            credentials: options.runtimeCredentials,
+            ...(options.runtimeProfileOptions ?? {}),
+          }),
+        }
       : {}),
     ...(options.skillMarket ? { skillMarket: options.skillMarket } : {}),
     ...(options.agentClis && !sandbox ? { agentClis: options.agentClis } : {}),

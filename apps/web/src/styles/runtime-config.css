@@ -168,3 +168,81 @@
   flex-direction: column;
   gap: 6px;
 }
+
+/* 接入 → 供应商：多套地址 + key 与官方订阅 */
+.runtime-profiles-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+}
+
+.runtime-profile-list li.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.runtime-profile-list li small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.runtime-profile-list .runtime-credential-note {
+  color: var(--warning);
+}
+
+.runtime-credentials-badge.current {
+  background: var(--bg-main);
+  color: var(--accent);
+}
+
+.runtime-credentials-badge.warn {
+  color: var(--warning);
+}
+
+.runtime-profile-login {
+  height: auto;
+  padding: 0 4px;
+}
+
+.runtime-profiles-ccswitch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  font-size: var(--text-xs);
+}
+
+.runtime-profiles-ccswitch p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.runtime-profiles-import {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: stretch;
+}
+
+.runtime-profiles-import label {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  font-size: var(--text-sm);
+}
+
+.runtime-profiles-import code {
+  overflow-wrap: anywhere;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}

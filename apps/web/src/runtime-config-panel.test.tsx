@@ -108,6 +108,17 @@ function api(provider: RuntimeCredentialProvider = "claude") {
     readRuntimeSkill: vi.fn(() => Promise.reject(new Error("unused"))),
     toggleRuntimeSkill: vi.fn(() => Promise.reject(new Error("unused"))),
     deleteRuntimeSkill: vi.fn(() => Promise.reject(new Error("unused"))),
+    // 供应商切换另有 runtime-profiles.test.tsx；这里只给一份空列表
+    runtimeProfiles: vi.fn(async () => ({
+      ...result(provider),
+      profiles: { provider, profiles: [], official: null, unsaved: false, ccSwitch: null },
+    })),
+    createRuntimeProfile: vi.fn(() => Promise.reject(new Error("unused"))),
+    updateRuntimeProfile: vi.fn(() => Promise.reject(new Error("unused"))),
+    deleteRuntimeProfile: vi.fn(() => Promise.reject(new Error("unused"))),
+    switchRuntimeProfile: vi.fn(() => Promise.reject(new Error("unused"))),
+    importCcSwitchProviders: vi.fn(() => Promise.reject(new Error("unused"))),
+    openRuntimeLogin: vi.fn(() => Promise.reject(new Error("unused"))),
   };
 }
 

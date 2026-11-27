@@ -51,6 +51,10 @@ import type {
   RuntimeSkills,
   UpdateIncidentSettingsRequest,
   UpdateRuntimeCredentialsRequest,
+  CreateRuntimeProfileRequest,
+  RuntimeProfiles,
+  SwitchRuntimeProfileRequest,
+  UpdateRuntimeProfileRequest,
   WorktreeDiscardPreview,
   WorktreeStatus,
 } from "@superhive/protocol";
@@ -280,6 +284,31 @@ export type LocalAgentsState = {
     content: string,
     baseHash: string | null,
   ): Promise<RuntimeConfigResult & { hash: string | null }>;
+  /** 本机：运行时的多套供应商与官方订阅 */
+  runtimeProfiles(provider: RuntimeCredentialProvider): Promise<RuntimeProfilesResult>;
+  createRuntimeProfile(
+    provider: RuntimeCredentialProvider,
+    input: CreateRuntimeProfileRequest,
+  ): Promise<RuntimeProfilesResult>;
+  updateRuntimeProfile(
+    provider: RuntimeCredentialProvider,
+    id: string,
+    input: UpdateRuntimeProfileRequest,
+  ): Promise<RuntimeProfilesResult>;
+  deleteRuntimeProfile(
+    provider: RuntimeCredentialProvider,
+    id: string,
+  ): Promise<RuntimeProfilesResult>;
+  switchRuntimeProfile(
+    provider: RuntimeCredentialProvider,
+    target: SwitchRuntimeProfileRequest,
+  ): Promise<RuntimeProfilesResult>;
+  importCcSwitchProviders(
+    provider: RuntimeCredentialProvider,
+    ids: string[],
+  ): Promise<RuntimeProfilesResult>;
+  /** 在这台电脑上开终端运行登录命令 */
+  openRuntimeLogin(provider: RuntimeCredentialProvider): Promise<void>;
   /** 本机：各 CLI 的全局 skills */
   runtimeSkills(provider: RuntimeCredentialProvider): Promise<RuntimeSkillsResult>;
   readRuntimeSkill(
@@ -340,6 +369,14 @@ export type RuntimeCredentialsWithAgents = RuntimeCredentials & {
 export type RuntimeConfigResult = {
   config: RuntimeConfig;
   agents: RuntimeCredentialsWithAgents["agents"];
+};
+
+export type RuntimeProfilesResult = RuntimeConfigResult & {
+  profiles: RuntimeProfiles;
+  /** 切换前自动存下的原配置的名字 */
+  saved?: string;
+  /** 从 cc-switch 导入了几套 */
+  imported?: number;
 };
 
 export type AgentCliWithAgents = AgentCliInfo & {
@@ -1142,6 +1179,60 @@ export function useLocalAgents(
     },
     [request],
   );
+  const profilesRequest = useCallback(
+    async (path: string, init: RequestInit = {}) => {
+      const response = await request(`/api/local/runtime-config/${path}`, {
+        cache: "no-store",
+        ...init,
+      });
+      return localizeServerPayload((await response.json()) as RuntimeProfilesResult);
+    },
+    [request],
+  );
+  const runtimeProfiles = useCallback(
+    (provider: RuntimeCredentialProvider) => profilesRequest(`${provider}/profiles`),
+    [profilesRequest],
+  );
+  const createRuntimeProfile = useCallback(
+    (provider: RuntimeCredentialProvider, input: CreateRuntimeProfileRequest) =>
+      profilesRequest(`${provider}/profiles`, { method: "POST", body: JSON.stringify(input) }),
+    [profilesRequest],
+  );
+  const updateRuntimeProfile = useCallback(
+    (provider: RuntimeCredentialProvider, id: string, input: UpdateRuntimeProfileRequest) =>
+      profilesRequest(`${provider}/profiles/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }),
+    [profilesRequest],
+  );
+  const deleteRuntimeProfile = useCallback(
+    (provider: RuntimeCredentialProvider, id: string) =>
+      profilesRequest(`${provider}/profiles/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    [profilesRequest],
+  );
+  const switchRuntimeProfile = useCallback(
+    (provider: RuntimeCredentialProvider, target: SwitchRuntimeProfileRequest) =>
+      profilesRequest(`${provider}/profiles/switch`, {
+        method: "POST",
+        body: JSON.stringify(target),
+      }),
+    [profilesRequest],
+  );
+  const importCcSwitchProviders = useCallback(
+    (provider: RuntimeCredentialProvider, ids: string[]) =>
+      profilesRequest(`${provider}/profiles/import`, {
+        method: "POST",
+        body: JSON.stringify({ ids }),
+      }),
+    [profilesRequest],
+  );
+  const openRuntimeLogin = useCallback(
+    async (provider: RuntimeCredentialProvider) => {
+      await request(`/api/local/runtime-config/${provider}/login`, { method: "POST" });
+    },
+    [request],
+  );
   const skillsRequest = useCallback(
     async <T,>(path: string, init: RequestInit = {}) => {
       const response = await request(`/api/local/runtime-skills/${path}`, init);
@@ -1406,6 +1497,13 @@ export function useLocalAgents(
     toggleRuntimeMcp,
     readRuntimeFile,
     writeRuntimeFile,
+    runtimeProfiles,
+    createRuntimeProfile,
+    updateRuntimeProfile,
+    deleteRuntimeProfile,
+    switchRuntimeProfile,
+    importCcSwitchProviders,
+    openRuntimeLogin,
     runtimeSkills,
     readRuntimeSkill,
     toggleRuntimeSkill,

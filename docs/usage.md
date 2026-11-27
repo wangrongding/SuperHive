@@ -165,6 +165,22 @@ Provider CLI 必须安装在 Agent 所在电脑，而不是 Hive Server 上。Ag
 hive skill search pdf
 ```
 
+### 切换供应商（多套地址和 key、官方订阅）
+
+本机房主在 Agent CLI 卡片的「配置 → 接入」里，每个运行时可以存多套「接口地址 + key」，Claude Code 和 Codex 另有一档「官方订阅」（账号登录），点「切换」确认后生效。
+
+- **只改 CLI 自己的配置，先备份再原子替换**，终端里的 CLI 也一起切换：
+  - Claude Code 只动 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN`（已经在用 `ANTHROPIC_API_KEY` 时改它）。切到官方就删掉这三项，模型、权限、插件、hook 等其它设置不动。
+  - Codex 只动 `config.toml` 顶层的 `model_provider` 和对应 `[model_providers.<id>]` 的 `base_url`、`experimental_bearer_token`。切到官方就删掉 `model_provider`，回到内置 OpenAI；`auth.json` 不碰。
+  - 其它运行时改当前 provider 条目的地址和 key。
+- **生效**：Claude Code、Copilot 下一轮就用新的，其它运行时按提示重启 Agent。
+- **官方订阅还没登录**：列表里标「未登录」，点「在终端登录」会在这台电脑上开一个终端运行 `claude auth login` 或 `codex login`，登录在终端里由你完成，Hive 不碰账号密码。切到官方后仍在生效、官方未必认的设置（如 `ANTHROPIC_MODEL`、Codex 的 `model`）会列出来，在下面的「模型」里改。
+- **原配置不会丢**：CLI 现在的地址和 key 不属于任何一套时，切走前自动存成一套，标「原配置」。
+- **key 的保存**：存在 Server 数据库里，用本机密钥加密（和飞书 App Secret 同一把）。列表只显示打码后的值，审计日志只记切到了哪一套。
+- **和 cc-switch 共存**：检测到 cc-switch（`~/.cc-switch/cc-switch.db`）也在管 Claude Code 或 Codex 时，会列出它存的供应商，可以一键导入。Hive 只读它的数据，不写它的任何文件。
+  - cc-switch 切换前会把当时的配置存回它记的「当前供应商」，所以在这里切换后，它显示的当前供应商不会跟着变。之后要在 cc-switch 里切换，先在这里切回它记的那一套，否则那一套的地址和 key 会被改成这里切过去的。
+  - cc-switch 开着代理接管时（地址指向本机代理、key 是 `PROXY_MANAGED`），这里不能切换，请先在 cc-switch 里关掉代理接管。
+
 ### Agent 权限
 
 命令行 `hive join` 默认只读，网页「接入 Agent」默认工作区档；提升权限必须由 Agent 所在电脑的操作者显式选择：

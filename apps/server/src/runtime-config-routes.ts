@@ -20,12 +20,17 @@ import {
   updateRuntimeConfigFieldsRequestSchema,
   updateRuntimeConfigFileRequestSchema,
   type RuntimeCredentialProvider,
+  createRuntimeProfileRequestSchema,
+  importCcSwitchProvidersRequestSchema,
+  switchRuntimeProfileRequestSchema,
+  updateRuntimeProfileRequestSchema,
 } from "@superhive/protocol";
 import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { HiveError } from "./database.js";
 import type { LocalAgentSupervisor } from "./local-agents.js";
 import { RuntimeConfigStore } from "./runtime-config.js";
+import type { RuntimeProfileStore } from "./runtime-profiles.js";
 import {
   RUNTIME_CREDENTIAL_PROVIDERS,
   type RuntimeCredentialStore,
@@ -41,6 +46,7 @@ import {
 import { RUNTIME_LABELS, RuntimeSkillStore } from "./runtime-skills.js";
 import { SkillInstallPlans, SkillMarket } from "./skill-market.js";
 import { errorText, hiveErrorBody } from "./texts.js";
+import { openTerminal } from "./open-terminal.js";
 
 /**
  * Agent CLI 配置面板的接口：只限本机房主（local 级，和运行时地址与密钥一样），
@@ -52,6 +58,10 @@ const ERROR_STATUS: Record<string, number> = {
   RUNTIME_CREDENTIALS_NOT_EDITABLE: 409,
   RUNTIME_CREDENTIALS_UNREADABLE: 409,
   RUNTIME_CREDENTIALS_WRITE_FAILED: 500,
+  RUNTIME_PROFILE_NOT_SWITCHABLE: 409,
+  RUNTIME_PROFILE_NOT_FOUND: 404,
+  RUNTIME_PROFILE_NOTHING_TO_SAVE: 409,
+  CC_SWITCH_UNAVAILABLE: 404,
   RUNTIME_CONFIG_INVALID: 400,
   RUNTIME_CONFIG_CHANGED: 409,
   RUNTIME_SKILL_NOT_FOUND: 404,
@@ -73,6 +83,10 @@ export function registerRuntimeConfigRoutes(
     authorizeLocal: (request: FastifyRequest, reply: FastifyReply) => boolean;
     /** 从网上搜索、下载 skill；测试注入替身，不真正访问外网 */
     skillMarket?: SkillMarket;
+    /** 多套供应商与官方订阅的切换；没有时这组接口返回 404 */
+    profiles?: RuntimeProfileStore;
+    /** 在终端里运行登录命令（复用「在终端打开会话」）；测试注入 */
+    openTerminal?: (command: string) => Promise<void>;
   },
 ): void {
   const { credentials, supervisor, authorizeLocal } = options;
@@ -109,7 +123,17 @@ export function registerRuntimeConfigRoutes(
 
   function audit(
     request: FastifyRequest,
-    action: "view" | "update" | "delete" | "sync" | "install-preview" | "install" | "skill-search",
+    action:
+      | "view"
+      | "update"
+      | "delete"
+      | "sync"
+      | "install-preview"
+      | "install"
+      | "skill-search"
+      | "switch"
+      | "import"
+      | "login",
     provider: RuntimeCredentialProvider,
     target: string[],
   ) {
@@ -260,6 +284,159 @@ export function registerRuntimeConfigRoutes(
       } catch (error) {
         return fail(reply, error);
       }
+    },
+  );
+
+  /* ---------- 多套供应商与官方订阅：key 只在 Server 里，列表打码，审计只记哪一套 ---------- */
+
+  const profileStore = options.profiles;
+  const profilesResult = async (
+    store: RuntimeConfigStore,
+    profiles: RuntimeProfileStore,
+    provider: RuntimeCredentialProvider,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    profiles: await profiles.list(provider),
+    ...result(store, provider),
+    ...extra,
+  });
+  function beginProfiles(
+    request: FastifyRequest<{ Params: { provider: string } }>,
+    reply: FastifyReply,
+  ) {
+    const ok = begin(request, reply);
+    if (!ok) return undefined;
+    if (!profileStore) {
+      void reply.code(404).send({ ...errorText(serverText("error.feature.disabled")) });
+      return undefined;
+    }
+    return { ...ok, profiles: profileStore };
+  }
+
+  app.get<{ Params: { provider: string } }>(
+    "/api/local/runtime-config/:provider/profiles",
+    async (request, reply) => {
+      const ok = beginProfiles(request, reply);
+      if (!ok) return reply;
+      try {
+        void reply.header("Cache-Control", "no-store");
+        return await profilesResult(ok.store, ok.profiles, ok.provider);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { provider: string } }>(
+    "/api/local/runtime-config/:provider/profiles",
+    async (request, reply) => {
+      const ok = beginProfiles(request, reply);
+      if (!ok) return reply;
+      const body = createRuntimeProfileRequestSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply);
+      try {
+        const id = ok.profiles.create(ok.provider, body.data);
+        audit(request, "update", ok.provider, [`profile:${id}:create`]);
+        return await profilesResult(ok.store, ok.profiles, ok.provider);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.put<{ Params: { provider: string; id: string } }>(
+    "/api/local/runtime-config/:provider/profiles/:id",
+    async (request, reply) => {
+      const ok = beginProfiles(request, reply);
+      if (!ok) return reply;
+      const body = updateRuntimeProfileRequestSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply);
+      try {
+        ok.profiles.update(ok.provider, request.params.id, body.data);
+        const fields = (["name", "baseUrl", "apiKey"] as const).filter(
+          (field) => body.data[field] !== undefined,
+        );
+        audit(request, "update", ok.provider, [`profile:${request.params.id}:${fields.join(",")}`]);
+        return await profilesResult(ok.store, ok.profiles, ok.provider);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.delete<{ Params: { provider: string; id: string } }>(
+    "/api/local/runtime-config/:provider/profiles/:id",
+    async (request, reply) => {
+      const ok = beginProfiles(request, reply);
+      if (!ok) return reply;
+      try {
+        ok.profiles.remove(ok.provider, request.params.id);
+        audit(request, "delete", ok.provider, [`profile:${request.params.id}`]);
+        return await profilesResult(ok.store, ok.profiles, ok.provider);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { provider: string } }>(
+    "/api/local/runtime-config/:provider/profiles/switch",
+    async (request, reply) => {
+      const ok = beginProfiles(request, reply);
+      if (!ok) return reply;
+      const body = switchRuntimeProfileRequestSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply);
+      try {
+        const { saved } = ok.profiles.switchTo(ok.provider, body.data);
+        audit(request, "switch", ok.provider, [
+          "official" in body.data ? "official" : `profile:${body.data.profileId}`,
+        ]);
+        return await profilesResult(ok.store, ok.profiles, ok.provider, saved ? { saved } : {});
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Params: { provider: string } }>(
+    "/api/local/runtime-config/:provider/profiles/import",
+    async (request, reply) => {
+      const ok = beginProfiles(request, reply);
+      if (!ok) return reply;
+      const body = importCcSwitchProvidersRequestSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply);
+      try {
+        const imported = ok.profiles.importCcSwitch(ok.provider, body.data.ids);
+        audit(
+          request,
+          "import",
+          ok.provider,
+          body.data.ids.map((id) => `cc-switch:${id}`),
+        );
+        return await profilesResult(ok.store, ok.profiles, ok.provider, { imported });
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  /** 官方订阅还没登录：在这台电脑上开一个终端运行登录命令，登录由人在终端里完成 */
+  app.post<{ Params: { provider: string } }>(
+    "/api/local/runtime-config/:provider/login",
+    async (request, reply) => {
+      const ok = beginProfiles(request, reply);
+      if (!ok) return reply;
+      const command = ok.profiles.loginCommand(ok.provider);
+      if (!command) return badRequest(reply);
+      try {
+        await (options.openTerminal ?? openTerminal)(command);
+      } catch {
+        return reply
+          .code(500)
+          .send({ ...errorText(serverText("error.runtimeProfiles.terminal", { command })) });
+      }
+      audit(request, "login", ok.provider, [command]);
+      return { ok: true };
     },
   );
 
