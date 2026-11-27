@@ -23,6 +23,8 @@ const texts = {
   docs: { zh: "使用文档", en: "Documentation" },
   issues: { zh: "反馈问题", en: "Report an Issue" },
   openInBrowser: { zh: "在浏览器中打开", en: "Open in Browser" },
+  copyImage: { zh: "复制图片", en: "Copy Image" },
+  saveImageAs: { zh: "图片另存为…", en: "Save Image As…" },
   file: { zh: "文件", en: "File" },
   edit: { zh: "编辑", en: "Edit" },
   view: { zh: "视图", en: "View" },

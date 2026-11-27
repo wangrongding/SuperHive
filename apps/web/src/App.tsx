@@ -48,6 +48,7 @@ import {
   type ContextMenuItem,
   type ContextMenuState,
 } from "./context-menu";
+import { isPortalBubble } from "./message-selection";
 import { AttentionToasts, useAttention, type AttentionDelivery } from "./attention-alerts";
 import { attentionLabels, concernsMe, nextAttention } from "./attention";
 import { useFaviconBadge } from "./favicon-badge";
@@ -2018,6 +2019,8 @@ export function App({
   }
 
   function openRoomMenu(event: ReactMouseEvent<HTMLElement>, room: RoomSummary) {
+    // 预览弹窗等 portal 里的右击会冒泡到这里，那不是在对它右击
+    if (isPortalBubble(event)) return;
     event.preventDefault();
     const row = event.currentTarget;
     const index = pinnedRoomIds.indexOf(room.id);
@@ -2237,6 +2240,8 @@ export function App({
 
   /** 成员右键：@ 它、复制名字；Agent 还能设为主 Agent、看任务、打开设置、重启 / 停止 / 启动 */
   function openMemberMenu(event: ReactMouseEvent<HTMLElement>, participant: Participant) {
+    // 预览弹窗等 portal 里的右击会冒泡到这里，那不是在对它右击
+    if (isPortalBubble(event)) return;
     event.preventDefault();
     setContextMenu({
       ...contextMenuPoint(event),
@@ -2250,6 +2255,8 @@ export function App({
     event: ReactMouseEvent<HTMLElement>,
     sender: { id?: string; name: string },
   ) {
+    // 预览弹窗等 portal 里的右击会冒泡到这里，那不是在对它右击
+    if (isPortalBubble(event)) return;
     event.preventDefault();
     event.stopPropagation();
     const participant =

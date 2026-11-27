@@ -41,7 +41,6 @@ export function messageMenuItems(options: MessageMenuOptions): ContextMenuItem[]
     const code = target.code;
     targeted.push({ label: t("复制代码"), onSelect: () => options.copyValue(code) });
   }
-  if (target.image) targeted.push({ label: t("打开图片"), onSelect: target.image.open });
   groups.push(targeted);
   groups.push([
     selection

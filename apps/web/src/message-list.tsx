@@ -65,7 +65,7 @@ import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
 import { contextMenuPoint, type ContextMenuState } from "./context-menu";
 import { messageMenuItems, thinkingCardMenuItems } from "./message-menu";
-import { isEditableTarget, menuTargetOf, selectedTextWithin } from "./message-selection";
+import { keepsNativeContextMenu, menuTargetOf, selectedTextWithin } from "./message-selection";
 import { splitQuote } from "./message-quote";
 
 type SenderMenuOpener = (
@@ -587,7 +587,7 @@ export function MessageList({
                     })
                   }
                   onContextMenu={(event) => {
-                    if (isEditableTarget(event.target)) return;
+                    if (keepsNativeContextMenu(event)) return;
                     const first = [...batch]
                       .map((item) => messageById.get(item.messageId))
                       .filter((message): message is ChatMessage => Boolean(message))
@@ -920,11 +920,12 @@ function MessageItem({
       },
     );
   /**
-   * 消息的右键菜单（也从操作条的「更多」按钮打开）：分享模式、已撤回的、点在输入框里的留给浏览器原生菜单。
+   * 消息的右键菜单（也从操作条的「更多」按钮打开）：分享模式、已撤回的、点在输入框或图片上的，
+   * 以及从预览弹窗等 portal 里冒泡上来的，都留给浏览器原生菜单（图片要能「复制图片」「另存为」）。
    * anchor 是「更多」按钮：菜单贴着按钮弹出
    */
   const openMessageMenu = (event: ReactMouseEvent<HTMLElement>, anchor?: HTMLElement) => {
-    if (shareMode || message.deletedAt || isEditableTarget(event.target)) return;
+    if (shareMode || message.deletedAt || keepsNativeContextMenu(event)) return;
     const article = event.currentTarget.closest<HTMLElement>("article.message");
     if (!article) return;
     event.preventDefault();

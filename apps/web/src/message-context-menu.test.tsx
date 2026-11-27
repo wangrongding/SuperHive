@@ -10,25 +10,42 @@ import type { GuestAccess } from "./access-gate";
 vi.mock("./shadow-content", () => ({
   ShadowContent: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock("./message-markdown-lazy", () => ({
-  MessageMarkdown: ({ content }: { content: string }) => (
-    <div>
-      {content.split("\n\n").map((part) =>
-        part.startsWith("```") ? (
-          <pre key={part}>
-            <code>{part.replace(/```\w*\n?/g, "")}</code>
-          </pre>
-        ) : part.startsWith("http") ? (
-          <a key={part} href={part}>
-            {part}
-          </a>
-        ) : (
-          <p key={part}>{part}</p>
-        ),
-      )}
-    </div>
-  ),
-}));
+vi.mock("./message-markdown-lazy", async () => {
+  const { createPortal } = await import("react-dom");
+  return {
+    MessageMarkdown: ({ content }: { content: string }) => (
+      <div>
+        {content.split("\n\n").map((part) =>
+          // 「portal:」：像预览大图一样挂到 document.body 的弹窗；「img:」：消息里的图片缩略图按钮
+          part.startsWith("portal:") ? (
+            createPortal(
+              <div role="dialog" key={part}>
+                <img alt="预览大图" src="blob:http://hive/big" />
+                <p>{part.slice(7)}</p>
+              </div>,
+              document.body,
+              part,
+            )
+          ) : part.startsWith("img:") ? (
+            <button type="button" key={part}>
+              <img alt={part.slice(4)} src="blob:http://hive/thumb" />
+            </button>
+          ) : part.startsWith("```") ? (
+            <pre key={part}>
+              <code>{part.replace(/```\w*\n?/g, "")}</code>
+            </pre>
+          ) : part.startsWith("http") ? (
+            <a key={part} href={part}>
+              {part}
+            </a>
+          ) : (
+            <p key={part}>{part}</p>
+          ),
+        )}
+      </div>
+    ),
+  };
+});
 vi.mock("./thinking-card", async (original) => ({
   ...(await original<typeof import("./thinking-card")>()),
   TraceRecap: ({ open, invocation }: { open?: boolean; invocation: Invocation }) => (
@@ -347,6 +364,51 @@ describe("消息右键菜单", () => {
     });
     render(<Harness props={shared.props} />);
     fireEvent.contextMenu(articleOf("看完了"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("预览弹窗等 portal 里的右击冒泡上来不拦，留给浏览器原生菜单", () => {
+    const withPreview = { ...reply, content: "看完了\n\nportal:弹窗里的文字" };
+    const { props } = makeProps([question, withPreview]);
+    render(<Harness props={props} />);
+    const dialog = screen.getByRole("dialog");
+    // 弹窗在 DOM 上挂在 body，不在消息 article 里
+    expect(articleOf("看完了").contains(dialog)).toBe(false);
+    for (const target of [screen.getByAltText("预览大图"), screen.getByText("弹窗里的文字")]) {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(screen.queryByRole("menu")).toBeNull();
+    }
+    // 消息正文本身右击仍是我们的菜单
+    fireEvent.contextMenu(screen.getByText("看完了"), { clientX: 40, clientY: 50 });
+    expect(menuLabels()[0]).toBe("引用回复");
+  });
+
+  it("消息里的图片缩略图右击走原生菜单（能复制图片、另存为），旁边的正文照旧", () => {
+    const withImage = { ...reply, content: "看完了\n\nimg:截图.png" };
+    const { props } = makeProps([question, withImage]);
+    render(<Harness props={props} />);
+    const image = screen.getByAltText("截图.png");
+    for (const target of [image, image.parentElement!]) {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(screen.queryByRole("menu")).toBeNull();
+    }
+    fireEvent.contextMenu(screen.getByText("看完了"), { clientX: 40, clientY: 50 });
+    expect(menuLabels()[0]).toBe("引用回复");
+    expect(menuLabels()).not.toContain("打开图片");
+  });
+
+  it("执行中卡片：portal 冒泡上来的右击同样不拦", () => {
+    const running = { ...finished, status: "running" as const, replyMessageId: undefined };
+    const withPreview = { ...question, content: "帮我看看\n\nportal:卡片外的弹窗" };
+    const { props } = makeProps([withPreview], { invocationList: [running] });
+    render(<Harness props={props} />);
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    screen.getByText("卡片外的弹窗").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
     expect(screen.queryByRole("menu")).toBeNull();
   });
 

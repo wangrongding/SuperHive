@@ -41,6 +41,7 @@ import {
   type OwnedServer,
 } from "./hive-server.js";
 import { IPC, type TerminalCreateRequest, type TerminalLayoutAction } from "./ipc-contract.js";
+import { imageContextMenu } from "./image-context-menu.js";
 import { createPickFilesHandler, createWorkspaceLookup, readPickedFiles } from "./file-picker.js";
 import { isLoopbackOrigin, isTrustedSender, originAnswer, originOf } from "./ipc-guard.js";
 import { loginShellEnv, mergePath, mergeProxyEnv } from "./shell-env.js";
@@ -584,6 +585,20 @@ function runApp(): void {
       if (isDeepLink(url)) handleDeepLink(url);
       else openExternal(url);
       return { action: "deny" };
+    });
+    // Electron 没有原生右键菜单：网页不接管的图片右击，补上「复制图片」「图片另存为」
+    contents.on("context-menu", (_event, params) => {
+      const items = imageContextMenu(
+        params,
+        {
+          copyImageAt: (x, y) => contents.copyImageAt(x, y),
+          downloadURL: (url) => contents.downloadURL(url),
+        },
+        { copyImage: t("copyImage"), saveImageAs: t("saveImageAs") },
+      );
+      if (!items) return;
+      const window = BrowserWindow.fromWebContents(contents);
+      Menu.buildFromTemplate(items).popup(window ? { window } : {});
     });
     // 别人服务器窗口里弹出的窗口也只能待在对方的地址上
     contents.on("did-create-window", (child) => {

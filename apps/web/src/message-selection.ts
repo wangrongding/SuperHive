@@ -1,5 +1,5 @@
 /**
- * 右键消息时看清楚点在了什么上：选中的文字、链接、代码块、图片，还是输入框（输入框留给浏览器原生菜单）。
+ * 右键消息时看清楚点在了什么上：选中的文字、链接、代码块，还是输入框、图片（这两种留给浏览器原生菜单）。
  * 对话流渲染在 shadow root 里，选区要从 shadow root 取，document 上只看得到宿主
  */
 
@@ -56,13 +56,35 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
+/** 右击点在图片上（含只包着一张图的缩略图按钮）：交给浏览器原生菜单，才能「复制图片」「图片另存为」 */
+export function isImageTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target instanceof HTMLImageElement || Boolean(target.querySelector(":scope > img"));
+}
+
+type MenuEvent = { target: EventTarget | null; currentTarget: EventTarget | null };
+
+/**
+ * 右击的目标在 DOM 上不在挂监听的元素里：React 的合成事件会穿过 portal 往上冒泡，
+ * 预览大图、产物面板、提示气泡这类挂在 document.body 的弹层里右击，也会冒到消息、成员、房间上。
+ * 这种不是在对它右击，一律不接管
+ */
+export function isPortalBubble(event: MenuEvent): boolean {
+  const { target, currentTarget } = event;
+  if (!(target instanceof Node) || !(currentTarget instanceof Node)) return true;
+  return !currentTarget.contains(target);
+}
+
+/** 消息、思考卡片上的右击该留给浏览器原生菜单：从 portal 冒上来的，或点在输入框、图片上 */
+export function keepsNativeContextMenu(event: MenuEvent): boolean {
+  return isPortalBubble(event) || isEditableTarget(event.target) || isImageTarget(event.target);
+}
+
 export type MenuTarget = {
   /** 右键点在外链上 */
   link?: string;
   /** 右键点在代码块（或行内代码）上：代码文本 */
   code?: string;
-  /** 右键点在图片上：点开它的那个按钮（附件缩略图），没有就是图片地址 */
-  image?: { open: () => void };
 };
 
 /** 右键点中的东西：只在 within 里面找，不越过消息边界 */
@@ -77,17 +99,6 @@ export function menuTargetOf(target: EventTarget | null, within: Element): MenuT
   const code = pre && within.contains(pre) ? pre : target.closest("code");
   if (code && within.contains(code) && code.textContent?.trim()) {
     result.code = code.textContent.replace(/\n$/, "");
-  }
-  const image =
-    target instanceof HTMLImageElement ? target : target.querySelector?.(":scope > img");
-  if (image instanceof HTMLImageElement && within.contains(image)) {
-    const opener = image.closest<HTMLButtonElement>("button");
-    result.image = {
-      open: () => {
-        if (opener && within.contains(opener) && !opener.disabled) opener.click();
-        else window.open(image.src, "_blank", "noopener,noreferrer");
-      },
-    };
   }
   return result;
 }
