@@ -129,7 +129,7 @@ hive models --provider codex --json
 
 支持上述八种 provider；`--command PATH` 可以指定对应 CLI 路径。Codex 通过 app-server 的 `model/list`，OpenCode、omp、OpenClaw 通过各自的模型列表命令读取，Gemini CLI、agy 经 ACP 开一个空会话读取。
 
-Claude Code 按它实际生效的接口地址和密钥（`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` 或 `apiKeyHelper`，优先级与 Claude Code 相同：进程环境变量 < `~/.claude/settings.json` < 工作目录的 `.claude/settings.json`、`.claude/settings.local.json` < 托管配置）请求 `GET /v1/models`，`--cwd` 传 Agent 的工作目录；opus、sonnet 等别名排在最前面。用账号登录（没有 key）或走 Bedrock / Vertex 时只给这些别名，JSON 里 `presetReason` 是 `oauth` 或 `cloud`；请求失败时同样只给别名并带 `error`（如 401、超时）。Copilot 当前返回常用预设。JSON 中的 `source` 区分 `runtime` 和 `preset`；其它运行时动态读取失败时返回空模型列表并带 `error`，不要把它当成账号没有可用模型。列表中的模型名不是购买证明，也不保证实际请求成功；模型切换与重试看 [Agent 指南](/guides/agents/) 和 [任务指南](/guides/tasks/)。
+Claude Code 按它实际生效的接口地址和密钥（`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` 或 `apiKeyHelper`，优先级与 Claude Code 相同：进程环境变量 < `~/.claude/settings.json` < 工作目录的 `.claude/settings.json`、`.claude/settings.local.json` < 托管配置）请求 `GET /v1/models`，`--cwd` 传 Agent 的工作目录。拉到列表时只列具体模型（按名字排），配置的默认模型（如 `claude-opus-5-5[1M]`）不在列表里会补在最前；opus、sonnet、haiku 这些别名不再列出，已经选了别名的 Agent 照常能用，网页上标成「旧设置」；`opusplan`（计划模式用 Opus、其余用 Sonnet）没有对应的具体模型，保留在最后。用账号登录（没有 key）或走 Bedrock / Vertex 时只能给 opus、sonnet、haiku、opusplan 这几个别名，JSON 里 `presetReason` 是 `oauth` 或 `cloud`；请求失败时同样只给别名并带 `error`（如 401、超时）。Copilot 当前返回常用预设。JSON 中的 `source` 区分 `runtime` 和 `preset`；其它运行时动态读取失败时返回空模型列表并带 `error`，不要把它当成账号没有可用模型。列表中的模型名不是购买证明，也不保证实际请求成功；模型切换与重试看 [Agent 指南](/guides/agents/) 和 [任务指南](/guides/tasks/)。
 
 ## 列出本机 MCP：不是列出 Hive 聊天室工具
 

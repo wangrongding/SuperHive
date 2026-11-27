@@ -26,7 +26,7 @@ const usage = `
 codex 用 app-server 的 model/list，opencode 用 opencode models，omp 用 omp models --json，
 openclaw 用 openclaw models list --json，gemini、agy 经 ACP 开一个空会话读它给的模型；
 claude 按它实际生效的接口地址和密钥（--cwd 是 Agent 的工作目录，项目配置会盖过全局配置）请求 /v1/models，
-用账号登录（没有 key）或拉取失败时给出常用选项；copilot 给出常用选项。网页上都能手填。
+只列具体模型（opusplan 在最后）；用账号登录（没有 key）或拉取失败时给出常用别名；copilot 给出常用选项。网页上都能手填。
 同时列出能选的思考强度（claude、codex、copilot、omp 支持；codex、omp 按模型列出）。
 `;
 
@@ -38,6 +38,8 @@ export type ModelEntry = {
   id: string;
   /** 显示名（和 id 一样时不给） */
   label?: string;
+  /** 一句说明（列表里没有对应具体模型的特殊选项，例如 Claude 的 opusplan） */
+  description?: string;
   /** 运行时自己的默认模型 */
   isDefault?: boolean;
   /** 这个模型支持的思考强度（运行时按模型列出时才有：Codex、omp） */
@@ -69,13 +71,23 @@ export type AcpModelLister = (provider: "gemini" | "agy", command: string) => Pr
 const TIMEOUT_MS = 20_000;
 const MAX_MODELS = 300;
 
+/**
+ * Claude 的 opusplan：计划模式用 opus 别名、其余时候用 sonnet 别名（走网关时按 ANTHROPIC_DEFAULT_OPUS_MODEL /
+ * ANTHROPIC_DEFAULT_SONNET_MODEL 解析）。它是一种模式，接口列表里没有对应的具体模型，拉到完整列表时也保留，放在最后
+ */
+const CLAUDE_OPUSPLAN: ModelEntry = {
+  id: "opusplan",
+  label: "Opus Plan",
+  description: "计划模式用 Opus、其余用 Sonnet；Hive 里只有只读 Agent 跑在计划模式",
+};
+
 /** 没有列模型命令（或拉不到）的运行时给的常用选项（别名由 CLI 自己解析到当前最新的版本） */
 const PRESETS: Partial<Record<ModelProvider, ModelEntry[]>> = {
   claude: [
     { id: "opus", label: "Opus" },
     { id: "sonnet", label: "Sonnet" },
     { id: "haiku", label: "Haiku" },
-    { id: "opusplan", label: "Opus Plan（计划用 Opus、执行用 Sonnet）" },
+    CLAUDE_OPUSPLAN,
   ],
   copilot: [{ id: "auto", label: "Auto（Copilot 自动选）" }],
 };
@@ -513,8 +525,10 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Claude：用它实际生效的接口地址和密钥拉 /v1/models。别名（opus、sonnet……）始终排在最前面，
- * 拉到的完整模型名接在后面；用账号登录、走云平台或拉取失败时只给别名，并说明原因
+ * Claude：用它实际生效的接口地址和密钥拉 /v1/models。拉到了就只列具体模型（按名字排），配置的默认模型不在
+ * 列表里时补在最前，opusplan 放最后；opus、sonnet、haiku 这几个别名不再列（指向哪个具体模型取决于 Claude Code
+ * 的版本和 ANTHROPIC_DEFAULT_*_MODEL，不如直接选具体模型清楚）。用账号登录、走云平台或拉取失败时只能给别名，
+ * 并说明原因
  */
 async function listClaude(
   options: Parameters<typeof listModels>[0],
@@ -546,12 +560,19 @@ async function listClaude(
     const listed = fetched
       .map((model) => entry(model.id, model.label))
       .sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
-    // 配置的默认模型不在列表里（例如带 [1M] 后缀）：放在别名后面，别名始终在最前
+    // 配置的默认模型不在列表里（例如带 [1M] 后缀，或是 opus 这样的别名）：补在最前
     const missing =
-      configured && ![...aliases, ...listed].some((model) => model.id === configured)
+      configured &&
+      configured !== CLAUDE_OPUSPLAN.id &&
+      !listed.some((model) => model.id === configured)
         ? [{ id: configured }]
         : [];
-    const models = unique([...aliases, ...missing, ...listed]);
+    // opusplan 始终在最后（网关自己也列了的话也挪到最后）
+    const models = unique([
+      ...missing,
+      ...listed.filter((model) => model.id !== CLAUDE_OPUSPLAN.id),
+      CLAUDE_OPUSPLAN,
+    ]);
     return {
       provider: "claude",
       source: "runtime",
@@ -613,7 +634,9 @@ export async function modelsCommand(argv: string[]): Promise<void> {
     console.log("（运行时没有列模型的命令，以下是常用选项，也可以手填）");
   for (const model of result.models) {
     console.log(
-      `${model.id}${model.label ? `  ${model.label}` : ""}${model.isDefault ? "  （默认）" : ""}${
+      `${model.id}${model.label ? `  ${model.label}` : ""}${
+        model.description ? `（${model.description}）` : ""
+      }${model.isDefault ? "  （默认）" : ""}${
         model.efforts ? `  思考强度：${model.efforts.join("/")}` : ""
       }`,
     );

@@ -234,12 +234,17 @@ describe("ModelPicker with many models", () => {
   const many = {
     source: "runtime" as const,
     efforts: [],
+    // 拉到完整列表时的样子：没有 opus、sonnet、haiku 别名，opusplan 在最后
     models: [
-      { id: "opus", label: "Opus" },
-      { id: "sonnet", label: "Sonnet" },
-      { id: "haiku", label: "Haiku" },
+      { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
       { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true },
+      { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
       ...Array.from({ length: 56 }, (_, index) => ({ id: `gw-model-${index + 1}` })),
+      {
+        id: "opusplan",
+        label: "Opus Plan",
+        description: "计划模式用 Opus、其余用 Sonnet；Hive 里只有只读 Agent 跑在计划模式",
+      },
     ],
   };
   const open = (props: Partial<Parameters<typeof ModelPicker>[0]> = {}) => {
@@ -265,11 +270,17 @@ describe("ModelPicker with many models", () => {
       .getAllByRole("option")
       .map((option) => option.querySelector(".select-option-text > span")!.textContent);
 
-  it("puts focus in the filter box and keeps the runtime default and aliases on top", () => {
+  it("puts focus in the filter box, the runtime default first and opusplan last with its note", () => {
     const { filter } = open();
     expect(document.activeElement).toBe(filter);
-    expect(optionNames().slice(0, 4)).toEqual(["运行时默认", "Opus", "Sonnet", "Haiku"]);
-    expect(screen.getAllByRole("option")).toHaveLength(61);
+    const options = screen.getAllByRole("option");
+    expect(optionNames().slice(0, 2)).toEqual(["运行时默认", "Claude Haiku 5.5"]);
+    // 说明里写清是哪个具体模型：显示名加模型名
+    expect(options[0]!.textContent).toBe("运行时默认现在是 Claude Opus 5.5 · claude-opus-5-5");
+    expect(options.at(-1)!.textContent).toBe(
+      "Opus Planopusplan · 计划模式用 Opus、其余用 Sonnet；Hive 里只有只读 Agent 跑在计划模式",
+    );
+    expect(options).toHaveLength(61);
     // 不再有单独的「手动输入…」
     expect(screen.queryByRole("option", { name: /手动输入/ })).toBeNull();
   });
@@ -374,6 +385,55 @@ describe("ModelPicker with many models", () => {
       fireEvent.click(screen.getByRole("option", { name: /^gw-model-7$/ }));
       expect(screen.getByRole("button", { name: "用 gw-model-7 重试" })).toBeTruthy();
     });
+  });
+
+  it("shows an alias saved before as an old setting that still works", () => {
+    const onChange = vi.fn();
+    render(
+      <ModelPicker aria-label="模型" data={many} value="opus" allowDefault onChange={onChange} />,
+    );
+    const trigger = screen.getByRole("combobox", { name: "模型" });
+    expect(trigger.textContent).toBe("opus（旧设置）");
+    expect(screen.getByRole("status").textContent).toBe(
+      "opus 是 Claude Code 的别名，照常能用；建议改选具体模型。",
+    );
+    fireEvent.click(trigger);
+    // 旧设置不算进模型个数
+    expect(screen.getByRole("combobox", { name: "过滤模型" }).getAttribute("placeholder")).toBe(
+      "过滤 60 个模型，或输入模型名",
+    );
+    const options = screen.getAllByRole("option");
+    // 紧跟在「运行时默认」后面，选中标记在它上面
+    expect(options[1]!.textContent).toContain("别名，指向哪个模型由 Claude Code 决定");
+    expect(options[1]!.getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("option", { name: /^Claude Opus 5\.5/ }));
+    expect(onChange).toHaveBeenCalledWith("claude-opus-5-5");
+  });
+
+  it("does not call an alias an old setting when only common choices are shown", () => {
+    const preset = {
+      source: "preset" as const,
+      efforts: [],
+      presetReason: "oauth" as const,
+      models: [
+        { id: "opus", label: "Opus" },
+        { id: "sonnet", label: "Sonnet" },
+      ],
+    };
+    render(<ModelPicker aria-label="模型" data={preset} value="opus" onChange={() => undefined} />);
+    expect(screen.getByRole("combobox", { name: "模型" }).textContent).toContain("Opus");
+    expect(screen.queryByText(/旧设置/)).toBeNull();
+    // 拉到的列表本来就有这个别名（网关自己列的）也不算旧设置
+    cleanup();
+    render(
+      <ModelPicker
+        aria-label="模型"
+        data={{ ...many, models: [...many.models, { id: "sonnet" }] }}
+        value="sonnet"
+        onChange={() => undefined}
+      />,
+    );
+    expect(screen.queryByText(/旧设置/)).toBeNull();
   });
 
   it("keeps the plain list without a filter box for 8 options or fewer", () => {

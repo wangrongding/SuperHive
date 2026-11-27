@@ -1617,6 +1617,8 @@ export const localModelSchema = z.object({
   /** 传给运行时的模型名 */
   id: z.string(),
   label: z.string().optional(),
+  /** 一句说明（列表里没有对应具体模型的特殊选项，例如 Claude 的 opusplan） */
+  description: z.string().optional(),
   /** 运行时自己的默认模型 */
   isDefault: z.boolean().optional(),
   /** 这个模型支持的思考强度（运行时按模型列出时才有，如 Codex、omp） */

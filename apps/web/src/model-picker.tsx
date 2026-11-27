@@ -12,12 +12,25 @@ import { sortReasoningEfforts, type LocalAgentModelsResponse } from "@superhive/
 import { t } from "./i18n";
 import { Check, Chevron, Select, place, type Placement, type SelectOption } from "./select";
 import { Button, IconButton } from "./button";
+import { modelDisplayName } from "./agent-models";
 
 const CUSTOM = "\u0000custom";
 /** 选项超过这么多就在面板顶上给过滤框（和状态栏「切换主 Agent」一致） */
 export const MODEL_FILTER_THRESHOLD = 8;
 /** 过滤面板最高多少：比普通下拉（300）高，模型多时一眼看得出能往下滚；屏幕放不下时按可用空间缩 */
 export const FILTER_PANEL_MAX_HEIGHT = 520;
+
+/** Claude Code 的模型别名：拉到完整列表时不再列出，但旧设置里可能还存着 */
+const CLAUDE_ALIAS = /^(opus|sonnet|haiku|fable)(\[1m\])?$/i;
+
+/** 拉到完整列表、列表里没有、又是 Claude 别名：这是以前选下的旧设置（照常能用） */
+export function isLegacyAlias(data: LocalAgentModelsResponse | undefined, value: string): boolean {
+  return (
+    data?.source === "runtime" &&
+    CLAUDE_ALIAS.test(value) &&
+    !data.models.some((model) => model.id === value)
+  );
+}
 
 /**
  * 选模型：列表从运行时拉（Server 的 /models），拉不到或列表里没有的可以手填。
@@ -48,7 +61,8 @@ export function ModelPicker({
   "aria-label"?: string;
 }) {
   const models = data?.models ?? [];
-  const listed = value === "" || models.some((model) => model.id === value);
+  const legacy = isLegacyAlias(data, value);
+  const listed = value === "" || legacy || models.some((model) => model.id === value);
   // 人点了「手动输入」；列表到了以后当前值不在列表里也按手填显示
   const [custom, setCustom] = useState(false);
   const runtimeDefault = models.find((model) => model.isDefault);
@@ -59,17 +73,41 @@ export function ModelPicker({
             value: "",
             label: t("运行时默认"),
             description: runtimeDefault
-              ? t("现在是 {0}", { 0: runtimeDefault.label ?? runtimeDefault.id })
+              ? t("现在是 {0}", { 0: currentDefaultName(runtimeDefault.id, data) })
               : t("用这个 Agent CLI 自己配置的模型"),
           },
         ]
       : []),
-    ...models.map((model) => ({
-      value: model.id,
-      label: model.label ?? model.id,
-      ...(model.label ? { description: model.id } : {}),
-    })),
+    // 旧设置里的别名：排在具体模型前面，选中时按钮上就能看出是旧设置
+    ...(legacy
+      ? [
+          {
+            value,
+            label: t("{0}（旧设置）", { 0: value }),
+            description: t("别名，指向哪个模型由 Claude Code 决定；建议改选具体模型"),
+          },
+        ]
+      : []),
+    ...models.map((model) => {
+      const description = model.description
+        ? `${model.id} · ${model.description}`
+        : model.label
+          ? model.id
+          : undefined;
+      return {
+        value: model.id,
+        label: model.label ?? model.id,
+        ...(description ? { description } : {}),
+      };
+    }),
   ];
+  const legacyHint = legacy ? (
+    <p className="agent-mcp-hint" role="status">
+      {t("{0} 是 Claude Code 的别名，照常能用；建议改选具体模型。", {
+        0: value,
+      })}
+    </p>
+  ) : null;
   // 选项多：用带过滤框的面板，手填也在过滤框里（过滤不到时「使用『xxx』」），不再另给输入框
   if (data && options.length > MODEL_FILTER_THRESHOLD) {
     return (
@@ -80,6 +118,7 @@ export function ModelPicker({
             {...(ariaLabel ? { "aria-label": ariaLabel } : {})}
             value={value}
             options={options}
+            count={models.length}
             disabled={disabled}
             onChoose={(next) => {
               onChange(next);
@@ -92,6 +131,7 @@ export function ModelPicker({
             </Button>
           )}
         </div>
+        {legacyHint}
         <ModelListHint data={data} />
       </div>
     );
@@ -149,9 +189,16 @@ export function ModelPicker({
           }}
         />
       )}
+      {legacyHint}
       {data && <ModelListHint data={data} />}
     </div>
   );
+}
+
+/** 「运行时默认」说明里的模型：有显示名时写「Opus 5.5 (1M) · claude-opus-5-5[1M]」，一眼知道是哪个具体模型 */
+function currentDefaultName(id: string, data: LocalAgentModelsResponse | undefined): string {
+  const name = modelDisplayName(id, data);
+  return name === id ? id : `${name} · ${id}`;
 }
 
 /** 过滤：模型名（id）或显示名里含有输入的字（不分大小写）；「运行时默认」的说明不算，免得总被带出来 */
@@ -171,6 +218,7 @@ export function filterModelOptions(options: SelectOption[], query: string): Sele
 function FilterCombobox({
   value,
   options,
+  count,
   onChoose,
   disabled,
   id,
@@ -178,6 +226,8 @@ function FilterCombobox({
 }: {
   value: string;
   options: SelectOption[];
+  /** 列表里有几个模型（不算「运行时默认」和旧设置），写在过滤框的占位里 */
+  count: number;
   onChoose: (value: string) => void;
   disabled: boolean;
   id?: string;
@@ -369,7 +419,7 @@ function FilterCombobox({
                 : {})}
               value={query}
               placeholder={t("过滤 {0} 个模型，或输入模型名", {
-                0: options.filter((option) => option.value !== "").length,
+                0: count,
               })}
               spellCheck={false}
               autoComplete="off"

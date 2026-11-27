@@ -2535,5 +2535,8 @@
   "复制消息链接": "Copy message link",
   "看这一轮过程": "View this turn's process",
   "跳到在处理的 #{0}": "Jump to #{0} being handled",
-  "浏览器未允许自动复制，请选中文本后手动复制。": "The browser blocked automatic copying. Select the text and copy it manually."
+  "浏览器未允许自动复制，请选中文本后手动复制。": "The browser blocked automatic copying. Select the text and copy it manually.",
+  "{0}（旧设置）": "{0} (old setting)",
+  "别名，指向哪个模型由 Claude Code 决定；建议改选具体模型": "An alias; Claude Code decides which model it points to. Pick a specific model instead",
+  "{0} 是 Claude Code 的别名，照常能用；建议改选具体模型。": "{0} is a Claude Code alias and still works; pick a specific model instead."
 }

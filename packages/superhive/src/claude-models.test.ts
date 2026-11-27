@@ -235,14 +235,14 @@ describe("fetchClaudeModels", () => {
 });
 
 describe("listModels for claude", () => {
-  it("keeps the aliases first, then the configured default, then the fetched models sorted by name and deduplicated", async () => {
+  it("lists only concrete models when the full list is fetched: configured default first, sorted by name, opusplan last", async () => {
     const fetchImpl = vi.fn(async () =>
       json({
         data: [
           { id: "glm-5.3" },
           { id: "claude-opus-5-10" },
           { id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
-          { id: "sonnet" },
+          { id: "opusplan" },
           { id: "claude-opus-5-5" },
         ],
       }),
@@ -259,18 +259,39 @@ describe("listModels for claude", () => {
     expect(result.source).toBe("runtime");
     expect(result.error).toBeUndefined();
     expect(result.models.map((model) => model.id)).toEqual([
-      "opus",
-      "sonnet",
-      "haiku",
-      "opusplan",
+      // 配置的默认模型不在接口列表里：补在最前
       "claude-opus-5-5[1M]",
       // 网关给的顺序不稳定：按名字排（数字按大小），不是按返回顺序
       "claude-opus-5-5",
       "claude-opus-5-10",
       "glm-5.3",
+      // opus、sonnet、haiku 别名不再列；opusplan 是一种模式，始终在最后（网关也列了也不重复）
+      "opusplan",
     ]);
     expect(result.models.find((model) => model.isDefault)?.id).toBe("claude-opus-5-5[1M]");
-    expect(result.models[5]).toEqual({ id: "claude-opus-5-5", label: "Claude Opus 5.5" });
+    expect(result.models[1]).toEqual({ id: "claude-opus-5-5", label: "Claude Opus 5.5" });
+    expect(result.models.at(-1)).toMatchObject({ label: "Opus Plan" });
+    expect(result.models.at(-1)?.description).toContain("计划模式用 Opus");
+  });
+
+  it("still shows a configured alias as the runtime default when the full list is fetched", async () => {
+    const fetched = (configured: string) =>
+      listModels({
+        provider: "claude",
+        claudeApi: async () => keyApi,
+        fetch: async () => json({ data: [{ id: "claude-sonnet-5-5" }] }),
+        configuredDefault: () => configured,
+      });
+    const alias = await fetched("sonnet");
+    expect(alias.models.map((model) => model.id)).toEqual([
+      "sonnet",
+      "claude-sonnet-5-5",
+      "opusplan",
+    ]);
+    expect(alias.models[0]).toEqual({ id: "sonnet", isDefault: true });
+    const plan = await fetched("opusplan");
+    expect(plan.models.map((model) => model.id)).toEqual(["claude-sonnet-5-5", "opusplan"]);
+    expect(plan.models[1]).toMatchObject({ id: "opusplan", isDefault: true, label: "Opus Plan" });
   });
 
   it("falls back to the aliases with a readable reason when the request fails, never with the key", async () => {
