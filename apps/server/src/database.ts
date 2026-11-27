@@ -210,6 +210,8 @@ type InvocationRow = {
   parent_invocation_id: string | null;
   continuation: InvocationContinuation | null;
   lane_key?: string | null;
+  question_message_id?: string | null;
+  question_seq?: number | null;
   attempts: number;
   created_at: string;
   updated_at: string;
@@ -304,6 +306,9 @@ export type InvocationPatch = {
   progress?: DetailInput;
   runtime?: RuntimeObservation | null;
   replyMessageId?: string | null;
+  /** 等人回答时那条提问（见 Invocation.questionMessageId），与 questionSeq 一起写 */
+  questionMessageId?: string | null;
+  questionSeq?: number | null;
   attempts?: number;
   receivedAt?: string | null;
   startedAt?: string | null;
@@ -558,6 +563,9 @@ function mapInvocation(row: InvocationRow): Invocation {
       ? { progressText: parseText(row.progress_text)! }
       : {}),
     ...(row.reply_message_id ? { replyMessageId: row.reply_message_id } : {}),
+    ...(row.question_message_id && row.question_seq
+      ? { questionMessageId: row.question_message_id, questionSeq: row.question_seq }
+      : {}),
     attempts: row.attempts,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -960,6 +968,11 @@ export class HiveDatabase {
     if (!invocationColumns.some((column) => column.name === "lane_key")) {
       // 这次调用属于 Agent 的哪一道会话（见 Invocation.laneKey）；老数据为空，按主道处理
       this.db.exec("ALTER TABLE invocations ADD COLUMN lane_key TEXT");
+    }
+    if (!invocationColumns.some((column) => column.name === "question_message_id")) {
+      // 等人回答时 Agent 发的那条提问（见 Invocation.questionMessageId）；老数据为空，网页按旧办法找
+      this.db.exec("ALTER TABLE invocations ADD COLUMN question_message_id TEXT");
+      this.db.exec("ALTER TABLE invocations ADD COLUMN question_seq INTEGER");
     }
     const messageColumns = this.db.pragma("table_info(messages)") as Array<{ name: string }>;
     if (!messageColumns.some((column) => column.name === "deleted_at")) {
@@ -1947,6 +1960,8 @@ export class HiveDatabase {
       progress: "progress",
       runtime: "runtime",
       replyMessageId: "reply_message_id",
+      questionMessageId: "question_message_id",
+      questionSeq: "question_seq",
       attempts: "attempts",
       receivedAt: "received_at",
       startedAt: "started_at",

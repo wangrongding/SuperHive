@@ -174,10 +174,22 @@ export function collectAttention(
   );
 }
 
+/**
+ * 这次等人回答对应的提问。新服务端在调用上记下了提问（questionMessageId）：载入了就用它，
+ * 撤回了或没载入返回 undefined（没载入时 attentionTarget 照样按记下的 seq 跳）；
+ * 旧数据没有这项，退回在已载入的消息里找同一 Agent 挂在触发消息下的最近一条提问。
+ */
 export function questionOf(
   invocation: Invocation,
   messages: readonly ChatMessage[],
 ): ChatMessage | undefined {
+  if (invocation.questionMessageId) {
+    const recorded = messages.find(
+      (message) =>
+        message.roomId === invocation.roomId && message.id === invocation.questionMessageId,
+    );
+    return recorded && !recorded.deletedAt ? recorded : undefined;
+  }
   return messages.reduce<ChatMessage | undefined>((latest, message) => {
     if (
       message.roomId !== invocation.roomId ||
@@ -189,6 +201,20 @@ export function questionOf(
       return latest;
     return !latest || message.seq > latest.seq ? message : latest;
   }, undefined);
+}
+
+/**
+ * 调用上记下、但还没载入的提问：按 id + seq 直接跳（跳转时补拉）。
+ * 已载入却被撤回的不算，退回触发消息。
+ */
+export function unloadedQuestion(
+  invocation: Invocation,
+  messages: readonly ChatMessage[],
+): { messageId: string; messageSeq: number } | undefined {
+  const { questionMessageId, questionSeq } = invocation;
+  if (!questionMessageId || !questionSeq) return undefined;
+  if (messages.some((message) => message.id === questionMessageId)) return undefined;
+  return { messageId: questionMessageId, messageSeq: questionSeq };
 }
 
 export type AttentionTarget = {
@@ -203,6 +229,10 @@ export function attentionTarget(
   messages: readonly ChatMessage[],
   kind = attentionKind(invocation) ?? (isCompleted(invocation) ? "unseen" : undefined),
 ): AttentionTarget {
+  if (kind === "question") {
+    const pending = unloadedQuestion(invocation, messages);
+    if (pending) return { invocation, roomId: invocation.roomId, ...pending };
+  }
   const question = kind === "question" ? questionOf(invocation, messages) : undefined;
   const messageId =
     question?.id ??

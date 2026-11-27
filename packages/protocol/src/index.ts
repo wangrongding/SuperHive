@@ -671,6 +671,12 @@ export const invocationSchema = z.object({
   runtime: runtimeObservationSchema.optional(),
   usage: agentUsageSchema.optional(),
   replyMessageId: z.string().uuid().optional(),
+  /**
+   * 等人回答时 Agent 用 hive_ask_human 发的那条提问：网页「等你回答」的入口据此直接跳过去，
+   * 提问没载入也能按 seq 补拉。只在发提问时写入，老服务端或旧数据没有，网页退回按父消息找。
+   */
+  questionMessageId: z.string().uuid().optional(),
+  questionSeq: z.number().int().positive().optional(),
   attempts: z.number().int().min(1),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

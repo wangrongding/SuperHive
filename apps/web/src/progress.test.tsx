@@ -141,6 +141,7 @@ describe("buildProgress", () => {
       "helper 的任务被拦下，等你放行",
     ]);
     expect(groups.attention[0]!.target).toMatchObject({ messageId: question.id, messageSeq: 11 });
+    expect(groups.attention[0]!.badge?.label).toBe("等你回答 · 提问 #11");
     expect(groups.doing.map((item) => [item.title, item.badge?.label])).toEqual([
       ["helper 正在处理", undefined],
       ["在做 A", undefined],
@@ -151,6 +152,32 @@ describe("buildProgress", () => {
     ]);
     expect(groups.done.map((item) => [item.title, item.badge?.label])).toEqual([
       ["D 合入了", "已合入"],
+    ]);
+  });
+
+  it("points a waiting question at the recorded question even when it is not loaded", () => {
+    const recorded = invocation({
+      status: "waiting_human",
+      questionMessageId: "00000000-0000-4000-8000-0000000000aa",
+      questionSeq: 42,
+    });
+    const legacy = invocation({ status: "waiting_human" });
+    const groups = buildProgress({
+      roomId: "build",
+      entries: [],
+      invocations: [recorded, legacy],
+      messages: [],
+    });
+    expect(groups.attention.map((item) => [item.target, item.badge?.label])).toEqual([
+      [
+        expect.objectContaining({
+          messageId: "00000000-0000-4000-8000-0000000000aa",
+          messageSeq: 42,
+        }),
+        "等你回答 · 提问 #42",
+      ],
+      // 旧调用没有记下提问、提问又没载入：退回触发消息，跳转时再按旧办法往后找
+      [expect.objectContaining({ messageId: legacy.messageId }), "等你回答"],
     ]);
   });
 

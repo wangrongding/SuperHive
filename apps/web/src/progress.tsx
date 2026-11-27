@@ -159,6 +159,12 @@ export function buildProgress({
       continue;
     }
     const question = kind === "question" ? questionOf(invocation, messages) : undefined;
+    const target = attentionTarget(invocation, messages, kind);
+    // 等你回答：标上提问序号，点了直接跳到那条提问（没载入也按记下的 seq 补拉）
+    const questionSeq =
+      kind === "question" && target.messageId !== invocation.messageId
+        ? target.messageSeq
+        : undefined;
     groups.attention.push({
       id: `invocation:${invocation.id}`,
       group: "attention",
@@ -166,8 +172,13 @@ export function buildProgress({
       detail: question?.content ?? invocation.detail ?? "",
       who: invocation.agentName,
       at: invocation.updatedAt,
-      badge: { label: attentionLabels[kind], tone: "warning" },
-      target: attentionTarget(invocation, messages, kind),
+      badge: {
+        label: questionSeq
+          ? t("{0} · 提问 #{1}", { 0: attentionLabels[kind], 1: questionSeq })
+          : attentionLabels[kind],
+        tone: "warning",
+      },
+      target,
     });
   }
   for (const entry of entries) {

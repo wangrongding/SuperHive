@@ -570,7 +570,8 @@ button.invocation-summary:focus-visible {
 /* 跳转的另一头：状态条、过程卡和目标一起闪一下，看得出是哪两处对应。
    描边在整个 2.2 秒里都在，减少动态效果时没有渐变也看得出来 */
 .invocation-chip.jump-flash,
-.thinking-card.jump-flash {
+.thinking-card.jump-flash,
+.waiting-question.jump-flash {
   outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 1px;
   animation: jump-flash 2.2s var(--ease-out);

@@ -31,6 +31,7 @@ import {
   waitingInvocationForQuestion,
 } from "./invocations";
 import { plainPreview } from "./activity";
+import { attentionTarget, questionOf } from "./attention";
 import {
   ThinkingCard,
   TraceRecap,
@@ -642,6 +643,15 @@ export function MessageList({
                       },
                     };
                   })()}
+                  {...(cardAttention(invocation) === "question"
+                    ? {
+                        question: waitingQuestion(invocation, messages),
+                        onJumpToQuestion: () => {
+                          jump.locateAttention(invocation);
+                          jump.flashOrigin({ invocationIds: [invocation.id] });
+                        },
+                      }
+                    : {})}
                   avatar={
                     <AvatarGlyph
                       type="agent"
@@ -654,60 +664,115 @@ export function MessageList({
             })()}
             {(() => {
               // 谁在干活：已经有卡片的不再重复列出，只剩排队、等你回答这些没在跑的
-              const rows = agentActivity(participants, invocations.values(), currentRoomId).filter(
+              const all = agentActivity(participants, invocations.values(), currentRoomId).filter(
                 (row) => !row.invocation || !showsLiveCard(row.invocation),
               );
-              if (!rows.length) return null;
+              // 等你回答的单独一行：写明在问什么，给一个「看提问 #N」直接跳到那条提问
+              const waiting = all.filter(
+                (row): row is typeof row & { invocation: Invocation } =>
+                  row.state === "waiting" && Boolean(row.invocation),
+              );
+              const rows = all.filter((row) => row.state !== "waiting");
+              if (!rows.length && !waiting.length) return null;
               return (
-                <div className="typing" role="status" aria-live="polite">
-                  <span aria-hidden="true" />
-                  <span aria-hidden="true" />
-                  <span aria-hidden="true" />
-                  <ul className="typing-agents">
-                    {rows.map((row) => {
-                      const target = row.invocation?.messageId;
-                      const canJump = Boolean(
-                        row.invocation?.status === "waiting_human" ||
-                        (target && loadedMessageIds.has(target)),
-                      );
-                      return (
-                        <li key={row.participant.id}>
-                          <Tooltip
-                            content={
-                              canJump
-                                ? t("{0}，点击跳到它正在处理的消息", {
-                                    0: row.participant.username,
-                                  })
-                                : row.participant.username
-                            }
-                          >
-                            <button
-                              type="button"
-                              className={`typing-agent ${row.state}`}
-                              disabled={!canJump}
-                              onClick={() => {
-                                if (row.invocation?.status === "waiting_human")
-                                  jump.locateAttention(row.invocation);
-                                else if (target) jumpToMessage(target);
-                              }}
-                            >
-                              <span className="mention-avatar agent" aria-hidden="true">
-                                <AvatarGlyph
-                                  type="agent"
-                                  name={row.participant.username}
-                                  provider={row.participant.provider}
-                                />
-                              </span>
-                              <strong>{row.participant.username}</strong>
-                            </button>
-                          </Tooltip>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {/* 详细进展看气泡下的状态，这里只说谁在干活 */}
-                  <span>{t("正在处理")}</span>
-                </div>
+                <>
+                  {waiting.map((row) => {
+                    const asked = waitingQuestion(row.invocation, messages);
+                    return (
+                      <div
+                        key={row.participant.id}
+                        className={`waiting-question${jump.flash.invocationIds.has(row.invocation.id) ? " jump-flash" : ""}`}
+                        role="status"
+                      >
+                        <span className="mention-avatar agent" aria-hidden="true">
+                          <AvatarGlyph
+                            type="agent"
+                            name={row.participant.username}
+                            provider={row.participant.provider}
+                          />
+                        </span>
+                        <span className="waiting-question-text">
+                          <strong>{row.participant.username}</strong>
+                          <span className="waiting-question-state">{t("在等你回答")}</span>
+                          {asked.preview && (
+                            <span className="waiting-question-preview" title={asked.preview}>
+                              {asked.preview}
+                            </span>
+                          )}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          aria-label={
+                            asked.seq
+                              ? t("跳到 {0} 的提问 #{1}", {
+                                  0: row.participant.username,
+                                  1: asked.seq,
+                                })
+                              : t("跳到 {0} 的提问", { 0: row.participant.username })
+                          }
+                          onClick={() => {
+                            jump.locateAttention(row.invocation);
+                            jump.flashOrigin({ invocationIds: [row.invocation.id] });
+                          }}
+                        >
+                          {asked.seq ? t("看提问 #{0}", { 0: asked.seq }) : t("看提问")}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                  {rows.length > 0 && (
+                    <div className="typing" role="status" aria-live="polite">
+                      <span aria-hidden="true" />
+                      <span aria-hidden="true" />
+                      <span aria-hidden="true" />
+                      <ul className="typing-agents">
+                        {rows.map((row) => {
+                          const target = row.invocation?.messageId;
+                          const canJump = Boolean(
+                            row.invocation?.status === "waiting_human" ||
+                            (target && loadedMessageIds.has(target)),
+                          );
+                          return (
+                            <li key={row.participant.id}>
+                              <Tooltip
+                                content={
+                                  canJump
+                                    ? t("{0}，点击跳到它正在处理的消息", {
+                                        0: row.participant.username,
+                                      })
+                                    : row.participant.username
+                                }
+                              >
+                                <button
+                                  type="button"
+                                  className={`typing-agent ${row.state}`}
+                                  disabled={!canJump}
+                                  onClick={() => {
+                                    if (row.invocation?.status === "waiting_human")
+                                      jump.locateAttention(row.invocation);
+                                    else if (target) jumpToMessage(target);
+                                  }}
+                                >
+                                  <span className="mention-avatar agent" aria-hidden="true">
+                                    <AvatarGlyph
+                                      type="agent"
+                                      name={row.participant.username}
+                                      provider={row.participant.provider}
+                                    />
+                                  </span>
+                                  <strong>{row.participant.username}</strong>
+                                </button>
+                              </Tooltip>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {/* 详细进展看气泡下的状态，这里只说谁在干活 */}
+                      <span>{t("正在处理")}</span>
+                    </div>
+                  )}
+                </>
               );
             })()}
             <div ref={messagesEndRef} />
@@ -1471,4 +1536,25 @@ function QuoteCard({ quote, onOpen }: { quote: QuoteState; onOpen: () => void })
       {quote.excerpt && <span className="message-quote-excerpt">{quote.excerpt}</span>}
     </button>
   );
+}
+
+/**
+ * 等你回答的那条提问：序号（调用上记下的，或已载入时按父消息找到的）和第一句摘要。
+ * 都不知道时返回空对象，入口照样在，点了由 locateAttention 按旧办法往后找
+ */
+function waitingQuestion(
+  invocation: Invocation,
+  messages: readonly ChatMessage[],
+): { seq?: number; preview?: string } {
+  const target = attentionTarget(invocation, messages, "question");
+  const asked = questionOf(invocation, messages);
+  const seq = target.messageId === invocation.messageId ? undefined : target.messageSeq;
+  const preview = asked
+    ? plainPreview(asked.content)
+        .replace(/^(?:@\S+\s+)*❓\s*/u, "")
+        .slice(0, 120)
+    : invocation.detailText?.key === "invocation.waitingAnswer"
+      ? String(invocation.detailText.params?.question ?? "").slice(0, 120)
+      : undefined;
+  return { ...(seq ? { seq } : {}), ...(preview ? { preview } : {}) };
 }

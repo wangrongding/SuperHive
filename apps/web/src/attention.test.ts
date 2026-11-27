@@ -62,6 +62,35 @@ describe("attention targets", () => {
     });
   });
 
+  it("prefers the question recorded on the invocation, loaded or not; recalled falls back to the trigger", () => {
+    const recorded = call("rec", "waiting_human", { questionMessageId: "q-7", questionSeq: 7 });
+    const asked = {
+      id: "q-7",
+      seq: 7,
+      roomId: "build",
+      senderId: "a",
+      parentMessageId: recorded.messageId,
+      kind: "question",
+    } as ChatMessage;
+    const newer = { ...asked, id: "q-9", seq: 9 } as ChatMessage;
+    // 已载入：用记下的那条，不被同一父消息下更新的提问顶掉
+    expect(questionOf(recorded, [asked, newer])).toBe(asked);
+    expect(attentionTarget(recorded, [asked, newer])).toMatchObject({
+      messageId: "q-7",
+      messageSeq: 7,
+    });
+    // 没载入：照样按记下的 id + seq 跳，跨房间提醒和进展面板都能补拉
+    expect(questionOf(recorded, [newer])).toBeUndefined();
+    expect(attentionTarget(recorded, [newer])).toMatchObject({ messageId: "q-7", messageSeq: 7 });
+    expect(collectAttention([recorded])[0]).toMatchObject({ messageId: "q-7", messageSeq: 7 });
+    // 撤回了：退回触发消息
+    const recalled = { ...asked, deletedAt: "now" } as ChatMessage;
+    expect(attentionTarget(recorded, [recalled]).messageId).toBe(recorded.messageId);
+    // 不是等你回答的状态不用它
+    const resumed = { ...recorded, status: "failed" } as Invocation;
+    expect(attentionTarget(resumed, []).messageId).toBe(recorded.messageId);
+  });
+
   it("keeps approval and decision actions on the trigger and unseen on the result", () => {
     for (const status of ["blocked", "failed", "timed_out"] as const) {
       const invocation = call(status, status, { replyMessageId: "result" });

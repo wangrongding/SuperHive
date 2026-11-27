@@ -8,7 +8,7 @@ import {
   type SetStateAction,
 } from "react";
 import type { ChatMessage, Invocation, MessagesResponse, MetaResponse } from "@superhive/protocol";
-import { attentionKind, attentionTarget } from "./attention";
+import { attentionKind, attentionTarget, unloadedQuestion } from "./attention";
 import { localizeServerPayload } from "./server-text";
 import type { ProgressTarget } from "./progress";
 import { t } from "./i18n";
@@ -155,14 +155,31 @@ export function useMessageJump({
       let target = messagesRef.current.find(
         (message) => message.id === initial.messageId && !message.deletedAt,
       );
-      if (attentionKind(invocation) === "question" && initial.messageId === invocation.messageId)
-        target = undefined;
-      if (!target && attentionKind(invocation) !== "question") {
+      const question = attentionKind(invocation) === "question";
+      if (question && initial.messageId === invocation.messageId) target = undefined;
+      // 调用上记下了提问（新服务端）：没载入就从提问那条起往后补拉到已载入的最早一条
+      // （和 locateMessage 一样连续补，不在列表里留空档），不用从触发消息往后一页页找
+      const pending = question ? unloadedQuestion(invocation, messagesRef.current) : undefined;
+      if (!target && pending) {
+        const earliest = messagesRef.current[0]?.seq ?? Number.MAX_SAFE_INTEGER;
+        let afterSeq = pending.messageSeq - 1;
+        for (
+          let page = 0;
+          page < 10 && (page === 0 || afterSeq + 1 < earliest) && valid();
+          page += 1
+        ) {
+          const result = await request(`afterSeq=${afterSeq}&limit=500`);
+          if (!result?.messages.length) break;
+          loaded.push(...result.messages);
+          afterSeq = result.messages.at(-1)!.seq;
+        }
+        target = loaded.find((message) => message.id === pending.messageId && !message.deletedAt);
+      } else if (!target && !question) {
         const result = await request(`messageId=${encodeURIComponent(initial.messageId)}&limit=1`);
         loaded.push(...(result?.messages ?? []));
         target = loaded.find((message) => message.id === initial.messageId && !message.deletedAt);
       }
-      if (!target) {
+      if (!target && !pending) {
         const trigger = messagesRef.current.find((message) => message.id === invocation.messageId);
         let afterSeq = trigger?.seq ?? triggerSeq;
         let page = await request(

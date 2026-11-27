@@ -307,6 +307,8 @@ export function ThinkingCard({
   batchSeqs = [],
   trigger,
   onJumpToTrigger,
+  question,
+  onJumpToQuestion,
   onAvatarContextMenu,
   onContextMenu,
   onStop,
@@ -328,6 +330,12 @@ export function ThinkingCard({
   /** 触发这一轮的那条消息：卡片上写明在处理哪个问题，点了跳过去 */
   trigger?: { seq: number; preview: string };
   onJumpToTrigger?: () => void;
+  /**
+   * 等你回答时 Agent 发的那条提问：卡片上给一个「看提问 #N」入口，点了跳过去。
+   * seq 不知道（旧数据、提问没载入）时按钮只写「看提问」，照样能跳
+   */
+  question?: { seq?: number; preview?: string };
+  onJumpToQuestion?: () => void;
   invocation: Invocation;
   steps: readonly TraceStep[] | undefined;
   avatar: ReactNode;
@@ -428,6 +436,27 @@ export function ThinkingCard({
                 onClick={onStop}
               >
                 {invocation.status === "cancelling" ? t("停止中…") : t("停止")}
+              </Button>
+            </Tooltip>
+          )}
+          {attention === "question" && onJumpToQuestion && (
+            <Tooltip
+              content={
+                question?.preview ? t("提问：{0}", { 0: question.preview }) : t("跳到 Agent 的提问")
+              }
+            >
+              <Button
+                size="sm"
+                variant="primary"
+                className="thinking-card-question"
+                aria-label={
+                  question?.seq
+                    ? t("跳到 {0} 的提问 #{1}", { 0: invocation.agentName, 1: question.seq })
+                    : t("跳到 {0} 的提问", { 0: invocation.agentName })
+                }
+                onClick={onJumpToQuestion}
+              >
+                {question?.seq ? t("看提问 #{0}", { 0: question.seq }) : t("看提问")}
               </Button>
             </Tooltip>
           )}

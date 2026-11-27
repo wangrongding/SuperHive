@@ -2477,6 +2477,11 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       );
       expect(parked.status).toBe("waiting_human");
       expect(parked.detail).toContain("等人回答");
+      // 调用上记下是哪条提问：网页「等你回答」的入口据此直接跳过去，提问没载入也能按 seq 补拉
+      expect(parked).toMatchObject({
+        questionMessageId: questionMessage!.id,
+        questionSeq: questionMessage!.seq,
+      });
 
       // 人直接回复提问（不必 @ helper）：旧调用完成，helper 被回答重新唤醒
       alice.send({

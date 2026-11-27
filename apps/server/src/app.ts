@@ -2627,6 +2627,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       database.updateInvocation(invocation.id, {
         status: "waiting_human",
         progress: null,
+        questionMessageId: message.id,
+        questionSeq: message.seq,
         detail: serverText("invocation.waitingAnswer", {
           question: input.question.replace(/\s+/g, " ").slice(0, 440),
         }),

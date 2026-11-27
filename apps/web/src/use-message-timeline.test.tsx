@@ -220,6 +220,41 @@ describe("attention message navigation", () => {
     expect(vi.mocked(fetch).mock.calls[0]![0]).toContain(`messageId=${trigger.id}&limit=500`);
   });
 
+  it("jumps to the question recorded on the invocation when it is loaded, without fetching", async () => {
+    const newer = message(25, { kind: "question", parentMessageId: trigger.id });
+    render(<Harness snapshot={[trigger, question, newer]} />);
+    act(() =>
+      jump.locateAttention({ ...invocation, questionMessageId: question.id, questionSeq: 20 }),
+    );
+    await waitFor(() => expect(jump.highlightedMessageId).toBe(question.id));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("loads an unloaded recorded question from its own sequence instead of paging from the trigger", async () => {
+    const loaded = message(200);
+    vi.mocked(fetch).mockResolvedValueOnce(respond([question, message(21), loaded], 300));
+    render(<Harness snapshot={[loaded, message(300)]} />);
+    act(() =>
+      jump.locateAttention({ ...invocation, questionMessageId: question.id, questionSeq: 20 }),
+    );
+    await waitFor(() => expect(jump.highlightedMessageId).toBe(question.id));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls[0]![0]).toContain(
+      "/api/rooms/other/messages?afterSeq=19&limit=500",
+    );
+    // 从提问连续补到已载入的最早一条，列表里不留空档
+    expect(latestMessages.map((item) => item.seq)).toEqual([20, 21, 200, 300]);
+  });
+
+  it("falls back to the trigger when the recorded question was recalled", async () => {
+    render(<Harness snapshot={[trigger, { ...question, deletedAt: at }]} />);
+    vi.mocked(fetch).mockResolvedValue(respond([trigger, { ...question, deletedAt: at }], 20));
+    act(() =>
+      jump.locateAttention({ ...invocation, questionMessageId: question.id, questionSeq: 20 }),
+    );
+    await waitFor(() => expect(jump.highlightedMessageId).toBe(trigger.id));
+  });
+
   it("falls back rather than selecting an unproven old question after the context limit", async () => {
     vi.mocked(fetch).mockImplementation(async () => respond([trigger, question], 10000));
     render(<Harness snapshot={[trigger]} />);

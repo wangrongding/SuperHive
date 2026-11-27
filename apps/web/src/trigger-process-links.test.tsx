@@ -59,11 +59,13 @@ function setup(
   messages: ChatMessage[],
   tasks: Invocation[],
   flash: { messageIds?: string[]; invocationIds?: string[] } = {},
+  participants: Props["participants"] = [],
 ) {
   const jump = {
     jumpToMessage: vi.fn(),
     jumpToProcess: vi.fn(() => true),
     locateMessage: vi.fn(),
+    locateAttention: vi.fn(),
     flashOrigin: vi.fn(),
     flash: {
       messageIds: new Set(flash.messageIds),
@@ -107,7 +109,7 @@ function setup(
     base: "",
     authToken: undefined,
     connectionState: "online",
-    participants: [],
+    participants,
     invocations: new Map(tasks.map((task) => [task.id, task])),
     traces: new Map(),
     pendingApprovals: new Set(),
@@ -282,5 +284,87 @@ describe("jumpToProcess", () => {
     });
     expect(found).toBe(false);
     vi.useRealTimers();
+  });
+});
+
+describe("底部「等你回答」卡片 → 具体那条提问", () => {
+  const waiting: Invocation = { ...running, status: "waiting_human" };
+  const asked: ChatMessage = {
+    ...reply,
+    id: "asked",
+    seq: 6410,
+    kind: "question",
+    content: "@Alice ❓ 要不要顺手把旧数据也迁过去？",
+    parentMessageId: question.id,
+  };
+
+  it("提问已载入：按钮写明提问序号，点了按提问定位并让卡片一起闪", () => {
+    const { jump } = setup(
+      [question, asked],
+      [{ ...waiting, questionMessageId: asked.id, questionSeq: asked.seq }],
+    );
+    const button = screen.getByRole("button", { name: "跳到 worker 的提问 #6410" });
+    expect(button.textContent).toBe("看提问 #6410");
+    fireEvent.click(button);
+    expect(jump.locateAttention).toHaveBeenCalledWith(expect.objectContaining({ id: "task" }));
+    expect(jump.flashOrigin).toHaveBeenCalledWith({ invocationIds: ["task"] });
+    // 原有的「回应 #N」小标还在，照样跳到触发消息
+    expect(screen.getByRole("button", { name: /跳到原消息 #6370/ })).toBeTruthy();
+  });
+
+  it("提问没载入：按调用上记下的序号显示，点了交给 locateAttention 补拉再跳", () => {
+    const { jump } = setup(
+      [question],
+      [{ ...waiting, questionMessageId: asked.id, questionSeq: 9 }],
+    );
+    const button = screen.getByRole("button", { name: "跳到 worker 的提问 #9" });
+    fireEvent.click(button);
+    expect(jump.locateAttention).toHaveBeenCalledTimes(1);
+  });
+
+  it("旧调用没有记下提问：已载入的按父消息找到，没载入时只写「看提问」，照样能点", () => {
+    const first = setup([question, asked], [waiting]);
+    expect(screen.getByRole("button", { name: "跳到 worker 的提问 #6410" })).toBeTruthy();
+    first.view.unmount();
+    const { jump } = setup([question], [waiting]);
+    const button = screen.getByRole("button", { name: "跳到 worker 的提问" });
+    expect(button.textContent).toBe("看提问");
+    fireEvent.click(button);
+    expect(jump.locateAttention).toHaveBeenCalledTimes(1);
+  });
+
+  it("只有等你回答的卡片有这个入口", () => {
+    setup([question], [running]);
+    expect(screen.queryByRole("button", { name: /的提问/ })).toBeNull();
+  });
+
+  it("这一轮已经结束、只剩等你回答：底部单独一行写明在问什么，「看提问 #N」跳到提问", () => {
+    const worker = {
+      id: "worker",
+      roomId: "general",
+      username: "worker",
+      type: "agent",
+      status: "online",
+    } as Props["participants"][number];
+    const parked: Invocation = {
+      ...waiting,
+      finishedAt: at,
+      questionMessageId: asked.id,
+      questionSeq: 9,
+      detail: "等人回答：要不要顺手把旧数据也迁过去？",
+      detailText: {
+        key: "invocation.waitingAnswer",
+        params: { question: "要不要顺手把旧数据也迁过去？" },
+      },
+    };
+    const { jump } = setup([question], [parked], {}, [worker]);
+    const bar = screen.getByRole("status");
+    expect(bar.className).toContain("waiting-question");
+    expect(bar.textContent).toContain("worker在等你回答要不要顺手把旧数据也迁过去？");
+    // 不再混进「正在处理」那一行
+    expect(screen.queryByText("正在处理")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "跳到 worker 的提问 #9" }));
+    expect(jump.locateAttention).toHaveBeenCalledWith(expect.objectContaining({ id: "task" }));
+    expect(jump.flashOrigin).toHaveBeenCalledWith({ invocationIds: ["task"] });
   });
 });
