@@ -144,7 +144,7 @@ export const SHOTS = [
 ];
 
 /** 截图页面里的辅助函数：在 shadow DOM 里也能找；量位置前先滚到可见 */
-const SHOT_HELPERS = `${HELPERS}
+export const SHOT_HELPERS = `${HELPERS}
 Object.assign(window.__shot, {
   deep(selector, match) {
     const roots = [document, ...[...document.querySelectorAll("*")].filter((el) => el.shadowRoot).map((el) => el.shadowRoot)];
@@ -309,24 +309,23 @@ function run(command, args, options = {}) {
   });
 }
 
-/** 起演示 Server：HOME 指向临时目录，等它打印 DEMO_READY */
-async function startDemo(home) {
+/** 起演示 Server：HOME 指向临时目录，等它打印 DEMO_READY；script 换成别的演示场景（宣传截图用 promo/stills-server.mjs） */
+export async function startDemo(
+  home,
+  script = path.join(import.meta.dirname, "screens/demo-server.mjs"),
+) {
   const log = path.join(home, "demo-server.log");
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", path.join(import.meta.dirname, "screens/demo-server.mjs")],
-    {
-      cwd: path.join(ROOT, "apps/server"),
-      env: {
-        // 只带运行要用的环境：不把本机的 HIVE_* 配置、令牌带进演示 Server
-        PATH: process.env.PATH,
-        HOME: home,
-        HIVE_DEMO_ROOT: home,
-        TZ: process.env.TZ ?? "Asia/Shanghai",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+  const child = spawn(process.execPath, ["--import", "tsx", script], {
+    cwd: path.join(ROOT, "apps/server"),
+    env: {
+      // 只带运行要用的环境：不把本机的 HIVE_* 配置、令牌带进演示 Server
+      PATH: process.env.PATH,
+      HOME: home,
+      HIVE_DEMO_ROOT: home,
+      TZ: process.env.TZ ?? "Asia/Shanghai",
     },
-  );
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   const output = fs.createWriteStream(log);
   child.stderr.pipe(output);
   // 失败时把日志末尾带进报错：临时目录随后会被删掉
@@ -366,7 +365,7 @@ async function startDemo(home) {
 }
 
 /** returnValue=false 时丢掉结果：按值回传 DOM 元素会报「Object reference chain is too long」 */
-async function evaluate(cdp, script, label, returnValue = false) {
+export async function evaluate(cdp, script, label, returnValue = false) {
   try {
     return await cdp.evaluate(
       returnValue ? `(async () => await (${script}))()` : `(async () => { await (${script}); })()`,

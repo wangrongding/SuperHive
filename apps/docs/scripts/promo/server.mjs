@@ -101,7 +101,7 @@ const CLIS = [
   { command: "omp", pkg: "@oh-my-pi/pi-coding-agent", version: "omp/19.0.0", latest: "19.0.0" },
 ];
 
-function createFakeClis() {
+export function createFakeClis() {
   const bin = path.join(HOME, ".npm-global/bin");
   fs.mkdirSync(bin, { recursive: true });
   for (const cli of CLIS) {
@@ -137,7 +137,7 @@ function git(cwd, ...args) {
   }).trim();
 }
 
-function write(file, content) {
+export function write(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }
@@ -247,7 +247,7 @@ function seedDatabase(databasePath, repo) {
 
 /* ---------------- 经真实协议上线的假成员 ---------------- */
 
-class Member {
+export class Member {
   constructor(url, token, room, name, type, agent) {
     this.url = url;
     this.token = token;
@@ -396,7 +396,7 @@ class Member {
 }
 
 /** 执行过程的小工具：一步步往外推，像真的在跑 */
-function tracer(member, messageId) {
+export function tracer(member, messageId) {
   const started = Date.now();
   let n = 0;
   const at = () => new Date().toISOString();

@@ -15,6 +15,7 @@
     "check": "astro check",
     "screens": "node scripts/screens.mjs",
     "promo": "node scripts/promo/make.mjs",
+    "promo:stills": "node scripts/promo/stills.mjs",
     "home:media": "node scripts/home-media.mjs",
     "social:image": "node scripts/social-image.mjs",
     "test": "node --test scripts/*.test.mjs",
