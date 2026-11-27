@@ -140,6 +140,14 @@ summary,
   outline: none;
 }
 
+/*
+ * Chrome 130 起，能滚动的区域（消息列表、房间列表、成员列表……）没写 tabindex 也能被聚焦，
+ * 点一下再按方向键或 Tab，整块区域就套上浏览器默认的蓝框。只有真正的控件和显式 tabindex="0" 的元素才画焦点框
+ */
+:focus-visible:not(button, a, input, textarea, select, summary, [contenteditable], [tabindex]) {
+  outline: none;
+}
+
 a {
   color: var(--accent);
 }
