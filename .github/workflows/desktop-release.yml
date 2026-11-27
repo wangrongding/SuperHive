@@ -75,7 +75,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $version = $env:RELEASE_VERSION
-          $assets = @("SuperHive-$version-win-x64-Setup.exe", "RELEASES", "SuperHive-$version-full.nupkg") | ForEach-Object { Join-Path release-assets $_ }
+          $assets = @("SuperHive-$version-win-x64-Setup.exe", "RELEASES", "SuperHive-$version-full.nupkg") | ForEach-Object { Join-Path (Join-Path release-assets $version) $_ }
           foreach ($asset in $assets) {
             $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
             Write-Output "$hash  $asset"
