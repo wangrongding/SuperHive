@@ -2894,7 +2894,6 @@ export class AgentBridge {
     };
   }
 
-  /** 为消息里的附件准备本机路径；拿不到的只在日志里记一笔，Agent 仍可改用 hive_attachment_read */
   /** 触发消息是对提问的回答时，找回那条提问（隔了很久才答，提问往往已不在上下文里） */
   private answeredQuestions(triggers: ChatMessage[], context: ChatMessage[]) {
     return loadAnsweredQuestions(
@@ -2908,6 +2907,7 @@ export class AgentBridge {
     });
   }
 
+  /** 为消息里的附件准备本机路径；拿不到的只在日志里记一笔，Agent 仍可改用 hive_attachment_read */
   private async attachmentPaths(messages: ChatMessage[]): Promise<AttachmentPaths> {
     const cache = this.attachments;
     if (!cache) return {};
