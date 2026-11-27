@@ -113,6 +113,7 @@ module.exports = {
       version: FuseVersion.V1,
       // Electron 不能被当成任意 Node 用；本机 Agent 走 --superhive-cli，只跑包里的 CLI
       [FuseV1Options.RunAsNode]: false,
+      // Windows 用 DPAPI 真加密；Mac 上主进程加了 use-mock-keychain，密钥固定、不碰钥匙串（src/keychain.ts）
       [FuseV1Options.EnableCookieEncryption]: true,
       [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
       [FuseV1Options.EnableNodeCliInspectArguments]: false,

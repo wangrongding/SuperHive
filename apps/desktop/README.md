@@ -24,6 +24,7 @@
 - 每个 IPC 都在主进程再校验一次 `senderFrame`：必须是我们窗口的顶层框架、来源等于本机 Hive 地址，iframe、别的窗口、跳走后的页面一律拒绝；每个终端只归创建它的页面，别的页面读写不了；
 - 不允许跳到别的站点，外部链接交给系统浏览器；同源新窗口不带 preload；禁止 webview；权限请求只放行剪贴板、通知、全屏，并且只给本机 Hive；
 - Fuses：关 `RunAsNode`、`EnableNodeOptionsEnvironmentVariable`、`EnableNodeCliInspectArguments`，开 asar 完整性校验和 `OnlyLoadAppFromAsar`，开 Cookie 加密；
+- **macOS 不碰钥匙串**（`src/keychain.ts`）：主进程在 app ready 之前加 Chromium 的 `use-mock-keychain`，cookie 用固定密钥加密，不去钥匙串读「SuperHive Safe Storage」。ad-hoc 签名的 cdhash 每个版本都不一样，不加的话每次升级打开都会弹框要登录密码。桌面端没有靠它保护的数据：网页登录凭据（本机房主、别人服务器的访客）都在 localStorage，Server 不发 cookie，也没用 `safeStorage`；以后要存机密得先有 Developer ID 签名、再去掉这个开关（`keychain.test.ts` 会拦住开关还在时用 `safeStorage`）。Windows 的 cookie 加密走 DPAPI，不弹框、照旧；
 - **终端能力不经过网络**：只走 Electron IPC。局域网、远程或浏览器里打开的网页没有 preload，`window.superhiveDesktop` 不存在，网页也不会出现终端入口、不会加载 xterm。
 
 ## 本地开发
@@ -64,6 +65,8 @@ Windows 上打包（Windows 11 x64 实测过）：
 ```bash
 SUPERHIVE_DESKTOP_APP=out/SuperHive-darwin-arm64/SuperHive.app/Contents/MacOS/SuperHive pnpm --filter @superhive/desktop exec playwright test test/packaged.smoke.ts
 ```
+
+Mac 上再跑一遍 `test/keychain.smoke.ts`（同样设 `SUPERHIVE_DESKTOP_APP`）：确认 cookie 是用假钥匙串的固定密钥加密的（没碰系统钥匙串），并模拟旧版写下的 cookie，换版后同一数据目录不用重新登录、localStorage 原样。
 
 为什么用 Electron Forge：这是 Electron 官方维护和推荐的工具链，fuses、原生模块重编、各平台 maker 和发布器都是官方插件。pnpm 仓库的问题用「先组装到 `.stage/app`、在那里跑 Forge」解决。
 

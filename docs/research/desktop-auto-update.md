@@ -116,7 +116,7 @@
 7. **替换**：应用退出时（`before-quit`，在停 Hive 之前）起一个脱离的 `/bin/sh`，参数按位置传进去、不拼进脚本：等主进程 PID 退出（最多 120 秒，等不到什么都不动）→ 把旧 `.app` 改名挪开 → 把暂存的新 `.app` 改名挪进来，挪不进来就把旧的挪回去 → 删旧的 → 点过「重启以更新」时再 `open` 新版本。输出写到 `<userData>/updates/install.log`。
 8. **清理**：下次启动时删掉没用上的 `.SuperHive-update-*` 和下载目录（比如上次等主进程超时没换成）；版本没变，检查器会照样提示，可以重新下载。
 
-**换上去之后的影响**：新旧版本都是 ad-hoc 签名，签名的 cdhash 每个版本都不一样，所以和手动拖进「应用程序」覆盖一样，macOS 可能会就钥匙串里的「SuperHive Safe Storage」、文件夹访问等权限再问一次。数据和设置不在 `.app` 里，不受影响。
+**换上去之后的影响**：新旧版本都是 ad-hoc 签名，签名的 cdhash 每个版本都不一样，所以和手动拖进「应用程序」覆盖一样，macOS 可能会就文件夹访问等权限再问一次。0.4.9 及以前每次换版打开还会弹钥匙串框（「SuperHive Safe Storage」），之后的版本在 Mac 上用 Chromium 的 `use-mock-keychain`，不再读写钥匙串（见 `apps/desktop/src/keychain.ts`）。数据和设置不在 `.app` 里，不受影响。
 
 本机 Agent 也是用 `.app` 里的 Electron 跑的（`--superhive-cli`）。桌面端自己起的 Hive 退出时会一起停掉；如果连的是外面已经在跑的 Hive，那边的 Agent 进程会继续用旧文件跑到它们重启为止（macOS 上改名、删除正在用的文件不影响已经打开的进程），重启 Agent 后就是新版本。
 

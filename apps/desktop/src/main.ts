@@ -42,6 +42,7 @@ import {
 } from "./hive-server.js";
 import { IPC, type TerminalCreateRequest, type TerminalLayoutAction } from "./ipc-contract.js";
 import { imageContextMenu } from "./image-context-menu.js";
+import { keychainSwitches } from "./keychain.js";
 import { createPickFilesHandler, createWorkspaceLookup, readPickedFiles } from "./file-picker.js";
 import { isLoopbackOrigin, isTrustedSender, originAnswer, originOf } from "./ipc-guard.js";
 import { loginShellEnv, mergePath, mergeProxyEnv } from "./shell-env.js";
@@ -113,6 +114,9 @@ const PREFERRED_PORT = Number.parseInt(process.env.SUPERHIVE_DESKTOP_PORT ?? "",
 /** 打包后的应用根目录（app.asar 或开发时的 .stage/app） */
 const appRoot = __dirname;
 const superhiveRoot = path.join(appRoot, "superhive");
+
+// Mac 上不碰钥匙串（ad-hoc 签名每个版本都会弹授权框，见 keychain.ts）；命令行模式也是 Electron 起的，一起加
+for (const name of keychainSwitches(process.platform)) app.commandLine.appendSwitch(name);
 
 const cliIndex = process.argv.indexOf(CLI_FLAG);
 if (cliIndex >= 0) {
