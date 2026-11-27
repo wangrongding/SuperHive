@@ -8,7 +8,7 @@
 
 - **本机 Hive**：读 `~/.superhive/server.json`，`hive start` 起的 Server 还在跑就直接连上，不再起第二个；没有就用 `utilityProcess` 起一个，写同样格式的 `server.json`，`hive stop` / `hive start` 都认得它。8787 被别的程序占了就往后找空端口。退出应用时只停自己起的那个，先请它正常退出（本机 Agent 下线、IM 断开），等不到再结束。数据目录、数据库和 CLI 是同一份，不迁移也不改写用户数据。Server 的 cwd 和 `HIVE_LAUNCH_DIR` 都设成用户主目录（`serverEnv`）：应用自己的 cwd 是安装目录（Windows `%LOCALAPPDATA%\SuperHive\app-<版本>`，升级后旧目录会被删）或 `/`（Mac 双击 .app），都不能当新建 Agent、房间工作区的默认目录。早先建的本机 Agent 工作目录指向安装目录时，Server 启动它前改成主目录并在 Agent 设置里提示（`checkCwd`）。
 - **本机 Agent**：打包后的应用关了 RunAsNode，Electron 不能当 Node 用。Server 改由环境变量 `HIVE_LOCAL_AGENT_CLI` 得知怎么拉起 Agent：桌面端让它运行 `SuperHive --superhive-cli join …`，主进程看到这个参数就只运行包里自带的 superhive CLI，不开窗口、不占单实例锁。
-- **PATH**：从访达、Dock 启动的程序拿不到 shell 配置里的 PATH，启动时用登录 shell 读一次再合并，本机 Agent 和终端才能找到 `claude`、`codex`、`node`。
+- **PATH**：从访达、Dock 启动的程序拿不到 shell 配置里的 PATH，启动时用登录 shell 读一次再合并，本机 Agent 和终端才能找到 `claude`、`codex`、`node`。给 Server 的 PATH 末尾再追加自带的 Node 和 `agent-clis`（见「自带的 Node」）。
 - **窗口**：加载 `http://127.0.0.1:<端口>` 的现有网页（在本机打开才是房主身份）；记住大小和位置（换了显示器会放回可见区域）；只允许一个实例；macOS 上关窗口不退出，点 Dock 图标再打开，⌘Q 才退出。
 - **标题栏**：去掉系统标题栏，网页顶栏顶到窗口最上面。macOS 用 `titleBarStyle: "hidden"`，红黄绿按钮在左侧栏顶部那一行垂直居中（网页同步顶栏高度，界面密度变了按钮跟着挪），全屏时按钮隐藏、让出的位置收回；Windows / Linux 用 `titleBarOverlay` 保留系统按钮（Win11 贴靠布局照常可用），底色、图标颜色和高度跟网页主题实时同步，失焦时图标变淡，网页用 `env(titlebar-area-*)` 在右上角让位。侧栏顶部、聊天顶栏、右侧栏顶部可拖动，按钮、输入框、提示等都是 `no-drag`，模态弹窗打开时顶部不再拖动。所有贴着窗口顶边的面板和弹窗统一按 `--titlebar-safe-top / --titlebar-safe-left / --titlebar-safe-right` 让位（窗口最上面那一行始终露出顶栏和窗口按钮：「代码」「产物」大面板、居中弹窗、提及和任务等面板都从这一行下面开始排），新加弹层也用这三个变量；Windows / Linux 上弹窗遮罩盖住右上角时，网页把那一点叠出来的颜色发给主进程，系统按钮底色跟着变暗。窗口最小 960×640。preload 在 html 上打 `data-desktop`、`data-titlebar`、`data-fullscreen`，样式全在 `apps/web/src/styles/desktop-titlebar.css`，浏览器里一条都不生效。`SUPERHIVE_DESKTOP_TITLEBAR=native` 退回系统标题栏。
 - **启动加载动画**：窗口一打开就按上次的位置大小显示，蜂巢 logo 动画铺在窗口里单独的一层 `WebContentsView` 上（`src/splash.ts`，纯 CSS + 内联 SVG）：描边画出、点亮中心、中心往外一圈圈扩散六边形信号。本机 Hive 起好后网页在这层下面加载，首屏画好时网页经 preload 的 `ready()` 通知主进程，logo 缩小淡出、底色变透明露出主界面；启动快时不硬等，没画完的入场动画加速播完。加载超过约 2 秒才淡入一行状态文字，超过 12 秒补一句提示。深浅色用上次网页的主题（记在用户目录的 `splash-theme.json`，和系统一致时跟随系统），`prefers-reduced-motion` 时换成静态 logo 加轻微明暗变化。起不来或 Hive 中途停了，停在出错画面上写明原因和日志位置，可「重试」「打开日志目录」「退出」。`SUPERHIVE_DESKTOP_SPLASH=comb` 换成「小六边形一格格拼出」的备选方案。preload 的本机 Hive 地址改为载入时同步问主进程（窗口比 Hive 先建出来），主进程只回答主窗口的顶层框架。
@@ -88,13 +88,29 @@ SUPERHIVE_DESKTOP_APP=out/SuperHive-darwin-arm64/SuperHive.app/Contents/MacOS/Su
 | Windows 签名          | 代码签名证书（OV/EV），或 Azure Trusted Signing 账号                                         | `packagerConfig.windowsSign`、`maker-squirrel` 的签名参数                |
 | 发布到 GitHub Release | 有发版权限的 GitHub token；在 CI 上按平台打包                                                | `forge.config.cjs` 的 `publishers`（`@electron-forge/publisher-github`） |
 
+## 自带的 Node
+
+桌面端自带一份官方 Node LTS（含 npm、npx），**只给本机 Agent 跑和安装 npm 装的 CLI 用**：不加进系统 PATH，不改用户的环境变量，也不影响内置终端。
+
+- **为什么不用 Electron 当 Node**：那要打开 RunAsNode fuse，任何程序都能借 `SuperHive.exe` 跑任意脚本（安全软件很在意这种行为）；Electron 里也没有 npm，「帮用户装 CLI」做不了。
+- **打包**：`scripts/stage.mjs` 调 `scripts/node-runtime.mjs` 下载固定版本的官方压缩包，放进 `.stage/node`，Forge 用 `extraResource` 带进安装包（Mac 在 `SuperHive.app/Contents/Resources/node`，Windows 在 `resources\node`）。每个平台压缩包的 SHA-256 写死在 `node-runtime.mjs` 里，下载后要和它、也要和当场从 nodejs.org 拉的 `SHASUMS256.txt` 都对得上，否则中止打包。头文件、文档、corepack 不带。压缩包缓存在 `apps/desktop/.cache/node`（CI 用 actions/cache 缓存）。
+  - 升级 Node：改 `NODE_RUNTIME.version`，把新版 `SHASUMS256.txt` 里对应几行抄进 `sha256`。
+  - 离线开发可以设 `SUPERHIVE_SKIP_BUNDLED_NODE=1` 跳过下载；这时 `forge package/make` 会拒绝打包（`prePackage` 钩子），免得发出一个不带 Node 的包。
+- **怎么交给 Agent**：主进程起 Server 时设三个环境变量（`src/bundled-node.ts`），Server 再传给每个本机 Agent：
+  - `SUPERHIVE_BUNDLED_NODE`：node 本体的绝对路径；
+  - `SUPERHIVE_AGENT_CLIS_DIR`：`<userData>/agent-clis`，用自带 npm 装 CLI 时的全局前缀；
+  - `PATH`：把 `agent-clis` 的命令目录和自带 Node 的目录**追加到末尾**。用户自己装的 node、CLI 排在前面照样优先；没装的时候，Mac / Linux 上 `#!/usr/bin/env node` 的 CLI 也能找到 node。
+- **Windows 上跑 npm 的 `.cmd` 启动器**：CLI 和 Server 两份解析器（`windows-command.ts`）按这个顺序找 node：启动器旁边的 `node.exe` → 自带的 node → `PATH` 里真正的 `node.exe` → 报错。自带的 node 不见了（安装不完整）时提示重装桌面端；「请安装 Node.js 并重新打开桌面端」这句只在开发版、纯 npm 版（没有自带 Node）里出现。原生 `.exe` 照旧直接运行。
+- **一键安装 CLI**（Agent 设置里的 CLI 列表，`apps/server/src/agent-clis.ts`）：
+  - Mac / Linux：系统里有 npm 就照旧用用户自己的；没有时用自带的 npm，加 `--prefix <userData>/agent-clis` 装进 SuperHive 自己的目录，不需要管理员权限。Claude Code、OpenCode 仍先跑官方安装脚本，失败才退回 npm。
+  - Windows：用自带的 `node.exe` 直接跑 `npm-cli.js`，装进 `%APPDATA%\SuperHive\agent-clis`；之后的一键升级也只针对装在这里的那份。omp（要 bun）、agy（不在 npm 上）和别处装的仍要手动。
+
 ## 已知限制
 
 - 未签名的 macOS 应用第一次打开会被 Gatekeeper 拦下，要到「系统设置 → 隐私与安全性」底部点「仍要打开」（macOS 15 起右键「打开」已经不能放行），或者 `xattr -dr com.apple.quarantine /Applications/SuperHive.app`。
 - 每个本机 Agent 是一个不带窗口的 Electron 主进程，比直接用 Node 多占几十 MB 内存。
-- 桌面端和随包的 Hive Server / CLI 本身不需要系统 Node.js；通过 npm 安装 Agent CLI，以及运行它的 JavaScript 启动器，仍需要系统 Node.js。CLI 的官方原生 `.exe` 可以不经 Node 直接运行。Electron 的 RunAsNode 保持禁用，不把桌面端开放成执行任意外部脚本的 Node 运行时。
+- 用户不用自己装 Node.js：安装包里自带一份官方 Node（见下面「自带的 Node」）。Electron 的 RunAsNode 保持禁用，不把桌面端开放成执行任意外部脚本的 Node 运行时。
 - Windows 上 Electron 遇到「像网址的参数后面还跟着 `--` 开关」会直接退出（防协议处理器注入），所以 Server 拉起 CLI 时字符串选项一律写成 `--key=value`（`apps/server/src/local-agents.ts` 的 `cliOption`）。
 - 命令行模式（`--superhive-cli`）下除了常驻的 `join`，命令做完主动退出（Electron 的消息循环不会自己停）；Chromium 缓存按 Agent 分目录放在 `<userData>/cli/` 下，不和桌面端、别的 Agent 抢。
-- Windows：npm 全局 Agent CLI 的 `.cmd` JavaScript 启动器优先使用旁边的 `node.exe`；桌面端旁边没有时从 `PATH` 查找真正的 `node.exe`，不把 Electron 本身误当作 Node。两处都找不到时明确报错；可安装 Node.js 后重新打开桌面端以刷新继承的 PATH，或安装该 CLI 的官方原生程序并在 Agent 设置中指定 `.exe` 路径。CLI 和 Server 的命令解析都遵循这一规则；这不代表桌面端已附带 Node / npm 或会自动安装它们。
 - Windows 安装包未签名，从网上下载后打开时 SmartScreen 一般会提示「已保护你的电脑」，需要点「更多信息 → 仍要运行」。
 - Linux 只配好了 maker，没有实际打包和运行过。

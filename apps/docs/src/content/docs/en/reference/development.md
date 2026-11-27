@@ -70,7 +70,7 @@ pnpm --filter @superhive/desktop test:smoke   # launch the app, run a command in
 pnpm --filter @superhive/desktop make         # build installers into apps/desktop/out/
 ```
 
-The app is assembled in `apps/desktop/.stage/app` with its own npm-installed runtime dependencies, so the Electron build never touches the workspace's pnpm `node_modules`. Packaged builds turn off the `RunAsNode` fuse; the Server learns how to start local agents from `HIVE_LOCAL_AGENT_CLI`, and the app runs its bundled CLI when started with `--superhive-cli`. Installers are published as unsigned previews on [GitHub Releases](https://github.com/wangrongding/SuperHive/releases/latest); code signing, notarization and auto-update are not set up yet. See `apps/desktop/README.md` for details and what they need.
+The app is assembled in `apps/desktop/.stage/app` with its own npm-installed runtime dependencies, so the Electron build never touches the workspace's pnpm `node_modules`. Packaged builds turn off the `RunAsNode` fuse; the Server learns how to start local agents from `HIVE_LOCAL_AGENT_CLI`, and the app runs its bundled CLI when started with `--superhive-cli`. The Node that agents use to run and install npm-based CLIs is an official Node LTS build downloaded at packaging time, checked against pinned SHA-256 hashes, shipped in `resources/node`, and handed to the Server and agents through `SUPERHIVE_BUNDLED_NODE` and related environment variables. Installers are published as unsigned previews on [GitHub Releases](https://github.com/wangrongding/SuperHive/releases/latest); code signing, notarization and auto-update are not set up yet. See `apps/desktop/README.md` for details and what they need.
 
 ## MCP and HTTP extension points
 

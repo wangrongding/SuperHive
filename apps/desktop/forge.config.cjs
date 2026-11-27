@@ -5,6 +5,7 @@
  * 需要证书或对外发布的部分（代码签名、公证、自动更新、发布到 GitHub Release）这次都没开，
  * 位置留在下面的 TODO 里，见 apps/desktop/README.md「发布前要准备的」。
  */
+const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { FusesPlugin } = require("@electron-forge/plugin-fuses");
@@ -14,6 +15,18 @@ const { prune: pruneNatives } = require("./prune-natives.cjs");
 // scripts/forge.mjs 传进来；Forge 加载配置时 __dirname 不一定是 .stage/app
 const desktopDir = process.env.SUPERHIVE_DESKTOP_DIR ?? path.resolve(__dirname, "../..");
 const { version } = require(path.join(desktopDir, "package.json"));
+
+/**
+ * 自带的 Node 运行时（scripts/stage.mjs 下载并校验好的 .stage/node），打包后在 resources/node。
+ * 缺了就不打包：没有它的桌面端会让没装 Node 的用户跑不起 npm 装的 CLI。
+ * 只有显式设了 SUPERHIVE_SKIP_BUNDLED_NODE=1（离线开发）才放行。
+ */
+const bundledNodeDir = path.join(desktopDir, ".stage", "node");
+const hasBundledNode = fs.existsSync(path.join(bundledNodeDir, ".superhive-node"));
+function assertBundledNode() {
+  if (hasBundledNode || process.env.SUPERHIVE_SKIP_BUNDLED_NODE === "1") return;
+  throw new Error(`Bundled Node runtime missing: ${bundledNodeDir}. Run scripts/stage.mjs first.`);
+}
 
 /** Windows 安装包文件名带版本和架构，和 Release 上的文件名一致，不用再手动改名 */
 function setupExeName(arch) {
@@ -43,6 +56,8 @@ module.exports = {
     // Mac 的 Info.plist 里声明 superhive:// 链接（打开别人的邀请、带 Agent 加入）；Windows 由主进程启动时注册
     protocols: [{ name: "SuperHive", schemes: ["superhive"] }],
     icon: path.join(desktopDir, "build/icon"),
+    // 复制到 Resources/node（Mac）、resources/node（Windows），在 asar 外面、可以直接执行
+    extraResource: hasBundledNode ? [bundledNodeDir] : [],
     // 原生模块和 node-pty 的 spawn-helper 必须放在 asar 外面才能加载 / 执行
     asar: {
       unpack: "**/{*.node,spawn-helper,winpty-agent.exe,winpty.dll,conpty.dll,OpenConsole.exe}",
@@ -88,6 +103,7 @@ module.exports = {
   // Mac 下载 Release 里 maker-zip 打的 SuperHive-darwin-arm64-<版本>.zip 自己替换 .app（src/mac-update.ts）。
   // 发版要上传的文件用 `pnpm --filter @superhive/desktop release-assets` 收集，见 docs/research/desktop-auto-update.md
   hooks: {
+    prePackage: async () => assertBundledNode(),
     postPackage: async (_config, { platform, outputPaths }) => {
       if (platform === "darwin") adHocSign(outputPaths);
     },

@@ -139,6 +139,48 @@ function safePath(value: string): boolean {
   return path.posix.isAbsolute(value) && !/[\0\n\r]/.test(value);
 }
 
+/** npm 全局前缀放命令的目录：Windows 直接放在前缀里，其余平台在 bin/ */
+export function prefixBin(prefix: string, platform: NodeJS.Platform): string {
+  return platform === "win32" ? path.win32.join(prefix) : path.posix.join(prefix, "bin");
+}
+
+/** file 在不在 dir 里（Windows 不分大小写、认两种斜杠） */
+export function isInside(file: string, dir: string, platform: NodeJS.Platform): boolean {
+  const norm = (value: string) =>
+    platform === "win32" ? lower(value).replace(/\/+$/, "") : value.replace(/\/+$/, "");
+  const base = norm(dir);
+  return Boolean(base) && norm(file).startsWith(`${base}/`);
+}
+
+/**
+ * Windows 上用自带 npm 装到 prefix 的命令，交给 `cmd.exe /d /s /c` 跑：node.exe 直接跑 npm-cli.js。
+ * 路径里有 cmd 会改写的字符（" % ! ^）或换行就不拼，退回手动。
+ */
+export function windowsNpmInstall(bundled: BundledNpm, spec: ToolSpec): string | undefined {
+  const paths = [bundled.node, bundled.npmCli, bundled.prefix];
+  if (
+    !spec.package ||
+    paths.some((item) => /["%!^\0\r\n]/.test(item) || !path.win32.isAbsolute(item))
+  ) {
+    return undefined;
+  }
+  const quote = (value: string) => `"${value}"`;
+  return `${quote(bundled.node)} ${quote(bundled.npmCli)} i -g --prefix ${quote(bundled.prefix)} ${spec.package}@latest${spec.npmArgs ?? ""}`;
+}
+
+/** 环境变量里换掉 PATH；Windows 上先去掉 Path、path 等别的大小写写法，免得子进程里两个都在 */
+export function withPath(
+  env: NodeJS.ProcessEnv,
+  value: string,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  if (platform !== "win32") return { ...env, PATH: value };
+  const next: NodeJS.ProcessEnv = {};
+  for (const [key, item] of Object.entries(env)) if (key.toLowerCase() !== "path") next[key] = item;
+  next.Path = value;
+  return next;
+}
+
 /**
  * 由入口路径（launcher，命令行看到的那个）和真实路径（real）推断安装来源。
  * Homebrew 看真实路径（Intel Cask 入口在 /usr/local/bin）；node 版本管理器看入口（shim 在入口路径上）。
@@ -336,10 +378,24 @@ export function nodeRangeSatisfied(range: string, version: string): boolean | un
   return anyUnknown ? undefined : false;
 }
 
+/**
+ * 桌面端自带的 Node 和 npm（环境变量 SUPERHIVE_BUNDLED_NODE / SUPERHIVE_AGENT_CLIS_DIR，见 apps/desktop/src/bundled-node.ts）。
+ * 用它装的 CLI 一律装进 prefix（<userData>/agent-clis）：不用管理员权限，也不写进安装包或系统目录。
+ */
+export type BundledNpm = {
+  node: string;
+  /** bin/npm（Mac / Linux 上的 `#!/usr/bin/env node` 脚本） */
+  npm: string;
+  /** npm-cli.js：Windows 上用 node.exe 直接跑它，不经 npm.cmd */
+  npmCli: string;
+  prefix: string;
+};
+
 export type PlanContext = {
   platform: NodeJS.Platform;
   /** 文件是否存在且可执行 */
   isExecutable: (file: string) => boolean;
+  bundled?: BundledNpm | undefined;
   /** 登录 shell PATH 里的 npm（自定义前缀的 npm 全局安装用它，配 --prefix 写回原处） */
   npm?: string | undefined;
 };
@@ -421,7 +477,14 @@ export function planUpdate(
   install: Pick<AgentCliInstallation, "path" | "realPath" | "source">,
   context: PlanContext,
 ): AgentCliUpdatePlan {
-  if (context.platform === "win32") return manual(serverText("agentCli.manual.windows"));
+  if (context.platform === "win32") {
+    // 只有用自带 npm 装进 agent-clis 的那份能一键升级：同一个 npm、同一个前缀再装一次 latest
+    const command =
+      context.bundled && tool !== "omp" && isInside(install.path, context.bundled.prefix, "win32")
+        ? windowsNpmInstall(context.bundled, TOOLS[tool])
+        : undefined;
+    return command ? { kind: "anchored", command } : manual(serverText("agentCli.manual.windows"));
+  }
   const spec = TOOLS[tool];
   const bin = install.path;
   const real = install.realPath;
@@ -490,8 +553,9 @@ export function planUpdate(
 export type InstallContext = {
   platform: NodeJS.Platform;
   isExecutable: (file: string) => boolean;
-  /** 登录 shell PATH 里的 npm（绝对路径） */
+  /** 登录 shell PATH 里的 npm（绝对路径）；系统里没有 npm 时是桌面端自带的那个 */
   npm?: string | undefined;
+  bundled?: BundledNpm | undefined;
 };
 
 /**
@@ -501,17 +565,27 @@ export type InstallContext = {
  * - agy：不在 npm 上，只跑官方脚本；
  * - codex、copilot、openclaw、gemini：npm。
  * npm 用登录 shell PATH 里实际的那个（绝对路径），同目录有 node 时把这个目录放到 PATH 最前。
+ * 系统里没有 npm、用的是桌面端自带的 npm 时，加 --prefix 装进 <userData>/agent-clis。
+ * Windows：只有桌面端（自带 npm）能一键装 npm 上的工具，装进 agent-clis；omp、agy 仍要手动。
  */
 export function planInstall(tool: AgentCliTool, context: InstallContext): AgentCliUpdatePlan {
-  if (context.platform === "win32") return manual(serverText("agentCli.manual.windows"));
   const spec = TOOLS[tool];
+  if (context.platform === "win32") {
+    const command =
+      context.bundled && tool !== "omp" ? windowsNpmInstall(context.bundled, spec) : undefined;
+    return command ? { kind: "anchored", command } : manual(serverText("agentCli.manual.windows"));
+  }
   let npm: string | undefined;
   if (spec.package && context.npm && safePath(context.npm)) {
     const dir = path.posix.dirname(context.npm);
     const pathPrefix = context.isExecutable(path.posix.join(dir, "node"))
       ? `PATH=${shellQuote(dir)}:"$PATH" `
       : "";
-    npm = `${pathPrefix}${shellQuote(context.npm)} i -g ${spec.package}@latest${spec.npmArgs ?? ""}`;
+    const prefix =
+      context.bundled && context.npm === context.bundled.npm && safePath(context.bundled.prefix)
+        ? ` --prefix ${shellQuote(context.bundled.prefix)}`
+        : "";
+    npm = `${pathPrefix}${shellQuote(context.npm)} i -g${prefix} ${spec.package}@latest${spec.npmArgs ?? ""}`;
   }
   if (tool === "omp" || tool === "agy") {
     return { kind: "anchored", command: installerCommand(tool) };
@@ -539,6 +613,12 @@ export function pathFromEnvOutput(output: string): string | undefined {
     if (line.startsWith("PATH=") && line.slice(5).startsWith("/")) return line.slice(5);
   }
   return undefined;
+}
+
+/** 环境变量里的 PATH（Windows 上不分大小写，常写作 Path） */
+function envPath(env: NodeJS.ProcessEnv): string | undefined {
+  const key = Object.keys(env).find((item) => item.toLowerCase() === "path");
+  return key ? env[key] : undefined;
 }
 
 /** 合并两段 PATH：primary 在前，extra 里没出现过的按序追加，丢掉空段和相对路径 */
@@ -649,8 +729,13 @@ export const defaultRunProbe: RunProbe = (command, args, options) =>
 function killGroup(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
   if (!pid) return;
   try {
-    if (process.platform === "win32") process.kill(pid, signal);
-    else process.kill(-pid, signal);
+    if (process.platform === "win32") {
+      // cmd.exe 下面还有 node / npm：连同子进程树一起结束
+      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      }).on("error", () => process.kill(pid, signal));
+    } else process.kill(-pid, signal);
   } catch {
     /* 已经退出 */
   }
@@ -658,14 +743,24 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") 
 
 /** 在 /bin/sh 里跑升级命令；独立进程组，结束时连同 npm 等子进程一起结束 */
 export const defaultSpawnUpgrade: SpawnUpgrade = (command, env) => {
-  const child = spawn("/bin/sh", ["-c", command], {
-    env,
-    // 在临时目录里跑：安装脚本出意外也不会在 Server 的工作目录里留下文件
-    cwd: tmpdir(),
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-    windowsHide: true,
-  });
+  // 在临时目录里跑：安装脚本出意外也不会在 Server 的工作目录里留下文件
+  const child =
+    process.platform === "win32"
+      ? // Windows 只跑 windowsNpmInstall 拼好的命令（路径都已加引号、没有 cmd 会改写的字符）
+        spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", `"${command}"`], {
+          env,
+          cwd: tmpdir(),
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+          windowsVerbatimArguments: true,
+        })
+      : spawn("/bin/sh", ["-c", command], {
+          env,
+          cwd: tmpdir(),
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
+          windowsHide: true,
+        });
   const outputs: Array<(chunk: string) => void> = [];
   const exits: Array<(code: number | null, error?: Error) => void> = [];
   let exited = false;
@@ -739,6 +834,10 @@ export type AgentCliManagerOptions = {
   realpath?: (file: string) => string;
   now?: () => number;
   upgradeTimeoutMs?: number;
+  /** 桌面端自带的 node；默认读 SUPERHIVE_BUNDLED_NODE */
+  bundledNode?: string | undefined;
+  /** 用自带 npm 安装时的全局前缀；默认读 SUPERHIVE_AGENT_CLIS_DIR */
+  agentClisDir?: string | undefined;
 };
 
 type Detected = {
@@ -781,13 +880,57 @@ export class AgentCliManager {
   loginPath(): Promise<string> {
     const cached = this.loginPathCache;
     if (cached && this.now() - cached.at < LOGIN_PATH_CACHE_MS) return cached.value;
-    const own = this.env.PATH ?? "";
+    const win = this.platform === "win32";
+    const own = (win ? envPath(this.env) : this.env.PATH) ?? "";
+    // 桌面端的 agent-clis 和自带 Node 排在最后：用户自己装的 node、CLI 优先
+    const tail = this.bundledDirs().join(win ? ";" : ":");
+    const withTail = (value: string) => (tail ? mergePath(value, tail, win ? ";" : ":") : value);
     const value = (this.options.loginPath ?? (() => this.readLoginPath()))().then(
-      (login) => (this.platform === "win32" ? own : mergePath(login ?? "", own || "/usr/bin:/bin")),
-      () => own,
+      (login) => withTail(win ? own : mergePath(login ?? "", own || "/usr/bin:/bin")),
+      () => withTail(own),
     );
     this.loginPathCache = { at: this.now(), value };
     return value;
+  }
+
+  private bundledNodePath(): string | undefined {
+    const node = this.options.bundledNode ?? this.env.SUPERHIVE_BUNDLED_NODE;
+    return node && path.isAbsolute(node) ? node : undefined;
+  }
+
+  private agentClisDir(): string | undefined {
+    const dir = this.options.agentClisDir ?? this.env.SUPERHIVE_AGENT_CLIS_DIR;
+    return dir && (this.platform === "win32" ? path.win32 : path.posix).isAbsolute(dir)
+      ? dir
+      : undefined;
+  }
+
+  /** 追加到 PATH 末尾的目录：agent-clis 的命令目录、自带 node 所在目录 */
+  private bundledDirs(): string[] {
+    const p = this.platform === "win32" ? path.win32 : path.posix;
+    const prefix = this.agentClisDir();
+    const node = this.bundledNodePath();
+    return [
+      ...(prefix ? [prefixBin(prefix, this.platform)] : []),
+      ...(node ? [p.dirname(node)] : []),
+    ];
+  }
+
+  /** 自带的 node、npm 都在、也知道往哪装，才算有自带 npm */
+  private bundledNpm(): BundledNpm | undefined {
+    const node = this.bundledNodePath();
+    const prefix = this.agentClisDir();
+    if (!node || !prefix || !this.isExecutable(node)) return undefined;
+    const win = this.platform === "win32";
+    const p = win ? path.win32 : path.posix;
+    const dir = p.dirname(node);
+    const npmCli = win
+      ? p.join(dir, "node_modules", "npm", "bin", "npm-cli.js")
+      : p.join(dir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    const npm = win ? p.join(dir, "npm.cmd") : p.join(dir, "npm");
+    // Windows 上 X_OK 等同于文件存在
+    if (!this.isExecutable(npmCli)) return undefined;
+    return { node, npm, npmCli, prefix };
   }
 
   private readLoginPath(): Promise<string | undefined> {
@@ -843,7 +986,10 @@ export class AgentCliManager {
     const dir = path.dirname(file);
     const delimiter = this.platform === "win32" ? ";" : ":";
     // 同目录放到 PATH 最前：nvm 装的 CLI 是 `#!/usr/bin/env node` 脚本，要用同一处的 node
-    const env = { ...this.env, PATH: `${dir}${delimiter}${loginPath}`, NO_COLOR: "1" };
+    const env = {
+      ...withPath(this.env, `${dir}${delimiter}${loginPath}`, this.platform),
+      NO_COLOR: "1",
+    };
     let command = file;
     let args = ["--version"];
     if (this.platform === "win32") {
@@ -890,7 +1036,7 @@ export class AgentCliManager {
 
   private async findInstalls(tool: AgentCliTool, loginPath: string): Promise<Detected> {
     if (this.platform === "win32") {
-      const found = findWindowsCommand(tool, { ...this.env, PATH: loginPath });
+      const found = findWindowsCommand(tool, withPath(this.env, loginPath, "win32"));
       if (!found) return { installations: [], primary: undefined };
       const install = await this.probeInstall(tool, found, this.realpath(found), loginPath, true);
       return { installations: [install], primary: install };
@@ -1016,6 +1162,9 @@ export class AgentCliManager {
         ? custom
         : path.join(this.home, OFFICIAL_INSTALLERS[tool].binDir);
     }
+    if (context.bundled && (this.platform === "win32" || context.npm === context.bundled.npm)) {
+      return prefixBin(context.bundled.prefix, this.platform);
+    }
     if (!context.npm) return undefined;
     const result = await this.runProbe(context.npm, ["prefix", "-g"], {
       env: { ...this.env, PATH: `${path.dirname(context.npm)}:${loginPath}` },
@@ -1031,10 +1180,12 @@ export class AgentCliManager {
   }
 
   private installContext(loginPath: string): InstallContext {
+    const bundled = this.bundledNpm();
     return {
       platform: this.platform,
       isExecutable: this.isExecutable,
-      npm: this.findOnPath("npm", loginPath),
+      npm: this.platform === "win32" ? undefined : this.findOnPath("npm", loginPath),
+      bundled,
     };
   }
 
@@ -1050,11 +1201,13 @@ export class AgentCliManager {
     const latest = await this.latest(tool, refresh);
     // 先跑官方脚本的装的是原生程序，不看 Node；npm 装的用 npm 同目录的 node，没有就用 PATH 里的
     const node =
-      SCRIPT_FIRST_INSTALL.has(tool) || !context.npm
-        ? undefined
-        : this.isExecutable(path.join(path.dirname(context.npm), "node"))
-          ? path.join(path.dirname(context.npm), "node")
-          : this.findOnPath("node", loginPath);
+      this.platform === "win32"
+        ? context.bundled?.node
+        : SCRIPT_FIRST_INSTALL.has(tool) || !context.npm
+          ? undefined
+          : this.isExecutable(path.join(path.dirname(context.npm), "node"))
+            ? path.join(path.dirname(context.npm), "node")
+            : this.findOnPath("node", loginPath);
     const [nodeGap, bin] = await Promise.all([
       latest ? this.nodeGap(tool, node, latest, loginPath) : undefined,
       this.globalBin(tool, context, loginPath),
@@ -1076,7 +1229,8 @@ export class AgentCliManager {
     return planUpdate(tool, detected.primary, {
       platform: this.platform,
       isExecutable: this.isExecutable,
-      npm: this.findOnPath("npm", loginPath),
+      npm: this.platform === "win32" ? undefined : this.findOnPath("npm", loginPath),
+      bundled: this.bundledNpm(),
     });
   }
 
@@ -1313,8 +1467,7 @@ export class AgentCliManager {
     }, this.upgradeTimeoutMs);
     try {
       child = this.spawnUpgrade(job.command, {
-        ...this.env,
-        PATH: loginPath,
+        ...withPath(this.env, loginPath, this.platform),
         NO_COLOR: "1",
         FORCE_COLOR: "0",
         npm_config_yes: "true",

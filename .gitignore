@@ -27,6 +27,7 @@ ChatGPT.md
 # 桌面端：组装目录、打包产物、截图
 /apps/desktop/.stage/
 /apps/desktop/out/
+/apps/desktop/.cache/
 /apps/desktop/test-results/
 /apps/desktop/playwright-report/
 /apps/desktop/screenshots/

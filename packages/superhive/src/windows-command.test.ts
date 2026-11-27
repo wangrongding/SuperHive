@@ -142,6 +142,64 @@ describe.each([
     ).toThrow(/需要 Node.js/);
   });
 
+  describe("node lookup order in the desktop app: adjacent → bundled → PATH → error", () => {
+    const bundled =
+      "C:\\Users\\me\\AppData\\Local\\SuperHive\\app-0.5.0\\resources\\node\\node.exe";
+    const pathNode = "C:\\Program Files\\nodejs\\node.exe";
+    const pathEnv = {
+      ...env,
+      Path: `C:\\Program Files\\nodejs;${env.Path}`,
+      SUPERHIVE_BUNDLED_NODE: bundled,
+    };
+    const resolve = (files: Record<string, string>, extra: Record<string, string> = {}) =>
+      resolveCommand("codex", {
+        platform: "win32",
+        env: { ...pathEnv, ...extra },
+        isElectron: true,
+        ...fs({ [`${npm}\\codex.cmd`]: jsShim, ...files }),
+      });
+
+    it("1. uses node.exe next to the shim first", () => {
+      expect(resolve({ [`${npm}\\node.exe`]: "", [bundled]: "", [pathNode]: "" }).command).toBe(
+        `${npm}\\node.exe`,
+      );
+    });
+
+    it("2. then the bundled Node from SUPERHIVE_BUNDLED_NODE, even when PATH has one", () => {
+      expect(resolve({ [bundled]: "", [pathNode]: "" })).toEqual({
+        command: bundled,
+        args: [`${npm}\\node_modules\\@openai\\codex\\bin\\codex.js`],
+      });
+      // 变量名不分大小写；也可以显式传 bundledNode
+      expect(
+        resolveCommand("codex", {
+          platform: "win32",
+          env,
+          isElectron: true,
+          bundledNode: bundled,
+          ...fs({ [`${npm}\\codex.cmd`]: jsShim, [bundled]: "" }),
+        }).command,
+      ).toBe(bundled);
+    });
+
+    it("3. then node.exe on PATH when the bundled one is missing", () => {
+      expect(resolve({ [pathNode]: "" }).command).toBe(pathNode);
+    });
+
+    it("4. reports a missing bundled Node (reinstall), not 'install Node.js'", () => {
+      expect(() => resolve({})).toThrow(/桌面端自带的 Node.js 不见了.*请重新安装 SuperHive 桌面端/);
+      // 没有自带 Node（开发版、npm 版）才提示自己装 Node.js
+      expect(() =>
+        resolveCommand("codex", {
+          platform: "win32",
+          env,
+          isElectron: true,
+          ...fs({ [`${npm}\\codex.cmd`]: jsShim }),
+        }),
+      ).toThrow(/请安装 Node.js 并重新打开桌面端/);
+    });
+  });
+
   it("runs native Codex directly in Electron without Node", () => {
     const files = fs({ [`${npm}\\codex.exe`]: "" });
     expect(resolveCommand("codex", { platform: "win32", env, isElectron: true, ...files })).toEqual(

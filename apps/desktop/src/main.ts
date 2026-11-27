@@ -97,6 +97,7 @@ import {
   type RemoteServer,
 } from "./remote-servers.js";
 import type { JoinRequest, RemoteServerView } from "./ipc-contract.js";
+import { bundledRuntime, bundledRuntimeEnv } from "./bundled-node.js";
 
 const CLI_FLAG = "--superhive-cli";
 const DOCS_URL = "https://wangrongding.github.io/SuperHive/";
@@ -1017,7 +1018,20 @@ function runApp(): void {
       staticDir: path.join(superhiveRoot, "web"),
       dataDir,
       port: found.port,
-      env: process.env,
+      env: {
+        ...process.env,
+        ...bundledRuntimeEnv(
+          bundledRuntime({
+            isPackaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+            appRoot,
+            userData: app.getPath("userData"),
+            platform: process.platform,
+          }),
+          process.env,
+          process.platform,
+        ),
+      },
       agentCli: agentCliCommand(),
       launcher: `SuperHive Desktop ${app.getVersion()}`,
       home: homedir(),

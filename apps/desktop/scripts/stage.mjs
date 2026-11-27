@@ -6,6 +6,10 @@
  *   superhive/               随包的 superhive CLI、Server 构建产物、网页和协作说明（和 npm 包同一份）
  *   node_modules/            运行时依赖，用 npm 单独装、再按 Electron 的 ABI 重新编译原生模块
  *
+ * 另外在 .stage/node 放一份校验过的官方 Node（含 npm），打包时作为 resources/node 带上，
+ * 给本机 Agent 跑和安装 npm 装的 CLI（见 scripts/node-runtime.mjs）。
+ * 设 SUPERHIVE_SKIP_BUNDLED_NODE=1 跳过（离线开发用；这样打出来的包会被 forge 配置拒绝）。
+ *
  * 为什么不直接用仓库的 node_modules：better-sqlite3 要按 Electron 的 ABI 编译，
  * 在 pnpm 共享的依赖里改编译会让 server 的测试（跑在系统 Node 上）全部挂掉；
  * 而且仓库用的 better-sqlite3 12.x 在 Electron 45 的 V8 上编译不过，桌面端换成走 N-API 的 13.x。
@@ -29,6 +33,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { ensureNodeRuntime } from "./node-runtime.mjs";
 
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(desktopDir, "../..");
@@ -189,5 +194,15 @@ if (existsSync(ptyPrebuilds)) {
     const helper = path.join(ptyPrebuilds, platformDir, "spawn-helper");
     if (existsSync(helper)) chmodSync(helper, 0o755);
   }
+}
+
+// 4. 自带的 Node 运行时：版本和哈希写死在 node-runtime.mjs，校验不过直接中止
+if (process.env.SUPERHIVE_SKIP_BUNDLED_NODE === "1") {
+  console.log("[stage] SUPERHIVE_SKIP_BUNDLED_NODE=1: bundled Node skipped");
+} else {
+  await ensureNodeRuntime({
+    cacheDir: path.join(desktopDir, ".cache/node"),
+    destDir: path.join(desktopDir, ".stage/node"),
+  });
 }
 console.log(`[stage] ready: ${stageDir} (Electron ${electronVersion})`);

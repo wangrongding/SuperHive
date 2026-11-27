@@ -30,6 +30,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 自带 Node 的官方压缩包：版本和哈希在 node-runtime.mjs 里，改了就换缓存；命中缓存也照样校验
+      - uses: actions/cache@v4
+        with:
+          path: apps/desktop/.cache/node
+          key: bundled-node-${{ runner.os }}-${{ hashFiles('apps/desktop/scripts/node-runtime.mjs') }}
+
       - name: Stage desktop distribution
         run: pnpm --filter @superhive/desktop exec node scripts/stage.mjs --rebuild
 

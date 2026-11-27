@@ -70,7 +70,7 @@ pnpm --filter @superhive/desktop test:smoke   # 真的启动应用、在终端�
 pnpm --filter @superhive/desktop make         # 打安装包，产物在 apps/desktop/out/
 ```
 
-应用组装在 `apps/desktop/.stage/app`，运行时依赖用 npm 单独装一份，Electron 的构建不会碰仓库的 pnpm `node_modules`。打包版关了 `RunAsNode` fuse：Server 从 `HIVE_LOCAL_AGENT_CLI` 得知怎么拉起本机 Agent，桌面端带 `--superhive-cli` 启动时只运行包里的 CLI。安装包作为未签名预览版发布在 [GitHub Releases](https://github.com/wangrongding/SuperHive/releases/latest)；代码签名、公证和自动更新还没做，细节和要准备的东西见 `apps/desktop/README.md`。
+应用组装在 `apps/desktop/.stage/app`，运行时依赖用 npm 单独装一份，Electron 的构建不会碰仓库的 pnpm `node_modules`。打包版关了 `RunAsNode` fuse：Server 从 `HIVE_LOCAL_AGENT_CLI` 得知怎么拉起本机 Agent，桌面端带 `--superhive-cli` 启动时只运行包里的 CLI。Agent 要用的 Node（跑和安装 npm 装的 CLI）是打包时下载、按固定 SHA-256 校验的一份官方 Node LTS，放在 `resources/node`，经 `SUPERHIVE_BUNDLED_NODE` 等环境变量交给 Server 和 Agent。安装包作为未签名预览版发布在 [GitHub Releases](https://github.com/wangrongding/SuperHive/releases/latest)；代码签名、公证和自动更新还没做，细节和要准备的东西见 `apps/desktop/README.md`。
 
 ## MCP 与 HTTP 扩展入口
 

@@ -19,6 +19,8 @@ export type ResolveOptions = {
   env?: Env;
   /** 运行 .js 目标时用的 node；垫片旁边有 node.exe 时优先用那个 */
   nodePath?: string;
+  /** 桌面端自带的 node.exe；默认读环境变量 SUPERHIVE_BUNDLED_NODE（桌面端启动 Server 时设置） */
+  bundledNode?: string;
   isElectron?: boolean;
   /** 测试注入 */
   isFile?: (file: string) => boolean;
@@ -92,27 +94,48 @@ export function resolveCommand(command: string, options: ResolveOptions = {}): R
   }
   const resolved = path.win32.join(shimDir, target);
   if (/\.(c|m)?js$/i.test(resolved)) {
-    const localNode = path.win32.join(shimDir, "node.exe");
-    // 垫片旁边的 node.exe 优先；桌面端里 process.execPath 是 Electron 本身，不能拿来跑 JS，只能去 PATH 找真的 node.exe
-    const isElectron = options.isElectron ?? Boolean(process.versions.electron);
-    const node = isFile(localNode)
-      ? localNode
-      : (options.nodePath ??
-        (isElectron
-          ? findWindowsCommand(
-              "node.exe",
-              env,
-              (file) => path.win32.extname(file).toLowerCase() === ".exe" && isFile(file),
-            )
-          : process.execPath));
-    if (!node) {
-      throw new Error(
-        `运行 ${found} 需要 Node.js，但没有在启动器目录或 PATH 中找到 node.exe；请安装 Node.js 并重新打开桌面端，或改用该 CLI 的原生 .exe。`,
-      );
-    }
-    return { command: node, args: [resolved] };
+    return { command: nodeFor(found, shimDir, env, isFile, options), args: [resolved] };
   }
   return { command: resolved, args: [] };
+}
+
+/** 环境变量 SUPERHIVE_BUNDLED_NODE：桌面端自带的 Node（打包进 resources/node） */
+export const BUNDLED_NODE_ENV = "SUPERHIVE_BUNDLED_NODE";
+
+/**
+ * 运行 npm 垫片背后的 .js 用哪个 node，按顺序：
+ * ① 垫片旁边的 node.exe（和这个 CLI 一起装的那份）；② 调用方指定的；③ 桌面端自带的；
+ * ④ 不在桌面端里时用当前进程的 node；在桌面端里 process.execPath 是 Electron 本身（RunAsNode 已关，不能跑 JS），
+ *    只能去 PATH 找真的 node.exe；⑤ 都没有就报错。
+ */
+function nodeFor(
+  found: string,
+  shimDir: string,
+  env: Env,
+  isFile: (file: string) => boolean,
+  options: ResolveOptions,
+): string {
+  const localNode = path.win32.join(shimDir, "node.exe");
+  if (isFile(localNode)) return localNode;
+  if (options.nodePath) return options.nodePath;
+  const bundled = options.bundledNode ?? envValue(env, BUNDLED_NODE_ENV);
+  if (bundled && isFile(bundled)) return bundled;
+  const isElectron = options.isElectron ?? Boolean(process.versions.electron);
+  if (!isElectron) return process.execPath;
+  const onPath = findWindowsCommand(
+    "node.exe",
+    env,
+    (file) => path.win32.extname(file).toLowerCase() === ".exe" && isFile(file),
+  );
+  if (onPath) return onPath;
+  if (bundled) {
+    throw new Error(
+      `运行 ${found} 需要 Node.js，但桌面端自带的 Node.js 不见了（${bundled}），PATH 里也没有 node.exe；请重新安装 SuperHive 桌面端。`,
+    );
+  }
+  throw new Error(
+    `运行 ${found} 需要 Node.js，但没有在启动器目录或 PATH 中找到 node.exe；请安装 Node.js 并重新打开桌面端，或改用该 CLI 的原生 .exe。`,
+  );
 }
 
 /** spawn 前统一调用：Windows 上换成真正的程序，其他平台原样返回 */

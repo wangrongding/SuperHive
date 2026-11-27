@@ -25,6 +25,8 @@ import {
   planInstall,
   planUpdate,
   shellQuote,
+  withPath,
+  type BundledNpm,
   type PlanContext,
   type SpawnUpgrade,
   type UpgradeChild,
@@ -1202,5 +1204,140 @@ describe("AgentCliManager install", () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe("desktop bundled Node and npm", () => {
+  function setup(options: { systemNpm?: boolean } = {}) {
+    const { bin, script, root } = sandbox();
+    const nodeBin = bin("SuperHive.app/Contents/Resources/node/bin");
+    script(nodeBin, "node", 'echo "v24.22.3"');
+    script(nodeBin, "npm", "exit 0");
+    script(bin("SuperHive.app/Contents/Resources/node/lib/node_modules/npm/bin"), "npm-cli.js", "");
+    const prefix = path.join(root, "Application Support/SuperHive/agent-clis");
+    const system = bin("usr-local/bin");
+    if (options.systemNpm) {
+      script(system, "npm", `[ "$1" = prefix ] && echo "${root}/usr-local"; exit 0`);
+      script(system, "node", 'echo "v22.1.0"');
+    }
+    const probes: Array<{ command: string; path: string | undefined }> = [];
+    const spawnUpgrade = vi.fn<SpawnUpgrade>(() => new FakeUpgrade());
+    const clis = new AgentCliManager({
+      platform: "darwin",
+      home: "/nonexistent-home",
+      env: {
+        PATH: "/usr/bin:/bin",
+        HOME: "/nonexistent-home",
+        SUPERHIVE_BUNDLED_NODE: path.join(nodeBin, "node"),
+        SUPERHIVE_AGENT_CLIS_DIR: prefix,
+      },
+      loginPath: async () => `${system}:/usr/bin:/bin`,
+      extraDirs: [],
+      fetchJson: async (url: string) =>
+        url.includes("dist-tags") ? { latest: "0.170.0" } : { engines: { node: ">=20" } },
+      spawnUpgrade,
+      runProbe: async (command, args, opts) => {
+        probes.push({ command, path: opts.env.PATH });
+        const { defaultRunProbe } = await import("./agent-clis.js");
+        return defaultRunProbe(command, args, opts);
+      },
+    });
+    return { clis, nodeBin, prefix, system, root, bin, script, probes, spawnUpgrade };
+  }
+
+  it("appends agent-clis and the bundled Node to the END of PATH, after the user's own", async () => {
+    const { clis, nodeBin, prefix, system } = setup();
+    expect(await clis.loginPath()).toBe(
+      `${system}:/usr/bin:/bin:${path.join(prefix, "bin")}:${nodeBin}`,
+    );
+  });
+
+  it("installs with the bundled npm into <userData>/agent-clis when there is no system npm", async () => {
+    const { clis, nodeBin, prefix, bin, script, spawnUpgrade } = setup();
+    const codex = (await clis.list()).find((item) => item.tool === "codex")!;
+    const command = `PATH=${shellQuote(nodeBin)}:"$PATH" ${shellQuote(`${nodeBin}/npm`)} i -g --prefix ${shellQuote(prefix)} @openai/codex@latest`;
+    expect(codex).toMatchObject({ status: "notInstalled", plan: { kind: "anchored", command } });
+    // agent-clis/bin 已经在 PATH 里，不提示「装完不在 PATH 上」；Node 版本按自带的算
+    expect(codex.binNotOnPath).toBeUndefined();
+    expect(codex.nodeGap).toBeUndefined();
+    await clis.start("codex", "install", command);
+    expect(spawnUpgrade.mock.calls[0]![1].PATH).toMatch(new RegExp(`:${nodeBin}$`));
+
+    // 装进 agent-clis 之后，重新探测能找到，并且升级也锚定到同一个前缀
+    const pkg = bin("Application Support/SuperHive/agent-clis/lib/node_modules/@openai/codex/bin");
+    const real = script(pkg, "codex.js", 'echo "codex-cli 0.169.0"');
+    bin("Application Support/SuperHive/agent-clis/bin");
+    symlinkSync(real, path.join(prefix, "bin", "codex"));
+    const installed = (await clis.list(true)).find((item) => item.tool === "codex")!;
+    expect(installed).toMatchObject({
+      status: "ok",
+      version: "0.169.0",
+      plan: {
+        kind: "anchored",
+        command: `${shellQuote(`${nodeBin}/npm`)} i -g --prefix ${shellQuote(prefix)} @openai/codex@latest`,
+      },
+    });
+  });
+
+  it("keeps using the user's own npm (no --prefix) when one is installed", async () => {
+    const { clis, system } = setup({ systemNpm: true });
+    const codex = (await clis.list()).find((item) => item.tool === "codex")!;
+    expect(codex.plan).toEqual({
+      kind: "anchored",
+      command: `PATH=${shellQuote(system)}:"$PATH" ${shellQuote(`${system}/npm`)} i -g @openai/codex@latest`,
+    });
+  });
+
+  const bundled: BundledNpm = {
+    node: "C:\\Users\\me\\AppData\\Local\\SuperHive\\app-0.5.0\\resources\\node\\node.exe",
+    npm: "C:\\Users\\me\\AppData\\Local\\SuperHive\\app-0.5.0\\resources\\node\\npm.cmd",
+    npmCli:
+      "C:\\Users\\me\\AppData\\Local\\SuperHive\\app-0.5.0\\resources\\node\\node_modules\\npm\\bin\\npm-cli.js",
+    prefix: "C:\\Users\\me\\AppData\\Roaming\\SuperHive\\agent-clis",
+  };
+  const win = { platform: "win32" as const, isExecutable: exists(), bundled };
+  const winCommand = (pkg: string, args = "") =>
+    `"${bundled.node}" "${bundled.npmCli}" i -g --prefix "${bundled.prefix}" ${pkg}@latest${args}`;
+
+  it("lets Windows install npm tools with the bundled node.exe + npm-cli.js", () => {
+    expect(planInstall("codex", win)).toEqual({
+      kind: "anchored",
+      command: winCommand("@openai/codex"),
+    });
+    expect(planInstall("claude", win)).toEqual({
+      kind: "anchored",
+      command: winCommand(
+        "@anthropic-ai/claude-code",
+        " --ignore-scripts=false --include=optional --allow-scripts=@anthropic-ai/claude-code",
+      ),
+    });
+    // bun 脚本、不在 npm 上的、没有自带 npm 的（开发版、npm 版）、路径里有 cmd 会改写的字符：都不一键装
+    for (const context of [
+      win,
+      { ...win, bundled: undefined },
+      { ...win, bundled: { ...bundled, prefix: "C:\\Users\\100%\\agent-clis" } },
+    ]) {
+      expect(planInstall(context === win ? "omp" : "codex", context)).toMatchObject({
+        kind: "manual",
+        reasonText: { key: "agentCli.manual.windows" },
+      });
+    }
+    expect(planInstall("agy", win)).toMatchObject({ kind: "manual" });
+  });
+
+  it("upgrades on Windows only what lives in agent-clis", () => {
+    const at = (file: string) => ({ path: file, realPath: file, source: inferSource(file, file) });
+    expect(planUpdate("codex", at(`${bundled.prefix.toUpperCase()}\\codex.cmd`), win)).toEqual({
+      kind: "anchored",
+      command: winCommand("@openai/codex"),
+    });
+    expect(
+      planUpdate("codex", at("C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd"), win),
+    ).toMatchObject({ kind: "manual", reasonText: { key: "agentCli.manual.windows" } });
+  });
+
+  it("replaces every spelling of PATH on Windows", () => {
+    expect(withPath({ Path: "a", path: "b", X: "1" }, "c", "win32")).toEqual({ Path: "c", X: "1" });
+    expect(withPath({ PATH: "a" }, "c", "darwin")).toEqual({ PATH: "c" });
   });
 });
