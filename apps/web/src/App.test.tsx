@@ -3164,7 +3164,7 @@ describe("App mention autocomplete", () => {
 
     // 选了没装的 Codex：可以直接跳到设置的「Agent 运行时」去装，关掉设置回到接入弹窗原来那一步
     await user.click(screen.getByRole("radio", { name: /Codex/ }));
-    await user.click(screen.getByRole("button", { name: "去安装 Codex →" }));
+    await user.click(screen.getByRole("button", { name: "去安装 Codex CLI →" }));
     expect(screen.queryByRole("heading", { name: "选择要接入的 Agent" })).toBeNull();
     expect(screen.getByRole("tab", { name: /Agent 运行时/ }).getAttribute("aria-selected")).toBe(
       "true",

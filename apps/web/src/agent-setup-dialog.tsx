@@ -188,7 +188,9 @@ export function AgentSetupDialog({
             </h3>
             {agentStep === 1 && (
               <p>
-                {t("选好后点「下一步」；接入命令会按所选 Agent 的运行环境自动调整。")}{" "}
+                {t(
+                  "接入的是各家的命令行工具（CLI），要先在这台电脑装好对应 CLI 并登录；Codex、Claude 等的桌面 App 和网页版接不进来。选好后点「下一步」。",
+                )}{" "}
                 <DocsLink to="agentSetup">{t("接入指南")}</DocsLink>
               </p>
             )}

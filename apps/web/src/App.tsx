@@ -1757,7 +1757,9 @@ export function App({
     {
       id: "agent",
       title: t("接入一个 Agent"),
-      description: t("选 Claude、Codex 等运行时，在这台电脑上一键启动，或复制命令到别的电脑运行。"),
+      description: t(
+        "选 Claude Code、Codex CLI 等命令行 Agent，在这台电脑上一键启动，或复制命令到别的电脑运行。",
+      ),
       action: t("接入 Agent"),
       done: participants.some((participant) => participant.type === "agent"),
       onAction: (trigger) => {

@@ -141,7 +141,9 @@ export function LoginDialog({
             <p className="login-next">
               <Icon name="plug" size={15} />
               <span>
-                {t("进去后点右下角「接入 Agent」，把本机的 Claude Code、Codex 拉进房间。")}
+                {t(
+                  "进去后点右下角「接入 Agent」，把本机装好的 Claude Code、Codex CLI 等命令行 Agent 拉进房间。",
+                )}
               </span>
             </p>
           </div>

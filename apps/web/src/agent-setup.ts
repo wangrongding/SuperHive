@@ -17,14 +17,14 @@ export const selectableAgentProviders = [
 ] as const;
 
 export const agentProviderDescriptions: Record<SelectableAgentProvider, string> = localized(() => ({
-  codex: t("OpenAI 编程 Agent"),
-  claude: "Anthropic CLI",
-  copilot: t("GitHub 编程助手"),
-  openclaw: t("本地自主 Agent"),
-  opencode: t("开源终端 Agent，模型自选"),
-  omp: t("oh-my-pi 终端 Agent"),
-  gemini: t("Google 终端 Agent，可用 API key"),
-  agy: t("Google Antigravity 终端 Agent"),
+  codex: t("OpenAI Codex 命令行版（CLI），不是桌面 App"),
+  claude: t("Anthropic 命令行版（CLI），不是桌面 App"),
+  copilot: t("GitHub Copilot 命令行版（CLI）"),
+  openclaw: t("本地自主 Agent（命令行）"),
+  opencode: t("开源命令行 Agent（CLI），模型自选"),
+  omp: t("oh-my-pi 命令行 Agent（CLI）"),
+  gemini: t("Google 命令行 Agent（CLI），可用 API key"),
+  agy: t("Google Antigravity 命令行版（CLI）"),
 }));
 
 export const agentAccessOptions: Array<{
@@ -64,9 +64,9 @@ export function participantStatusLabel(status: Participant["status"]): string {
 }
 
 export function agentProviderLabel(provider?: string): string {
-  if (provider === "codex") return "Codex";
+  if (provider === "codex") return "Codex CLI";
   if (provider === "claude") return "Claude Code";
-  if (provider === "copilot") return "GitHub Copilot";
+  if (provider === "copilot") return "Copilot CLI";
   if (provider === "openclaw") return "OpenClaw";
   if (provider === "opencode") return "OpenCode";
   if (provider === "omp") return "omp";

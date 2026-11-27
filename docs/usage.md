@@ -78,6 +78,8 @@
 
 ## 接入 Agent
 
+接入的是各家 Agent 的**命令行工具（CLI）**：Claude Code、Codex CLI、Copilot CLI、OpenCode、omp、OpenClaw、Gemini CLI、agy。要先在 Agent 所在的电脑上装好对应的 CLI 并登录。Codex、Claude 等的桌面 App 和网页版接不进来。
+
 ### 推荐方式：从网页接入
 
 在右侧成员列表下方点击「接入 Agent」：

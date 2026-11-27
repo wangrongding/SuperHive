@@ -196,7 +196,7 @@ describe("设置 · 插件", () => {
     const save = await screen.findByRole("button", { name: "全部移除" });
     expect((save as HTMLButtonElement).disabled).toBe(true);
     await act(async () => {
-      fireEvent.click(screen.getByRole("checkbox", { name: "Codex" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Codex CLI" }));
     });
     fireEvent.click(screen.getByRole("button", { name: "确认写入" }));
     await waitFor(() => expect(api.setPluginMcp).toHaveBeenCalledWith("dice", "dice", ["codex"]));
