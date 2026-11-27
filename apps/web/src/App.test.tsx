@@ -1250,6 +1250,8 @@ describe("App mention autocomplete", () => {
     const userMenu = screen.getByRole("menu", { name: "用户菜单" });
     await user.click(within(userMenu).getByRole("menuitem", { name: /设置/ }));
     const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
+    // 不是本机页面、也没以房主登录过：没有「设备」（和头像菜单「在其他设备登录」一致）
+    expect(within(settingsDialog).queryByRole("tab", { name: /^设备/ })).toBeNull();
     expect(
       within(settingsDialog)
         .getByRole("radio", { name: /^组合键发送/ })
@@ -3232,6 +3234,40 @@ describe("App mention autocomplete", () => {
       }),
     );
     expect(within(chips).getByText("无需回复")).toBeTruthy();
+  });
+
+  it("shows the 「设备」 settings tab on the local page, same content as 「在其他设备登录」", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("superhive.username", "Alice");
+    localApi.enabled = true;
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "用户菜单" }));
+    const userMenu = screen.getByRole("menu", { name: "用户菜单" });
+    // 头像菜单入口还在
+    expect(within(userMenu).getByRole("menuitem", { name: "在其他设备登录" })).toBeTruthy();
+    await user.click(within(userMenu).getByRole("menuitem", { name: /设置/ }));
+    const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
+    const tab = await within(settingsDialog).findByRole("tab", { name: /^设备/ });
+    await user.click(tab);
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    const panel = within(settingsDialog).getByRole("tabpanel", { name: "设备" });
+    expect(within(panel).getByRole("heading", { name: "在其他设备登录" })).toBeTruthy();
+    expect(within(panel).getByText(/直接以房主身份进入/)).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "显示登录二维码" })).toBeTruthy();
   });
 
   it("launches an agent on this machine with one click when the page is local", async () => {

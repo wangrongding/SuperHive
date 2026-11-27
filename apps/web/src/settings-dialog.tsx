@@ -33,7 +33,8 @@ import {
   type AttentionDelivery,
 } from "./attention-alerts";
 import { playNotificationTone, type BrowserNotificationPermission } from "./browser-notify";
-import { HostManageNotice, KeepAwakeSettingsGroup } from "./host-settings";
+import { HostManageNotice, KeepAwakeSettingsGroup, OwnerDevicesPanel } from "./host-settings";
+import { ownerDevicesIntro } from "./owner-devices-dialog";
 import { LocalAgentAdvancedSettings, LocalAgentUpdatesGroup } from "./local-agent-updates";
 import { NetworkProxySettingsGroup } from "./network-proxy-settings";
 import { RemoteJoinsGroup } from "./remote-joins-settings";
@@ -502,6 +503,15 @@ export function SettingsDialog({
                 <NetworkProxySettingsGroup local={local} />
                 <KeepAwakeSettingsGroup local={local} />
                 <LocalAgentAdvancedSettings local={local} />
+              </section>
+            )}
+            {settingsTab === "devices" && local.enabled && (
+              <section id="settings-panel-devices" role="tabpanel" aria-label={t("设备")}>
+                <div className="settings-panel-heading">
+                  <h3>{t("在其他设备登录")}</h3>
+                  <p>{ownerDevicesIntro(local)}</p>
+                </div>
+                <OwnerDevicesPanel local={local} />
               </section>
             )}
             {settingsTab === "runtimes" && local.mode === "local" && (

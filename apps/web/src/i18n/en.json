@@ -2611,5 +2611,7 @@
   "{0} 个 Agent 在跑旧版本，一直没能自动重启": "{0} {0|agent is|agents are} on outdated code and haven't restarted automatically",
   "自动重启已关，{0} 个 Agent 在跑旧版本，重启后才用上新代码": "Automatic restart is off; {0} {0|agent is|agents are} on outdated code until restarted",
   "空闲后重启，已等 {0} 分钟": "Restart when idle, waiting {0} min",
-  "合入或升级后，落后的 Agent 等手上的任务都做完再自动重启一次，不打断正在做的事；同一个版本只自动重启一次，两次至少隔 10 分钟": "After a merge or upgrade, outdated agents restart once after their current tasks finish, so nothing in progress is interrupted; at most once per version, and at least 10 minutes apart"
+  "合入或升级后，落后的 Agent 等手上的任务都做完再自动重启一次，不打断正在做的事；同一个版本只自动重启一次，两次至少隔 10 分钟": "After a merge or upgrade, outdated agents restart once after their current tasks finish, so nothing in progress is interrupted; at most once per version, and at least 10 minutes apart",
+  "设备": "Devices",
+  "扫码登录、已登录的设备": "QR sign-in, signed-in devices"
 }

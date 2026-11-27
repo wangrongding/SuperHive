@@ -457,9 +457,14 @@ export function App({
       dev: import.meta.env.DEV,
     });
   }, [base, authToken, isOwner]);
-  // 「Agent 运行时」只给页面开在 Server 所在电脑上的本机房主
-  const visibleSettingsTabs = settingsTabs.filter(
-    (tab) => (tab.id !== "runtimes" && tab.id !== "plugins") || local.mode === "local",
+  // 「Agent 运行时」只给页面开在 Server 所在电脑上的本机房主；
+  // 「其他设备」和头像菜单「在其他设备登录」一样，本机页面或房主登录过的设备才有
+  const visibleSettingsTabs = settingsTabs.filter((tab) =>
+    tab.id === "runtimes" || tab.id === "plugins"
+      ? local.mode === "local"
+      : tab.id === "devices"
+        ? local.enabled
+        : true,
   );
   useEffect(() => {
     if (!isOwner || !local.enabled) return;

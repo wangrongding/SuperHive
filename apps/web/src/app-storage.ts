@@ -25,7 +25,7 @@ export const storedStatusBarKey = "superhive.status-bar";
 export type MessageNotificationMode = "off" | "mentions" | "all";
 export type SendShortcut = "modifier-enter" | "enter";
 export type SettingsTab =
-  "chat" | "notifications" | "appearance" | "computer" | "runtimes" | "plugins";
+  "chat" | "notifications" | "appearance" | "computer" | "devices" | "runtimes" | "plugins";
 export type TimeFormat = "system" | "24h" | "12h";
 export type ThemePreference = "system" | "dark" | "light";
 export type InterfaceDensity = "comfortable" | "compact";
@@ -60,6 +60,7 @@ export const settingsTabs: Array<{ id: SettingsTab; label: string; description: 
       label: t("这台电脑"),
       description: t("本机 Agent、网络代理、熄屏后保持在线"),
     },
+    { id: "devices", label: t("设备"), description: t("扫码登录、已登录的设备") },
     { id: "runtimes", label: t("Agent 运行时"), description: t("CLI 升级与配置") },
     { id: "plugins", label: t("插件"), description: t("面板、/ 命令与 MCP 工具") },
   ]);
