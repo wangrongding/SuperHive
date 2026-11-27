@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { findWindowsCommand, resolveCommand, windowsCommandLineLength } from "./windows-command.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as serverCommands from "../../../apps/server/src/windows-command.js";
+import * as cliCommands from "./windows-command.js";
 
 const npm = "C:\\Users\\me\\AppData\\Roaming\\npm";
 const env = { Path: `C:\\Windows\\system32;${npm}`, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
@@ -35,7 +36,13 @@ function fs(files: Record<string, string>) {
   };
 }
 
-describe("resolveCommand（Windows）", () => {
+afterEach(() => vi.unstubAllGlobals());
+
+describe.each([
+  { name: "CLI", commands: cliCommands },
+  { name: "Server", commands: serverCommands },
+])("$name resolveCommand（Windows）", ({ commands }) => {
+  const { findWindowsCommand, resolveCommand, windowsCommandLineLength } = commands;
   it("leaves other platforms untouched", () => {
     expect(resolveCommand("claude", { platform: "darwin" })).toEqual({
       command: "claude",
@@ -45,7 +52,9 @@ describe("resolveCommand（Windows）", () => {
 
   it("runs the exe behind an npm .cmd shim directly, without cmd.exe", () => {
     const files = fs({ [`${npm}\\claude.cmd`]: exeShim });
-    expect(resolveCommand("claude", { platform: "win32", env, ...files })).toEqual({
+    expect(
+      resolveCommand("claude", { platform: "win32", env, isElectron: true, ...files }),
+    ).toEqual({
       command: `${npm}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`,
       args: [],
     });
@@ -62,6 +71,84 @@ describe("resolveCommand（Windows）", () => {
     const withLocalNode = fs({ [`${npm}\\codex.cmd`]: jsShim, [`${npm}\\node.exe`]: "" });
     expect(resolveCommand("codex", { platform: "win32", env, ...withLocalNode }).command).toBe(
       `${npm}\\node.exe`,
+    );
+  });
+
+  it("uses a real node.exe from a quoted, mixed-case PATH in Electron", () => {
+    const nodeDir = "D:\\Program Files\\nodejs";
+    const files = fs({ [`${npm}\\codex.cmd`]: jsShim, [`${nodeDir}\\node.exe`]: "" });
+    expect(
+      resolveCommand("codex", {
+        platform: "win32",
+        env: { ...env, Path: `"${nodeDir}";${env.Path}` },
+        isElectron: true,
+        ...files,
+      }),
+    ).toEqual({
+      command: `${nodeDir}\\node.exe`,
+      args: [`${npm}\\node_modules\\@openai\\codex\\bin\\codex.js`],
+    });
+  });
+
+  it("prefers adjacent Node over an explicit runtime and PATH in Electron", () => {
+    const files = fs({ [`${npm}\\codex.cmd`]: jsShim, [`${npm}\\node.exe`]: "" });
+    expect(
+      resolveCommand("codex", {
+        platform: "win32",
+        env,
+        nodePath: "C:\\node\\node.exe",
+        isElectron: true,
+        ...files,
+      }).command,
+    ).toBe(`${npm}\\node.exe`);
+  });
+
+  it("supports an explicitly supplied Node runtime in Electron", () => {
+    const files = fs({ [`${npm}\\codex.cmd`]: jsShim });
+    expect(
+      resolveCommand("codex", {
+        platform: "win32",
+        env,
+        nodePath: "C:\\node\\node.exe",
+        isElectron: true,
+        ...files,
+      }).command,
+    ).toBe("C:\\node\\node.exe");
+  });
+
+  it("keeps using the current Node runtime outside Electron when PATH has no Node", () => {
+    const files = fs({ [`${npm}\\codex.cmd`]: jsShim });
+    expect(
+      resolveCommand("codex", { platform: "win32", env, isElectron: false, ...files }).command,
+    ).toBe(process.execPath);
+  });
+
+  it("reports missing Node instead of launching Electron, including automatic detection", () => {
+    const files = fs({ [`${npm}\\codex.cmd`]: jsShim });
+    vi.stubGlobal("process", {
+      ...process,
+      platform: "win32",
+      env,
+      execPath: "C:\\SuperHive\\SuperHive.exe",
+      versions: { ...process.versions, electron: "45.4.1" },
+    });
+    expect(() => resolveCommand("codex", files)).toThrow(/没有在启动器目录或 PATH 中找到 node.exe/);
+  });
+
+  it("does not mistake node.exe.cmd on PATH for a real Node executable", () => {
+    const files = fs({ [`${npm}\\codex.cmd`]: jsShim, [`${npm}\\node.exe.cmd`]: jsShim });
+    expect(() =>
+      resolveCommand("codex", { platform: "win32", env, isElectron: true, ...files }),
+    ).toThrow(/需要 Node.js/);
+  });
+
+  it("runs native Codex directly in Electron without Node", () => {
+    const files = fs({ [`${npm}\\codex.exe`]: "" });
+    expect(resolveCommand("codex", { platform: "win32", env, isElectron: true, ...files })).toEqual(
+      {
+        command: `${npm}\\codex.exe`,
+        args: [],
+      },
     );
   });
 

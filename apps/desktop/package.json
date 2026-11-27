@@ -1,7 +1,7 @@
 {
   "name": "@superhive/desktop",
   "productName": "SuperHive",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "private": true,
   "description": "SuperHive desktop app: runs the local Hive and opens it in its own window, with a built-in terminal.",
   "author": "SuperHive",

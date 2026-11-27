@@ -20,6 +20,7 @@ export type ResolveOptions = {
   env?: Env;
   /** 运行 .js 目标时用的 node；垫片旁边有 node.exe 时优先用那个 */
   nodePath?: string;
+  isElectron?: boolean;
   /** 测试注入 */
   isFile?: (file: string) => boolean;
   readFile?: (file: string) => string;
@@ -93,7 +94,22 @@ export function resolveCommand(command: string, options: ResolveOptions = {}): R
   const resolved = path.win32.join(shimDir, target);
   if (/\.(c|m)?js$/i.test(resolved)) {
     const localNode = path.win32.join(shimDir, "node.exe");
-    const node = isFile(localNode) ? localNode : (options.nodePath ?? process.execPath);
+    const isElectron = options.isElectron ?? Boolean(process.versions.electron);
+    const runtimeNode =
+      options.nodePath ??
+      (isElectron
+        ? findWindowsCommand(
+            "node.exe",
+            env,
+            (file) => path.win32.extname(file).toLowerCase() === ".exe" && isFile(file),
+          )
+        : process.execPath);
+    const node = isFile(localNode) ? localNode : runtimeNode;
+    if (!node) {
+      throw new Error(
+        `运行 ${found} 需要 Node.js，但没有在启动器目录或 PATH 中找到 node.exe；请安装 Node.js 并重新打开桌面端，或改用该 CLI 的原生 .exe。`,
+      );
+    }
     return { command: node, args: [resolved] };
   }
   return { command: resolved, args: [] };

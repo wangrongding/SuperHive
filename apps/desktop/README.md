@@ -76,6 +76,8 @@ SUPERHIVE_DESKTOP_APP=out/SuperHive-darwin-arm64/SuperHive.app/Contents/MacOS/Su
 - Mac：`SuperHive-<版本>-arm64.dmg`（安装）和 `SuperHive-darwin-arm64-<版本>.zip`（应用内更新）；
 - Windows：`SuperHive-<版本>-win-x64-Setup.exe`（安装）、`RELEASES` 和 `SuperHive-<版本>-full.nupkg`（应用内更新）。
 
+推送 `v*` 标签时，`Desktop release assets` GitHub Actions 工作流会在 Windows runner 上构建并保存上述 Windows 文件为 artifact；下载并核对校验和后，再上传到同版本 GitHub Release。macOS 文件仍按上面的本机打包流程生成。
+
 没传更新包时那个平台只能手动下载安装包。客户端只认正式版（不是 draft、prerelease）里的这些文件名，Mac 的 zip 靠 GitHub 给的 sha256 校验。
 
 ## 发布前要准备的（这次没做）
@@ -90,9 +92,9 @@ SUPERHIVE_DESKTOP_APP=out/SuperHive-darwin-arm64/SuperHive.app/Contents/MacOS/Su
 
 - 未签名的 macOS 应用第一次打开会被 Gatekeeper 拦下，要到「系统设置 → 隐私与安全性」底部点「仍要打开」（macOS 15 起右键「打开」已经不能放行），或者 `xattr -dr com.apple.quarantine /Applications/SuperHive.app`。
 - 每个本机 Agent 是一个不带窗口的 Electron 主进程，比直接用 Node 多占几十 MB 内存。
-- 安装 Agent CLI（`npm i -g @anthropic-ai/claude-code` 之类）仍然需要系统里有 Node.js；桌面端本身不需要。
+- 桌面端和随包的 Hive Server / CLI 本身不需要系统 Node.js；通过 npm 安装 Agent CLI，以及运行它的 JavaScript 启动器，仍需要系统 Node.js。CLI 的官方原生 `.exe` 可以不经 Node 直接运行。Electron 的 RunAsNode 保持禁用，不把桌面端开放成执行任意外部脚本的 Node 运行时。
 - Windows 上 Electron 遇到「像网址的参数后面还跟着 `--` 开关」会直接退出（防协议处理器注入），所以 Server 拉起 CLI 时字符串选项一律写成 `--key=value`（`apps/server/src/local-agents.ts` 的 `cliOption`）。
 - 命令行模式（`--superhive-cli`）下除了常驻的 `join`，命令做完主动退出（Electron 的消息循环不会自己停）；Chromium 缓存按 Agent 分目录放在 `<userData>/cli/` 下，不和桌面端、别的 Agent 抢。
-- Windows：npm 全局装的 Agent CLI 如果是 `.cmd` 包装、旁边又没有 `node.exe`，Hive 会退回用 `process.execPath` 运行它，在桌面端里这会是 Electron 本身。用 nvm 装的 node（`node.exe` 和 `.cmd` 在同一目录）实测正常，其它装法还没测。
+- Windows：npm 全局 Agent CLI 的 `.cmd` JavaScript 启动器优先使用旁边的 `node.exe`；桌面端旁边没有时从 `PATH` 查找真正的 `node.exe`，不把 Electron 本身误当作 Node。两处都找不到时明确报错；可安装 Node.js 后重新打开桌面端以刷新继承的 PATH，或安装该 CLI 的官方原生程序并在 Agent 设置中指定 `.exe` 路径。CLI 和 Server 的命令解析都遵循这一规则；这不代表桌面端已附带 Node / npm 或会自动安装它们。
 - Windows 安装包未签名，从网上下载后打开时 SmartScreen 一般会提示「已保护你的电脑」，需要点「更多信息 → 仍要运行」。
 - Linux 只配好了 maker，没有实际打包和运行过。
