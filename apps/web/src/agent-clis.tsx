@@ -304,6 +304,8 @@ function AgentCliCard({
     }
   };
 
+  /** 装了但跑不起来：走升级流程（锚定到原处重装），文案按重新安装说 */
+  const reinstall = action === "upgrade" && info.status === "broken";
   const label = mine
     ? action === "install"
       ? t("正在安装…")
@@ -413,24 +415,30 @@ function AgentCliCard({
           ariaLabel={
             action === "install"
               ? t("确认安装 {0}", { 0: info.name })
-              : t("确认升级 {0}", { 0: info.name })
+              : reinstall
+                ? t("确认重新安装 {0}", { 0: info.name })
+                : t("确认升级 {0}", { 0: info.name })
           }
           title={
             action === "install"
               ? t("在这台电脑上安装 {0}", { 0: info.name })
-              : t("在这台电脑上执行升级命令")
+              : reinstall
+                ? t("在这台电脑上重新安装 {0}", { 0: info.name })
+                : t("在这台电脑上执行升级命令")
           }
           message={
             <>
               <CommandSteps action={action} name={info.name} command={command} />
               {action === "upgrade" && (
                 <span>
-                  {t("正在用 {0} 的 Agent 不会自动重启，升级完再手动重启。", { 0: info.name })}
+                  {reinstall
+                    ? t("正在用 {0} 的 Agent 不会自动重启，装好后再手动重启。", { 0: info.name })
+                    : t("正在用 {0} 的 Agent 不会自动重启，升级完再手动重启。", { 0: info.name })}
                 </span>
               )}
             </>
           }
-          confirmLabel={action === "install" ? t("安装") : t("升级")}
+          confirmLabel={action === "install" ? t("安装") : reinstall ? t("重新安装") : t("升级")}
           cancelLabel={t("取消")}
           anchorRef={buttonRef}
           busy={submitting}
@@ -617,7 +625,10 @@ function JobStatus({
   return (
     <div className="agent-cli-job done" role="status">
       <p>
-        {t("已升级到 {0}。", { 0: job.versionAfter ?? "" })}{" "}
+        {job.versionBefore
+          ? t("已升级到 {0}。", { 0: job.versionAfter ?? "" })
+          : // 原来那一处跑不起来（查不到版本）时走的是重新安装
+            t("已重新安装 {0} {1}。", { 0: info.name, 1: job.versionAfter ?? "" })}{" "}
         {info.agents.length
           ? t("用 {0} 的 Agent 重启后才用上新版：{1}", {
               0: info.name,

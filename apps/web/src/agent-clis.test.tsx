@@ -236,7 +236,7 @@ describe("AgentClisGroup", () => {
     client.agentCliJob.mockImplementation(async () =>
       job({
         state: "failed",
-        reason: "升级命令失败（退出码 243）。",
+        reason: "命令出错退出（退出码 243）。",
         error: "npm error code EACCES\nnpm error path /usr/local/lib/node_modules",
       }),
     );
@@ -248,7 +248,7 @@ describe("AgentClisGroup", () => {
       await vi.advanceTimersByTimeAsync(JOB_POLL_MS);
     });
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("升级失败：升级命令失败（退出码 243）。");
+    expect(alert.textContent).toContain("升级失败：命令出错退出（退出码 243）。");
     expect(alert.textContent).toContain("npm error code EACCES");
   });
 
@@ -367,11 +367,31 @@ describe("AgentClisGroup", () => {
     ]);
     render(<AgentClisGroup api={client} />);
     fireEvent.click(await screen.findByRole("button", { name: "重新安装" }));
-    const dialog = screen.getByRole("dialog");
+    // 确认框按「重新安装」说，不说「升级」
+    const dialog = screen.getByRole("dialog", { name: "确认重新安装 Codex" });
+    expect(dialog.textContent).toContain("在这台电脑上重新安装 Codex");
+    expect(dialog.textContent).not.toContain("升级");
+    expect(dialog.querySelector("button:last-child")!.textContent).toBe("重新安装");
+    let current = job({ versionBefore: null });
+    client.upgradeAgentCli.mockImplementation(async () => current);
+    client.agentCliJob.mockImplementation(async () => current);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     await act(async () => {
       fireEvent.click(dialog.querySelector("button:last-child")!);
     });
     expect(client.upgradeAgentCli).toHaveBeenCalledWith("codex", COMMAND);
+
+    // 原来那一处查不到版本：做完说「已重新安装」，不说「已升级到」
+    current = { ...current, state: "succeeded", versionAfter: "0.170.0" };
+    client.agentClis.mockImplementation(async () => ({
+      tools: [codex({ version: "0.170.0", updateAvailable: false })],
+      job: current,
+    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(JOB_POLL_MS);
+    });
+    expect(await screen.findByText(/已重新安装 Codex 0\.170\.0。/)).toBeTruthy();
+    expect(screen.queryByText(/已升级到/)).toBeNull();
   });
 
   it("offers no install button without Node, and links official instructions when given", async () => {

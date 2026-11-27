@@ -1569,16 +1569,16 @@ export const serverTexts = {
     en: "Node.js and npm weren't found on this computer; install Node.js first",
   },
   "error.agentCli.timeout": {
-    zh: "升级超过 {minutes} 分钟还没结束，已停止。",
-    en: "The update didn't finish within {minutes} minutes and was stopped.",
+    zh: "命令超过 {minutes} 分钟还没结束，已停止。",
+    en: "The command didn't finish within {minutes} minutes and was stopped.",
   },
   "error.agentCli.spawnFailed": {
-    zh: "升级命令没能启动：{reason}",
-    en: "The update command couldn't start: {reason}",
+    zh: "命令没能启动：{reason}",
+    en: "The command couldn't start: {reason}",
   },
   "error.agentCli.exitCode": {
-    zh: "升级命令失败（退出码 {code}）。",
-    en: "The update command failed (exit code {code}).",
+    zh: "命令出错退出（退出码 {code}）。",
+    en: "The command failed (exit code {code}).",
   },
   "agentCli.manual.unknownSource": {
     zh: "认不出 {path} 是怎么装的，请用原来的安装方式升级",
