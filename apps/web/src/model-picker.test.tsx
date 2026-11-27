@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Invocation } from "@superhive/protocol";
 import { InvocationChips } from "./invocations";
-import { RetryModelDialog } from "./model-picker";
+import { ModelPicker, RetryModelDialog } from "./model-picker";
 
 afterEach(cleanup);
 
@@ -193,5 +193,39 @@ describe("可能需要配置代理", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: /打开网络代理设置/ })).toBeNull();
+  });
+});
+
+describe("ModelPicker hint", () => {
+  const aliases = [{ id: "opus" }, { id: "sonnet" }];
+  const efforts = ["low", "high"];
+  const hint = (data: Parameters<typeof ModelPicker>[0]["data"]) => {
+    cleanup();
+    const { container } = render(
+      <ModelPicker data={data} value="" onChange={() => undefined} allowDefault />,
+    );
+    return container.querySelector(".agent-mcp-hint")?.textContent ?? null;
+  };
+
+  it("says nothing for a full list from the runtime", () => {
+    expect(hint({ source: "runtime", models: aliases, efforts })).toBeNull();
+  });
+
+  it("explains why only common choices are shown", () => {
+    expect(hint({ source: "preset", models: aliases, efforts, presetReason: "oauth" })).toBe(
+      "Claude 用账号登录、没有 API key，拉不到完整列表，下面是常用选项，也可以手动输入。",
+    );
+    expect(hint({ source: "preset", models: aliases, efforts, presetReason: "cloud" })).toContain(
+      "Bedrock / Vertex",
+    );
+    expect(
+      hint({ source: "preset", models: aliases, efforts, error: "api.example.com 返回 401" }),
+    ).toBe("没能拉到完整的模型列表（api.example.com 返回 401），下面是常用选项，也可以手动输入。");
+    expect(hint({ source: "preset", models: [], efforts, error: "spawn ENOENT" })).toBe(
+      "没能从运行时拉到模型列表（spawn ENOENT），可以手动输入。",
+    );
+    expect(hint({ source: "preset", models: [{ id: "auto" }], efforts })).toBe(
+      "这个运行时没有列模型的命令，下面是常用选项，也可以手动输入。",
+    );
   });
 });

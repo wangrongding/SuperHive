@@ -110,18 +110,28 @@ export function ModelPicker({
           }}
         />
       )}
-      {data?.error && (
-        <p className="agent-mcp-hint">
-          {t("没能从运行时拉到模型列表（{0}），可以手动输入。", { 0: data.error })}
-        </p>
-      )}
-      {data && !data.error && data.source === "preset" && (
-        <p className="agent-mcp-hint">
-          {t("这个运行时没有列模型的命令，下面是常用选项，也可以手动输入。")}
-        </p>
-      )}
+      {data && <ModelListHint data={data} />}
     </div>
   );
+}
+
+/** 列表从哪来：拉取失败的原因，或者为什么只有常用选项；从运行时拉到的完整列表不提示 */
+function ModelListHint({ data }: { data: LocalAgentModelsResponse }) {
+  let text: string | undefined;
+  if (data.error)
+    text =
+      data.models.length > 0
+        ? t("没能拉到完整的模型列表（{0}），下面是常用选项，也可以手动输入。", { 0: data.error })
+        : t("没能从运行时拉到模型列表（{0}），可以手动输入。", { 0: data.error });
+  else if (data.presetReason === "oauth")
+    text = t("Claude 用账号登录、没有 API key，拉不到完整列表，下面是常用选项，也可以手动输入。");
+  else if (data.presetReason === "cloud")
+    text = t(
+      "Claude 走 Bedrock / Vertex 等云平台，拉不到完整列表，下面是常用选项，也可以手动输入。",
+    );
+  else if (data.source === "preset")
+    text = t("这个运行时没有列模型的命令，下面是常用选项，也可以手动输入。");
+  return text ? <p className="agent-mcp-hint">{text}</p> : null;
 }
 
 /** 档位的显示名；运行时报出不认识的档位就原样显示 */

@@ -192,7 +192,11 @@ export function mcpListError(error: unknown): HiveError {
 export type LocalAgentEndReason = "stopped" | "restarted" | "removed" | "serverStopped";
 
 export type McpLister = (args: string[]) => Promise<string>;
-export type ModelLister = (provider: LocalAgentProvider) => Promise<LocalAgentModelsResponse>;
+/** cwd：Agent 的工作目录（Claude 的项目级配置会盖过全局配置，决定它实际用的接口和密钥） */
+export type ModelLister = (
+  provider: LocalAgentProvider,
+  context: { cwd?: string },
+) => Promise<LocalAgentModelsResponse>;
 /** 模型列表缓存：起 Codex app-server、跑 opencode models 都要几秒 */
 const MODELS_CACHE_MS = 10 * 60_000;
 
@@ -596,8 +600,9 @@ export class LocalAgentSupervisor {
   private readonly measureCache = new Map<string, { at: number; result: LocalAgentMcpResponse }>();
   private readonly listMcp: McpLister;
   private readonly listModels: ModelLister;
+  /** 按 provider 缓存；Claude 再按工作目录分（项目配置可能换了接口和密钥） */
   private readonly modelsCache = new Map<
-    LocalAgentProvider,
+    string,
     { at: number; result: Promise<LocalAgentModelsResponse> }
   >();
   private shuttingDown = false;
@@ -639,8 +644,31 @@ export class LocalAgentSupervisor {
         ));
     this.listModels =
       options.listModels ??
-      (async (provider) => {
-        const stdout = await this.listMcp(["models", cliOption("provider", provider), "--json"]);
+      (async (provider, context) => {
+        const args = [
+          ...options.cli.args,
+          "models",
+          cliOption("provider", provider),
+          ...(context.cwd ? [cliOption("cwd", context.cwd)] : []),
+          "--json",
+        ];
+        // 和 Agent 启动时同样的网络代理：Claude 要连它的接口地址
+        let proxy: ProxyEnvPatch | undefined;
+        try {
+          proxy = options.proxyEnv?.();
+        } catch {
+          proxy = undefined;
+        }
+        const env = applyProxyEnv({ ...process.env }, proxy) as NodeJS.ProcessEnv;
+        const stdout = await new Promise<string>((resolve, reject) =>
+          execFile(
+            options.cli.command,
+            args,
+            { timeout: MCP_LIST_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true, env },
+            (error, out, stderr) =>
+              error ? reject(Object.assign(error, { stderr })) : resolve(out),
+          ),
+        );
         const line = stdout.trim().split("\n").at(-1) ?? "";
         const parsed = JSON.parse(line) as LocalAgentModelsResponse;
         return {
@@ -651,6 +679,9 @@ export class LocalAgentSupervisor {
             ? parsed.efforts
             : [...runtimeReasoningEfforts(provider)],
           ...(parsed.error ? { error: parsed.error } : {}),
+          ...(parsed.presetReason === "oauth" || parsed.presetReason === "cloud"
+            ? { presetReason: parsed.presetReason }
+            : {}),
         };
       });
   }
@@ -829,20 +860,29 @@ export class LocalAgentSupervisor {
    * 拉不到不报错：返回空列表和原因，网页上照样可以手填。
    */
   async models(id: string, refresh = false): Promise<LocalAgentModelsResponse> {
-    const { provider } = this.require(id).config;
-    const cached = this.modelsCache.get(provider);
+    const { config } = this.require(id);
+    const { provider } = config;
+    // Claude 按工作目录读项目级配置；和启动时一样，目录用不了就按主目录
+    const cwd =
+      provider === "claude"
+        ? (checkCwd(config.cwd, this.options.home?.())?.to ?? config.cwd ?? undefined)
+        : undefined;
+    const key = cwd ? `${provider}\u0000${cwd}` : provider;
+    const cached = this.modelsCache.get(key);
     if (cached && !refresh && this.now() - cached.at < MODELS_CACHE_MS) return cached.result;
-    const result = this.listModels(provider).catch((error: unknown): LocalAgentModelsResponse => ({
-      source: "preset",
-      models: [],
-      efforts: [...runtimeReasoningEfforts(provider)],
-      error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-    }));
-    this.modelsCache.set(provider, { at: this.now(), result });
+    const result = this.listModels(provider, cwd ? { cwd } : {}).catch(
+      (error: unknown): LocalAgentModelsResponse => ({
+        source: "preset",
+        models: [],
+        efforts: [...runtimeReasoningEfforts(provider)],
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+      }),
+    );
+    this.modelsCache.set(key, { at: this.now(), result });
     // 拉取失败的不缓存：下次打开再试
     void result.then((value) => {
-      if (value.error && this.modelsCache.get(provider)?.result === result) {
-        this.modelsCache.delete(provider);
+      if (value.error && this.modelsCache.get(key)?.result === result) {
+        this.modelsCache.delete(key);
       }
     });
     return result;

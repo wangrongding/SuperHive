@@ -1,9 +1,18 @@
 import { execFile, spawn } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { ACP_PROTOCOL_VERSION, sessionModelChoices } from "./acp-responder.js";
+import {
+  fetchClaudeModels,
+  resolveClaudeApi,
+  useEnvProxy,
+  type ClaudeApi,
+  type ClaudeApiOptions,
+  type FetchLike,
+} from "./claude-models.js";
 import { geminiHomeEnv, hasGeminiApiKey } from "./gemini-client.js";
 import { superhiveHome } from "./home-dir.js";
 import { spawnStdioTransport } from "./stdio-transport.js";
@@ -11,12 +20,13 @@ import { commandFor } from "./windows-command.js";
 
 const usage = `
 用法：
-  hive models --provider codex|claude|copilot|opencode|omp|openclaw|gemini|agy [--command PATH] [--json]
+  hive models --provider codex|claude|copilot|opencode|omp|openclaw|gemini|agy [--command PATH] [--cwd DIR] [--json]
 
 列出这个 Agent CLI 能用的模型，供网页上选择模型、「换个模型重试」使用。
 codex 用 app-server 的 model/list，opencode 用 opencode models，omp 用 omp models --json，
 openclaw 用 openclaw models list --json，gemini、agy 经 ACP 开一个空会话读它给的模型；
-claude、copilot 没有列模型的命令，给出常用选项，网页上也能手填。
+claude 按它实际生效的接口地址和密钥（--cwd 是 Agent 的工作目录，项目配置会盖过全局配置）请求 /v1/models，
+用账号登录（没有 key）或拉取失败时给出常用选项；copilot 给出常用选项。网页上都能手填。
 同时列出能选的思考强度（claude、codex、copilot、omp 支持；codex、omp 按模型列出）。
 `;
 
@@ -45,6 +55,8 @@ export type ModelList = {
   efforts: string[];
   /** 拉取失败的原因（这时 models 是常用选项） */
   error?: string;
+  /** 为什么只给常用选项（不算失败）：oauth=Claude 用账号登录、没有 API key；cloud=走 Bedrock / Vertex 等云平台 */
+  presetReason?: "oauth" | "cloud";
 };
 
 /** 跑一个命令拿标准输出（测试注入） */
@@ -57,7 +69,7 @@ export type AcpModelLister = (provider: "gemini" | "agy", command: string) => Pr
 const TIMEOUT_MS = 20_000;
 const MAX_MODELS = 300;
 
-/** 没有列模型命令的运行时给的常用选项（别名由 CLI 自己解析到当前最新的版本） */
+/** 没有列模型命令（或拉不到）的运行时给的常用选项（别名由 CLI 自己解析到当前最新的版本） */
 const PRESETS: Partial<Record<ModelProvider, ModelEntry[]>> = {
   claude: [
     { id: "opus", label: "Opus" },
@@ -454,6 +466,12 @@ export async function listModels(options: {
   listAcp?: AcpModelLister;
   /** 运行时自己配置的默认模型（测试注入）；默认读各 CLI 的配置文件 */
   configuredDefault?: (provider: ModelProvider) => string | undefined;
+  /** Agent 的工作目录：Claude 的项目级配置会盖过全局配置 */
+  cwd?: string;
+  /** 算出 Claude 实际用的接口和密钥（测试注入） */
+  claudeApi?: (options: ClaudeApiOptions) => Promise<ClaudeApi>;
+  /** 请求 Claude 的 /v1/models（测试注入） */
+  fetch?: FetchLike;
 }): Promise<ModelList> {
   const { provider } = options;
   const command = options.command ?? provider;
@@ -461,6 +479,7 @@ export async function listModels(options: {
   const efforts = RUNTIME_EFFORTS[provider] ?? [];
   const preset = PRESETS[provider];
   const fallback = () => (options.configuredDefault ?? configuredDefaultModel)(provider);
+  if (provider === "claude") return listClaude(options, efforts, fallback);
   if (preset)
     return { provider, source: "preset", models: withDefault(preset, fallback()), efforts };
   try {
@@ -488,6 +507,59 @@ export async function listModels(options: {
   }
 }
 
+function errorText(error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return reason.replace(/\s+/g, " ").slice(0, 300);
+}
+
+/**
+ * Claude：用它实际生效的接口地址和密钥拉 /v1/models。别名（opus、sonnet……）始终排在最前面，
+ * 拉到的完整模型名接在后面；用账号登录、走云平台或拉取失败时只给别名，并说明原因
+ */
+async function listClaude(
+  options: Parameters<typeof listModels>[0],
+  efforts: string[],
+  fallback: () => string | undefined,
+): Promise<ModelList> {
+  const aliases = PRESETS.claude!;
+  const preset = (extra: Pick<ModelList, "error" | "presetReason">): ModelList => ({
+    provider: "claude",
+    source: "preset",
+    models: withDefault(aliases, fallback()),
+    efforts,
+    ...extra,
+  });
+  try {
+    const api = await (options.claudeApi ?? resolveClaudeApi)({
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+    });
+    if (api.kind !== "key") return preset({ presetReason: api.kind });
+    if (!options.fetch)
+      useEnvProxy(
+        process.env,
+        (http as { setGlobalProxyFromEnv?: (env: NodeJS.ProcessEnv) => unknown })
+          .setGlobalProxyFromEnv,
+      );
+    const fetched = await fetchClaudeModels(api, options.fetch);
+    const configured = fallback();
+    const listed = fetched.map((model) => entry(model.id, model.label));
+    // 配置的默认模型不在列表里（例如带 [1M] 后缀）：放在别名后面，别名始终在最前
+    const missing =
+      configured && ![...aliases, ...listed].some((model) => model.id === configured)
+        ? [{ id: configured }]
+        : [];
+    const models = unique([...aliases, ...missing, ...listed]);
+    return {
+      provider: "claude",
+      source: "runtime",
+      models: withDefault(models, configured),
+      efforts,
+    };
+  } catch (error) {
+    return preset({ error: errorText(error) });
+  }
+}
+
 const PROVIDERS: readonly ModelProvider[] = [
   "codex",
   "claude",
@@ -505,6 +577,7 @@ export async function modelsCommand(argv: string[]): Promise<void> {
     options: {
       provider: { type: "string", default: "codex" },
       command: { type: "string" },
+      cwd: { type: "string" },
       json: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -520,13 +593,20 @@ export async function modelsCommand(argv: string[]): Promise<void> {
   const result = await listModels({
     provider,
     ...(parsed.values.command ? { command: parsed.values.command } : {}),
+    ...(parsed.values.cwd ? { cwd: parsed.values.cwd } : {}),
   });
   if (parsed.values.json) {
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
   if (result.error) console.log(`拉取模型列表失败：${result.error}`);
-  if (result.source === "preset")
+  if (result.presetReason === "oauth")
+    console.log("（Claude 用账号登录、没有 API key，列不出完整列表，以下是常用选项，也可以手填）");
+  else if (result.presetReason === "cloud")
+    console.log(
+      "（Claude 走 Bedrock / Vertex 等云平台，列不出完整列表，以下是常用选项，也可以手填）",
+    );
+  else if (result.source === "preset")
     console.log("（运行时没有列模型的命令，以下是常用选项，也可以手填）");
   for (const model of result.models) {
     console.log(

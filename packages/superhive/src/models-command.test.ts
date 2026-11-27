@@ -153,8 +153,11 @@ describe("listModels", () => {
       provider: "claude",
       run,
       configuredDefault: () => undefined,
+      claudeApi: async () => ({ kind: "oauth" }),
     });
     expect(claude.source).toBe("preset");
+    expect(claude.presetReason).toBe("oauth");
+    expect(claude.error).toBeUndefined();
     expect(claude.models.map((model) => model.id)).toEqual(["opus", "sonnet", "haiku", "opusplan"]);
     expect(claude.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
     const copilot = await listModels({ provider: "copilot", run });
@@ -164,12 +167,18 @@ describe("listModels", () => {
   });
 
   it("marks the model Claude Code is configured to use as the runtime default", async () => {
+    const claudeApi = async () => ({ kind: "oauth" as const });
     const listed = await listModels({
       provider: "claude",
       configuredDefault: () => "claude-opus-5-5[1M]",
+      claudeApi,
     });
     expect(listed.models[0]).toEqual({ id: "claude-opus-5-5[1M]", isDefault: true });
-    const alias = await listModels({ provider: "claude", configuredDefault: () => "sonnet" });
+    const alias = await listModels({
+      provider: "claude",
+      configuredDefault: () => "sonnet",
+      claudeApi,
+    });
     expect(alias.models.find((model) => model.isDefault)?.id).toBe("sonnet");
     expect(claudeConfiguredModel({ ANTHROPIC_MODEL: " haiku " })).toBe("haiku");
     expect(claudeConfiguredModel({ CLAUDE_CONFIG_DIR: "/nonexistent-claude-dir" })).toBeUndefined();

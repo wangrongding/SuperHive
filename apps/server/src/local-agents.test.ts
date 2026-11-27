@@ -935,7 +935,8 @@ describe("local agent routes", () => {
       headers: owner,
     });
     expect(listModels).toHaveBeenCalledTimes(2);
-    expect(listModels).toHaveBeenCalledWith("opencode");
+    // 只有 Claude 按工作目录读配置：别的运行时不带目录，按 provider 缓存
+    expect(listModels).toHaveBeenCalledWith("opencode", {});
     // 不带房主凭证拿不到
     const anonymous = await app.inject({ method: "GET", url: `/api/local/agents/${id}/models` });
     expect(anonymous.statusCode).toBeGreaterThanOrEqual(400);
@@ -1057,6 +1058,38 @@ describe("local agent routes", () => {
     const listed = await app.inject({ method: "GET", url: "/api/local/agents", headers: owner });
     expect(listed.json().agents[0].effort).toBeNull();
     rmSync(settingsDir, { recursive: true, force: true });
+  });
+
+  it("lists Claude's models with its working directory and caches them per directory", async () => {
+    const first = mkdtempSync(path.join(tmpdir(), "hive-claude-a-"));
+    const second = mkdtempSync(path.join(tmpdir(), "hive-claude-b-"));
+    const listModels = vi.fn(async () => ({
+      source: "runtime" as const,
+      models: [{ id: "opus", label: "Opus" }, { id: "claude-opus-5-5" }],
+      efforts: ["low", "high"],
+    }));
+    const { app, owner } = await setup({ listModels });
+    const create = async (name: string, cwd: string) =>
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/local/agents",
+          headers: owner,
+          payload: { provider: "claude", name, access: "workspace", cwd },
+        })
+      ).json().agent.id as string;
+    const a = await create("rd-claude-a", first);
+    const b = await create("rd-claude-b", second);
+    const get = (id: string) =>
+      app.inject({ method: "GET", url: `/api/local/agents/${id}/models`, headers: owner });
+    expect((await get(a)).json().models).toHaveLength(2);
+    await get(a);
+    await get(b);
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(listModels).toHaveBeenNthCalledWith(1, "claude", { cwd: realpathSync(first) });
+    expect(listModels).toHaveBeenNthCalledWith(2, "claude", { cwd: realpathSync(second) });
+    rmSync(first, { recursive: true, force: true });
+    rmSync(second, { recursive: true, force: true });
   });
 
   it("reports why the model list could not be fetched instead of failing", async () => {
