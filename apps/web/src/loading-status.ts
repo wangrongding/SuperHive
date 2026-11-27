@@ -13,10 +13,10 @@ const titles: Record<LoadingPhase, string> = {
   messages: "载入房间消息",
 };
 const hints: Record<LoadingPhase, string[]> = {
-  starting: ["正在把蜂巢搬到你的屏幕上…", "给蜂巢轻轻敲个门…"],
-  connecting: ["正在寻找回蜂巢的路…", "给蜂巢轻轻敲个门…"],
-  joining: ["给 Agent 们留个座位…", "看看蜂巢里都有谁…"],
-  messages: ["把蜂巢里的新鲜消息捎过来…", "整理一下大家留下的花粉笔记…"],
+  starting: ["正在载入页面…", "马上就好…"],
+  connecting: ["正在连接服务器…", "马上就好…"],
+  joining: ["正在进入房间…", "正在读取房间成员…"],
+  messages: ["正在载入最近的消息…", "马上就好…"],
 };
 const slowHints: Record<LoadingPhase, string> = {
   starting: "网页资源还在载入，请检查网络或重新加载。",

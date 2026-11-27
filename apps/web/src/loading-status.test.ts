@@ -37,21 +37,21 @@ describe("loading status", () => {
     setLocalePreference("zh-CN");
   });
 
-  it("shows real phases immediately, keeps each playful hint at least 1.5 seconds and never invents progress", () => {
+  it("shows real phases immediately, keeps each hint at least 1.5 seconds and never invents progress", () => {
     const { controller, title, hint } = mount();
     expect(title.textContent).toBe("连接 Hive");
-    expect(hint.textContent).toBe("正在寻找回蜂巢的路…");
+    expect(hint.textContent).toBe("正在连接服务器…");
     controller.update({ phase: "joining" });
     expect(title.textContent).toBe("准备房间");
     vi.advanceTimersByTime(LOADING_COPY_MIN_MS - 1);
-    expect(hint.textContent).toBe("正在寻找回蜂巢的路…");
+    expect(hint.textContent).toBe("正在连接服务器…");
     vi.advanceTimersByTime(1);
-    expect(hint.textContent).toBe("给 Agent 们留个座位…");
+    expect(hint.textContent).toBe("正在进入房间…");
     controller.update({ phase: "messages" });
     vi.advanceTimersByTime(LOADING_COPY_MIN_MS - 1);
-    expect(hint.textContent).toBe("给 Agent 们留个座位…");
+    expect(hint.textContent).toBe("正在进入房间…");
     vi.advanceTimersByTime(1);
-    expect(hint.textContent).toBe("把蜂巢里的新鲜消息捎过来…");
+    expect(hint.textContent).toBe("正在载入最近的消息…");
     controller.destroy();
   });
 
@@ -97,7 +97,7 @@ describe("loading status", () => {
     setLocalePreference("en");
     const { controller, title, hint, help } = mount();
     expect(title.textContent).toBe("Connecting to Hive");
-    expect(hint.textContent).toBe("Finding our way back to the hive…");
+    expect(hint.textContent).toBe("Connecting to the server…");
     controller.update({ phase: "joining" });
     vi.advanceTimersByTime(LOADING_SLOW_MS);
     expect(title.textContent).toBe("Preparing the room");

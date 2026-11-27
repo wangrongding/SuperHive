@@ -82,7 +82,14 @@ export const runInstall: InstallRunner = (plan, cwd, timeoutMs, signal) =>
         ([key]) => !key.startsWith("GIT_") && !key.toLowerCase().startsWith("npm_"),
       ),
     );
-    const resolved = commandFor(plan.command, plan.args);
+    let resolved;
+    try {
+      resolved = commandFor(plan.command, plan.args);
+    } catch (error) {
+      // 例如 Windows 桌面端没装 Node.js：按启动失败处理，照常退回软链主目录依赖
+      resolve({ code: null, output: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     let output = "";
     let settled = false;
     const finish = (result: InstallResult) => {
