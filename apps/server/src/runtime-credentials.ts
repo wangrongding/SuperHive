@@ -87,7 +87,7 @@ export const RUNTIME_CREDENTIAL_PROVIDERS: readonly RuntimeCredentialProvider[] 
 
 /** 改完怎么生效：按各运行时在 superhive 里的实际运行方式 */
 const EFFECT: Record<RuntimeCredentialProvider, RuntimeCredentialEffect> = {
-  // 每轮新起 claude 进程，启动时读 settings.json
+  // 常驻的 claude 进程按生效凭据的指纹判断能否复用：改了 key 或地址，下一轮新起进程（--resume 接着会话）
   claude: "nextTurn",
   // app-server 常驻，启动时读一次配置
   codex: "restart",

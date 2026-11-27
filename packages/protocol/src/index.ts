@@ -1803,7 +1803,7 @@ export const runtimeCredentialFieldInfoSchema = z.object({
   shadowedBy: z.string().optional(),
 });
 /**
- * 改完怎么生效：nextTurn=Agent 每轮新起进程，下一轮就用新值；restart=常驻进程，要重启 Agent；
+ * 改完怎么生效：nextTurn=不用重启，Agent 下一轮就用新值（每轮新起进程，或常驻进程发现凭据变了会换新）；restart=常驻进程，要重启 Agent；
  * gateway=Agent 每轮新起进程，但经 OpenClaw gateway 执行，gateway 要重新加载配置
  */
 export const runtimeCredentialEffectSchema = z.enum(["nextTurn", "restart", "gateway"]);

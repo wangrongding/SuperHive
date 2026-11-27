@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { fetchClaudeModels, resolveClaudeApi, useEnvProxy } from "./claude-models.js";
+import {
+  claudeCredentialFingerprint,
+  fetchClaudeModels,
+  resolveClaudeApi,
+  useEnvProxy,
+} from "./claude-models.js";
 import { listModels } from "./models-command.js";
 
 const KEY = "sk-ant-secret-0123456789";
@@ -122,6 +127,40 @@ describe("resolveClaudeApi", () => {
     await expect(
       resolveClaudeApi({ env: { CLAUDE_CODE_USE_VERTEX: "0" }, home, managedSettings }),
     ).resolves.toEqual({ kind: "oauth" });
+  });
+});
+
+describe("claudeCredentialFingerprint", () => {
+  it("changes with the effective address, key or apiKeyHelper, and never contains the key", () => {
+    const { home, cwd, managedSettings } = fixture();
+    const user = path.join(home, ".claude", "settings.json");
+    const at = () => claudeCredentialFingerprint({ env: {}, home, cwd, managedSettings });
+    writeJson(user, { env: { ANTHROPIC_AUTH_TOKEN: KEY } });
+    const first = at();
+    expect(first).not.toContain(KEY);
+    expect(first).not.toContain("0123456789");
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+    // 和认证无关的设置改了不变
+    writeJson(user, { env: { ANTHROPIC_AUTH_TOKEN: KEY, OTHER: "x" }, theme: "dark" });
+    expect(at()).toBe(first);
+    writeJson(user, { env: { ANTHROPIC_AUTH_TOKEN: `${KEY}-new` } });
+    const rotated = at();
+    expect(rotated).not.toBe(first);
+    writeJson(user, {
+      env: { ANTHROPIC_AUTH_TOKEN: `${KEY}-new`, ANTHROPIC_BASE_URL: "https://gw" },
+    });
+    expect(at()).not.toBe(rotated);
+    // 项目级 settings.local.json 盖过全局，改它也算
+    writeJson(path.join(cwd, ".claude", "settings.local.json"), { apiKeyHelper: "echo k" });
+    const helper = at();
+    writeJson(path.join(cwd, ".claude", "settings.local.json"), { apiKeyHelper: "echo k2" });
+    expect(at()).not.toBe(helper);
+    // 进程环境里的 key 也算
+    expect(
+      claudeCredentialFingerprint({ env: { ANTHROPIC_API_KEY: "a" }, home, managedSettings }),
+    ).not.toBe(
+      claudeCredentialFingerprint({ env: { ANTHROPIC_API_KEY: "b" }, home, managedSettings }),
+    );
   });
 });
 

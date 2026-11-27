@@ -107,10 +107,9 @@ function savedMessage(
 ): string {
   const names = agents.map((agent) => agent.name).join(t("、"));
   if (effect === "nextTurn") {
-    return t(
-      "已保存，不用重启：{0} 每一轮都新起进程，Agent 从下一轮起就用新值（正在跑的这一轮仍用旧值），终端里新开的 {0} 也一样。",
-      { 0: label },
-    );
+    return t("已保存，不用重启：{0} Agent 从下一轮起就用新值，终端里新开的 {0} 也一样。", {
+      0: label,
+    });
   }
   if (effect === "gateway") {
     return t(

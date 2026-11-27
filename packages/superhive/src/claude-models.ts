@@ -1,4 +1,5 @@
 import { exec } from "node:child_process";
+import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +48,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const PAGE_LIMIT = 1000;
 const MAX_PAGES = 10;
 const MAX_MODELS = 300;
+const FINGERPRINT_SALT = randomBytes(32);
 
 const ENV_KEYS = [
   "ANTHROPIC_BASE_URL",
@@ -98,8 +100,13 @@ const defaultRunHelper = (command: string, env: NodeJS.ProcessEnv) =>
     ),
   );
 
-/** 按 Claude Code 的优先级算出这个 Agent 实际用的接口地址和认证方式 */
-export async function resolveClaudeApi(options: ClaudeApiOptions = {}): Promise<ClaudeApi> {
+type ClaudeAuthEnv = {
+  env: Record<(typeof ENV_KEYS)[number], string | undefined>;
+  helper?: string;
+};
+
+/** 按 Claude Code 的优先级合出认证相关的环境变量和 apiKeyHelper（不执行 helper） */
+function resolveClaudeAuthEnv(options: ClaudeApiOptions): ClaudeAuthEnv {
   const processEnv = options.env ?? process.env;
   const home = options.home ?? os.homedir();
   const configDir = value(processEnv.CLAUDE_CONFIG_DIR) ?? path.join(home, ".claude");
@@ -113,7 +120,7 @@ export async function resolveClaudeApi(options: ClaudeApiOptions = {}): Promise<
       : []),
     options.managedSettings ?? managedSettingsFile(),
   ];
-  const env: Record<string, string | undefined> = {};
+  const env = {} as ClaudeAuthEnv["env"];
   for (const key of ENV_KEYS) env[key] = value(processEnv[key]);
   let helper: string | undefined;
   for (const file of files) {
@@ -124,6 +131,26 @@ export async function resolveClaudeApi(options: ClaudeApiOptions = {}): Promise<
     }
     if (settings.helper) helper = settings.helper;
   }
+  return { env, ...(helper ? { helper } : {}) };
+}
+
+/**
+ * Claude Agent 当前生效凭据的指纹：接口地址、云平台开关、密钥（或 apiKeyHelper 命令）合起来的 SHA-256。
+ * 只用来在本进程里比较前后有没有变（常驻进程换没换 key）：用进程内随机密钥做 HMAC，不含明文，
+ * 也没法拿去离线比对；不执行 apiKeyHelper，helper 的输出由 Claude Code 自己按 TTL 重新取。
+ */
+export function claudeCredentialFingerprint(options: ClaudeApiOptions = {}): string {
+  const { env, helper } = resolveClaudeAuthEnv(options);
+  return createHmac("sha256", FINGERPRINT_SALT)
+    .update(JSON.stringify([ENV_KEYS.map((key) => env[key] ?? null), helper ?? null]))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/** 按 Claude Code 的优先级算出这个 Agent 实际用的接口地址和认证方式 */
+export async function resolveClaudeApi(options: ClaudeApiOptions = {}): Promise<ClaudeApi> {
+  const processEnv = options.env ?? process.env;
+  const { env, helper } = resolveClaudeAuthEnv(options);
   if (
     truthy(env.CLAUDE_CODE_USE_BEDROCK) ||
     truthy(env.CLAUDE_CODE_USE_VERTEX) ||

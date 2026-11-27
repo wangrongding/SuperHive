@@ -3,7 +3,7 @@ import { ClaudeCodeResponder } from "./claude-client.js";
 import type { CommandRunner } from "./command-runner.js";
 import { claudeKeepAliveMs } from "./run.js";
 import { ClaudeWarmRegistry } from "./claude-warm-registry.js";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -125,6 +125,66 @@ describe("ClaudeCodeResponder 常驻进程", () => {
     expect(processes).toHaveLength(4);
     expect(processes[3]!.args).not.toContain("--resume");
     await responder.close();
+  });
+
+  it("换了接口地址或密钥（凭据指纹变了）就新起进程 --resume，没变照常复用", async () => {
+    const { runner, processes } = fakeClaude();
+    let fingerprint = "a";
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/w",
+      hive,
+      runner,
+      keepAliveMs: 60_000,
+      credentialFingerprint: () => fingerprint,
+    });
+    await responder.reply({ instructions: "r", prompt: "一" });
+    await responder.reply({ instructions: "r", prompt: "二", threadId: "s1" });
+    expect(processes).toHaveLength(1);
+    fingerprint = "b";
+    const third = await responder.reply({ instructions: "r", prompt: "三", threadId: "s1" });
+    expect(third.text).toBe("re:三");
+    expect(processes).toHaveLength(2);
+    expect(processes[0]!.ended).toBe(true);
+    expect(processes[1]!.args.join(" ")).toContain("--resume s1");
+    await responder.reply({ instructions: "r", prompt: "四", threadId: "s1" });
+    expect(processes).toHaveLength(2);
+    expect(processes[1]!.prompts).toEqual(["三", "四"]);
+    await responder.close();
+  });
+
+  it("默认按工作目录里的 Claude 配置算指纹：改了 settings 里的 key 下一轮就换进程", async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "hive-claude-cred-"));
+    try {
+      mkdirSync(path.join(cwd, ".claude"));
+      const settings = path.join(cwd, ".claude", "settings.local.json");
+      writeFileSync(settings, JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "old-key" } }));
+      const { runner, processes } = fakeClaude();
+      const responder = new ClaudeCodeResponder({
+        command: "claude",
+        cwd,
+        hive,
+        runner,
+        keepAliveMs: 60_000,
+      });
+      await responder.reply({ instructions: "r", prompt: "一" });
+      // 别的设置改了不算换 key
+      writeFileSync(
+        settings,
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "old-key" }, theme: "dark" }),
+      );
+      await responder.reply({ instructions: "r", prompt: "二", threadId: "s1" });
+      expect(processes).toHaveLength(1);
+      writeFileSync(settings, JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "new-key" } }));
+      await responder.reply({ instructions: "r", prompt: "三", threadId: "s1" });
+      expect(processes).toHaveLength(2);
+      expect(processes[1]!.args.join(" ")).toContain("--resume s1");
+      // 密钥不会出现在命令行参数里
+      expect(processes.flatMap((proc) => proc.args).join(" ")).not.toMatch(/old-key|new-key/);
+      await responder.close();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("自动压缩阈值或缓存时长改了也换新进程，没改就接着复用", async () => {

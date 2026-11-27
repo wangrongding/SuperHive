@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { claudeHiveMcpConfig, type HiveMcpConnection } from "./hive-mcp-config.js";
+import { claudeCredentialFingerprint } from "./claude-models.js";
 import type { ClaudeWarmRegistry, WarmTicket } from "./claude-warm-registry.js";
 import { enabledClaudeMcpServers, readAgentSettings, type AgentSettings } from "./mcp-servers.js";
 import {
@@ -191,6 +192,11 @@ export class ClaudeCodeResponder implements AgentResponder {
       warmPollMs?: number;
       /** 停止时请 Claude 自己中断，等多久没确认停下就改为结束进程（默认 5 秒） */
       interruptTimeoutMs?: number;
+      /**
+       * 测试注入：当前生效凭据的指纹（默认按 Claude Code 的优先级读 settings.json 等算出，不含明文）。
+       * 变了就不复用常驻进程：Claude Code 虽会热加载 settings 里的 env，但要 1～1.5 秒才生效，刚改完的下一轮还在用旧 key
+       */
+      credentialFingerprint?: () => string;
       /** 测试注入：按 cwd 和设置列出要加载的 MCP（不含 hive） */
       mcpServers?: (
         cwd: string,
@@ -296,8 +302,13 @@ export class ClaudeCodeResponder implements AgentResponder {
     if (model) args.push("--model", model);
     // 思考强度：Agent 设置或「换个模型重试」选的才传，否则沿用 CLI 自己的配置
     if (input.effort) args.push("--effort", input.effort);
-    // 能复用的常驻进程：参数（含 MCP 配置内容）完全一样，且停在 Bridge 要接的这个会话上
-    const key = JSON.stringify([this.options.cwd, args, mcpConfig]);
+    // 能复用的常驻进程：参数（含 MCP 配置内容）、生效的接口地址和密钥都没变，且停在 Bridge 要接的这个会话上。
+    // 换了 key 就新起进程 --resume 接着原会话，上下文不丢
+    const credentials = (
+      this.options.credentialFingerprint ??
+      (() => claudeCredentialFingerprint({ cwd: this.options.cwd }))
+    )();
+    const key = JSON.stringify([this.options.cwd, args, mcpConfig, credentials]);
     const previous = this.warm;
     const reuse =
       previous !== undefined &&

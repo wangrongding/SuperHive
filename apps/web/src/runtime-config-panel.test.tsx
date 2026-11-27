@@ -148,7 +148,7 @@ describe("RuntimeConfigPanel", () => {
     expect(screen.getByRole("dialog").textContent).toContain("会同时影响终端里的 Claude Code");
     await confirmIn("确认保存 Claude Code 的配置");
     expect(client.updateRuntimeFields).toHaveBeenCalledWith("claude", { model: null });
-    // Claude 每轮新起进程：不用重启，没有重启按钮
+    // Claude 常驻进程发现凭据变了会换新：不用重启，没有重启按钮
     expect(screen.getByRole("status").textContent).toContain("不用重启");
     expect(screen.queryByText(/重启这/)).toBeNull();
 
