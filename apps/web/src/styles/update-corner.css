@@ -58,6 +58,10 @@
   border-left-color: var(--danger);
 }
 
+.update-card.warn {
+  border-left-color: var(--warning);
+}
+
 .update-card-head {
   display: flex;
   align-items: center;
@@ -91,6 +95,13 @@
 .update-card-actions > .update-card-text {
   flex: 1;
   min-width: 0;
+}
+
+/* 要人选的几个选项（有 Agent 在忙时重启等不等）：一行一个，文字长也不挤 */
+.update-card-choices {
+  display: grid;
+  gap: 6px;
+  margin-right: 6px;
 }
 
 .update-card .desktop-update-progress {

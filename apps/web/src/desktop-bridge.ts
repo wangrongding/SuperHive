@@ -93,12 +93,33 @@ export type DesktopInstallState =
   | { phase: "ready" }
   | { phase: "failed"; reason: DesktopInstallFailure };
 
+/**
+ * 已下载好、点了「重启以更新」但有本机 Agent 在执行任务：waiting=在等它们做完，做完自动重启；
+ * timeout=等到 30 分钟上限还没做完，等人再决定（老版本桌面端没有这一项）
+ */
+export type DesktopRestartWait =
+  { phase: "waiting"; agents: string[] } | { phase: "timeout"; agents: string[] };
+
 export type DesktopInstallView = {
   available: boolean;
   reason?: DesktopInstallFailure;
   size: number;
   state: DesktopInstallState;
+  restart?: DesktopRestartWait;
 };
+
+/**
+ * 「重启以更新」带的选择：check=先看有没有本机 Agent 在执行任务，没有就直接重启；
+ * wait=等它们做完再重启（超时后再选一次是再等一轮）；now=立即重启，中断正在执行的任务
+ */
+export type DesktopRestartChoice = "check" | "wait" | "now";
+
+/** busy=有 Agent 在忙、没有重启，等人选；unavailable=新版本还没准备好 */
+export type DesktopRestartResult =
+  | { status: "restarting" }
+  | { status: "busy"; agents: string[] }
+  | { status: "waiting"; agents: string[] }
+  | { status: "unavailable" };
 
 /** 「检查更新」的结果：有新版时详情照常从 onChange 推过来 */
 export type DesktopUpdateCheckResult = {
@@ -115,8 +136,10 @@ export type DesktopUpdatesApi = {
   onChange(listener: (info: DesktopUpdateInfo | null) => void): () => void;
   /** 「下载并更新」（老版本桌面端没有） */
   install?(version: string): Promise<boolean>;
-  /** 「重启以更新」（老版本桌面端没有） */
-  restart?(): Promise<boolean>;
+  /** 「重启以更新」（老版本桌面端没有；也不认选择，直接重启并返回 true） */
+  restart?(choice?: DesktopRestartChoice): Promise<boolean | DesktopRestartResult>;
+  /** 取消「等任务做完再重启」（老版本桌面端没有） */
+  cancelRestart?(): Promise<boolean>;
   /** 状态栏「检查更新」：马上查一次，不弹系统对话框（老版本桌面端没有，不显示这个按钮） */
   checkNow?(): Promise<DesktopUpdateCheckResult>;
 };
@@ -225,6 +248,12 @@ export function desktopBridge(
     // 检查更新的方法形状不对：只去掉它，不显示「检查更新」按钮
     const cleaned: Partial<DesktopUpdatesApi> = { ...updates };
     delete cleaned.checkNow;
+    return desktopBridge({ ...value, updates: cleaned });
+  }
+  if (updates && "cancelRestart" in updates && typeof updates.cancelRestart !== "function") {
+    // 取消等待的方法形状不对：只去掉它，等待时不给「取消等待」
+    const cleaned: Partial<DesktopUpdatesApi> = { ...updates };
+    delete cleaned.cancelRestart;
     return desktopBridge({ ...value, updates: cleaned });
   }
   const remote = value.remote as Partial<DesktopRemoteApi> | undefined;

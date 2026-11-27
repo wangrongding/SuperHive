@@ -2654,5 +2654,17 @@
   "连不上": "Can't connect",
   "检查网址和网络，用了代理的看看代理设置。": "Check the URL and your network, and the proxy settings if you use one.",
   "起不来": "Won't start",
-  "看看它需要的软件装好没有，再测一次。": "Make sure the software it needs is installed, then test again."
+  "看看它需要的软件装好没有，再测一次。": "Make sure the software it needs is installed, then test again.",
+  "等 {0} 个 Agent 做完再重启": "Waiting for {0} {0|agent|agents} to finish",
+  "等 Agent 做完再重启": "Waiting for agents to finish",
+  "{0} 还在执行任务，做完后自动重启，最多等 30 分钟。": "{0} are still running tasks. SuperHive restarts once they finish, waiting up to 30 minutes.",
+  "取消等待": "Stop waiting",
+  "等了 30 分钟，任务还没做完": "Tasks still running after 30 minutes",
+  "{0} 还在执行任务。不重启的话，下次打开时换上新版本。": "{0} are still running tasks. If you don't restart, the new version takes over next time you open the app.",
+  "{0} 还在执行任务。不重启的话，下次退出时换上新版本。": "{0} are still running tasks. If you don't restart, the new version takes over when you quit.",
+  "再等 30 分钟": "Wait 30 more minutes",
+  "以后再说": "Later",
+  "等任务做完再重启（推荐）": "Wait for tasks to finish, then restart (recommended)",
+  "立即重启，中断正在执行的任务": "Restart now and interrupt running tasks",
+  "{0} 等 {1} 个 Agent": "{1} agents including {0}"
 }

@@ -19,7 +19,7 @@ export function UpdateCard({
   children,
 }: {
   title: string;
-  tone?: "danger" | "ok";
+  tone?: "danger" | "ok" | "warn";
   onCollapse?: () => void;
   onClose?: () => void;
   children?: ReactNode;

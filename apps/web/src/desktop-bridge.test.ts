@@ -115,4 +115,23 @@ describe("desktopBridge", () => {
     expect(broken?.install).toBe(fn);
     expect(broken && "checkNow" in broken).toBe(false);
   });
+
+  it("drops only a malformed cancelRestart, restart itself keeps working", () => {
+    const broken = desktopBridge({
+      version: 1,
+      platform: "darwin",
+      terminal,
+      updates: {
+        get: fn,
+        open: fn,
+        dismiss: fn,
+        onChange: fn,
+        install: fn,
+        restart: fn,
+        cancelRestart: "x",
+      },
+    })?.updates;
+    expect(broken?.restart).toBe(fn);
+    expect(broken && "cancelRestart" in broken).toBe(false);
+  });
 });

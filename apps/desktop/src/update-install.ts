@@ -7,6 +7,7 @@
  * - Windows：Electron autoUpdater（Squirrel.Windows），见 win-update.ts；
  * - Mac：自己下载 zip、校验 sha256、解压核对后暂存，退出时由独立脚本替换 .app，见 mac-update.ts。
  */
+import type { RestartWait } from "./ipc-contract.js";
 import type { InstallPackage, UpdateInfo } from "./update-check.js";
 
 /** 不能直接更新 / 更新失败的原因，网页按它显示说明（不带任何路径和地址） */
@@ -66,6 +67,8 @@ export type InstallView = {
   /** 要下载多大（字节） */
   size: number;
   state: InstallState;
+  /** 已下载好、点了「重启以更新」但有 Agent 在执行任务：在等它们做完（见 restart-gate.ts） */
+  restart?: RestartWait;
 };
 
 /** 交给网页的完整新版信息 */

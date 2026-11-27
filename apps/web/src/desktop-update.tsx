@@ -3,6 +3,10 @@
  * 能在应用里直接更新时给「下载并更新」：确认后弹窗关掉，右下角出一张进度卡片（可以收起到状态栏）→
  * 「重启以更新」，不重启就等下次退出 / 打开时生效；不能（位置只读、老版本桌面端、Release 没传更新包）
  * 或失败时退回「下载」安装包，并说明原因。状态栏弹层里的「检查更新」马上查一次，结果在右下角提示。
+ *
+ * 「重启以更新」会停掉桌面端起的本机 Hive：有本机 Agent 在执行任务时，卡片里先让人选「等任务做完再重启
+ * （推荐）」或「立即重启，中断正在执行的任务」，和网页版（npm）更新同一个口径。等待由桌面端做（每 2 秒查一次，
+ * 最多 30 分钟），卡片显示在等谁、可以取消；到上限还没做完就停下来让人再决定，不硬重启。
  * 只在桌面端出现（浏览器里没有 window.superhiveDesktop.updates）。
  *
  * 网页拿不到任何链接：「下载」「完整发布说明」只告诉桌面端打开哪一个，地址由桌面端从自己的检查结果里取，
@@ -17,6 +21,8 @@ import {
   desktopBridge,
   type DesktopInstallFailure,
   type DesktopInstallState,
+  type DesktopRestartChoice,
+  type DesktopRestartWait,
   type DesktopUpdateInfo,
   type DesktopUpdatesApi,
 } from "./desktop-bridge";
@@ -125,7 +131,41 @@ function inProgress(state: DesktopInstallState | undefined): boolean {
   return state?.phase === "downloading" || state?.phase === "verifying" || state?.phase === "ready";
 }
 
-function entryLabelOf(info: DesktopUpdateInfo, state: DesktopInstallState): string {
+/** 已下载好、在等 Agent 做完再重启（或等超时了）；老版本桌面端没有 */
+function restartWaitOf(install: DesktopUpdateInfo["install"]): DesktopRestartWait | undefined {
+  return install?.state.phase === "ready" ? install.restart : undefined;
+}
+
+/** 卡片里最多点出几个名字，其余的放进悬停提示 */
+const NAMED_AGENTS = 3;
+
+/** 在忙的 Agent 名单：多了只点出前几个；桌面端一时没查到名字时笼统说「本机 Agent」 */
+function agentNames(agents: string[]): string {
+  if (!agents.length) return t("本机 Agent");
+  if (agents.length <= NAMED_AGENTS) return agents.join(t("、"));
+  return t("{0} 等 {1} 个 Agent", {
+    0: agents.slice(0, NAMED_AGENTS).join(t("、")),
+    1: agents.length,
+  });
+}
+
+/** 点不全名字时，悬停看完整名单 */
+function agentsTitle(agents: string[]): string | undefined {
+  return agents.length > NAMED_AGENTS ? agents.join(t("、")) : undefined;
+}
+
+function waitingTitle(agents: string[]): string {
+  return agents.length
+    ? t("等 {0} 个 Agent 做完再重启", { 0: agents.length })
+    : t("等 Agent 做完再重启");
+}
+
+function entryLabelOf(
+  info: DesktopUpdateInfo,
+  state: DesktopInstallState,
+  wait: DesktopRestartWait | undefined,
+): string {
+  if (wait?.phase === "waiting") return waitingTitle(wait.agents);
   if (state.phase === "ready") return t("重启以更新到 {0}", { 0: info.version });
   if (state.phase === "downloading" || state.phase === "verifying") {
     const progress =
@@ -149,7 +189,8 @@ export function DesktopUpdateEntry({
   const { info, api } = useDesktopUpdate(injected ?? desktopBridge()?.updates);
   const { desktopDismissed } = useUpdateCenter();
   if (!api || !info || desktopDismissed === info.version) return null;
-  const state = installOf(info, api)?.state ?? { phase: "idle" as const };
+  const install = installOf(info, api);
+  const state = install?.state ?? { phase: "idle" as const };
   return (
     <button
       type="button"
@@ -168,7 +209,7 @@ export function DesktopUpdateEntry({
       <span className="desktop-update-dot" aria-hidden="true">
         <Icon name="arrow-up" size={12} />
       </span>
-      <span>{entryLabelOf(info, state)}</span>
+      <span>{entryLabelOf(info, state, restartWaitOf(install))}</span>
     </button>
   );
 }
@@ -226,7 +267,12 @@ export function DesktopUpdateLayer({
   const center = useUpdateCenter();
   const install = info && api ? installOf(info, api) : undefined;
   const phase = install?.state.phase;
+  const wait = restartWaitOf(install);
   const previous = useRef(phase);
+  const previousWait = useRef(wait?.phase);
+  // 点了「重启以更新」、桌面端说有 Agent 在忙：等人在卡片里选，名单是那一刻查到的
+  const [asking, setAsking] = useState<string[]>();
+  const [pending, setPending] = useState(false);
   useEffect(() => {
     const before = previous.current;
     previous.current = phase;
@@ -234,8 +280,31 @@ export function DesktopUpdateLayer({
       expandUpdateCard();
     }
   }, [phase]);
+  useEffect(() => {
+    // 开始等（包括从菜单选的）、等到上限：卡片收起着也展开，免得错过
+    const before = previousWait.current;
+    previousWait.current = wait?.phase;
+    if (wait && wait.phase !== before) expandUpdateCard();
+  }, [wait]);
   if (!api || !info || center.desktopDismissed === info.version) return null;
   const state = install?.state ?? { phase: "idle" as const };
+  const restart = async (choice: DesktopRestartChoice) => {
+    if (!api.restart) return;
+    setPending(true);
+    try {
+      const result = await api.restart(choice);
+      if (typeof result === "object" && result.status === "busy") {
+        setAsking(result.agents);
+        expandUpdateCard();
+      } else {
+        setAsking(undefined);
+      }
+    } catch {
+      setAsking(undefined);
+    } finally {
+      setPending(false);
+    }
+  };
   const showCard =
     !center.notice && !center.cardCollapsed && (inProgress(state) || state.phase === "failed");
   return (
@@ -248,31 +317,59 @@ export function DesktopUpdateLayer({
             state={state}
             canRetry={Boolean(install?.available)}
             platform={platform}
+            wait={wait}
+            asking={state.phase === "ready" && !wait ? asking : undefined}
+            pending={pending}
+            onRestart={(choice) => void restart(choice)}
+            onCancelAsk={() => setAsking(undefined)}
           />
         </UpdateCornerPortal>
       )}
       {center.desktopDialog &&
         createPortal(
-          <DesktopUpdateDialog info={info} api={api} platform={platform} />,
+          <DesktopUpdateDialog
+            info={info}
+            api={api}
+            platform={platform}
+            onRestart={() => {
+              // 进度和要不要等 Agent 都在右下角的卡片里看
+              closeDesktopUpdateDialog();
+              expandUpdateCard();
+              void restart("check");
+            }}
+          />,
           document.body,
         )}
     </>
   );
 }
 
-/** 右下角的进度卡片：下载进度 →「重启以更新」；失败时说明原因，可以重试或下载安装包 */
+/**
+ * 右下角的进度卡片：下载进度 →「重启以更新」；有 Agent 在忙时先选等不等、在等时显示等谁；
+ * 失败时说明原因，可以重试或下载安装包
+ */
 function DesktopUpdateCard({
   info,
   api,
   state,
   canRetry,
   platform,
+  wait,
+  asking,
+  pending,
+  onRestart,
+  onCancelAsk,
 }: {
   info: DesktopUpdateInfo;
   api: DesktopUpdatesApi;
   state: DesktopInstallState;
   canRetry: boolean;
   platform: string | undefined;
+  wait: DesktopRestartWait | undefined;
+  asking: string[] | undefined;
+  pending: boolean;
+  onRestart: (choice: DesktopRestartChoice) => void;
+  onCancelAsk: () => void;
 }) {
   const releaseLink = (
     <Button variant="link" size="sm" onClick={() => void api.open("release")}>
@@ -280,6 +377,91 @@ function DesktopUpdateCard({
       <Icon name="external" size={12} />
     </Button>
   );
+  const quitHint =
+    platform === "win32"
+      ? t("不重启的话，下次打开时换上新版本。")
+      : t("不重启的话，下次退出时换上新版本。");
+  const cancelWait = api.cancelRestart && (
+    <Button size="sm" onClick={() => void api.cancelRestart?.()}>
+      {wait?.phase === "timeout" ? t("以后再说") : t("取消等待")}
+    </Button>
+  );
+  if (state.phase === "ready" && wait?.phase === "waiting") {
+    return (
+      <UpdateCard title={waitingTitle(wait.agents)} onCollapse={collapseUpdateCard}>
+        <p className="update-card-text" title={agentsTitle(wait.agents)}>
+          {t("{0} 还在执行任务，做完后自动重启，最多等 30 分钟。", {
+            0: agentNames(wait.agents),
+          })}
+        </p>
+        <UpdateProgress label={t("等 Agent 做完再重启")} />
+        <div className="update-card-actions">
+          {cancelWait}
+          <Button size="sm" tone="danger" disabled={pending} onClick={() => onRestart("now")}>
+            {t("立即重启")}
+          </Button>
+        </div>
+      </UpdateCard>
+    );
+  }
+  if (state.phase === "ready" && wait?.phase === "timeout") {
+    return (
+      <UpdateCard
+        title={t("等了 30 分钟，任务还没做完")}
+        tone="warn"
+        onCollapse={collapseUpdateCard}
+      >
+        <p className="update-card-text" title={agentsTitle(wait.agents)}>
+          {platform === "win32"
+            ? t("{0} 还在执行任务。不重启的话，下次打开时换上新版本。", {
+                0: agentNames(wait.agents),
+              })
+            : t("{0} 还在执行任务。不重启的话，下次退出时换上新版本。", {
+                0: agentNames(wait.agents),
+              })}
+        </p>
+        <div className="update-card-actions">
+          <Button variant="primary" size="sm" disabled={pending} onClick={() => onRestart("wait")}>
+            {t("再等 30 分钟")}
+          </Button>
+          <Button size="sm" tone="danger" disabled={pending} onClick={() => onRestart("now")}>
+            {t("立即重启")}
+          </Button>
+          {cancelWait}
+        </div>
+      </UpdateCard>
+    );
+  }
+  if (state.phase === "ready" && asking) {
+    return (
+      <UpdateCard
+        title={t("新版本 {0} 已下载好", { 0: info.version })}
+        tone="ok"
+        onCollapse={collapseUpdateCard}
+      >
+        <p className="update-card-text" title={agentsTitle(asking)}>
+          {t("{0} 正在执行任务，重启将中断它们，请确认：", { 0: agentNames(asking) })}
+        </p>
+        <div className="update-card-choices">
+          <Button
+            variant="primary"
+            size="sm"
+            block
+            disabled={pending}
+            onClick={() => onRestart("wait")}
+          >
+            {t("等任务做完再重启（推荐）")}
+          </Button>
+          <Button size="sm" tone="danger" block disabled={pending} onClick={() => onRestart("now")}>
+            {t("立即重启，中断正在执行的任务")}
+          </Button>
+          <Button variant="ghost" size="sm" block onClick={onCancelAsk}>
+            {t("取消")}
+          </Button>
+        </div>
+      </UpdateCard>
+    );
+  }
   if (state.phase === "ready") {
     return (
       <UpdateCard
@@ -287,13 +469,9 @@ function DesktopUpdateCard({
         tone="ok"
         onCollapse={collapseUpdateCard}
       >
-        <p className="update-card-text">
-          {platform === "win32"
-            ? t("不重启的话，下次打开时换上新版本。")
-            : t("不重启的话，下次退出时换上新版本。")}
-        </p>
+        <p className="update-card-text">{quitHint}</p>
         <div className="update-card-actions">
-          <Button variant="primary" size="sm" onClick={() => void api.restart?.()}>
+          <Button variant="primary" size="sm" disabled={pending} onClick={() => onRestart("check")}>
             {t("重启以更新")}
           </Button>
           {releaseLink}
@@ -341,10 +519,13 @@ function DesktopUpdateDialog({
   info,
   api,
   platform,
+  onRestart,
 }: {
   info: DesktopUpdateInfo;
   api: DesktopUpdatesApi;
   platform: string | undefined;
+  /** 「重启以更新」：弹窗关掉，要不要等 Agent 在右下角卡片里问 */
+  onRestart: () => void;
 }) {
   const locale = getLocale();
   const published = formatDate(info.publishedAt, locale);
@@ -381,7 +562,7 @@ function DesktopUpdateDialog({
   let primary;
   if (state.phase === "ready") {
     primary = (
-      <Button variant="primary" onClick={() => void api.restart?.()}>
+      <Button variant="primary" onClick={onRestart}>
         {t("重启以更新")}
       </Button>
     );

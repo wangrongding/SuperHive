@@ -42,6 +42,9 @@ import {
 } from "./hive-server.js";
 import {
   IPC,
+  RESTART_CHOICES,
+  type RestartChoice,
+  type RestartResult,
   type TerminalCreateRequest,
   type TerminalLayoutAction,
   type UpdateCheckNowResult,
@@ -49,6 +52,8 @@ import {
 import { imageContextMenu } from "./image-context-menu.js";
 import { keychainSwitches } from "./keychain.js";
 import { createPickFilesHandler, createWorkspaceLookup, readPickedFiles } from "./file-picker.js";
+import { createLocalHiveGet } from "./local-hive.js";
+import { busyAgentNames, RestartGate } from "./restart-gate.js";
 import { isLoopbackOrigin, isTrustedSender, originAnswer, originOf } from "./ipc-guard.js";
 import { loginShellEnv, mergePath, mergeProxyEnv } from "./shell-env.js";
 import {
@@ -356,12 +361,27 @@ function runApp(): void {
     installer ??= new UpdateInstaller({ backend: installBackend(), onChange: () => pushUpdate() });
     return installer;
   };
-  /** 交给网页的新版信息：检查结果 + 应用内更新的状态 */
+  // 「重启以更新」前先看本机 Agent 有没有在执行任务（口径和网页版更新一致，见 restart-gate.ts）
+  const localHive = createLocalHiveGet({ origin: () => owned?.origin, fetch, timeoutMs: 5_000 });
+  let gate: RestartGate | undefined;
+  const restartGate = (): RestartGate => {
+    gate ??= new RestartGate({
+      ready: () => installer?.phase === "ready",
+      restart: () => installer?.restart() ?? false,
+      // 连的是别人起的 Hive（hive start）：退出桌面端不会停掉它，Agent 不受影响
+      busyAgents: async () => (owned ? busyAgentNames(await localHive("/api/local/agents")) : []),
+      onChange: () => pushUpdate(),
+    });
+    return gate;
+  };
+  /** 交给网页的新版信息：检查结果 + 应用内更新的状态（含等 Agent 做完再重启） */
   const updateSnapshot = (): DesktopUpdate | null => {
     const checker = updateChecker();
     const info = checker.current();
     if (!info) return null;
-    return { ...info, install: updateInstaller().view(info.version, checker.installPackage()) };
+    const install = updateInstaller().view(info.version, checker.installPackage());
+    const restart = install.state.phase === "ready" ? gate?.view() : undefined;
+    return { ...info, install: restart ? { ...install, restart } : install };
   };
   let lastSentUpdate: string | undefined;
   /** 把当前新版信息和安装进度告诉主窗口里的网页（和上次一样就不发） */
@@ -416,9 +436,22 @@ function runApp(): void {
     if (!trusted(event) || !updateCheckEnabled) return false;
     return startInstall(version);
   });
-  ipcMain.handle(IPC.updateRestart, (event) => {
+  ipcMain.handle(
+    IPC.updateRestart,
+    async (event, choice: unknown): Promise<boolean | RestartResult> => {
+      if (!trusted(event) || !updateCheckEnabled) return false;
+      // 老网页不带选择：有 Agent 在忙时弹系统对话框问（和菜单「检查新版本…」一样）
+      if (choice === undefined) {
+        void confirmRestart();
+        return true;
+      }
+      if (!RESTART_CHOICES.includes(choice as RestartChoice)) return false;
+      return restartGate().request(choice as RestartChoice);
+    },
+  );
+  ipcMain.handle(IPC.updateCancelRestart, (event) => {
     if (!trusted(event) || !updateCheckEnabled) return false;
-    return installer?.restart() ?? false;
+    return gate?.cancel() ?? false;
   });
   /** 人主动检查（菜单、网页按钮）：马上查，忽略过的版本重新提示，并把结果推给网页 */
   const manualUpdateCheck = async () => {
@@ -439,16 +472,77 @@ function runApp(): void {
     };
   });
 
+  const showUpdateBox = (options: Electron.MessageBoxOptions) => {
+    const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    return owner ? dialog.showMessageBox(owner, options) : dialog.showMessageBox(options);
+  };
+  const agentList = (agents: string[]) =>
+    agents.length ? agents.join(lang === "zh" ? "、" : ", ") : t("localAgents");
+
+  /**
+   * 系统对话框里的「重启以更新」（菜单「检查新版本…」、老网页）：有本机 Agent 在执行任务时先问，
+   * 选项和网页里的卡片一样；已经在等或等超时了，就问接着怎么办。
+   */
+  async function confirmRestart(): Promise<void> {
+    const restarter = restartGate();
+    const wait = restarter.view();
+    if (wait?.phase === "waiting") {
+      const { response } = await showUpdateBox({
+        type: "info",
+        message: t("updateWaitingTitle"),
+        detail: t("updateWaitingDetail", { agents: agentList(wait.agents) }),
+        buttons: [t("updateKeepWaiting"), t("updateRestartNow"), t("updateStopWaiting")],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (response === 1) await restarter.request("now");
+      else if (response === 2) restarter.cancel();
+      return;
+    }
+    if (wait?.phase === "timeout") {
+      const { response } = await showUpdateBox({
+        type: "warning",
+        message: t("updateTimeoutTitle"),
+        detail: t("updateTimeoutDetail", { agents: agentList(wait.agents) }),
+        buttons: [t("updateWaitMore"), t("updateRestartNow"), t("updateLater")],
+        defaultId: 0,
+        cancelId: 2,
+      });
+      if (response === 0) await restarter.request("wait");
+      else if (response === 1) await restarter.request("now");
+      else restarter.cancel();
+      return;
+    }
+    const result = await restarter.request("check");
+    if (result.status !== "busy") return;
+    const { response } = await showUpdateBox({
+      type: "warning",
+      message: t("updateBusyTitle"),
+      detail: t("updateBusyDetail", { agents: agentList(result.agents) }),
+      buttons: [t("updateWaitRestart"), t("updateRestartNow"), t("cancel")],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (response === 0) {
+      // 等待进度在主窗口右下角的卡片里看，可以随时取消
+      await restarter.request("wait");
+      showMainWindow();
+    } else if (response === 1) await restarter.request("now");
+  }
+
   /** 菜单「检查新版本…」：不管上次什么时候查过，马上查一次，并且一定给个答复 */
   async function checkUpdatesNow(): Promise<void> {
     const { checker, info } = await manualUpdateCheck();
-    const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
-    const show = (options: Electron.MessageBoxOptions) =>
-      owner ? dialog.showMessageBox(owner, options) : dialog.showMessageBox(options);
+    const show = showUpdateBox;
     const current = app.getVersion();
     if (info) {
       const install = updateInstaller().view(info.version, checker.installPackage());
       if (install.state.phase === "ready") {
+        // 已经在等 Agent 做完：不再问一遍「重启以更新」，直接问接着怎么办
+        if (gate?.view()) {
+          await confirmRestart();
+          return;
+        }
         const { response } = await show({
           type: "info",
           message: t("updateReadyTitle", { version: info.version }),
@@ -457,7 +551,7 @@ function runApp(): void {
           defaultId: 0,
           cancelId: 1,
         });
-        if (response === 0) updateInstaller().restart();
+        if (response === 0) await confirmRestart();
         return;
       }
       if (install.state.phase === "downloading" || install.state.phase === "verifying") {
@@ -1253,6 +1347,7 @@ function runApp(): void {
     shutdownDone = true;
     // 新版已经准备好：起替换脚本（Mac），等这个进程退出后换上新版本
     installer?.onQuit();
+    gate?.dispose();
     terminals.disposeAll();
     clearTimeout(updateTimer);
     const server = owned;

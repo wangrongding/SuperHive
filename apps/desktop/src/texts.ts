@@ -83,6 +83,36 @@ const texts = {
     en: "Restart to use the new version. If you don't restart now, it's applied the next time you quit.",
   },
   updateRestart: { zh: "重启以更新", en: "Restart to Update" },
+  updateBusyTitle: { zh: "有 Agent 正在执行任务", en: "Agents are running tasks" },
+  updateBusyDetail: {
+    zh: "{agents} 正在执行任务，现在重启会中断它们。可以等它们做完再自动重启，最多等 30 分钟。",
+    en: "{agents} are running tasks. Restarting now interrupts them. SuperHive can restart once they finish, waiting up to 30 minutes.",
+  },
+  updateWaitRestart: {
+    zh: "等任务做完再重启（推荐）",
+    en: "Wait for Tasks to Finish (Recommended)",
+  },
+  updateRestartNow: {
+    zh: "立即重启，中断正在执行的任务",
+    en: "Restart Now and Interrupt Tasks",
+  },
+  updateWaitingTitle: { zh: "正在等 Agent 做完再重启", en: "Waiting for agents to finish" },
+  updateWaitingDetail: {
+    zh: "{agents} 还在执行任务，做完后自动重启。",
+    en: "{agents} are still running tasks. SuperHive restarts when they finish.",
+  },
+  updateKeepWaiting: { zh: "继续等", en: "Keep Waiting" },
+  updateStopWaiting: { zh: "取消等待", en: "Stop Waiting" },
+  updateTimeoutTitle: {
+    zh: "等了 30 分钟，任务还没做完",
+    en: "Tasks are still running after 30 minutes",
+  },
+  updateTimeoutDetail: {
+    zh: "{agents} 还在执行任务。可以再等 30 分钟，或者现在重启（会中断它们）。不重启的话，下次退出时换上新版本。",
+    en: "{agents} are still running tasks. Wait another 30 minutes, or restart now and interrupt them. If you don't restart, the update is applied the next time you quit.",
+  },
+  updateWaitMore: { zh: "再等 30 分钟", en: "Wait 30 More Minutes" },
+  localAgents: { zh: "本机 Agent", en: "Local agents" },
   updateDownload: { zh: "下载", en: "Download" },
   updateLater: { zh: "以后再说", en: "Later" },
   updateNone: { zh: "已经是最新版本", en: "You're up to date" },

@@ -3,12 +3,13 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  DesktopRestartChoice,
   DesktopUpdateCheckResult,
   DesktopUpdateInfo,
   DesktopUpdatesApi,
 } from "./desktop-bridge";
 import { checkDesktopUpdatesNow, DesktopUpdateEntry, noteForLocale } from "./desktop-update";
-import { resetUpdateCenter } from "./update-center";
+import { openDesktopUpdateDialog, resetUpdateCenter } from "./update-center";
 import { UpdateCorner } from "./update-corner";
 
 afterEach(() => {
@@ -350,6 +351,189 @@ describe("DesktopUpdateEntry", () => {
         push(withInstall({ available: false, reason: "no-package", size: 0, state: idle })),
       );
       expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    describe("重启前看有没有 Agent 在执行任务", () => {
+      const ready = withInstall({ available: true, size: 200, state: { phase: "ready" } });
+      const waiting = (agents: string[]) =>
+        withInstall({
+          available: true,
+          size: 200,
+          state: { phase: "ready" },
+          restart: { phase: "waiting", agents },
+        });
+      /** 桌面端：check 时按 busy 回答，wait / now 照单收下 */
+      function restartApi(initial: DesktopUpdateInfo, busy: string[]) {
+        const fake = fakeApi(initial, true);
+        fake.api.restart = vi.fn(async (choice?: DesktopRestartChoice) =>
+          choice === "check" && busy.length
+            ? ({ status: "busy", agents: busy } as const)
+            : choice === "wait"
+              ? ({ status: "waiting", agents: busy } as const)
+              : ({ status: "restarting" } as const),
+        );
+        fake.api.cancelRestart = vi.fn(async () => true);
+        return fake;
+      }
+
+      it("没有 Agent 在忙：照旧直接重启", async () => {
+        const { api } = restartApi(ready, []);
+        renderDesktop(api);
+        const card = await screen.findByRole("region", { name: "新版本 0.4.8 已下载好" });
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "重启以更新" }));
+        });
+        expect(api.restart).toHaveBeenCalledTimes(1);
+        expect(api.restart).toHaveBeenCalledWith("check");
+        expect(screen.queryByRole("button", { name: "等任务做完再重启（推荐）" })).toBeNull();
+      });
+
+      it("有 Agent 在忙：卡片里改成两个选项并列出是谁，选等待交给桌面端去等", async () => {
+        const { api } = restartApi(ready, ["rd-claude2", "rd-claude3"]);
+        renderDesktop(api);
+        const card = await screen.findByRole("region", { name: "新版本 0.4.8 已下载好" });
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "重启以更新" }));
+        });
+        expect(card.textContent).toContain(
+          "rd-claude2、rd-claude3 正在执行任务，重启将中断它们，请确认：",
+        );
+        expect(within(card).queryByRole("button", { name: "重启以更新" })).toBeNull();
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "等任务做完再重启（推荐）" }));
+        });
+        expect(api.restart).toHaveBeenLastCalledWith("wait");
+      });
+
+      it("有 Agent 在忙：可以立即重启，也可以取消回到「重启以更新」", async () => {
+        const { api } = restartApi(ready, ["rd-claude2"]);
+        renderDesktop(api);
+        const card = await screen.findByRole("region", { name: "新版本 0.4.8 已下载好" });
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "重启以更新" }));
+        });
+        fireEvent.click(within(card).getByRole("button", { name: "取消" }));
+        expect(within(card).getByRole("button", { name: "重启以更新" })).toBeTruthy();
+        expect(card.textContent).not.toContain("正在执行任务");
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "重启以更新" }));
+        });
+        await act(async () => {
+          fireEvent.click(
+            within(card).getByRole("button", { name: "立即重启，中断正在执行的任务" }),
+          );
+        });
+        expect(api.restart).toHaveBeenLastCalledWith("now");
+      });
+
+      it("从弹窗点「重启以更新」：弹窗关掉，要不要等在右下角卡片里问", async () => {
+        const { api } = restartApi(ready, ["rd-claude2"]);
+        renderDesktop(api);
+        await screen.findByRole("region", { name: "新版本 0.4.8 已下载好" });
+        act(() => openDesktopUpdateDialog());
+        await act(async () => {
+          fireEvent.click(
+            within(screen.getByRole("dialog")).getByRole("button", { name: "重启以更新" }),
+          );
+        });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(api.restart).toHaveBeenCalledWith("check");
+        expect(screen.getByRole("button", { name: "等任务做完再重启（推荐）" })).toBeTruthy();
+      });
+
+      it("在等时卡片和入口都显示等几个 Agent，可以取消等待或立即重启", async () => {
+        const { api, push } = restartApi(waiting(["rd-claude2", "rd-claude3"]), []);
+        renderDesktop(api);
+        const card = await screen.findByRole("region", { name: "等 2 个 Agent 做完再重启" });
+        expect(card.textContent).toContain(
+          "rd-claude2、rd-claude3 还在执行任务，做完后自动重启，最多等 30 分钟。",
+        );
+        expect(within(card).getByRole("progressbar")).toBeTruthy();
+        expect(screen.getByRole("button", { name: "等 2 个 Agent 做完再重启" })).toBeTruthy();
+        // 名单变了跟着变
+        act(() => push(waiting(["rd-claude3"])));
+        expect(screen.getByRole("region", { name: "等 1 个 Agent 做完再重启" })).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "取消等待" }));
+        expect(api.cancelRestart).toHaveBeenCalledTimes(1);
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "立即重启" }));
+        });
+        expect(api.restart).toHaveBeenLastCalledWith("now");
+        // 桌面端取消了等待：回到「重启以更新」
+        act(() => push(ready));
+        expect(screen.getByRole("region", { name: "新版本 0.4.8 已下载好" })).toBeTruthy();
+      });
+
+      it("在忙的 Agent 多了只点出前三个，完整名单悬停看", async () => {
+        const many = ["a1", "a2", "a3", "a4", "a5"];
+        const { api } = restartApi(waiting(many), []);
+        renderDesktop(api);
+        const card = await screen.findByRole("region", { name: "等 5 个 Agent 做完再重启" });
+        const text = card.querySelector(".update-card-text");
+        expect(text?.textContent).toContain("a1、a2、a3 等 5 个 Agent 还在执行任务");
+        expect(text?.textContent).not.toContain("a4");
+        expect(text?.getAttribute("title")).toBe("a1、a2、a3、a4、a5");
+      });
+
+      it("收起着时开始等（比如从菜单选的）或等到上限，卡片会自己展开", async () => {
+        const { api, push } = restartApi(ready, []);
+        renderDesktop(api);
+        await screen.findByRole("region", { name: "新版本 0.4.8 已下载好" });
+        fireEvent.click(screen.getByRole("button", { name: "收起到状态栏" }));
+        expect(screen.queryByRole("region")).toBeNull();
+        act(() => push(waiting(["rd-claude2"])));
+        expect(screen.getByRole("region", { name: "等 1 个 Agent 做完再重启" })).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "收起到状态栏" }));
+        act(() =>
+          push(
+            withInstall({
+              available: true,
+              size: 200,
+              state: { phase: "ready" },
+              restart: { phase: "timeout", agents: ["rd-claude2"] },
+            }),
+          ),
+        );
+        expect(screen.getByRole("region", { name: "等了 30 分钟，任务还没做完" })).toBeTruthy();
+      });
+
+      it("等到 30 分钟上限：不硬重启，让人选再等、立即重启或以后再说", async () => {
+        const { api } = restartApi(
+          withInstall({
+            available: true,
+            size: 200,
+            state: { phase: "ready" },
+            restart: { phase: "timeout", agents: ["rd-claude2"] },
+          }),
+          ["rd-claude2"],
+        );
+        renderDesktop(api);
+        const card = await screen.findByRole("region", { name: "等了 30 分钟，任务还没做完" });
+        expect(card.className).toContain("warn");
+        expect(card.textContent).toContain("rd-claude2 还在执行任务。不重启的话，下次退出时");
+        expect(api.restart).not.toHaveBeenCalled();
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "再等 30 分钟" }));
+        });
+        expect(api.restart).toHaveBeenLastCalledWith("wait");
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "立即重启" }));
+        });
+        expect(api.restart).toHaveBeenLastCalledWith("now");
+        fireEvent.click(within(card).getByRole("button", { name: "以后再说" }));
+        expect(api.cancelRestart).toHaveBeenCalledTimes(1);
+      });
+
+      it("老版本桌面端不认选择、直接重启（返回 true）：不出选项", async () => {
+        const { api } = fakeApi(ready, true);
+        renderDesktop(api);
+        const card = await screen.findByRole("region", { name: "新版本 0.4.8 已下载好" });
+        await act(async () => {
+          fireEvent.click(within(card).getByRole("button", { name: "重启以更新" }));
+        });
+        expect(api.restart).toHaveBeenCalledTimes(1);
+        expect(within(card).getByRole("button", { name: "重启以更新" })).toBeTruthy();
+      });
     });
 
     it("老版本桌面端没有 install / restart 时照旧只给「下载」", async () => {

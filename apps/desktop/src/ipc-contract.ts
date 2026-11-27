@@ -32,8 +32,10 @@ export const IPC = {
   updateDismiss: "superhive:update:dismiss",
   /** 「下载并更新」：网页只给版本号，要下载什么由主进程从检查结果里挑 */
   updateInstall: "superhive:update:install",
-  /** 「重启以更新」 */
+  /** 「重启以更新」：先看有没有本机 Agent 在执行任务，有就等人选等它们做完还是立即重启 */
   updateRestart: "superhive:update:restart",
+  /** 取消「等任务做完再重启」 */
+  updateCancelRestart: "superhive:update:cancel-restart",
   /** 网页「检查更新」：马上查一次，结果交给网页自己显示（不弹系统对话框） */
   updateCheckNow: "superhive:update:check-now",
   /** 主进程查到新版、安装进度变了（或提示该收起）时通知页面 */
@@ -70,6 +72,25 @@ export type UpdateCheckNowResult = {
   status: "available" | "latest" | "failed" | "disabled";
   currentVersion: string;
 };
+
+/** 交给网页的等待状态：waiting=等这些 Agent 做完就重启；timeout=等到上限还没做完，等人再决定 */
+export type RestartWait =
+  { phase: "waiting"; agents: string[] } | { phase: "timeout"; agents: string[] };
+
+/**
+ * 网页「重启以更新」带的选择：check=先看有没有 Agent 在忙（没有就直接重启）；
+ * wait=等它们做完再重启（超时后再选一次就是再等一轮）；now=立即重启，中断正在执行的任务
+ */
+export type RestartChoice = "check" | "wait" | "now";
+export const RESTART_CHOICES: readonly RestartChoice[] = ["check", "wait", "now"];
+
+export type RestartResult =
+  | { status: "restarting" }
+  /** 有 Agent 在忙，没有重启：等人选 wait 或 now */
+  | { status: "busy"; agents: string[] }
+  | { status: "waiting"; agents: string[] }
+  /** 新版本还没准备好（或已经作废），没有可重启的 */
+  | { status: "unavailable" };
 
 /** 网页点新版提示里的哪个按钮 */
 export type UpdateOpenTarget = "download" | "release";

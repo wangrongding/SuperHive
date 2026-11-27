@@ -7,6 +7,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import {
   IPC,
+  RESTART_CHOICES,
   TERMINAL_LAYOUT_ACTIONS,
   UPDATE_OPEN_TARGETS,
   type TerminalAttachResult,
@@ -19,6 +20,8 @@ import {
   type UpdateOpenTarget,
   type JoinRequest,
   type RemoteServerView,
+  type RestartChoice,
+  type RestartResult,
 } from "./ipc-contract.js";
 import type { DesktopUpdate } from "./update-install.js";
 import type { PickFilesRequest, PickFilesResult } from "./file-picker.js";
@@ -86,8 +89,17 @@ if (allowedOrigin && window.location.origin === allowedOrigin && window.top === 
       /** 「下载并更新」：在后台下载、校验、准备好新版本，进度从 onChange 推过来 */
       install: (version: string): Promise<boolean> =>
         ipcRenderer.invoke(IPC.updateInstall, String(version)),
-      /** 「重启以更新」 */
-      restart: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateRestart),
+      /**
+       * 「重启以更新」：check 先看有没有本机 Agent 在执行任务（有就不重启，返回名单等人选），
+       * wait 等它们做完再重启，now 立即重启。不传（老网页）时有 Agent 在忙由桌面端弹系统对话框问
+       */
+      restart: (choice?: RestartChoice): Promise<boolean | RestartResult> =>
+        ipcRenderer.invoke(
+          IPC.updateRestart,
+          ...(choice !== undefined && RESTART_CHOICES.includes(choice) ? [choice] : []),
+        ),
+      /** 取消「等任务做完再重启」 */
+      cancelRestart: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateCancelRestart),
       /** 「检查更新」：马上查一次；有新版时详情照常从 onChange 推过来 */
       checkNow: (): Promise<UpdateCheckNowResult> => ipcRenderer.invoke(IPC.updateCheckNow),
       onChange: (listener: (info: DesktopUpdate | null) => void): (() => void) => {

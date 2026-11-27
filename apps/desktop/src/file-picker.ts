@@ -9,6 +9,7 @@
  *   合计超过 50 MB、超过 10 个的不读内容，只回文件名和大小，由网页照常提示。
  */
 import path from "node:path";
+import { createLocalHiveGet, type FetchLike } from "./local-hive.js";
 
 /** 与服务端 LIMITS、网页 attachments.tsx 一致：单个 20 MiB、一条消息 10 个、合计 50 MiB */
 export const PICK_LIMITS = {
@@ -40,60 +41,21 @@ export function normalizePickRequest(input: unknown): { roomId?: string; multipl
   return { ...(roomId ? { roomId } : {}), multiple: value.multiple !== false };
 }
 
-export type FetchLike = (
-  url: string,
-  init?: { headers?: Record<string, string>; signal?: AbortSignal },
-) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+export type { FetchLike } from "./local-hive.js";
 
-/**
- * 向本机 Hive 查房间绑定的工作区。本机凭证从 /api/local/session 取（主进程直连回环地址，
- * 不带 Origin，算本机房主），缓存起来；Hive 重启换了凭证（401）就重取一次。
- */
+/** 向本机 Hive 查房间绑定的工作区（要本机凭证的 /api/local 接口，见 local-hive.ts） */
 export function createWorkspaceLookup(options: {
   origin: () => string | undefined;
   fetch: FetchLike;
   timeoutMs?: number;
 }): (roomId: string) => Promise<string | undefined> {
-  let cached: { origin: string; token: string } | undefined;
-  const timeoutMs = options.timeoutMs ?? 2_000;
-
-  async function request(url: string, headers?: Record<string, string>) {
-    return options.fetch(url, {
-      ...(headers ? { headers } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  }
-
-  async function ownerToken(origin: string, fresh: boolean): Promise<string | undefined> {
-    if (!fresh && cached?.origin === origin) return cached.token;
-    const response = await request(`${origin}/api/local/session`);
-    if (!response.ok) return undefined;
-    const body = (await response.json()) as { enabled?: unknown; ownerToken?: unknown };
-    if (body?.enabled !== true || typeof body.ownerToken !== "string") return undefined;
-    cached = { origin, token: body.ownerToken };
-    return body.ownerToken;
-  }
-
+  const get = createLocalHiveGet(options);
   return async (roomId) => {
-    const origin = options.origin();
-    if (!origin || !ROOM_ID.test(roomId)) return undefined;
-    try {
-      for (const fresh of [false, true]) {
-        const token = await ownerToken(origin, fresh);
-        if (!token) return undefined;
-        const response = await request(
-          `${origin}/api/local/rooms/${encodeURIComponent(roomId)}/workspace`,
-          { "x-hive-owner": token },
-        );
-        if (response.status === 401 && !fresh) continue;
-        if (!response.ok) return undefined;
-        const body = (await response.json()) as { workspace?: unknown };
-        return typeof body?.workspace === "string" && body.workspace ? body.workspace : undefined;
-      }
-    } catch {
-      // Hive 没起好、超时：退回主目录
-    }
-    return undefined;
+    // Hive 没起好、超时、没绑定：退回主目录
+    if (!ROOM_ID.test(roomId)) return undefined;
+    const body = (await get(`/api/local/rooms/${encodeURIComponent(roomId)}/workspace`)) as
+      { workspace?: unknown } | undefined;
+    return typeof body?.workspace === "string" && body.workspace ? body.workspace : undefined;
   };
 }
 
