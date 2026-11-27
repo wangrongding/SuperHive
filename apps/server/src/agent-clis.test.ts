@@ -1279,6 +1279,25 @@ describe("desktop bundled Node and npm", () => {
     });
   });
 
+  it("fails an install whose CLI is found but won't run (npm silently dropped an optional package)", async () => {
+    const { clis, nodeBin, prefix, bin, script, spawnUpgrade } = setup();
+    const command = `PATH=${shellQuote(nodeBin)}:"$PATH" ${shellQuote(`${nodeBin}/npm`)} i -g --prefix ${shellQuote(prefix)} @openai/codex@latest`;
+    await clis.list();
+    const job = await clis.start("codex", "install", command);
+    const pkg = bin("Application Support/SuperHive/agent-clis/lib/node_modules/@openai/codex/bin");
+    const real = script(pkg, "codex.js", 'echo "native binary not installed" >&2; exit 1');
+    bin("Application Support/SuperHive/agent-clis/bin");
+    symlinkSync(real, path.join(prefix, "bin", "codex"));
+    const child = spawnUpgrade.mock.results[0]!.value as FakeUpgrade;
+    child.exit(0);
+    await vi.waitFor(() =>
+      expect(clis.job(job.id)).toMatchObject({
+        state: "failed",
+        reasonText: { key: "error.agentCli.installBroken" },
+      }),
+    );
+  });
+
   it("keeps using the user's own npm (no --prefix) when one is installed", async () => {
     const { clis, system } = setup({ systemNpm: true });
     const codex = (await clis.list()).find((item) => item.tool === "codex")!;

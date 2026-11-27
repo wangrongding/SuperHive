@@ -281,7 +281,11 @@ function AgentCliCard({
   const offered =
     Boolean(command) &&
     !info.nodeGap &&
-    (action === "install" || info.updateAvailable || info.latest === null);
+    (action === "install" ||
+      info.updateAvailable ||
+      info.latest === null ||
+      // 装了但跑不起来（比如网络慢、平台程序包没下载下来）：允许用同一条命令重新装一遍
+      info.status === "broken");
   const mine = activity?.tool === info.tool;
   const other = activity && !mine ? activity : undefined;
 
@@ -306,9 +310,11 @@ function AgentCliCard({
       : t("正在升级…")
     : action === "install"
       ? t("安装")
-      : info.updateAvailable && info.latest
-        ? t("升级到 {0}", { 0: info.latest })
-        : t("尝试升级");
+      : info.status === "broken"
+        ? t("重新安装")
+        : info.updateAvailable && info.latest
+          ? t("升级到 {0}", { 0: info.latest })
+          : t("尝试升级");
 
   return (
     <section

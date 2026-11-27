@@ -1548,6 +1548,10 @@ export const serverTexts = {
     zh: "命令执行完了，但 {tool} 的版本还是 {version}，没有真的升级。可能是网络不通，或者装到了别处。",
     en: "The command finished, but {tool} is still {version}, so it wasn't actually updated. The network may be down, or it was installed somewhere else.",
   },
+  "error.agentCli.installBroken": {
+    zh: "安装命令跑完了，但 {tool} 还运行不起来，多半是网络慢、有的程序包没下载下来。点「重新安装」再试一次。",
+    en: "The install finished, but {tool} still won't run, most likely because a package didn't finish downloading on a slow network. Click Reinstall to try again.",
+  },
   "error.agentCli.versionUnknown": {
     zh: "命令执行完了，但检测不到 {tool} 的版本，不确定升级是否成功。",
     en: "The command finished, but {tool}'s version couldn't be detected, so it's unclear whether the update worked.",

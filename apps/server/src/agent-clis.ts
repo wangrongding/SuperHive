@@ -1422,13 +1422,19 @@ export class AgentCliManager {
         // 核对完之前任务仍算进行中，锁也不放
         void this.detectTool(job.tool, loginPath)
           .then(
-            (detected) => (detected.primary ?? detected.installations[0])?.version ?? null,
-            () => null,
+            (detected) => {
+              const found = detected.primary ?? detected.installations[0];
+              return { after: found?.version ?? null, broken: Boolean(found && !found.runnable) };
+            },
+            () => ({ after: null, broken: false }),
           )
-          .then((after) => {
+          .then(({ after, broken }) => {
             job.versionAfter = after;
             const name = TOOLS[job.tool].name;
-            if (job.action === "upgrade" && after === null) {
+            if (job.action === "install" && broken) {
+              // npm 下载平台相关的可选依赖失败时只记一笔、照样退出 0（实测网络慢时 Claude Code 的原生程序包就这样丢了）
+              fail(serverText("error.agentCli.installBroken", { tool: name }), tail);
+            } else if (job.action === "upgrade" && after === null) {
               fail(serverText("error.agentCli.versionUnknown", { tool: name }), tail);
             } else if (
               job.action === "upgrade" &&

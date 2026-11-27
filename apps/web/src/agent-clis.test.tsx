@@ -353,6 +353,27 @@ describe("AgentClisGroup", () => {
     expect(client.agentClis).toHaveBeenCalledTimes(2);
   });
 
+  it("offers a reinstall for a CLI that is installed but won't run", async () => {
+    const client = api([
+      codex({
+        status: "broken",
+        version: null,
+        latest: "0.170.0",
+        updateAvailable: false,
+        installations: [
+          { ...codex().installations[0]!, version: null, runnable: false, error: "boom" },
+        ],
+      }),
+    ]);
+    render(<AgentClisGroup api={client} />);
+    fireEvent.click(await screen.findByRole("button", { name: "重新安装" }));
+    const dialog = screen.getByRole("dialog");
+    await act(async () => {
+      fireEvent.click(dialog.querySelector("button:last-child")!);
+    });
+    expect(client.upgradeAgentCli).toHaveBeenCalledWith("codex", COMMAND);
+  });
+
   it("offers no install button without Node, and links official instructions when given", async () => {
     const client = api([
       claude({
