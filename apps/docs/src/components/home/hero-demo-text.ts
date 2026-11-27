@@ -581,7 +581,6 @@ export const demoText: Record<"zh-CN" | "en", DemoText> = {
     tips: {
       artifacts: "房间里的图片和文件都在这",
       code: "看工作区的改动和文件",
-      share: "选几条消息分享出去",
       option: "点一个选项，回答 Agent",
       stop: "停止这一轮",
       composer: "输入 @ 选一个 Agent，发条消息",
@@ -902,7 +901,6 @@ export const demoText: Record<"zh-CN" | "en", DemoText> = {
     tips: {
       artifacts: "Every image and file in the room",
       code: "See workspace changes and files",
-      share: "Pick messages to share",
       option: "Pick an option to answer the agent",
       stop: "Stop this turn",
       composer: "Type @ to pick an agent and send a message",

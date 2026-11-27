@@ -958,7 +958,6 @@ export function mountDemo(host: HTMLElement, lang: Lang): HTMLElement {
   hint("terminal", termButton);
   hint("artifacts", q('[data-sheet="artifacts"]'));
   hint("code", q('[data-sheet="code"]'));
-  hint("share", q(".hd-head [data-share]"));
   hint("progress", tabs[1]);
   hint("room", root.querySelector('[data-room="web"]'));
 

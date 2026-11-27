@@ -1139,6 +1139,12 @@
   right: -0.45em;
 }
 
+/* 顶栏按钮贴着窗口标题栏：光点放在按钮右侧居中，扩散的光圈不被标题栏裁掉 */
+.hd-head .hd-dot {
+  top: calc(50% - 0.5em);
+  right: -0.5em;
+}
+
 .hd-composer > .hd-dot {
   top: 0.9em;
   right: 3.4em;
