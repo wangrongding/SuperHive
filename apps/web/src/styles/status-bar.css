@@ -353,7 +353,8 @@
   height: 5px;
   overflow: hidden;
   border-radius: var(--radius-pill);
-  background: var(--bg-muted);
+  /* 跟着文字色走：深色主题里 --bg-muted 和弹层底色几乎一样，进度条底色就看不见了 */
+  background: color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 .status-meter span {
@@ -411,16 +412,96 @@
   }
 }
 
-/* 切换主 Agent 的列表：Agent 多时在弹层里滚动，不把弹层撑高 */
+/*
+ * 选主 Agent 的列表：列表自己限高滚动（约 6.5 项，露半行提示还能往下滚），弹层不跟着滚，
+ * 上面的主 Agent 信息和「切换主 Agent」开关一直看得见。
+ * position: relative 让列表成为里面绝对定位元素的包含块——以前行里的读屏文字（.sr-only）
+ * 绝对定位到弹层上，溢出列表的那些把弹层撑出一大截空白，聚焦当前项时弹层还会滚过去
+ */
 .status-lead-choices {
-  max-height: 240px;
+  --lead-row: 30px;
+  position: relative;
+  display: grid;
+  max-height: calc(var(--lead-row) * 6.5);
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.status-lead-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--lead-row);
+  padding: 3px 8px 3px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.status-lead-option:hover:not([aria-disabled="true"]),
+.status-lead-option:focus-visible,
+.status-lead-option.active {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+/* 离线的：变灰、不能选（悬停提示写明原因） */
+.status-lead-option[aria-disabled="true"] {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.status-lead-option[aria-disabled="true"] .status-lead-avatar {
+  opacity: 0.5;
+}
+
+.status-lead-option .status-lead-avatar {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
+.status-lead-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-lead-state {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  gap: 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.status-lead-option.busy .status-lead-state {
+  color: var(--warning);
+}
+
+.status-lead-filter {
+  width: 100%;
+  height: 28px;
+  margin: 2px 0 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.status-lead-filter:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 
 /* 自动设的主 Agent：名字后面一个小标签，窄了也不收起 */

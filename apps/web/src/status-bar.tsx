@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -42,6 +43,7 @@ import { SettingsSwitch } from "./settings-switch";
 import { Tooltip } from "./tooltip";
 import { Button } from "./button";
 import { suggestLead } from "./lead-agent";
+import { AvatarGlyph } from "./avatar";
 import type { LocalAgentsState } from "./local-agents";
 import "./styles/status-bar.css";
 
@@ -336,7 +338,7 @@ function PopoverLink({ onClick, children }: { onClick: () => void; children: Rea
   );
 }
 
-function Dot({ tone }: { tone: "ok" | "pending" | "warning" | "danger" }) {
+function Dot({ tone }: { tone: "ok" | "pending" | "warning" | "danger" | "idle" }) {
   return <span className={`status-dot ${tone}`} aria-hidden="true" />;
 }
 
@@ -916,14 +918,50 @@ export function StatusBar(props: StatusBarProps) {
   );
 }
 
-/** 房间里的 Agent：在线的在前，按名字排 */
-function agentsOf(participants: readonly Participant[]): Participant[] {
-  const rank = (participant: Participant) => (participant.status === "offline" ? 1 : 0);
-  return participants
-    .filter((participant) => participant.type === "agent")
-    .sort((a, b) => rank(a) - rank(b) || a.username.localeCompare(b.username));
+/** 列表里 Agent 的先后：在线空闲的在前，忙的其次，离线的最后 */
+function leadRank(participant: Participant): number {
+  return participant.status === "offline" ? 2 : participant.status === "busy" ? 1 : 0;
 }
 
+/** 房间里的 Agent：在线空闲 → 忙 → 离线，同一档按名字排 */
+export function agentsOf(participants: readonly Participant[]): Participant[] {
+  return participants
+    .filter((participant) => participant.type === "agent")
+    .sort((a, b) => leadRank(a) - leadRank(b) || a.username.localeCompare(b.username));
+}
+
+/** Agent 多于这个数时，列表顶上加过滤框 */
+export const LEAD_FILTER_THRESHOLD = 8;
+
+/** 按名字或运行时过滤（不分大小写）；空白关键字返回原列表 */
+export function filterLeadChoices(
+  agents: readonly Participant[],
+  query: string,
+): readonly Participant[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return agents;
+  return agents.filter(
+    (agent) =>
+      agent.username.toLocaleLowerCase().includes(needle) ||
+      Boolean(agent.provider?.toLocaleLowerCase().includes(needle)),
+  );
+}
+
+/** 只滚列表自己，把某一项滚进可见区；不像 scrollIntoView 那样连带滚动弹层 */
+function revealInList(list: HTMLElement | null, item: HTMLElement | null | undefined) {
+  if (!list || !item) return;
+  const top = item.offsetTop;
+  const bottom = top + item.offsetHeight;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+}
+
+/**
+ * 选主 Agent 的列表：每项是运行时图标 + 名字 + 状态（忙、离线写字，在线只一个绿点）。
+ * 离线的变灰、不能选：主 Agent 要接没人 @ 的消息，离线的接不了。
+ * Agent 多于 8 个时顶上有过滤框，焦点留在框里，↑↓ 挪高亮、回车选中。
+ * 列表自己限高滚动，弹层里上面的信息和开关不跟着滚走
+ */
 function LeadChoices({
   agents,
   current,
@@ -933,32 +971,161 @@ function LeadChoices({
   current?: string;
   onSwitch: (name: string) => void;
 }) {
-  // 一行一个：名字 + 右侧状态点（悬停看文字），列表短一半
-  const tone = (participant: Participant) =>
-    participant.status === "offline" ? "danger" : participant.status === "busy" ? "pending" : "ok";
+  const filterable = agents.length > LEAD_FILTER_THRESHOLD;
+  const [query, setQuery] = useState("");
+  const shown = filterable ? filterLeadChoices(agents, query) : agents;
+  const selectable = shown.filter((agent) => agent.status !== "offline");
+  const [active, setActive] = useState<string | undefined>(undefined);
+  const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const baseId = useId();
+  const optionId = (name: string) => `${baseId}-${shown.findIndex((a) => a.username === name)}`;
+  // 高亮的那项被过滤掉了，就落到第一个能选的（先当前主 Agent）
+  const activeName =
+    active && selectable.some((agent) => agent.username === active)
+      ? active
+      : (selectable.find((agent) => agent.username === current) ?? selectable[0])?.username;
+
+  // 展开后：有过滤框时焦点进框，否则落到当前那项（没有就第一个能选的）；都不连带滚动弹层
+  useEffect(() => {
+    const list = listRef.current;
+    if (filterable) {
+      inputRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    const target =
+      list?.querySelector<HTMLElement>('[aria-selected="true"]:not([aria-disabled="true"])') ??
+      list?.querySelector<HTMLElement>('[role="option"]:not([aria-disabled="true"])');
+    target?.focus({ preventScroll: true });
+    revealInList(list, target);
+    // 只在展开时做一次
+  }, []);
+
+  useEffect(() => {
+    if (!filterable || !activeName) return;
+    revealInList(listRef.current, document.getElementById(optionId(activeName)));
+    // optionId 跟着 shown 变，activeName/query 变了才需要重新滚
+  }, [filterable, activeName, query]);
+
+  const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+    // 不交给弹层的 ↑↓ 焦点导航：焦点留在框里，可以接着打字
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      if (activeName) onSwitch(activeName);
+      return;
+    }
+    if (!selectable.length) return;
+    const index = selectable.findIndex((agent) => agent.username === activeName);
+    const next =
+      event.key === "ArrowDown"
+        ? (index + 1) % selectable.length
+        : (index - 1 + selectable.length) % selectable.length;
+    setActive(selectable[next]?.username);
+  };
+
   const statusText = (participant: Participant) =>
     participant.status === "offline"
       ? t("离线")
       : participant.status === "busy"
         ? t("忙碌")
         : t("在线");
+  const listId = `${baseId}-list`;
   return (
-    <ChoiceGroup
-      label={t("切换主 Agent")}
-      value={current ?? ""}
-      options={agents.map((agent) => ({
-        value: agent.username,
-        label: agent.username,
-        extra: (
-          <span className="status-lead-state" title={statusText(agent)}>
-            <Dot tone={tone(agent)} />
-            <span className="sr-only">{statusText(agent)}</span>
-          </span>
-        ),
-      }))}
-      // 点当前那项也要回调：调用方据此关掉面板（是不是同一个由调用方判断）
-      onChange={onSwitch}
-    />
+    <div className="status-lead-picker">
+      {filterable && (
+        <input
+          ref={inputRef}
+          className="status-lead-filter"
+          type="search"
+          role="combobox"
+          aria-label={t("过滤 Agent")}
+          aria-expanded="true"
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={activeName ? optionId(activeName) : undefined}
+          placeholder={t("按名字或运行时过滤")}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={onInputKeyDown}
+        />
+      )}
+      <div
+        ref={listRef}
+        id={listId}
+        role="listbox"
+        aria-label={t("切换主 Agent")}
+        className="status-lead-choices"
+      >
+        {shown.map((agent) => {
+          const offline = agent.status === "offline";
+          const selected = agent.username === current;
+          const text = statusText(agent);
+          const option = (
+            <button
+              type="button"
+              role="option"
+              id={optionId(agent.username)}
+              aria-selected={selected}
+              aria-label={
+                offline
+                  ? t("{0}（{1}）：离线，不能设为主 Agent", {
+                      0: agent.username,
+                      1: agent.provider ?? "Agent",
+                    })
+                  : t("{0}（{1}）：{2}", {
+                      0: agent.username,
+                      1: agent.provider ?? "Agent",
+                      2: text,
+                    })
+              }
+              // 不用 disabled：鼠标移上去要能看到为什么不能选
+              aria-disabled={offline || undefined}
+              // 有过滤框时焦点一直在框里，↑↓ 靠高亮，选项本身不进 Tab 顺序
+              tabIndex={filterable ? -1 : undefined}
+              className={[
+                "status-lead-option",
+                selected ? "selected" : "",
+                filterable && agent.username === activeName ? "active" : "",
+                agent.status,
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              onMouseEnter={filterable && !offline ? () => setActive(agent.username) : undefined}
+              // 点当前那项也要回调：调用方据此关掉面板（是不是同一个由调用方判断）
+              onClick={offline ? undefined : () => onSwitch(agent.username)}
+            >
+              <span className="status-choice-check" aria-hidden="true">
+                {selected && <Icon name="check" size={13} />}
+              </span>
+              <span className="mention-avatar agent status-lead-avatar" aria-hidden="true">
+                <AvatarGlyph type="agent" name={agent.username} provider={agent.provider} />
+              </span>
+              <span className="status-lead-name">{agent.username}</span>
+              <span className="status-lead-state" aria-hidden="true">
+                {agent.status !== "online" && (
+                  <span>{agent.status === "busy" ? t("忙") : text}</span>
+                )}
+                <Dot
+                  tone={
+                    agent.status === "offline" ? "idle" : agent.status === "busy" ? "pending" : "ok"
+                  }
+                />
+              </span>
+            </button>
+          );
+          return offline ? (
+            <Tooltip key={agent.username} content={t("离线，不会接话，不能设为主 Agent")}>
+              {option}
+            </Tooltip>
+          ) : (
+            <Fragment key={agent.username}>{option}</Fragment>
+          );
+        })}
+        {shown.length === 0 && <p className="status-popover-note">{t("没有匹配的 Agent")}</p>}
+      </div>
+    </div>
   );
 }
 
@@ -998,9 +1165,7 @@ function LeadPicker({
         </PopoverSection>
       )}
       <PopoverSection title={t("选一个主 Agent")}>
-        <div className="status-lead-choices">
-          <LeadChoices agents={agents} onSwitch={onPick} />
-        </div>
+        <LeadChoices agents={agents} onSwitch={onPick} />
       </PopoverSection>
     </>
   );
@@ -1020,12 +1185,7 @@ function LeadSwitcher({
   onSwitch: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const listRef = useRef<HTMLDivElement>(null);
   const listId = useId();
-  // 展开后焦点落到当前主 Agent 那项，↑↓ 接着选
-  useEffect(() => {
-    if (open) listRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
-  }, [open]);
   return (
     <>
       <button
@@ -1039,7 +1199,7 @@ function LeadSwitcher({
         <Icon name="arrow-right" size={12} />
       </button>
       {open && (
-        <div ref={listRef} id={listId} className="status-lead-choices status-lead-switch-list">
+        <div id={listId} className="status-lead-switch-list">
           <LeadChoices agents={agents} current={current} onSwitch={onSwitch} />
         </div>
       )}

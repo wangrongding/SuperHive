@@ -7,6 +7,8 @@ import type { LocalAgentsState } from "./local-agents";
 import {
   StatusBar,
   agentCounts,
+  agentsOf,
+  filterLeadChoices,
   contextPercent,
   imSummary,
   leadCacheState,
@@ -171,11 +173,11 @@ describe("StatusBar", () => {
     renderBar({ setLeadAgent });
     fireEvent.click(screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" }));
     // 先只有一个入口，点了才列出 Agent
-    expect(screen.queryByRole("radiogroup", { name: "切换主 Agent" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "切换主 Agent" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
-    const group = screen.getByRole("radiogroup", { name: "切换主 Agent" });
+    const group = screen.getByRole("listbox", { name: "切换主 Agent" });
     expect(group).toBeTruthy();
-    fireEvent.click(screen.getByRole("radio", { name: /rd-codex/ }));
+    fireEvent.click(screen.getByRole("option", { name: /rd-codex/ }));
     expect(setLeadAgent).toHaveBeenCalledWith("rd-codex");
     expect(screen.queryByRole("dialog")).toBeNull();
     cleanup();
@@ -188,7 +190,7 @@ describe("StatusBar", () => {
     const setLeadAgent = vi.fn();
     renderBar({ setLeadAgent, leadAgentName: undefined });
     fireEvent.click(screen.getByRole("button", { name: /这个房间还没有主 Agent/ }));
-    fireEvent.click(screen.getByRole("radio", { name: /rd-claude/ }));
+    fireEvent.click(screen.getByRole("option", { name: /rd-claude/ }));
     expect(setLeadAgent).toHaveBeenCalledWith("rd-claude");
   });
 
@@ -428,15 +430,15 @@ describe("StatusBar", () => {
       // 展开后开关还在，再点一次收起
       fireEvent.click(toggle);
       expect(toggle.getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByRole("radiogroup", { name: "切换主 Agent" })).toBeTruthy();
-      expect(document.activeElement).toBe(screen.getByRole("radio", { name: /rd-claude/ }));
+      expect(screen.getByRole("listbox", { name: "切换主 Agent" })).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByRole("option", { name: /rd-claude/ }));
       fireEvent.click(toggle);
-      expect(screen.queryByRole("radiogroup", { name: "切换主 Agent" })).toBeNull();
+      expect(screen.queryByRole("listbox", { name: "切换主 Agent" })).toBeNull();
       expect(screen.getByRole("dialog")).toBeTruthy();
 
       // 选当前那项：关掉弹层、不发请求、焦点回到状态栏按钮
       fireEvent.click(toggle);
-      fireEvent.click(screen.getByRole("radio", { name: /rd-claude/ }));
+      fireEvent.click(screen.getByRole("option", { name: /rd-claude/ }));
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(setLeadAgent).not.toHaveBeenCalled();
       await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
@@ -445,7 +447,7 @@ describe("StatusBar", () => {
       // Esc：焦点在列表里时
       openLead();
       fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
-      fireEvent.keyDown(screen.getByRole("radio", { name: /rd-codex/ }), { key: "Escape" });
+      fireEvent.keyDown(screen.getByRole("option", { name: /rd-codex/ }), { key: "Escape" });
       expect(screen.queryByRole("dialog")).toBeNull();
       await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
       expect(document.activeElement).toBe(trigger);
@@ -467,7 +469,7 @@ describe("StatusBar", () => {
       // 选别的：切换并关掉
       openLead();
       fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
-      fireEvent.click(screen.getByRole("radio", { name: /rd-codex/ }));
+      fireEvent.click(screen.getByRole("option", { name: /rd-codex/ }));
       expect(setLeadAgent).toHaveBeenCalledWith("rd-codex");
       expect(screen.queryByRole("dialog")).toBeNull();
     });
@@ -484,5 +486,113 @@ describe("StatusBar", () => {
       expect(document.activeElement).toBe(input);
       input.remove();
     });
+  });
+});
+
+describe("切换主 Agent 的列表", () => {
+  const roster = (count: number) => [
+    agent("lead", "online", { provider: "claude" }),
+    agent("busy-one", "busy", { provider: "codex" }),
+    agent("gone", "offline", { provider: "mystery" }),
+    ...Array.from({ length: count - 3 }, (_, index) =>
+      agent(`idle-${String(index).padStart(2, "0")}`, "online", { provider: "claude" }),
+    ),
+  ];
+  const openList = (participants: Participant[]) => {
+    const setLeadAgent = vi.fn();
+    renderBar({ setLeadAgent, leadAgentName: "lead", participants });
+    fireEvent.click(screen.getByRole("button", { name: /^主 Agent lead/ }));
+    fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
+    return setLeadAgent;
+  };
+
+  it("排序：在线空闲的在前，忙的其次，离线的最后；同一档按名字", () => {
+    const sorted = agentsOf([
+      agent("z-off", "offline"),
+      agent("b-busy", "busy"),
+      agent("y-idle", "online"),
+      { ...agent("rd", "online"), type: "human" } as Participant,
+      agent("a-busy", "busy"),
+      agent("x-idle", "online"),
+    ]).map((participant) => participant.username);
+    expect(sorted).toEqual(["x-idle", "y-idle", "a-busy", "b-busy", "z-off"]);
+  });
+
+  it("过滤按名字或运行时，不分大小写；空白不过滤", () => {
+    const list = [
+      agent("rd-Claude", "online", { provider: "claude" }),
+      agent("glm", "online", { provider: "omp" }),
+    ];
+    expect(filterLeadChoices(list, "  ")).toBe(list);
+    expect(filterLeadChoices(list, "CLAU").map((a) => a.username)).toEqual(["rd-Claude"]);
+    expect(filterLeadChoices(list, "omp").map((a) => a.username)).toEqual(["glm"]);
+  });
+
+  it("每项有运行时图标；忙的写「忙」，离线的变灰排最后且不能选", () => {
+    const setLeadAgent = openList(roster(5));
+    const options = screen.getAllByRole("option");
+    expect(options.map((option) => option.querySelector(".status-lead-name")?.textContent)).toEqual(
+      ["idle-00", "idle-01", "lead", "busy-one", "gone"],
+    );
+    // claude / codex 有厂商标识，未知运行时回退成 AI
+    expect(options[0]!.querySelector(".status-lead-avatar .provider-logo")).toBeTruthy();
+    expect(options[4]!.querySelector(".status-lead-avatar")?.textContent).toBe("AI");
+    const busy = screen.getByRole("option", { name: "busy-one（codex）：忙碌" });
+    expect(busy.querySelector(".status-lead-state")?.textContent).toBe("忙");
+    expect(
+      screen.getByRole("option", { name: "lead（claude）：在线" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    const offline = screen.getByRole("option", { name: "gone（mystery）：离线，不能设为主 Agent" });
+    expect(offline.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(offline);
+    expect(setLeadAgent).not.toHaveBeenCalled();
+    // 不到 8 个没有过滤框，焦点落在当前主 Agent 那项
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("option", { name: /^lead/ }));
+  });
+
+  it("Agent 超过 8 个时顶上有过滤框：焦点进框，↑↓ 跳过离线的，回车选中", () => {
+    const setLeadAgent = openList(roster(16));
+    const input = screen.getByRole("combobox", { name: "过滤 Agent" });
+    expect(document.activeElement).toBe(input);
+    // 一开始高亮当前主 Agent
+    const activeName = () =>
+      document
+        .getElementById(input.getAttribute("aria-activedescendant")!)
+        ?.querySelector(".status-lead-name")?.textContent;
+    expect(activeName()).toBe("lead");
+
+    fireEvent.change(input, { target: { value: "o" } });
+    // 剩 busy-one、gone：离线的 gone 在列表里但高亮跳过它
+    expect(
+      screen.getAllByRole("option").map((o) => o.querySelector(".status-lead-name")?.textContent),
+    ).toEqual(["busy-one", "gone"]);
+    expect(activeName()).toBe("busy-one");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(activeName()).toBe("busy-one");
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.change(input, { target: { value: "idle-1" } });
+    expect(activeName()).toBe("idle-10");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(activeName()).toBe("idle-11");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(activeName()).toBe("idle-12");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(setLeadAgent).toHaveBeenCalledWith("idle-12");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("过滤不到时提示没有匹配；框里按 Esc 关掉弹层", () => {
+    const setLeadAgent = openList(roster(9));
+    const input = screen.getByRole("combobox", { name: "过滤 Agent" });
+    fireEvent.change(input, { target: { value: "nobody" } });
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByText("没有匹配的 Agent")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(setLeadAgent).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
