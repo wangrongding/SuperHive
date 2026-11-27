@@ -152,6 +152,18 @@ export function isInside(file: string, dir: string, platform: NodeJS.Platform): 
   return Boolean(base) && norm(file).startsWith(`${base}/`);
 }
 
+/** PATH 里有没有 dir：Windows 用 ; 分隔、不分大小写、认两种斜杠，其余平台用 : 分隔 */
+export function pathHasDir(pathValue: string, dir: string, platform: NodeJS.Platform): boolean {
+  const win = platform === "win32";
+  const norm = (value: string) =>
+    win ? lower(value).replace(/\/+$/, "") : value.replace(/\/+$/, "");
+  const target = norm(dir);
+  return pathValue
+    .split(win ? ";" : ":")
+    .filter(Boolean)
+    .some((item) => norm(item) === target);
+}
+
 /**
  * Windows 上用自带 npm 装到 prefix 的命令，交给 `cmd.exe /d /s /c` 跑：node.exe 直接跑 npm-cli.js。
  * 路径里有 cmd 会改写的字符（" % ! ^）或换行就不拼，退回手动。
@@ -895,7 +907,9 @@ export class AgentCliManager {
 
   private bundledNodePath(): string | undefined {
     const node = this.options.bundledNode ?? this.env.SUPERHIVE_BUNDLED_NODE;
-    return node && path.isAbsolute(node) ? node : undefined;
+    return node && (this.platform === "win32" ? path.win32 : path.posix).isAbsolute(node)
+      ? node
+      : undefined;
   }
 
   private agentClisDir(): string | undefined {
@@ -994,7 +1008,14 @@ export class AgentCliManager {
     let args = ["--version"];
     if (this.platform === "win32") {
       try {
-        const resolved = resolveCommand(file, { env });
+        // 自带 Node、agent-clis 目录也可能是构造时传进来的（不一定在 env 里）
+        const bundledNode = this.bundledNodePath();
+        const agentClisDir = this.agentClisDir();
+        const resolved = resolveCommand(file, {
+          env,
+          ...(bundledNode ? { bundledNode } : {}),
+          ...(agentClisDir ? { agentClisDir } : {}),
+        });
         command = resolved.command;
         args = [...resolved.args, "--version"];
       } catch (error) {
@@ -1153,16 +1174,20 @@ export class AgentCliManager {
 
   /**
    * 全局安装会把命令放进哪个目录：先跑官方脚本的看脚本默认目录（omp 的 PI_INSTALL_DIR 可改），
-   * npm 用 `npm prefix -g`/bin
+   * npm 用 `npm prefix -g`/bin。Windows 上一律用自带 npm 装进 agent-clis（planInstall），
+   * Claude Code、OpenCode 也不跑官方脚本
    */
   private async globalBin(tool: AgentCliTool, context: InstallContext, loginPath: string) {
+    if (this.platform === "win32") {
+      return context.bundled ? prefixBin(context.bundled.prefix, this.platform) : undefined;
+    }
     if (tool === "claude" || tool === "opencode" || tool === "omp" || tool === "agy") {
       const custom = tool === "omp" ? this.env.PI_INSTALL_DIR : undefined;
       return custom && path.isAbsolute(custom)
         ? custom
         : path.join(this.home, OFFICIAL_INSTALLERS[tool].binDir);
     }
-    if (context.bundled && (this.platform === "win32" || context.npm === context.bundled.npm)) {
+    if (context.bundled && context.npm === context.bundled.npm) {
       return prefixBin(context.bundled.prefix, this.platform);
     }
     if (!context.npm) return undefined;
@@ -1212,13 +1237,12 @@ export class AgentCliManager {
       latest ? this.nodeGap(tool, node, latest, loginPath) : undefined,
       this.globalBin(tool, context, loginPath),
     ]);
-    const onPath = new Set(loginPath.split(":"));
     return {
       ...base,
       latest,
       plan,
       ...(nodeGap ? { nodeGap } : {}),
-      ...(bin && !onPath.has(bin) ? { binNotOnPath: bin } : {}),
+      ...(bin && !pathHasDir(loginPath, bin, this.platform) ? { binNotOnPath: bin } : {}),
     };
   }
 

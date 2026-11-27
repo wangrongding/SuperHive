@@ -21,6 +21,8 @@ export type ResolveOptions = {
   nodePath?: string;
   /** 桌面端自带的 node.exe；默认读环境变量 SUPERHIVE_BUNDLED_NODE（桌面端启动 Server 时设置） */
   bundledNode?: string;
+  /** 桌面端用自带 npm 装 CLI 的目录；默认读环境变量 SUPERHIVE_AGENT_CLIS_DIR */
+  agentClisDir?: string;
   isElectron?: boolean;
   /** 测试注入 */
   isFile?: (file: string) => boolean;
@@ -101,12 +103,21 @@ export function resolveCommand(command: string, options: ResolveOptions = {}): R
 
 /** 环境变量 SUPERHIVE_BUNDLED_NODE：桌面端自带的 Node（打包进 resources/node） */
 export const BUNDLED_NODE_ENV = "SUPERHIVE_BUNDLED_NODE";
+/** 环境变量 SUPERHIVE_AGENT_CLIS_DIR：桌面端用自带 npm 装 CLI 的全局前缀（<userData>/agent-clis） */
+export const AGENT_CLIS_DIR_ENV = "SUPERHIVE_AGENT_CLIS_DIR";
+
+function sameWindowsDir(a: string, b: string): boolean {
+  const norm = (dir: string) => path.win32.resolve(dir).replace(/\\+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+}
 
 /**
  * 运行 npm 垫片背后的 .js 用哪个 node，按顺序：
- * ① 垫片旁边的 node.exe（和这个 CLI 一起装的那份）；② 调用方指定的；③ 桌面端自带的；
+ * ① 垫片旁边的 node.exe（和这个 CLI 一起装的那份，nvm 的目录就是这样）；② 调用方指定的；
+ * ③ 垫片在桌面端的 agent-clis 目录里（SuperHive 用自带 npm 装的）：用自带的 node，就是装它的那份；
  * ④ 不在桌面端里时用当前进程的 node；在桌面端里 process.execPath 是 Electron 本身（RunAsNode 已关，不能跑 JS），
- *    只能去 PATH 找真的 node.exe；⑤ 都没有就报错。
+ *    去 PATH 找真的 node.exe——用户自己装的 Node 优先（官方安装包把 node.exe 放在 Program Files，
+ *    npm 全局命令却在 %APPDATA%\npm，垫片旁边没有 node.exe）；⑤ PATH 里没有才用自带的；⑥ 都没有就报错。
  */
 function nodeFor(
   found: string,
@@ -119,7 +130,9 @@ function nodeFor(
   if (isFile(localNode)) return localNode;
   if (options.nodePath) return options.nodePath;
   const bundled = options.bundledNode ?? envValue(env, BUNDLED_NODE_ENV);
-  if (bundled && isFile(bundled)) return bundled;
+  const hasBundled = Boolean(bundled && isFile(bundled));
+  const clisDir = options.agentClisDir ?? envValue(env, AGENT_CLIS_DIR_ENV);
+  if (bundled && hasBundled && clisDir && sameWindowsDir(shimDir, clisDir)) return bundled;
   const isElectron = options.isElectron ?? Boolean(process.versions.electron);
   if (!isElectron) return process.execPath;
   const onPath = findWindowsCommand(
@@ -128,6 +141,7 @@ function nodeFor(
     (file) => path.win32.extname(file).toLowerCase() === ".exe" && isFile(file),
   );
   if (onPath) return onPath;
+  if (bundled && hasBundled) return bundled;
   if (bundled) {
     throw new Error(
       `运行 ${found} 需要 Node.js，但桌面端自带的 Node.js 不见了（${bundled}），PATH 里也没有 node.exe；请重新安装 SuperHive 桌面端。`,

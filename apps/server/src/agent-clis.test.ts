@@ -20,6 +20,7 @@ import {
   mergePath,
   nodeRangeSatisfied,
   pathFromEnvOutput,
+  pathHasDir,
   OFFICIAL_INSTALLERS,
   installerCommand,
   planInstall,
@@ -1342,6 +1343,47 @@ describe("desktop bundled Node and npm", () => {
       });
     }
     expect(planInstall("agy", win)).toMatchObject({ kind: "manual" });
+  });
+
+  it("on Windows names agent-clis as the install dir for every npm tool and knows it is on PATH", async () => {
+    const lowerWin = (file: string) => file.toLowerCase();
+    const clis = new AgentCliManager({
+      platform: "win32",
+      home: "C:\\Users\\me",
+      env: {
+        Path: "C:\\Windows\\system32;C:\\Users\\me\\AppData\\Roaming\\npm",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        SUPERHIVE_BUNDLED_NODE: bundled.node,
+        SUPERHIVE_AGENT_CLIS_DIR: bundled.prefix,
+      },
+      isExecutable: (file) => [bundled.node, bundled.npmCli].map(lowerWin).includes(lowerWin(file)),
+      fetchJson: async (url: string) => (url.includes("dist-tags") ? { latest: "1.0.0" } : {}),
+      runProbe: async () => ({ code: 0, stdout: "v24.22.3\n", stderr: "" }),
+    });
+    // 桌面端把 agent-clis 追加在 PATH 末尾，本机 Agent 直接找得到；以前按「:」切 Windows 的 PATH，
+    // 每一项都误报「不在 PATH 里」，Claude Code、OpenCode 还报成官方脚本的目录（Windows 上并不跑脚本）
+    const tools = await clis.list();
+    for (const tool of ["codex", "claude", "opencode", "gemini"] as const) {
+      const info = tools.find((item) => item.tool === tool)!;
+      expect(info.plan).toMatchObject({
+        kind: "anchored",
+        command: expect.stringContaining(`--prefix "${bundled.prefix}"`),
+      });
+      expect(info.binNotOnPath).toBeUndefined();
+    }
+  });
+
+  it("matches PATH entries per platform: ';' and case-insensitive on Windows, ':' elsewhere", () => {
+    const prefix = "C:\\Users\\me\\AppData\\Roaming\\SuperHive\\agent-clis";
+    expect(pathHasDir(`C:\\Windows;${prefix.toUpperCase()}\\`, prefix, "win32")).toBe(true);
+    expect(
+      pathHasDir("C:\\Windows;C:/Users/me/AppData/Roaming/SuperHive/agent-clis", prefix, "win32"),
+    ).toBe(true);
+    expect(pathHasDir("C:\\Windows;C:\\Users\\me\\AppData\\Roaming\\npm", prefix, "win32")).toBe(
+      false,
+    );
+    expect(pathHasDir("/usr/bin:/opt/x/bin/", "/opt/x/bin", "darwin")).toBe(true);
+    expect(pathHasDir("/usr/bin:/opt/X/bin", "/opt/x/bin", "darwin")).toBe(false);
   });
 
   it("upgrades on Windows only what lives in agent-clis", () => {

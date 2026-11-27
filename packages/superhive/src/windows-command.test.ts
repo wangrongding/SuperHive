@@ -142,14 +142,16 @@ describe.each([
     ).toThrow(/需要 Node.js/);
   });
 
-  describe("node lookup order in the desktop app: adjacent → bundled → PATH → error", () => {
+  describe("node lookup order in the desktop app: adjacent → agent-clis → PATH → bundled → error", () => {
     const bundled =
       "C:\\Users\\me\\AppData\\Local\\SuperHive\\app-0.5.0\\resources\\node\\node.exe";
     const pathNode = "C:\\Program Files\\nodejs\\node.exe";
+    const clis = "C:\\Users\\me\\AppData\\Roaming\\SuperHive\\agent-clis";
     const pathEnv = {
       ...env,
       Path: `C:\\Program Files\\nodejs;${env.Path}`,
       SUPERHIVE_BUNDLED_NODE: bundled,
+      SUPERHIVE_AGENT_CLIS_DIR: clis,
     };
     const resolve = (files: Record<string, string>, extra: Record<string, string> = {}) =>
       resolveCommand("codex", {
@@ -165,11 +167,41 @@ describe.each([
       );
     });
 
-    it("2. then the bundled Node from SUPERHIVE_BUNDLED_NODE, even when PATH has one", () => {
-      expect(resolve({ [bundled]: "", [pathNode]: "" })).toEqual({
+    it("2. runs CLIs SuperHive installed into agent-clis with the bundled Node that installed them", () => {
+      const shim = `${clis}\\codex.cmd`;
+      expect(
+        resolveCommand(shim, {
+          platform: "win32",
+          env: pathEnv,
+          isElectron: true,
+          ...fs({ [shim]: jsShim, [bundled]: "", [pathNode]: "" }),
+        }),
+      ).toEqual({
         command: bundled,
+        args: [`${clis}\\node_modules\\@openai\\codex\\bin\\codex.js`],
+      });
+      // 目录比较不分大小写、不管结尾的反斜杠；也可以显式传 agentClisDir / bundledNode
+      expect(
+        resolveCommand(shim, {
+          platform: "win32",
+          env,
+          isElectron: true,
+          bundledNode: bundled,
+          agentClisDir: `${clis.toUpperCase()}\\`,
+          ...fs({ [shim]: jsShim, [bundled]: "", [pathNode]: "" }),
+        }).command,
+      ).toBe(bundled);
+    });
+
+    it("3. otherwise the user's own node.exe on PATH wins over the bundled Node", () => {
+      expect(resolve({ [bundled]: "", [pathNode]: "" })).toEqual({
+        command: pathNode,
         args: [`${npm}\\node_modules\\@openai\\codex\\bin\\codex.js`],
       });
+    });
+
+    it("4. falls back to the bundled Node when PATH has none", () => {
+      expect(resolve({ [bundled]: "" }).command).toBe(bundled);
       // 变量名不分大小写；也可以显式传 bundledNode
       expect(
         resolveCommand("codex", {
@@ -182,12 +214,18 @@ describe.each([
       ).toBe(bundled);
     });
 
-    it("3. then node.exe on PATH when the bundled one is missing", () => {
-      expect(resolve({ [pathNode]: "" }).command).toBe(pathNode);
-    });
-
-    it("4. reports a missing bundled Node (reinstall), not 'install Node.js'", () => {
+    it("5. reports a missing bundled Node (reinstall), not 'install Node.js'", () => {
       expect(() => resolve({})).toThrow(/桌面端自带的 Node.js 不见了.*请重新安装 SuperHive 桌面端/);
+      // agent-clis 里的 CLI 也一样：自带的不见了、PATH 里也没有才报错
+      const shim = `${clis}\\codex.cmd`;
+      expect(() =>
+        resolveCommand(shim, {
+          platform: "win32",
+          env: pathEnv,
+          isElectron: true,
+          ...fs({ [shim]: jsShim }),
+        }),
+      ).toThrow(/桌面端自带的 Node.js 不见了/);
       // 没有自带 Node（开发版、npm 版）才提示自己装 Node.js
       expect(() =>
         resolveCommand("codex", {

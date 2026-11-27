@@ -100,7 +100,7 @@ SUPERHIVE_DESKTOP_APP=out/SuperHive-darwin-arm64/SuperHive.app/Contents/MacOS/Su
   - `SUPERHIVE_BUNDLED_NODE`：node 本体的绝对路径；
   - `SUPERHIVE_AGENT_CLIS_DIR`：`<userData>/agent-clis`，用自带 npm 装 CLI 时的全局前缀；
   - `PATH`：把 `agent-clis` 的命令目录和自带 Node 的目录**追加到末尾**。用户自己装的 node、CLI 排在前面照样优先；没装的时候，Mac / Linux 上 `#!/usr/bin/env node` 的 CLI 也能找到 node。
-- **Windows 上跑 npm 的 `.cmd` 启动器**：CLI 和 Server 两份解析器（`windows-command.ts`）按这个顺序找 node：启动器旁边的 `node.exe` → 自带的 node → `PATH` 里真正的 `node.exe` → 报错。自带的 node 不见了（安装不完整）时提示重装桌面端；「请安装 Node.js 并重新打开桌面端」这句只在开发版、纯 npm 版（没有自带 Node）里出现。原生 `.exe` 照旧直接运行。
+- **Windows 上跑 npm 的 `.cmd` 启动器**：CLI 和 Server 两份解析器（`windows-command.ts`）按这个顺序找 node：启动器旁边的 `node.exe`（nvm 的目录就是这样）→ 启动器在 `agent-clis` 里（SuperHive 用自带 npm 装的）就用自带的 node → `PATH` 里真正的 `node.exe`（用户自己装的 Node 优先：官方安装包把 node.exe 放在 Program Files，npm 全局命令却在 `%APPDATA%\npm`，启动器旁边没有 node.exe）→ 自带的 node → 报错。自带的 node 不见了（安装不完整）时提示重装桌面端；「请安装 Node.js 并重新打开桌面端」这句只在开发版、纯 npm 版（没有自带 Node）里出现。原生 `.exe` 照旧直接运行。
 - **一键安装 CLI**（Agent 设置里的 CLI 列表，`apps/server/src/agent-clis.ts`）：
   - Mac / Linux：系统里有 npm 就照旧用用户自己的；没有时用自带的 npm，加 `--prefix <userData>/agent-clis` 装进 SuperHive 自己的目录，不需要管理员权限。Claude Code、OpenCode 仍先跑官方安装脚本，失败才退回 npm。
   - Windows：用自带的 `node.exe` 直接跑 `npm-cli.js`，装进 `%APPDATA%\SuperHive\agent-clis`；之后的一键升级也只针对装在这里的那份。omp（要 bun）、agy（不在 npm 上）和别处装的仍要手动。
