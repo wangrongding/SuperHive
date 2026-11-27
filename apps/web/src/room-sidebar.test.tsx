@@ -4,7 +4,7 @@ import { createRef, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCS_BASE_URL } from "@superhive/protocol";
 import { setLocalePreference } from "./i18n";
-import { RoomSidebar } from "./room-sidebar";
+import { DESKTOP_DOWNLOAD_URL, RoomSidebar } from "./room-sidebar";
 
 afterEach(cleanup);
 
@@ -208,6 +208,41 @@ describe("sidebar user menu", () => {
       );
     } finally {
       setLocalePreference("zh-CN");
+    }
+  });
+
+  it("links 「下载客户端」 to the latest GitHub release in the browser, but not in the desktop app", () => {
+    const setUserMenuOpen = vi.fn();
+    const setMobilePanel = vi.fn();
+    const { rerender } = render(
+      <RoomSidebar {...props({ userMenuOpen: true, setUserMenuOpen, setMobilePanel })} />,
+    );
+    const download = screen.getByRole("menuitem", { name: /下载客户端/ });
+    expect(DESKTOP_DOWNLOAD_URL).toBe("https://github.com/wangrongding/SuperHive/releases/latest");
+    expect(download.getAttribute("href")).toBe(DESKTOP_DOWNLOAD_URL);
+    expect(download.getAttribute("target")).toBe("_blank");
+    expect(download.getAttribute("rel")).toBe("noreferrer");
+    fireEvent.click(download);
+    expect(setUserMenuOpen).toHaveBeenCalledWith(false);
+    expect(setMobilePanel).toHaveBeenCalledWith(undefined);
+
+    const noop = () => () => {};
+    window.superhiveDesktop = {
+      version: 1,
+      platform: "darwin",
+      terminal: Object.fromEntries(
+        ["create", "write", "resize", "kill", "onData", "onExit", "onNewRequest"].map((name) => [
+          name,
+          noop,
+        ]),
+      ),
+    };
+    try {
+      rerender(<RoomSidebar {...props({ userMenuOpen: true })} />);
+      expect(screen.getByRole("menuitem", { name: /帮助与文档/ })).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: /下载客户端/ })).toBeNull();
+    } finally {
+      delete window.superhiveDesktop;
     }
   });
 });

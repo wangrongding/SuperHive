@@ -17,6 +17,7 @@ export type IconName =
   | "close"
   | "copy"
   | "devices"
+  | "download"
   | "external"
   | "files"
   | "hash"
@@ -110,6 +111,7 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
         <rect x="16" y="9" width="5" height="10" rx="1.2" />
       </>
     ),
+    download: <path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M5 19h14" />,
     external: (
       <path d="M14 5h5v5m0-5-8 8M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
     ),

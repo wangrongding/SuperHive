@@ -18,10 +18,13 @@ import type { useRoomReorder } from "./room-reorder";
 import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
 import { DesktopUpdateEntry } from "./desktop-update";
+import { desktopBridge } from "./desktop-bridge";
 import { openJoinDialog, RemoteServerList } from "./join-remote";
 
 /** 悬停展开用户菜单后这么久之内的点击算「打开」，不当成「关上」 */
 const HOVER_CLICK_GRACE_MS = 600;
+/** 浏览器里「下载客户端」指向的地方：GitHub Releases 最新版（有 Windows 安装包和 macOS dmg） */
+export const DESKTOP_DOWNLOAD_URL = "https://github.com/wangrongding/SuperHive/releases/latest";
 
 /** 左侧栏：房间列表、需要处理的事项与当前用户 */
 export function RoomSidebar({
@@ -424,6 +427,24 @@ export function RoomSidebar({
               <span>{t("帮助与文档")}</span>
               <Icon name="external" size={13} />
             </a>
+            {/* 桌面客户端里不出：客户端自己有 DesktopUpdateEntry 管更新 */}
+            {!desktopBridge() && (
+              <a
+                role="menuitem"
+                className="user-menu-external"
+                href={DESKTOP_DOWNLOAD_URL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  setMobilePanel(undefined);
+                }}
+              >
+                <Icon name="download" size={15} />
+                <span>{t("下载客户端")}</span>
+                <Icon name="external" size={13} />
+              </a>
+            )}
             {openFeedback && (
               <button
                 type="button"

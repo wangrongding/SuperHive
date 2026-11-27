@@ -815,7 +815,8 @@
 }
 
 /* 外链：右侧的小箭头提示会在新标签页打开 */
-.user-menu .user-menu-docs .icon:last-of-type {
+.user-menu .user-menu-docs .icon:last-of-type,
+.user-menu .user-menu-external .icon:last-of-type {
   margin-left: auto;
   color: var(--text-tertiary);
 }
