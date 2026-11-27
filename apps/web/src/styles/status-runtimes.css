@@ -1,0 +1,147 @@
+/* 状态栏「Agent 运行时」：有新版时文字用强调色（不用红），图标同 npm 更新入口 */
+.status-item.status-runtime-clis.update {
+  color: var(--accent);
+}
+
+.status-item.status-runtime-clis.update > svg {
+  opacity: 1;
+}
+
+.status-runtimes {
+  width: 300px;
+  max-width: 100%;
+}
+
+.status-runtimes-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.status-runtimes-row {
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.status-runtimes-row + .status-runtimes-row {
+  border-top: 1px solid var(--border-light);
+}
+
+.status-runtimes-head {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-runtimes-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-runtimes-version {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.status-runtimes-version .mono {
+  font-size: 11px;
+}
+
+.status-runtimes-arrow,
+.status-runtimes-muted {
+  color: var(--text-tertiary);
+}
+
+.status-runtimes-latest {
+  color: var(--accent);
+}
+
+.status-runtimes-broken {
+  color: var(--warning);
+}
+
+.status-runtimes-row .status-popover-note {
+  margin: 2px 0 4px;
+}
+
+.status-popover-note.warning {
+  color: var(--warning);
+}
+
+.status-runtimes-missing {
+  color: var(--text-tertiary);
+}
+
+/* 就地确认：命令原样给人看，取消 / 升级 */
+.status-runtimes-confirm {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.status-runtimes-confirm .agent-cli-hint {
+  color: var(--text-tertiary);
+}
+
+.status-runtimes-confirm .agent-cli-command {
+  display: block;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.status-runtimes-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* 设置卡片里的进度 / 结果，搬进小弹层时收紧间距、允许换行 */
+.status-runtimes-row .agent-cli-job {
+  margin-top: 2px;
+  padding-top: 0;
+  border-top: 0;
+  font-size: var(--text-xs);
+  white-space: normal;
+}
+
+.status-runtimes-row .agent-cli-progress {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.status-runtimes-row .agent-cli-output {
+  max-height: 96px;
+  font-size: 11px;
+}
+
+@container status-bar (max-width: 900px) {
+  .status-runtime-clis:not(.update):not(.busy) .status-item-label {
+    display: none;
+  }
+}

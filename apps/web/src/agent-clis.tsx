@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentCliAction,
+  AgentCliInfo,
   AgentCliInstallation,
   AgentCliJob,
   AgentCliSource,
@@ -54,7 +55,7 @@ const SOURCE_LABELS: Record<AgentCliSource, string> = {
 };
 
 /** 检测结果还没回来时（例如刷新后先恢复了进行中的任务）显示用的名字 */
-const TOOL_NAMES: Record<AgentCliTool, string> = {
+export const TOOL_NAMES: Record<AgentCliTool, string> = {
   claude: "Claude Code",
   codex: "Codex",
   copilot: "GitHub Copilot CLI",
@@ -72,8 +73,32 @@ const errorMessage = (reason: unknown) =>
   reason instanceof Error ? reason.message : String(reason);
 
 /** 任务还没结束：在跑，或者成功了但还没重新探测到版本 */
-const pending = (job: AgentCliJob) =>
+export const pending = (job: AgentCliJob) =>
   job.state === "running" || (job.state === "succeeded" && job.versionAfter === undefined);
+
+/**
+ * 这个 CLI 的按钮做什么：没装是安装、装了是升级；offered 表示给不给按钮（有可执行的命令、Node 够新，
+ * 并且有新版、查不到最新版或装了跑不起来）；reinstall：装了但跑不起来，走升级流程、文案按「重新安装」说。
+ * 设置里的卡片和状态栏的运行时弹层共用。
+ */
+export function cliPlan(info: AgentCliInfo): {
+  action: AgentCliAction;
+  command: string | undefined;
+  offered: boolean;
+  reinstall: boolean;
+} {
+  const action: AgentCliAction = info.status === "notInstalled" ? "install" : "upgrade";
+  const command = info.plan?.kind === "anchored" ? info.plan.command : undefined;
+  const offered =
+    Boolean(command) &&
+    !info.nodeGap &&
+    (action === "install" ||
+      info.updateAvailable ||
+      info.latest === null ||
+      // 装了但跑不起来（比如网络慢、平台程序包没下载下来）：允许用同一条命令重新装一遍
+      info.status === "broken");
+  return { action, command, offered, reinstall: action === "upgrade" && info.status === "broken" };
+}
 
 /** 正在进行的是哪个工具的什么操作：已经拿到任务，或者刚点了确认、还在等服务端核对命令 */
 /** reinstall：装了但跑不起来时走升级流程，文案按「重新安装」说 */
@@ -299,16 +324,7 @@ function AgentCliCard({
   const [error, setError] = useState<string>();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const primary = info.installations.find((install) => install.pathDefault);
-  const action: AgentCliAction = info.status === "notInstalled" ? "install" : "upgrade";
-  const command = info.plan?.kind === "anchored" ? info.plan.command : undefined;
-  const offered =
-    Boolean(command) &&
-    !info.nodeGap &&
-    (action === "install" ||
-      info.updateAvailable ||
-      info.latest === null ||
-      // 装了但跑不起来（比如网络慢、平台程序包没下载下来）：允许用同一条命令重新装一遍
-      info.status === "broken");
+  const { action, command, offered, reinstall } = cliPlan(info);
   const mine = activity?.tool === info.tool;
   const other = activity && !mine ? activity : undefined;
 
@@ -327,8 +343,6 @@ function AgentCliCard({
     }
   };
 
-  /** 装了但跑不起来：走升级流程（锚定到原处重装），文案按重新安装说 */
-  const reinstall = action === "upgrade" && info.status === "broken";
   const label = mine
     ? action === "install"
       ? t("正在安装…")
@@ -482,7 +496,7 @@ function AgentCliCard({
  * 确认气泡里的命令：用 `||` 串起来的回退链拆成「先试 / 失败再用」几步，每步等宽、自动换行、
  * 太长可以滚动；上面一句话说明回退的含义。展示用，执行的仍是整条原样命令。
  */
-function CommandSteps({
+export function CommandSteps({
   action,
   name,
   command,
@@ -566,12 +580,12 @@ function Installations({ installations }: { installations: AgentCliInstallation[
   );
 }
 
-function JobStatus({
+export function JobStatus({
   api,
   info,
   job,
 }: {
-  api: AgentClisApi;
+  api: Pick<AgentClisApi, "act">;
   info: AgentCliWithAgents;
   job: AgentCliJob;
 }) {

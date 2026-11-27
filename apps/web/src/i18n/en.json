@@ -2666,5 +2666,19 @@
   "以后再说": "Later",
   "等任务做完再重启（推荐）": "Wait for tasks to finish, then restart (recommended)",
   "立即重启，中断正在执行的任务": "Restart now and interrupt running tasks",
-  "{0} 等 {1} 个 Agent": "{1} agents including {0}"
+  "{0} 等 {1} 个 Agent": "{1} agents including {0}",
+  "正在安装 {0}…": "Installing {0}…",
+  "正在升级 {0}…": "Upgrading {0}…",
+  "Agent 运行时：{0}": "Agent runtimes: {0}",
+  "{0} 个 CLI 可升级": "{0} CLI updates",
+  "CLI {0}": "CLI {0}",
+  "这台电脑还没装 Agent CLI。": "No Agent CLI is installed on this computer yet.",
+  "未安装：{0}": "Not installed: {0}",
+  "可升级到": "can be upgraded to",
+  "重新安装 {0}": "Reinstall {0}",
+  "升级 {0}": "Upgrade {0}",
+  "新版需要 Node {0}，这台电脑用的是 Node {1}。": "The new version needs Node {0}; this computer has Node {1}.",
+  "Agent 运行时：{0} 个 CLI 有新版": "Agent runtimes: {0} CLI updates available",
+  "Agent 运行时：{0} 个 CLI 都是最新": "Agent runtimes: {0} CLIs, all up to date",
+  "运行时设置": "Runtime settings"
 }

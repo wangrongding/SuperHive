@@ -48,6 +48,11 @@ import { Button } from "./button";
 import { suggestLead } from "./lead-agent";
 import { AvatarGlyph } from "./avatar";
 import type { LocalAgentsState } from "./local-agents";
+import {
+  StatusAgentClisPopover,
+  statusAgentClisLabel,
+  useStatusAgentClis,
+} from "./status-runtimes";
 import "./styles/status-bar.css";
 
 /* ---------- 纯函数：每一项显示什么（单独测） ---------- */
@@ -532,6 +537,9 @@ export function StatusBar(props: StatusBarProps) {
     : npmCheck
       ? () => void npmCheck()
       : undefined;
+  // Agent 运行时（各 CLI 的版本和升级）：同一权限，和设置里的「Agent 运行时」共用接口
+  const agentClis = useStatusAgentClis(runtimeOwner ? local : undefined, settingsOpen);
+  const agentClisItem = agentClis.tools ? statusAgentClisLabel(agentClis) : undefined;
 
   return (
     <footer className="status-bar" aria-label={t("状态栏")}>
@@ -749,6 +757,27 @@ export function StatusBar(props: StatusBarProps) {
                   {t("代理地址和不走代理的地址")}
                 </PopoverLink>
               </>
+            )}
+          />
+        )}
+        {runtimeOwner && agentClisItem && (
+          <StatusItem
+            className={`status-runtime-clis${agentClisItem.tone ? ` ${agentClisItem.tone}` : ""}`}
+            align="end"
+            icon={
+              <Icon name={agentClisItem.tone === "update" ? "arrow-up" : "terminal"} size={13} />
+            }
+            label={agentClisItem.label}
+            tooltip={agentClisItem.tooltip}
+            popover={(close) => (
+              <StatusAgentClisPopover
+                state={agentClis}
+                api={local}
+                openSettings={() => {
+                  close();
+                  openSettings("runtimes");
+                }}
+              />
             )}
           />
         )}

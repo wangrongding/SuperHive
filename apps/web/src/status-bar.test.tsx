@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ImConnection, NetworkProxyState, Participant } from "@superhive/protocol";
-import type { LocalAgentsState } from "./local-agents";
+import type {
+  AgentCliJob,
+  ImConnection,
+  NetworkProxyState,
+  Participant,
+} from "@superhive/protocol";
+import type { AgentCliWithAgents, LocalAgentsState } from "./local-agents";
+import { JOB_POLL_MS } from "./agent-clis";
 import {
   StatusBar,
   agentCounts,
@@ -725,5 +731,167 @@ describe("切换主 Agent 的列表", () => {
     expect(setLeadAgent).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("状态栏 · Agent 运行时", () => {
+  const COMMAND = "'/usr/local/bin/npm' i -g @openai/codex@latest";
+  const cli = (overrides: Partial<AgentCliWithAgents>): AgentCliWithAgents => ({
+    tool: "codex",
+    name: "Codex",
+    package: "@openai/codex",
+    status: "ok",
+    version: "0.160.0",
+    installations: [],
+    conflict: false,
+    latest: "0.160.0",
+    updateAvailable: false,
+    plan: { kind: "anchored", command: COMMAND },
+    agents: [{ id: "a1", name: "rd-codex", status: "running" }],
+    ...overrides,
+  });
+  const upgradeJob = (overrides: Partial<AgentCliJob> = {}): AgentCliJob => ({
+    id: "job-1",
+    tool: "codex",
+    action: "upgrade",
+    command: COMMAND,
+    state: "running",
+    progress: "",
+    startedAt: now,
+    versionBefore: "0.160.0",
+    ...overrides,
+  });
+  const cliApi = (tools: AgentCliWithAgents[]) => ({
+    agentClis: vi.fn<
+      (refresh?: boolean) => Promise<{ tools: AgentCliWithAgents[]; job: AgentCliJob | null }>
+    >(async () => ({ tools, job: null })),
+    upgradeAgentCli: vi.fn<(tool: string, command: string) => Promise<AgentCliJob>>(async () =>
+      upgradeJob(),
+    ),
+    agentCliJob: vi.fn<(id: string) => Promise<AgentCliJob>>(async () => upgradeJob()),
+    act: vi.fn(async () => undefined),
+  });
+  const claudeOk = cli({
+    tool: "claude",
+    name: "Claude Code",
+    package: "@anthropic-ai/claude-code",
+    version: "2.1.0",
+    latest: "2.1.0",
+    plan: { kind: "anchored", command: "claude update" },
+    agents: [],
+  });
+  const geminiMissing = cli({
+    tool: "gemini",
+    name: "Gemini CLI",
+    status: "notInstalled",
+    version: null,
+    latest: "1.0.0",
+    agents: [],
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("都是最新：只显示装了几个，弹层列出版本、没装的折成一行，底部去设置", async () => {
+    const clis = cliApi([cli({}), claudeOk, geminiMissing]);
+    const props = renderBar({ local: fakeLocal({ mode: "local", ...clis }) });
+    const item = await screen.findByRole("button", {
+      name: "Agent 运行时：2 个 CLI 都是最新",
+    });
+    expect(item.textContent).toContain("CLI 2");
+    expect(item.className).not.toContain("update");
+    expect(clis.agentClis).toHaveBeenCalledWith(false);
+    fireEvent.click(item);
+    const dialog = screen.getByRole("dialog");
+    const codexRow = within(dialog).getByRole("listitem", { name: "Codex" });
+    expect(codexRow.textContent).toContain("0.160.0");
+    expect(codexRow.textContent).toContain("已是最新");
+    expect(within(dialog).queryByRole("button", { name: /^升级/ })).toBeNull();
+    expect(within(dialog).queryByRole("listitem", { name: "Gemini CLI" })).toBeNull();
+    expect(dialog.textContent).toContain("未安装：Gemini CLI");
+    // 弹层打开时再取一次（服务端有缓存），不加定时轮询
+    await waitFor(() => expect(clis.agentClis).toHaveBeenCalledTimes(2));
+    fireEvent.click(within(dialog).getByRole("button", { name: "运行时设置" }));
+    expect(props.openSettings).toHaveBeenCalledWith("runtimes");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("有新版：显示「N 个 CLI 可升级」，确认命令后调升级接口，进度跑完重新检测", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const clis = cliApi([cli({ latest: "0.170.0", updateAvailable: true }), claudeOk]);
+    renderBar({ local: fakeLocal({ mode: "local", ...clis }) });
+    const item = await screen.findByRole("button", { name: "Agent 运行时：1 个 CLI 有新版" });
+    expect(item.textContent).toContain("1 个 CLI 可升级");
+    expect(item.className).toContain("update");
+    fireEvent.click(item);
+    const dialog = screen.getByRole("dialog");
+    const row = within(dialog).getByRole("listitem", { name: "Codex" });
+    expect(row.textContent).toMatch(/0\.160\.0→0\.170\.0/);
+    // 先给人看要跑的命令；Esc 只收起确认，不关弹层
+    fireEvent.click(within(row).getByRole("button", { name: "升级 Codex" }));
+    const confirm = within(row).getByRole("group", { name: "确认升级 Codex" });
+    expect(confirm.textContent).toContain(COMMAND);
+    expect(confirm.textContent).toContain("正在用 Codex 的 Agent 不会自动重启");
+    fireEvent.keyDown(confirm, { key: "Escape" });
+    expect(within(row).queryByRole("group")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(clis.upgradeAgentCli).not.toHaveBeenCalled();
+
+    fireEvent.click(within(row).getByRole("button", { name: "升级 Codex" }));
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "升级" }));
+    });
+    expect(clis.upgradeAgentCli).toHaveBeenCalledWith("codex", COMMAND);
+    expect(item.textContent).toContain("正在升级 Codex…");
+
+    clis.agentCliJob.mockResolvedValueOnce(
+      upgradeJob({ state: "succeeded", versionAfter: "0.170.0" }),
+    );
+    clis.agentClis.mockResolvedValue({
+      tools: [cli({ version: "0.170.0", latest: "0.170.0" }), claudeOk],
+      job: null,
+    });
+    const calls = clis.agentClis.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(JOB_POLL_MS);
+    });
+    expect(clis.agentCliJob).toHaveBeenCalledWith("job-1");
+    expect(row.textContent).toContain("已升级到 0.170.0");
+    expect(row.textContent).toContain("rd-codex");
+    expect(clis.agentClis.mock.calls.length).toBeGreaterThan(calls);
+    await waitFor(() => expect(item.textContent).toContain("CLI 2"));
+  });
+
+  it("升级失败：在那一行显示原因", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const clis = cliApi([cli({ latest: "0.170.0", updateAvailable: true })]);
+    renderBar({ local: fakeLocal({ mode: "local", ...clis }) });
+    fireEvent.click(await screen.findByRole("button", { name: "Agent 运行时：1 个 CLI 有新版" }));
+    const row = within(screen.getByRole("dialog")).getByRole("listitem", { name: "Codex" });
+    fireEvent.click(within(row).getByRole("button", { name: "升级 Codex" }));
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "升级" }));
+    });
+    clis.agentCliJob.mockResolvedValueOnce(
+      upgradeJob({ state: "failed", reason: "网络超时", error: "npm ERR! network" }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(JOB_POLL_MS);
+    });
+    expect(within(row).getByRole("alert").textContent).toContain("升级失败：网络超时");
+  });
+
+  it("不是 Server 这台电脑上的房主：没有这一项，也不去查；设置开着时不查", async () => {
+    const remote = cliApi([cli({ latest: "0.170.0", updateAvailable: true })]);
+    renderBar({ local: fakeLocal({ mode: "device", ...remote }) });
+    await screen.findByRole("button", { name: "本机 Agent 的网络代理" });
+    expect(screen.queryByRole("button", { name: /Agent 运行时/ })).toBeNull();
+    expect(remote.agentClis).not.toHaveBeenCalled();
+    cleanup();
+
+    const paused = cliApi([cli({})]);
+    renderBar({ local: fakeLocal({ mode: "local", ...paused }), settingsOpen: true });
+    await act(async () => undefined);
+    expect(paused.agentClis).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Agent 运行时/ })).toBeNull();
   });
 });
