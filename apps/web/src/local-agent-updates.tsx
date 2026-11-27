@@ -3,7 +3,7 @@ import { formatAgentVersion, type LocalAgent, type Participant } from "@superhiv
 import { ConfirmPopover } from "./confirm-popover";
 import { t } from "./i18n";
 import { MemberBadge } from "./member-badge";
-import { localAgentStatusLabels, type LocalAgentsState } from "./local-agents";
+import type { LocalAgentsState } from "./local-agents";
 import { SettingsSwitch } from "./settings-switch";
 import "./styles/local-agent-updates.css";
 import { Tooltip } from "./tooltip";
@@ -100,13 +100,26 @@ export function agentUpdateNotes(agent: LocalAgent): string[] {
   ];
 }
 
+/** 跑着的 Agent 才有「旧版本」可言：停止的下次启动就用上新代码 */
+function isLive(agent: LocalAgent): boolean {
+  return agent.status === "running" || agent.status === "starting";
+}
+
 /**
- * 设置 · 这台电脑 · 本机 Agent：自动更新开关和每个 Agent 的版本、忙闲。
+ * 设置 · 这台电脑 · 本机 Agent：自动更新开关，以及在跑旧版本的 Agent（只列这些，每个一行一个按钮）。
  * 合入或升级后，跑着的 Agent 进程仍是旧代码；开着自动更新时，落后的 Agent 等手上的任务都做完再重启一次。
+ * 全部 Agent 在成员面板里管理，这里只放一个跳过去的链接，不重复列。
  */
-export function LocalAgentUpdatesGroup({ local }: { local: LocalAgentsState }) {
+export function LocalAgentUpdatesGroup({
+  local,
+  onShowAgents,
+}: {
+  local: LocalAgentsState;
+  /** 「查看全部 Agent」：关掉设置、打开成员面板 */
+  onShowAgents?: () => void;
+}) {
   const [error, setError] = useState<string>();
-  const [acting, setActing] = useState<string>();
+  const [acting, setActing] = useState<ReadonlySet<string>>(() => new Set());
   const { enabled, refreshAgents } = local;
   useEffect(() => {
     if (!enabled) return;
@@ -115,16 +128,24 @@ export function LocalAgentUpdatesGroup({ local }: { local: LocalAgentsState }) {
     return () => window.clearInterval(timer);
   }, [enabled, refreshAgents]);
   if (!enabled || local.autoUpdate === undefined) return null;
-  const outdated = local.agents.filter((agent) => agent.outdated).length;
-  const restartWhenIdle = (agent: LocalAgent) => {
-    setActing(agent.id);
+  const outdated = local.agents.filter((agent) => agent.outdated && isLive(agent));
+  // 空闲、还没安排重启的：可以一键重启，不会打断任何事
+  const idle = outdated.filter((agent) => !agent.busy && !agent.restartWhenIdle);
+  const restartWhenIdle = (agents: LocalAgent[]) => {
+    const ids = agents.map((agent) => agent.id);
+    setActing((current) => new Set([...current, ...ids]));
     setError(undefined);
-    local
-      .act(agent.id, "restart")
-      .catch((reason: unknown) =>
-        setError(reason instanceof Error ? reason.message : String(reason)),
-      )
-      .finally(() => setActing(undefined));
+    void Promise.all(
+      agents.map((agent) =>
+        local
+          .act(agent.id, "restart")
+          .catch((reason: unknown) =>
+            setError(reason instanceof Error ? reason.message : String(reason)),
+          ),
+      ),
+    ).finally(() =>
+      setActing((current) => new Set([...current].filter((id) => !ids.includes(id)))),
+    );
   };
   return (
     <div className="settings-group">
@@ -154,54 +175,80 @@ export function LocalAgentUpdatesGroup({ local }: { local: LocalAgentsState }) {
             );
         }}
       />
-      <p className="settings-note" role="status">
-        {local.currentVersion
-          ? t("当前代码：{0}", { 0: formatAgentVersion(local.currentVersion) })
-          : t("判断不出当前代码的版本，不会自动重启。")}
-        {outdated > 0 ? t("；{0} 个 Agent 在跑旧版本", { 0: outdated }) : ""}
-      </p>
-      {local.agents.length > 0 && (
-        <ul className="agent-updates" aria-label={t("本机 Agent")}>
-          {local.agents.map((agent) => {
-            const live = agent.status === "running" || agent.status === "starting";
-            return (
-              <li key={agent.id} className={`local-agent ${agent.status}`}>
-                <span className="local-agent-dot" aria-hidden="true" />
-                <span className="agent-update-main">
-                  <strong>
-                    {agent.name}
-                    {agent.outdated && <span className="agent-update-badge">{t("旧版本")}</span>}
-                    {agent.restartWhenIdle && (
-                      <span className="agent-update-badge pending">{t("空闲后重启")}</span>
-                    )}
-                  </strong>
-                  <small>
-                    {[localAgentStatusLabels[agent.status], ...agentUpdateNotes(agent)].join(" · ")}
-                  </small>
-                </span>
-                {live && (
-                  <span className="agent-update-actions">
-                    <Tooltip content={t("等手上的任务都做完再重启")}>
-                      <Button
-                        size="sm"
-                        disabled={!local.canManage || acting === agent.id || agent.restartWhenIdle}
-                        onClick={() => restartWhenIdle(agent)}
-                      >
-                        {t("重启")}
-                      </Button>
-                    </Tooltip>
-                    <RestartNowButton
-                      agent={agent}
-                      local={local}
-                      disabled={!local.canManage}
-                      onError={setError}
-                    />
-                  </span>
+      <div className="agent-updates-status">
+        <p className="settings-note" role="status">
+          {local.currentVersion
+            ? t("当前代码：{0}", { 0: formatAgentVersion(local.currentVersion) })
+            : t("判断不出当前代码的版本，不会自动重启。")}
+          {outdated.length > 0
+            ? t("；{0} 个 Agent 在跑旧版本", { 0: outdated.length })
+            : local.currentVersion
+              ? t("；都是最新的")
+              : ""}
+        </p>
+        {onShowAgents && (
+          <Button size="sm" variant="link" onClick={onShowAgents}>
+            {t("查看全部 Agent")}
+          </Button>
+        )}
+      </div>
+      {outdated.length > 0 && (
+        <ul className="agent-updates outdated" aria-label={t("在跑旧版本的 Agent")}>
+          {outdated.map((agent) => (
+            <li key={agent.id} className={`local-agent ${agent.status}`}>
+              <span className="local-agent-dot" aria-hidden="true" />
+              <strong className="agent-update-name">{agent.name}</strong>
+              <small className="agent-update-state">
+                {[
+                  agent.restartWhenIdle
+                    ? t("空闲后重启")
+                    : agent.busy
+                      ? t("正在执行任务")
+                      : t("空闲"),
+                  agent.version ? formatAgentVersion(agent.version) : t("版本未上报"),
+                ].join(" · ")}
+              </small>
+              <span className="agent-update-actions">
+                {agent.busy && !agent.restartWhenIdle ? (
+                  <Tooltip content={t("等手上的任务都做完再重启，不打断正在做的事")}>
+                    <Button
+                      size="sm"
+                      disabled={!local.canManage || acting.has(agent.id)}
+                      onClick={() => restartWhenIdle([agent])}
+                    >
+                      {t("空闲后重启")}
+                    </Button>
+                  </Tooltip>
+                ) : agent.busy ? (
+                  <RestartNowButton
+                    agent={agent}
+                    local={local}
+                    disabled={!local.canManage}
+                    onError={setError}
+                  />
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={!local.canManage || acting.has(agent.id) || agent.restartWhenIdle}
+                    onClick={() => restartWhenIdle([agent])}
+                  >
+                    {acting.has(agent.id) ? t("重启中…") : t("重启")}
+                  </Button>
                 )}
-              </li>
-            );
-          })}
+              </span>
+            </li>
+          ))}
         </ul>
+      )}
+      {idle.length > 1 && (
+        <Button
+          size="sm"
+          className="agent-updates-bulk"
+          disabled={!local.canManage || idle.some((agent) => acting.has(agent.id))}
+          onClick={() => restartWhenIdle(idle)}
+        >
+          {t("重启全部空闲的（{0} 个）", { 0: idle.length })}
+        </Button>
       )}
       {error && <p className="settings-note error">{error}</p>}
     </div>

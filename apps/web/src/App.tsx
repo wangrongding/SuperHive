@@ -1213,6 +1213,16 @@ export function App({
     setRuntimeHubOpen(true);
   }, []);
 
+  /** 设置里的「查看全部 Agent」：关掉设置，打开成员面板（本机 Agent 在那里管理） */
+  const openMembersFromSettings = useCallback(() => {
+    returnToAgentDialogRef.current = false;
+    setSettingsOpen(false);
+    setRuntimesFocus(undefined);
+    setSidePanelTab("members");
+    setMembersCollapsed(false);
+    if (window.matchMedia?.("(max-width: 1100px)").matches) setMobilePanel("members");
+  }, []);
+
   /** 大面板里点 CLI 名字：去设置「Agent 运行时」里那个 CLI 的配置 */
   const jumpFromRuntimeHub = useCallback((provider: SelectableAgentProvider) => {
     setRuntimeHubOpen(false);
@@ -3092,6 +3102,7 @@ export function App({
           autoSaveDraft={autoSaveDraft}
           closeSettings={closeSettings}
           openRuntimeHub={openRuntimeHub}
+          openMembers={openMembersFromSettings}
           currentRoomId={currentRoomId}
           draft={draft}
           ensureNotificationPermission={ensureNotificationPermission}

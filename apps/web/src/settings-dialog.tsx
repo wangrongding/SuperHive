@@ -51,6 +51,7 @@ export function SettingsDialog({
   autoSaveDraft,
   closeSettings,
   openRuntimeHub,
+  openMembers,
   currentRoomId,
   draft,
   ensureNotificationPermission,
@@ -101,6 +102,8 @@ export function SettingsDialog({
   closeSettings: () => void;
   /** 打开「MCP 与技能」大面板（会先关掉设置） */
   openRuntimeHub?: () => void;
+  /** 「查看全部 Agent」：关掉设置，打开成员面板 */
+  openMembers?: () => void;
   currentRoomId: string;
   draft: string;
   ensureNotificationPermission: () => Promise<boolean>;
@@ -494,7 +497,7 @@ export function SettingsDialog({
                   </p>
                 </div>
                 <HostManageNotice local={local} />
-                <LocalAgentUpdatesGroup local={local} />
+                <LocalAgentUpdatesGroup local={local} onShowAgents={openMembers} />
                 <RemoteJoinsGroup local={local} />
                 <NetworkProxySettingsGroup local={local} />
                 <KeepAwakeSettingsGroup local={local} />
