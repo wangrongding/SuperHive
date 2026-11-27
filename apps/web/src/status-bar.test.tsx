@@ -9,6 +9,7 @@ import {
   agentCounts,
   contextPercent,
   imSummary,
+  leadCacheState,
   type StatusBarProps,
 } from "./status-bar";
 
@@ -74,6 +75,25 @@ describe("contextPercent", () => {
       ),
     ).toBeUndefined();
     expect(contextPercent(undefined)).toBeUndefined();
+  });
+});
+
+describe("leadCacheState", () => {
+  const at = Date.parse(now);
+  const expires = (ms: number) => ({ cacheExpiresAt: new Date(at + ms).toISOString() });
+  it("充足、不到 5 分钟临期、到点才算过期；不知道有效期返回 undefined", () => {
+    expect(leadCacheState(expires(23.5 * 60_000), at)).toEqual({ tone: "ok", minutes: 23 });
+    expect(leadCacheState(expires(4 * 60_000 + 59_000), at)).toEqual({
+      tone: "warning",
+      minutes: 4,
+    });
+    // 最后不到一分钟还没过期，不提前标成过期
+    expect(leadCacheState(expires(30_000), at)).toEqual({ tone: "warning", minutes: 0 });
+    expect(leadCacheState(expires(0), at)).toEqual({ tone: "expired", minutes: 0 });
+    expect(leadCacheState(expires(-60_000), at)).toEqual({ tone: "expired", minutes: 0 });
+    expect(leadCacheState({}, at)).toBeUndefined();
+    expect(leadCacheState({ cacheExpiresAt: "bad" }, at)).toBeUndefined();
+    expect(leadCacheState(undefined, at)).toBeUndefined();
   });
 });
 
@@ -316,5 +336,153 @@ describe("StatusBar", () => {
     expect(item.className).toContain("danger");
     fireEvent.click(item);
     expect(screen.getByText(/连不上 Hive Server/)).toBeTruthy();
+  });
+
+  describe("主 Agent 弹层", () => {
+    const leadWith = (context: NonNullable<Participant["context"]>) => [
+      agent("rd-claude", "busy", { context } as Partial<Participant>),
+      agent("rd-codex", "online"),
+    ];
+    const minutesFromNow = (minutes: number) =>
+      new Date(Date.now() + minutes * 60_000 + 30_000).toISOString();
+    const openLead = () => {
+      fireEvent.click(screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" }));
+      return screen.getByRole("dialog", { name: "主 Agent rd-claude：忙碌" });
+    };
+
+    it("上下文一行：进度条 · 百分比 · 用量/阈值；不再有成段说明，解释在悬停提示里", () => {
+      renderBar({
+        participants: leadWith({
+          at: now,
+          contextTokens: 121_000,
+          compactWindow: 400_000,
+          cacheExpiresAt: minutesFromNow(23),
+        }),
+      });
+      const dialog = openLead();
+      expect(screen.getByRole("meter", { name: "上下文用量" }).getAttribute("aria-valuenow")).toBe(
+        "30",
+      );
+      expect(dialog.textContent).toContain("30%");
+      expect(dialog.textContent).toMatch(/121k\s*\/\s*400k/);
+      expect(dialog.textContent).not.toContain("上一轮结束时");
+      expect(dialog.textContent).not.toContain("离自动压缩阈值");
+      expect(dialog.textContent).not.toContain("从最后一次模型请求算起");
+      expect(dialog.querySelector(".status-popover-note")).toBeNull();
+      // 解释还在：读屏名 / 悬停提示里
+      const line = dialog.querySelector(".status-context-line")!;
+      expect(line.getAttribute("aria-label")).toContain("离自动压缩阈值 400k 还有 279k");
+      expect(line.getAttribute("aria-label")).not.toContain("缓存");
+    });
+
+    it("缓存单独一行 chip：充足、临期、过期三种状态", () => {
+      renderBar({
+        participants: leadWith({
+          at: now,
+          contextTokens: 1000,
+          compactWindow: 400_000,
+          cacheExpiresAt: minutesFromNow(23),
+        }),
+      });
+      let chip = openLead().querySelector(".status-cache-chip")!;
+      expect(chip.textContent).toBe("还剩 23 分钟");
+      expect(chip.className).toContain("ok");
+      expect(chip.getAttribute("aria-label")).toContain("从最后一次模型请求算起");
+      cleanup();
+      renderBar({
+        participants: leadWith({ at: now, contextTokens: 1000, cacheExpiresAt: minutesFromNow(3) }),
+      });
+      chip = openLead().querySelector(".status-cache-chip")!;
+      expect(chip.textContent).toBe("还剩 3 分钟");
+      expect(chip.className).toContain("warning");
+      cleanup();
+      renderBar({
+        participants: leadWith({
+          at: now,
+          contextTokens: 1000,
+          cacheExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+        }),
+      });
+      chip = openLead().querySelector(".status-cache-chip")!;
+      expect(chip.textContent).toBe("已过期");
+      expect(chip.className).toContain("expired");
+    });
+
+    it("不知道缓存有效期就整行不显示", () => {
+      renderBar({
+        participants: leadWith({ at: now, contextTokens: 1000, compactWindow: 400_000 }),
+      });
+      const dialog = openLead();
+      expect(dialog.querySelector(".status-cache-chip")).toBeNull();
+      expect(screen.queryByText("缓存")).toBeNull();
+      expect(screen.getByText("上下文")).toBeTruthy();
+    });
+
+    it("「切换主 Agent」展开后能收起：再点开关、选当前那项、选别的、Esc、点外面", async () => {
+      const setLeadAgent = vi.fn();
+      renderBar({ setLeadAgent });
+      const trigger = screen.getByRole("button", { name: "主 Agent rd-claude：忙碌" });
+      openLead();
+      const toggle = screen.getByRole("button", { name: /切换主 Agent/ });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      // 展开后开关还在，再点一次收起
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByRole("radiogroup", { name: "切换主 Agent" })).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: /rd-claude/ }));
+      fireEvent.click(toggle);
+      expect(screen.queryByRole("radiogroup", { name: "切换主 Agent" })).toBeNull();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+
+      // 选当前那项：关掉弹层、不发请求、焦点回到状态栏按钮
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole("radio", { name: /rd-claude/ }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(setLeadAgent).not.toHaveBeenCalled();
+      await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      expect(document.activeElement).toBe(trigger);
+
+      // Esc：焦点在列表里时
+      openLead();
+      fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
+      fireEvent.keyDown(screen.getByRole("radio", { name: /rd-codex/ }), { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      expect(document.activeElement).toBe(trigger);
+
+      // Esc：焦点不在弹层里（落在 body）时也能关
+      openLead();
+      (document.activeElement as HTMLElement | null)?.blur();
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // 点外面：关掉，焦点没被别处接走就回到按钮
+      openLead();
+      fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      expect(document.activeElement).toBe(trigger);
+
+      // 选别的：切换并关掉
+      openLead();
+      fireEvent.click(screen.getByRole("button", { name: /切换主 Agent/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /rd-codex/ }));
+      expect(setLeadAgent).toHaveBeenCalledWith("rd-codex");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("点外面的输入框关掉弹层时，不把焦点抢回状态栏按钮", async () => {
+      renderBar();
+      const input = document.createElement("input");
+      document.body.append(input);
+      openLead();
+      fireEvent.pointerDown(input);
+      input.focus();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+      expect(document.activeElement).toBe(input);
+      input.remove();
+    });
   });
 });

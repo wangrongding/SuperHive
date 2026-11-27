@@ -452,3 +452,63 @@
   font-weight: normal;
   font-size: var(--text-xs);
 }
+
+/* 主 Agent 弹层：「切换主 Agent」开关展开后箭头朝下，列表就在开关下面 */
+.status-lead-toggle svg {
+  transition: transform 120ms ease;
+}
+
+.status-lead-toggle.open svg {
+  transform: rotate(90deg);
+}
+
+.status-lead-switch-list {
+  margin-top: 4px;
+}
+
+/* 上下文一行：进度条 · 百分比 · 用量/阈值 */
+.status-context-line {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.status-context-line:focus-visible,
+.status-cache-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 缓存剩余时间：小标签，临期警示色、过期危险色 */
+.status-cache-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-muted);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.status-cache-chip.ok {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+}
+
+.status-cache-chip.warning {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+}
+
+.status-cache-chip.expired {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}

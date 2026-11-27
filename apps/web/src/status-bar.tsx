@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type {
+  AgentContextStatus,
   ImConnection,
   MetaResponse,
   NetworkProxyMode,
@@ -35,6 +36,7 @@ import { KeyCombo } from "./key-combo";
 import { keepAwakeStatusText } from "./host-settings";
 import { listAllImConnections, IM_CHANNEL_LABELS } from "./im-api";
 import { effectiveCompactWindow, memberContextHint } from "./member-context";
+import { formatTokens } from "./usage";
 import { modelDisplayName } from "./agent-models";
 import { SettingsSwitch } from "./settings-switch";
 import { Tooltip } from "./tooltip";
@@ -143,9 +145,18 @@ function StatusItem({
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
-  const close = useCallback((restoreFocus = true) => {
+  /**
+   * 关掉面板。"always"：焦点一定回到按钮（Esc、选了一项、再点按钮）；
+   * "if-lost"：点了外面时，只在焦点没被别的东西接走（落回 body）时才还给按钮，
+   * 免得抢走刚点中的输入框或另一个状态栏菜单的焦点
+   */
+  const close = useCallback((restoreFocus: "always" | "if-lost" = "always") => {
     setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => buttonRef.current?.focus());
+    window.requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (restoreFocus === "always" || !active || active === document.body)
+        buttonRef.current?.focus({ preventScroll: true });
+    });
   }, []);
 
   useLayoutEffect(() => {
@@ -171,10 +182,20 @@ function StatusItem({
       const target = event.target as Node | null;
       if (target && (panelRef.current?.contains(target) || buttonRef.current?.contains(target)))
         return;
-      close(false);
+      close("if-lost");
+    };
+    // 焦点不在面板里时（比如点了面板里的空白处）Esc 也要能关
+    const onEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      close();
     };
     document.addEventListener("pointerdown", onPointer, true);
-    return () => document.removeEventListener("pointerdown", onPointer, true);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("keydown", onEscape);
+    };
   }, [open, close]);
 
   // 打开后焦点落在选中的那项（没有就第一项）
@@ -935,9 +956,8 @@ function LeadChoices({
           </span>
         ),
       }))}
-      onChange={(name) => {
-        if (name !== current) onSwitch(name);
-      }}
+      // 点当前那项也要回调：调用方据此关掉面板（是不是同一个由调用方判断）
+      onChange={onSwitch}
     />
   );
 }
@@ -986,7 +1006,10 @@ function LeadPicker({
   );
 }
 
-/** 详情下面先只有一个「切换主 Agent」，点了才展开列表 */
+/**
+ * 详情下面先只有一个「切换主 Agent」开关，点了展开列表、再点收起。
+ * 开关一直留着：以前展开后开关被换成列表，点当前那项又被忽略，列表就收不回去了
+ */
 function LeadSwitcher({
   agents,
   current,
@@ -997,15 +1020,127 @@ function LeadSwitcher({
   onSwitch: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  if (!open) {
-    return <PopoverLink onClick={() => setOpen(true)}>{t("切换主 Agent")}</PopoverLink>;
-  }
+  const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  // 展开后焦点落到当前主 Agent 那项，↑↓ 接着选
+  useEffect(() => {
+    if (open) listRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+  }, [open]);
   return (
-    <PopoverSection title={t("切换主 Agent")}>
-      <div className="status-lead-choices">
-        <LeadChoices agents={agents} current={current} onSwitch={onSwitch} />
-      </div>
-    </PopoverSection>
+    <>
+      <button
+        type="button"
+        className={`status-popover-link status-lead-toggle${open ? " open" : ""}`}
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {t("切换主 Agent")}
+        <Icon name="arrow-right" size={12} />
+      </button>
+      {open && (
+        <div ref={listRef} id={listId} className="status-lead-choices status-lead-switch-list">
+          <LeadChoices agents={agents} current={current} onSwitch={onSwitch} />
+        </div>
+      )}
+    </>
+  );
+}
+
+/** 缓存还剩多久：已过期、不到 5 分钟、充足；不知道有效期返回 undefined */
+export function leadCacheState(
+  context: Pick<AgentContextStatus, "cacheExpiresAt"> | undefined,
+  now: number,
+): { tone: "ok" | "warning" | "expired"; minutes: number } | undefined {
+  if (!context?.cacheExpiresAt) return undefined;
+  const left = Date.parse(context.cacheExpiresAt) - now;
+  if (!Number.isFinite(left)) return undefined;
+  if (left <= 0) return { tone: "expired", minutes: 0 };
+  const minutes = Math.floor(left / 60_000);
+  return { tone: minutes < 5 ? "warning" : "ok", minutes };
+}
+
+/** 弹层开着时每 30 秒刷新一次「现在」，缓存剩余时间跟着走 */
+function useNow(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [enabled]);
+  return now;
+}
+
+/** 主 Agent 弹层里的上下文和缓存：各一行，解释都放进悬停提示 */
+function LeadContextFacts({ context }: { context: AgentContextStatus }) {
+  const now = useNow(Boolean(context.cacheExpiresAt));
+  const window = effectiveCompactWindow(context);
+  const percent =
+    window !== undefined && window > 0
+      ? Math.min(100, Math.round((context.contextTokens / window) * 100))
+      : undefined;
+  const contextHint = memberContextHint({ ...context, cacheExpiresAt: undefined }, now);
+  const cache = leadCacheState(context, now);
+  const cacheText = !cache
+    ? undefined
+    : cache.tone === "expired"
+      ? t("已过期")
+      : cache.minutes < 1
+        ? t("还剩不到 1 分钟")
+        : t("还剩 {0} 分钟", { 0: cache.minutes });
+  const cacheHint = !cache
+    ? undefined
+    : cache.tone === "expired"
+      ? t("缓存已过期：下一轮要把整段会话重新写进缓存，更慢也更贵。")
+      : t("从最后一次模型请求算起；过期后下一轮要整段重写缓存，更慢也更贵。");
+  const size =
+    window !== undefined
+      ? `${formatTokens(context.contextTokens)} / ${formatTokens(window)}`
+      : formatTokens(context.contextTokens);
+  return (
+    <>
+      <dt>{t("上下文")}</dt>
+      <dd>
+        <Tooltip content={contextHint}>
+          <span className="status-context-line" tabIndex={0} aria-label={contextHint}>
+            {percent !== undefined && (
+              <>
+                <span
+                  className={`status-meter${percent >= 80 ? " warning" : ""}`}
+                  role="meter"
+                  aria-label={t("上下文用量")}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={percent}
+                >
+                  <span style={{ width: `${percent}%` }} />
+                </span>
+                <span>{percent}%</span>
+                <span aria-hidden="true">·</span>
+              </>
+            )}
+            <span className="mono">{size}</span>
+          </span>
+        </Tooltip>
+      </dd>
+      {cache && cacheText && (
+        <>
+          <dt>{t("缓存")}</dt>
+          <dd>
+            <Tooltip content={cacheHint}>
+              <span
+                className={`status-cache-chip ${cache.tone}`}
+                tabIndex={0}
+                aria-label={`${t("缓存")} ${cacheText}：${cacheHint}`}
+              >
+                {cacheText}
+              </span>
+            </Tooltip>
+          </dd>
+        </>
+      )}
+    </>
   );
 }
 
@@ -1075,38 +1210,17 @@ function LeadAgentItem({
                   </dd>
                 </>
               )}
-              {percent !== undefined && (
-                <>
-                  <dt>{t("上下文")}</dt>
-                  <dd>
-                    <span
-                      className={`status-meter${percent >= 80 ? " warning" : ""}`}
-                      role="meter"
-                      aria-label={t("上下文用量")}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={percent}
-                    >
-                      <span style={{ width: `${percent}%` }} />
-                    </span>
-                    {percent}%
-                  </dd>
-                </>
-              )}
+              {lead.context && <LeadContextFacts context={lead.context} />}
             </dl>
-            {lead.context && (
-              <p className="status-popover-note pre">
-                {memberContextHint(lead.context, Date.now())}
-              </p>
-            )}
           </PopoverSection>
           {onSwitch && agents.length > 1 && (
             <LeadSwitcher
               agents={agents}
               current={lead.username}
               onSwitch={(name) => {
+                // 选了哪一项都关掉面板；选的还是当前这个就不用再请求
                 close();
-                onSwitch(name);
+                if (name !== lead.username) onSwitch(name);
               }}
             />
           )}
