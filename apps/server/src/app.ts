@@ -39,6 +39,7 @@ import {
   createRoomRequestSchema,
   updateRoomRequestSchema,
   roomPinsRequestSchema,
+  readStateUpdateSchema,
   whiteboardArchiveRequestSchema,
   createGuestAgentRequestSchema,
   createInviteRequestSchema,
@@ -6498,6 +6499,79 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (room) broadcastAll({ type: "rooms.changed", room: withBranch(room) });
     }
     return { roomIds: next };
+  });
+
+  /**
+   * 已读状态跟着人走：房主不管从本机、登录过的其他设备还是桌面端进来都是 owner；
+   * 访客按房间里的名字各记各的（重新兑换邀请拿到新会话也接得上）
+   */
+  function readerOf(principal: Principal): string {
+    if (principal.kind === "admin") return "owner";
+    const session = principal.resolved.session;
+    return `guest:${session.roomId}:${session.username.toLocaleLowerCase()}`;
+  }
+
+  function schedulesSeenKey(reader: string): string {
+    return `schedules-seen-at:${reader}`;
+  }
+
+  /** 推给同一个人开着的所有网页（Agent 用不上，不发） */
+  function sendReadState(reader: string, event: ServerEvent): void {
+    for (const connection of connections) {
+      if (connection.participant?.type !== "human" || !connection.principal) continue;
+      if (readerOf(connection.principal) !== reader) continue;
+      send(connection.socket, event);
+    }
+  }
+
+  app.get("/api/read-state", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    const reader = readerOf(principal);
+    const rooms = Object.fromEntries(
+      Object.entries(database.readPositions(reader)).filter(([roomId]) =>
+        canAccessRoom(principal, roomId),
+      ),
+    );
+    const schedulesSeenAt = database.getSetting(schedulesSeenKey(reader));
+    return { rooms, ...(schedulesSeenAt ? { schedulesSeenAt } : {}) };
+  });
+
+  /** 已读位置只进不退：比 Server 上旧的忽略；返回真正往前走了的部分，同时推给这个人的其他网页 */
+  app.put("/api/read-state", async (request, reply) => {
+    const principal = guard(request, reply);
+    if (!principal) return reply;
+    const body = readStateUpdateSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
+    const reader = readerOf(principal);
+    const now = new Date(clock()).toISOString();
+    const rooms = database.advanceReadPositions(
+      reader,
+      Object.fromEntries(
+        Object.entries(body.data.rooms ?? {}).filter(([roomId]) =>
+          canAccessRoom(principal, roomId),
+        ),
+      ),
+      now,
+    );
+    let schedulesSeenAt: string | undefined;
+    if (body.data.schedulesSeenAt) {
+      // 不认未来的时间：设备时钟快了也不会把之后的失败一直算成看过
+      const requested = new Date(
+        Math.min(Date.parse(body.data.schedulesSeenAt), clock()),
+      ).toISOString();
+      const before = database.getSetting(schedulesSeenKey(reader));
+      if (!before || requested > before) {
+        database.setSetting(schedulesSeenKey(reader), requested);
+        schedulesSeenAt = requested;
+      }
+    }
+    const changed = { rooms, ...(schedulesSeenAt ? { schedulesSeenAt } : {}) };
+    if (Object.keys(rooms).length > 0 || schedulesSeenAt) {
+      sendReadState(reader, { type: "read-state.changed", ...changed });
+    }
+    return changed;
   });
 
   /** 房间工作区必须是 Server 所在电脑上真实存在的目录，存解析后的真实路径 */

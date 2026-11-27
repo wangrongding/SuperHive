@@ -92,6 +92,38 @@ describe("attention opening", () => {
   });
 });
 
+describe("完成未看跟着已读走", () => {
+  it("别的设备上看过那个房间，这里的「完成未看」和提示一起收起", () => {
+    localStorage.clear();
+    const running = { ...toast(1).invocation, status: "running" } as Invocation;
+    const done = { ...running, status: "completed", finishedAt: new Date().toISOString() };
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const { result } = renderHook(() =>
+      useAttention({
+        username: "Alice",
+        isOwner: true,
+        currentRoomId: "general",
+        activeInvocations: new Map(),
+        preferences: { delivery: "page", sound: false },
+        roomName: (id) => id,
+        onOpen: vi.fn(),
+      }),
+    );
+    act(() => {
+      result.current.seed([running]);
+      result.current.observe(done as Invocation);
+    });
+    expect(result.current.unseenByRoom.get("frontend")).toBe(1);
+    expect(result.current.toasts).toHaveLength(1);
+    act(() => result.current.markRoomsSeen(["design"]));
+    expect(result.current.unseenByRoom.get("frontend")).toBe(1);
+    act(() => result.current.markRoomsSeen(["frontend"]));
+    expect(result.current.unseenByRoom.get("frontend")).toBeUndefined();
+    expect(result.current.toasts).toHaveLength(0);
+    visibility.mockRestore();
+  });
+});
+
 describe("AttentionToasts", () => {
   it("keeps completed toasts until dismissed and folds older ones", () => {
     vi.useFakeTimers();

@@ -126,6 +126,7 @@ function useHarness() {
       onInvocation: noOp,
       onSchedule: noOp,
       onRoomActivity: noOp,
+      onReadState: noOp,
       onSnapshot: noOp,
     }),
   });

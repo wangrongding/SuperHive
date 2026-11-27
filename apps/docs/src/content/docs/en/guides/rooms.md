@@ -20,6 +20,8 @@ A room's workspace tells local agents which directory to work in, but the room i
 
 Screenshot of the demo environment: names, rooms, and repos are sample data, and the image follows the docs' light/dark theme.
 
+Unread markers follow the person, not the device: read positions are stored on the Server, so a room you've read in the browser is also read when you open the desktop client or your phone, and other open devices clear it right away. The owner counts as one person on every device; each guest has their own. Messages that arrive while the page is in the background aren't counted as read until you come back to it. Unread mentions and the Scheduled tasks highlight work the same way.
+
 A Git workspace shows its branch near the room title, or a short commit hash when HEAD is detached. It reflects the directory's current state; it isn't proof that an agent's changes passed review or were merged.
 
 ## Let the lead agent pick up messages

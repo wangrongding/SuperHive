@@ -9,17 +9,6 @@ import {
   upsertSchedule,
 } from "./schedules";
 
-/** 上次打开「定时任务」面板的时间：之后才失败、错过的才在入口上醒目提示 */
-export const schedulesSeenKey = "superhive.schedules-seen-at";
-
-function readSeenAt(): string {
-  try {
-    return localStorage.getItem(schedulesSeenKey) ?? "";
-  } catch {
-    return "";
-  }
-}
-
 /** 两个时间里较晚的那个（ISO 字符串可以直接比较） */
 function later(a: string, b: string | undefined): string {
   return b && b > a ? b : a;
@@ -34,16 +23,21 @@ export function useSchedules({
   meta,
   authToken,
   username,
+  seenAt,
+  markSeen,
 }: {
   base: string;
   meta: MetaResponse | undefined;
   authToken: string | undefined;
   username: string;
+  /** 上次打开「定时任务」面板的时间（跟着人走，见 read-state.ts）：之后才失败、错过的才醒目提示 */
+  seenAt: string;
+  /** 打开面板：之前的失败、错过算看过了，入口上不再醒目提示 */
+  markSeen: () => void;
 }) {
   const [schedules, setSchedules] = useState<ReadonlyMap<string, Schedule>>(new Map());
   const [invocations, setInvocations] = useState<ReadonlyMap<string, Invocation>>(new Map());
   const [onlineInvocationIds, setOnlineInvocationIds] = useState<ReadonlySet<string>>(new Set());
-  const [seenAt, setSeenAt] = useState(readSeenAt);
   const schedulesRef = useRef(schedules);
   schedulesRef.current = schedules;
   const invocationsRef = useRef(invocations);
@@ -123,17 +117,6 @@ export function useSchedules({
     },
     [authToken, base, username],
   );
-
-  /** 打开面板：之前的失败、错过算看过了，入口上不再醒目提示 */
-  const markSeen = useCallback(() => {
-    const at = new Date().toISOString();
-    setSeenAt(at);
-    try {
-      localStorage.setItem(schedulesSeenKey, at);
-    } catch {
-      // 存不下就只在本页生效
-    }
-  }, []);
 
   const relocalize = useCallback(() => {
     const again = <T>(map: ReadonlyMap<string, T>) =>

@@ -140,7 +140,12 @@ const crossRoom: {
   schedules: Schedule[];
   scheduleInvocations: Invocation[];
   scheduleRequests: Array<{ url: string; method: string; body?: unknown }>;
+  /** GET /api/read-state 返回的 Server 端已读位置；PUT 的请求体记在 readStateWrites */
+  readState: { rooms: Record<string, number>; schedulesSeenAt?: string };
+  readStateWrites: unknown[];
 } = {
+  readState: { rooms: {} },
+  readStateWrites: [],
   mentions: [],
   invocations: [],
   invocationMessages: [],
@@ -218,6 +223,8 @@ describe("App mention autocomplete", () => {
     crossRoom.schedules = [];
     crossRoom.scheduleInvocations = [];
     crossRoom.scheduleRequests = [];
+    crossRoom.readState = { rooms: {} };
+    crossRoom.readStateWrites = [];
     whiteboardApi.entries = [];
     whiteboardApi.requests = [];
     localApi.enabled = false;
@@ -443,6 +450,15 @@ describe("App mention autocomplete", () => {
         if (url.includes("/api/rooms") && init?.method === "POST") {
           const body = JSON.parse(String(init.body)) as { id: string; name?: string };
           return jsonResponse({ room: roomSummary(body.id, { name: body.name ?? body.id }) }, 201);
+        }
+        if (url.includes("/api/read-state")) {
+          if (init?.method === "PUT") {
+            const body = JSON.parse(String(init.body)) as { rooms?: Record<string, number> };
+            crossRoom.readStateWrites.push(body);
+            crossRoom.readState.rooms = { ...crossRoom.readState.rooms, ...body.rooms };
+            return jsonResponse({ rooms: body.rooms ?? {} });
+          }
+          return jsonResponse(crossRoom.readState);
         }
         if (url.includes("/api/room-pins")) {
           const body = JSON.parse(String(init!.body)) as { roomIds: string[] };
@@ -1866,6 +1882,88 @@ describe("App mention autocomplete", () => {
       "@ old-bot",
       "复制名字",
     ]);
+  });
+
+  it("syncs read positions through the server: migrates local ones and follows other devices", async () => {
+    localStorage.setItem("superhive.username", "Alice");
+    // 升级前这台设备只在本地记着 frontend 读到 4，Server 上只有 2
+    localStorage.setItem("superhive.read-seq.frontend", "4");
+    crossRoom.readState = { rooms: { frontend: 2 } };
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    const roomsPanel = screen.getByLabelText("房间列表");
+    await waitFor(() => expect(within(roomsPanel).getByText("# frontend")).toBeTruthy());
+    // 两边取较大值，本地更新的写回 Server
+    await waitFor(() => expect(crossRoom.readStateWrites).toEqual([{ rooms: { frontend: 4 } }]));
+
+    act(() =>
+      socket.serverEvent({
+        type: "room.activity",
+        roomId: "frontend",
+        latestSeq: 4,
+        onlineCount: 1,
+      }),
+    );
+    expect(screen.queryByLabelText("# frontend 有未读消息")).toBeNull();
+    act(() =>
+      socket.serverEvent({
+        type: "room.activity",
+        roomId: "frontend",
+        latestSeq: 6,
+        onlineCount: 1,
+      }),
+    );
+    expect(screen.getByLabelText("# frontend 有未读消息")).toBeTruthy();
+
+    // 另一台设备上读了：Server 推过来，未读点马上消失，本地缓存也跟上
+    act(() => socket.serverEvent({ type: "read-state.changed", rooms: { frontend: 6 } }));
+    expect(screen.queryByLabelText("# frontend 有未读消息")).toBeNull();
+    expect(localStorage.getItem("superhive.read-seq.frontend")).toBe("6");
+    // 别的设备推来的不再写回
+    expect(crossRoom.readStateWrites).toHaveLength(1);
+
+    // 页面在后台时来的消息不算读过（不然开着没看的这台会把别的设备上的未读也清掉），回到前台补记
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    act(() =>
+      socket.serverEvent({
+        type: "message.created",
+        message: {
+          id: "00000000-0000-4000-8000-000000000031",
+          seq: 9,
+          roomId: "general",
+          senderId: "00000000-0000-4000-8000-000000000009",
+          senderName: "Bob",
+          senderType: "human",
+          content: "后台时来的",
+          mentions: [],
+          traceId: "00000000-0000-4000-8000-000000000032",
+          hopCount: 0,
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(crossRoom.readStateWrites).toHaveLength(1);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() =>
+      expect(crossRoom.readStateWrites).toEqual([
+        { rooms: { frontend: 4 } },
+        { rooms: { general: 9 } },
+      ]),
+    );
   });
 
   it("switches rooms, shows unread dots, and creates rooms from the sidebar", async () => {

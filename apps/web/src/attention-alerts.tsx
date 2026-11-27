@@ -221,6 +221,22 @@ export function useAttention({
     );
   }, [currentRoomId, visible]);
 
+  /** 这个人在别的设备上看过这些房间：「完成未看」和对应的提示也算看过了 */
+  const markRoomsSeen = useCallback((roomIds: readonly string[]) => {
+    if (roomIds.length === 0) return;
+    const rooms = new Set(roomIds);
+    setUnseen((current) =>
+      [...current.values()].some((item) => rooms.has(item.roomId))
+        ? new Map([...current].filter(([, item]) => !rooms.has(item.roomId)))
+        : current,
+    );
+    setToasts((current) =>
+      current.some((toast) => rooms.has(toast.invocation.roomId))
+        ? current.filter((toast) => !rooms.has(toast.invocation.roomId))
+        : current,
+    );
+  }, []);
+
   const dismissToast = useCallback((id: string) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
@@ -343,6 +359,7 @@ export function useAttention({
     items,
     byRoom,
     unseenByRoom,
+    markRoomsSeen,
     observe,
     seed,
     open,

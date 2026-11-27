@@ -138,6 +138,7 @@ import { RoomSidebar } from "./room-sidebar";
 import { useRoomData } from "./use-room-data";
 import { useRoomList } from "./use-room-list";
 import { useRoomConnection, type GlobalEvents } from "./use-room-connection";
+import { useReadState } from "./read-state";
 import { useMessageScroll } from "./use-message-scroll";
 import { useMessageJump, useMessageWindow } from "./use-message-timeline";
 import { useComposer } from "./use-composer";
@@ -200,6 +201,7 @@ export function App({
   const base = useMemo(serverBase, []);
   const [error, setError] = useState<string>();
   const room = useRoomData({ base, authToken, currentRoomId });
+  const readState = useReadState({ base, authToken, meta });
   const {
     participants,
     messages,
@@ -216,7 +218,6 @@ export function App({
     rooms,
     setRooms,
     readSeqs,
-    setReadSeqs,
     showArchivedRooms,
     setShowArchivedRooms,
     sidebarRooms,
@@ -230,7 +231,16 @@ export function App({
     upsertRoom,
     refreshRooms,
     markRoomReadNow,
-  } = useRoomList({ base, authToken, meta, isOwner, username, latestSeqRef, setError });
+  } = useRoomList({
+    base,
+    authToken,
+    meta,
+    isOwner,
+    username,
+    latestSeqRef,
+    readState,
+    setError,
+  });
   // 消息本身不带 provider：按发送者名到成员表里查，离开房间的 Agent 回退为 "AI"
   const agentProviderByName = useMemo(
     () =>
@@ -274,6 +284,7 @@ export function App({
     onInvocation: () => undefined,
     onSchedule: () => undefined,
     onRoomActivity: () => undefined,
+    onReadState: () => undefined,
     onSnapshot: () => undefined,
   });
   const [connectionState, setConnectionState] = useState<"connecting" | "online" | "offline">(
@@ -1375,6 +1386,14 @@ export function App({
   useEffect(() => {
     if (messages.length > 0) markRoomRead(currentRoomId);
   }, [currentRoomId, markRoomRead, messages]);
+  // 页面在后台时来的消息不算读过（见 markRoomRead），回到前台正看着这个房间时补记
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") markRoomRead(currentRoomId);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [currentRoomId, markRoomRead]);
 
   const todosApi = useMemo(
     () => todoApi(base, authToken, currentRoomId, username),
@@ -1463,8 +1482,7 @@ export function App({
     authToken,
     username,
     currentRoomId,
-    readSeqs,
-    setReadSeqs,
+    readState,
     attentionRef,
     globalEventsRef,
   });

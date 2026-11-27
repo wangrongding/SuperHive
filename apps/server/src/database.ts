@@ -848,6 +848,14 @@ export class HiveDatabase {
         autostart INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL
       );
+      -- 已读位置：reader 是「人」（房主为 owner，访客按房间与名字），每个房间读到的最大 seq
+      CREATE TABLE IF NOT EXISTS read_positions (
+        reader TEXT NOT NULL,
+        room_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(reader, room_id)
+      );
       CREATE TABLE IF NOT EXISTS removed_local_agents (
         name_key TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -1068,6 +1076,47 @@ export class HiveDatabase {
 
   close(): void {
     this.db.close();
+  }
+
+  /** 一个人在各房间读到的最大 seq */
+  readPositions(reader: string): Record<string, number> {
+    const rows = this.db
+      .prepare("SELECT room_id, seq FROM read_positions WHERE reader = ?")
+      .all(reader) as Array<{ room_id: string; seq: number }>;
+    return Object.fromEntries(rows.map((row) => [row.room_id, row.seq]));
+  }
+
+  /**
+   * 把已读位置往前推：比已有的小或相等的忽略（只进不退），超过房间最新 seq 的按最新 seq 记，
+   * 不存在的房间跳过。返回真正往前走了的那些房间和新值
+   */
+  advanceReadPositions(
+    reader: string,
+    positions: Record<string, number>,
+    at: string,
+  ): Record<string, number> {
+    const current = this.db.prepare(
+      "SELECT seq FROM read_positions WHERE reader = ? AND room_id = ?",
+    );
+    const upsert = this.db.prepare(
+      `INSERT INTO read_positions(reader, room_id, seq, updated_at) VALUES(?, ?, ?, ?)
+       ON CONFLICT(reader, room_id) DO UPDATE SET seq = excluded.seq, updated_at = excluded.updated_at
+       WHERE excluded.seq > read_positions.seq`,
+    );
+    const roomExists = this.db.prepare("SELECT 1 FROM rooms WHERE id = ?");
+    const changed: Record<string, number> = {};
+    this.db.transaction(() => {
+      for (const [roomId, requested] of Object.entries(positions)) {
+        if (!Number.isSafeInteger(requested) || requested <= 0) continue;
+        if (!roomExists.get(roomId)) continue;
+        const seq = Math.min(requested, this.latestSeq(roomId));
+        const before = current.get(reader, roomId) as { seq: number } | undefined;
+        if (seq <= (before?.seq ?? 0)) continue;
+        upsert.run(reader, roomId, seq, at);
+        changed[roomId] = seq;
+      }
+    })();
+    return changed;
   }
 
   /** 服务端的小设置（存在 meta 表里，JSON） */

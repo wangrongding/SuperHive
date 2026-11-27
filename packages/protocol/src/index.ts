@@ -1159,6 +1159,35 @@ export const roomActivityEventSchema = z.object({
 });
 
 /**
+ * 一个人的已读状态，存在 Server 上，换设备、换客户端都一样：房主不管从哪台设备进来算同一个人，
+ * 访客按房间里的访客成员各算各的。
+ * - rooms：每个房间读到的最大消息 seq，只进不退
+ * - schedulesSeenAt：上次打开「定时任务」面板的时间，之后才失败、错过的才醒目提示
+ */
+export const readStateSchema = z.object({
+  rooms: z.record(z.string(), z.number().int().nonnegative()),
+  schedulesSeenAt: z.string().datetime().optional(),
+});
+
+/** 写已读状态：只带变了的部分；比 Server 上旧的值会被忽略 */
+export const readStateUpdateSchema = z.object({
+  rooms: z
+    .record(roomIdSchema, z.number().int().nonnegative())
+    .refine((rooms) => Object.keys(rooms).length <= 1000)
+    .optional(),
+  schedulesSeenAt: z.string().datetime().optional(),
+});
+
+/** 已读状态往前走了：推给同一个人的所有网页，只带变了的部分 */
+export const readStateChangedEventSchema = readStateSchema.extend({
+  type: z.literal("read-state.changed"),
+});
+
+export type ReadState = z.infer<typeof readStateSchema>;
+export type ReadStateUpdate = z.infer<typeof readStateUpdateSchema>;
+export type ReadStateChangedEvent = z.infer<typeof readStateChangedEventSchema>;
+
+/**
  * Server 上一次超过阈值的慢操作（锁、git 子进程、重查询、HTTP 请求）。只记操作名和耗时，
  * 不记命令参数、请求体或查询串。
  */
@@ -1238,6 +1267,7 @@ export const serverEventSchema = z.discriminatedUnion("type", [
   presenceChangedEventSchema,
   roomsChangedEventSchema,
   roomActivityEventSchema,
+  readStateChangedEventSchema,
   slowOperationSnapshotEventSchema,
   slowOperationRecordedEventSchema,
   incidentsChangedEventSchema,

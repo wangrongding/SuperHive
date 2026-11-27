@@ -11,6 +11,7 @@ import type {
   Invocation,
   MessagesResponse,
   MetaResponse,
+  ReadState,
   RoomSummary,
   Schedule,
   ServerEvent,
@@ -35,6 +36,8 @@ export type GlobalEvents = {
   /** 定时任务跨房间推送：左侧「定时任务」面板合并 */
   onSchedule: (schedule: Schedule) => void;
   onRoomActivity: () => void;
+  /** 这个人在别的设备（或这台）上读了：已读位置往前走了 */
+  onReadState: (state: ReadState) => void;
   onSnapshot: () => void;
 };
 
@@ -513,6 +516,10 @@ export function useRoomConnection({
             setError(t("房间 # {0} 已被归档，已切换回默认房间。", { 0: event.room.name }));
             callbacksRef.current.switchRoom("general");
           }
+        } else if (event.type === "read-state.changed") {
+          const { type: _type, ...state } = event;
+          void _type;
+          globalEventsRef.current.onReadState(state);
         } else if (event.type === "room.activity") {
           globalEventsRef.current.onRoomActivity();
           setRooms((current) =>

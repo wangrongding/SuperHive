@@ -1,18 +1,10 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type Dispatch,
-  type RefObject,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useMemo, useState, type RefObject } from "react";
 import type { ChatMessage, Invocation, MetaResponse, UsageSummary } from "@superhive/protocol";
 import { localizeServerPayload } from "./server-text";
 import { isInFlight, needsAttention } from "./activity";
 import type { useAttention } from "./attention-alerts";
 import { t } from "./i18n";
-import { readSeqStorageKey } from "./app-storage";
+import type { ReadStateApi } from "./read-state";
 import type { GlobalEvents } from "./use-room-connection";
 import { useSchedules } from "./use-schedules";
 
@@ -23,8 +15,7 @@ export function useActivityData({
   authToken,
   username,
   currentRoomId,
-  readSeqs,
-  setReadSeqs,
+  readState,
   attentionRef,
   globalEventsRef,
 }: {
@@ -33,8 +24,7 @@ export function useActivityData({
   authToken: string | undefined;
   username: string;
   currentRoomId: string;
-  readSeqs: Record<string, number>;
-  setReadSeqs: Dispatch<SetStateAction<Record<string, number>>>;
+  readState: ReadStateApi;
   attentionRef: RefObject<ReturnType<typeof useAttention> | undefined>;
   globalEventsRef: RefObject<GlobalEvents>;
 }) {
@@ -46,7 +36,15 @@ export function useActivityData({
     new Map(),
   );
   const [onlineInvocationIds, setOnlineInvocationIds] = useState<ReadonlySet<string>>(new Set());
-  const schedules = useSchedules({ base, meta, authToken, username });
+  const { readSeqs, advance: advanceReadSeqs, apply: applyReadState } = readState;
+  const schedules = useSchedules({
+    base,
+    meta,
+    authToken,
+    username,
+    seenAt: readState.schedulesSeenAt,
+    markSeen: readState.markSchedulesSeen,
+  });
   const { onInvocation: onScheduleInvocation, onSchedule, refresh: refreshSchedules } = schedules;
 
   const authorizedJson = useCallback(
@@ -122,6 +120,11 @@ export function useActivityData({
         onScheduleInvocation(invocation);
       },
       onSchedule,
+      onReadState: (state) => {
+        applyReadState(state);
+        // 别的设备上看过这些房间：那里「完成未看」的任务也算看过了
+        attentionRef.current?.markRoomsSeen(Object.keys(state.rooms));
+      },
       onRoomActivity: () => {
         mentionTimer = debounced(mentionTimer, refreshMentions, 800);
       },
@@ -135,7 +138,14 @@ export function useActivityData({
       window.clearTimeout(mentionTimer);
       window.clearTimeout(taskTimer);
     };
-  }, [onSchedule, onScheduleInvocation, refreshMentions, refreshSchedules, refreshTasks]);
+  }, [
+    applyReadState,
+    onSchedule,
+    onScheduleInvocation,
+    refreshMentions,
+    refreshSchedules,
+    refreshTasks,
+  ]);
 
   const unreadMentionCount = useMemo(
     () =>
@@ -167,16 +177,11 @@ export function useActivityData({
   }, [activeInvocations]);
 
   function markMentionsRead() {
-    setReadSeqs((current) => {
-      const next = { ...current };
-      for (const message of mentionMessages) {
-        if (message.seq > (next[message.roomId] ?? 0)) {
-          next[message.roomId] = message.seq;
-          localStorage.setItem(readSeqStorageKey(message.roomId), String(message.seq));
-        }
-      }
-      return next;
-    });
+    const rooms: Record<string, number> = {};
+    for (const message of mentionMessages) {
+      if (message.seq > (rooms[message.roomId] ?? 0)) rooms[message.roomId] = message.seq;
+    }
+    advanceReadSeqs(rooms);
   }
 
   return {

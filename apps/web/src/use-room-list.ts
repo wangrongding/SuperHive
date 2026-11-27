@@ -16,7 +16,7 @@ import {
   useRoomReorder,
 } from "./room-reorder";
 import { serverError } from "./server-text";
-import { readSeqStorageKey } from "./app-storage";
+import type { ReadStateApi } from "./read-state";
 import { sortRooms } from "./rooms";
 import { t } from "./i18n";
 
@@ -28,6 +28,7 @@ export function useRoomList({
   isOwner,
   username,
   latestSeqRef,
+  readState,
   setError,
 }: {
   base: string;
@@ -36,10 +37,11 @@ export function useRoomList({
   isOwner: boolean;
   username: string;
   latestSeqRef: RefObject<number>;
+  readState: ReadStateApi;
   setError: Dispatch<SetStateAction<string | undefined>>;
 }) {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
-  const [readSeqs, setReadSeqs] = useState<Record<string, number>>({});
+  const { readSeqs, advance: advanceReadSeqs, sync: syncReadState } = readState;
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
   // 房间顺序：置顶的在最前（顺序存在服务端，跟着房主走），其余按最近活跃倒序。
   // 鼠标停在列表上或焦点在列表里时，不置顶区暂停重排，免得正要点的房间被新消息顶走
@@ -113,15 +115,18 @@ export function useRoomList({
   }, []);
   const activeRoomCount = useMemo(() => rooms.filter((room) => !room.archivedAt).length, [rooms]);
 
-  const markRoomRead = useCallback((roomId: string) => {
-    const seq = latestSeqRef.current;
-    if (seq <= 0) return;
-    const stored = Number(localStorage.getItem(readSeqStorageKey(roomId)) ?? "0");
-    if (seq > stored) localStorage.setItem(readSeqStorageKey(roomId), String(seq));
-    setReadSeqs((current) =>
-      (current[roomId] ?? 0) >= seq ? current : { ...current, [roomId]: seq },
-    );
-  }, []);
+  /**
+   * 正看着的房间读到最新：页面在后台时不算（不然开着没看的那台设备会把别的设备上的未读也清掉），
+   * 回到前台时再补记
+   */
+  const markRoomRead = useCallback(
+    (roomId: string) => {
+      const seq = latestSeqRef.current;
+      if (seq <= 0 || document.visibilityState !== "visible") return;
+      advanceReadSeqs({ [roomId]: seq });
+    },
+    [advanceReadSeqs],
+  );
 
   const upsertRoom = useCallback((room: RoomSummary) => {
     setRooms((current) =>
@@ -137,16 +142,9 @@ export function useRoomList({
     if (!response.ok) throw new Error(t("房间列表拉取失败 ({0})", { 0: response.status }));
     const payload = (await response.json()) as RoomsResponse;
     setRooms(sortRooms(payload.rooms));
-    setReadSeqs((current) => {
-      const next = { ...current };
-      for (const room of payload.rooms) {
-        if (next[room.id] === undefined) {
-          next[room.id] = Number(localStorage.getItem(readSeqStorageKey(room.id)) ?? "0");
-        }
-      }
-      return next;
-    });
-  }, [authToken, base, meta]);
+    // 已读位置和 Server 对齐（打开页面、重连时）；对不上只影响未读标记，不报错
+    void syncReadState(payload.rooms.map((room) => room.id)).catch(() => undefined);
+  }, [authToken, base, meta, syncReadState]);
   refreshRoomsRef.current = refreshRooms;
 
   useEffect(() => {
@@ -157,15 +155,13 @@ export function useRoomList({
   }, [meta, refreshRooms, username]);
 
   function markRoomReadNow(room: RoomSummary) {
-    localStorage.setItem(readSeqStorageKey(room.id), String(room.latestSeq));
-    setReadSeqs((current) => ({ ...current, [room.id]: room.latestSeq }));
+    advanceReadSeqs({ [room.id]: room.latestSeq });
   }
 
   return {
     rooms,
     setRooms,
     readSeqs,
-    setReadSeqs,
     showArchivedRooms,
     setShowArchivedRooms,
     sidebarRooms,
