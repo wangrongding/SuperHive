@@ -1583,6 +1583,8 @@ export const localAgentSchema = z.object({
   version: agentCodeVersionSchema.optional(),
   /** 运行的代码比当前的旧（含旧版 Bridge 不上报版本）：重启后才用上新代码 */
   outdated: z.boolean().optional(),
+  /** 从什么时候起判为旧版本（当前代码换了就重新计）：忙了很久一直没能重启时，设置里提示人处理 */
+  outdatedSince: z.string().datetime().optional(),
   /** 已安排在空闲后重启（手动点了「重启」，或自动更新在等它忙完） */
   restartWhenIdle: z.boolean().optional(),
   /**

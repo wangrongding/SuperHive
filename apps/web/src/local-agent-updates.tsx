@@ -105,9 +105,35 @@ function isLive(agent: LocalAgent): boolean {
   return agent.status === "running" || agent.status === "starting";
 }
 
+/** 开着自动重启、已安排了空闲后重启，但落后超过这么久还没重启上（一直在忙）：提示人处理 */
+export const STUCK_OUTDATED_MS = 30 * 60_000;
+
 /**
- * 设置 · 这台电脑 · 本机 Agent：自动更新开关，以及在跑旧版本的 Agent（只列这些，每个一行一个按钮）。
- * 合入或升级后，跑着的 Agent 进程仍是旧代码；开着自动更新时，落后的 Agent 等手上的任务都做完再重启一次。
+ * 需要人管的旧版本 Agent（只看在跑的；停止的下次启动就用上新代码）：
+ * - 自动重启关着：在跑旧版本的都算；
+ * - 开着：自动重启不会管的（这个版本已经自动重启过一次仍是旧的等），或者落后很久了还在忙、一直没能重启的。
+ */
+export function outdatedNeedingAttention(
+  agents: readonly LocalAgent[],
+  autoUpdate: boolean,
+  now = Date.now(),
+): LocalAgent[] {
+  return agents.filter((agent) => {
+    if (!agent.outdated || !isLive(agent)) return false;
+    if (!autoUpdate || !agent.restartWhenIdle) return true;
+    return agent.busy === true && waitedMs(agent, now) >= STUCK_OUTDATED_MS;
+  });
+}
+
+function waitedMs(agent: LocalAgent, now: number): number {
+  const since = agent.outdatedSince ? Date.parse(agent.outdatedSince) : NaN;
+  return Number.isFinite(since) ? now - since : 0;
+}
+
+/**
+ * 设置 · 这台电脑 · 本机 Agent 的旧版本：平时（开着自动重启、旧版本的都安排好了空闲后重启）整块不显示，
+ * 只在需要人管时出一行提示，下面列出这些 Agent，每个一行一个按钮。
+ * 合入或升级后，跑着的 Agent 进程仍是旧代码；自动重启开关在「这台电脑」底部的「高级」里。
  * 全部 Agent 在成员面板里管理，这里只放一个跳过去的链接，不重复列。
  */
 export function LocalAgentUpdatesGroup({
@@ -128,7 +154,9 @@ export function LocalAgentUpdatesGroup({
     return () => window.clearInterval(timer);
   }, [enabled, refreshAgents]);
   if (!enabled || local.autoUpdate === undefined) return null;
-  const outdated = local.agents.filter((agent) => agent.outdated && isLive(agent));
+  const now = Date.now();
+  const outdated = outdatedNeedingAttention(local.agents, local.autoUpdate, now);
+  if (outdated.length === 0 && !error) return null;
   // 空闲、还没安排重启的：可以一键重启，不会打断任何事
   const idle = outdated.filter((agent) => !agent.busy && !agent.restartWhenIdle);
   const restartWhenIdle = (agents: LocalAgent[]) => {
@@ -147,51 +175,33 @@ export function LocalAgentUpdatesGroup({
       setActing((current) => new Set([...current].filter((id) => !ids.includes(id)))),
     );
   };
+  const stateOf = (agent: LocalAgent) => {
+    if (agent.restartWhenIdle) {
+      const minutes = Math.floor(waitedMs(agent, now) / 60_000);
+      return minutes >= STUCK_OUTDATED_MS / 60_000
+        ? t("空闲后重启，已等 {0} 分钟", { 0: minutes })
+        : t("空闲后重启");
+    }
+    return agent.busy ? t("正在执行任务") : t("空闲");
+  };
   return (
-    <div className="settings-group">
-      <div className="settings-section-heading">
-        <div>
-          <h4>{t("本机 Agent")}</h4>
-          <p>
-            {t(
-              "合入或升级后，跑着的 Agent 仍是旧代码，要重启才用上新代码。「重启」会等它手上的任务都做完再重启，不打断正在做的事。",
-            )}
+    <div className="settings-group agent-updates-notice">
+      {outdated.length > 0 && (
+        <div className="agent-updates-status">
+          <p className="settings-note" role="status">
+            {local.autoUpdate
+              ? t("{0} 个 Agent 在跑旧版本，一直没能自动重启", { 0: outdated.length })
+              : t("自动重启已关，{0} 个 Agent 在跑旧版本，重启后才用上新代码", {
+                  0: outdated.length,
+                })}
           </p>
+          {onShowAgents && (
+            <Button size="sm" variant="link" onClick={onShowAgents}>
+              {t("查看全部 Agent")}
+            </Button>
+          )}
         </div>
-      </div>
-      <SettingsSwitch
-        checked={local.autoUpdate}
-        disabled={!local.canManage}
-        label={t("代码更新后自动重启")}
-        description={t(
-          "落后的 Agent 空闲后自动重启一次；同一个版本只自动重启一次，两次至少隔 10 分钟",
-        )}
-        onChange={(checked) => {
-          setError(undefined);
-          local
-            .setAutoUpdate(checked)
-            .catch((reason: unknown) =>
-              setError(reason instanceof Error ? reason.message : String(reason)),
-            );
-        }}
-      />
-      <div className="agent-updates-status">
-        <p className="settings-note" role="status">
-          {local.currentVersion
-            ? t("当前代码：{0}", { 0: formatAgentVersion(local.currentVersion) })
-            : t("判断不出当前代码的版本，不会自动重启。")}
-          {outdated.length > 0
-            ? t("；{0} 个 Agent 在跑旧版本", { 0: outdated.length })
-            : local.currentVersion
-              ? t("；都是最新的")
-              : ""}
-        </p>
-        {onShowAgents && (
-          <Button size="sm" variant="link" onClick={onShowAgents}>
-            {t("查看全部 Agent")}
-          </Button>
-        )}
-      </div>
+      )}
       {outdated.length > 0 && (
         <ul className="agent-updates outdated" aria-label={t("在跑旧版本的 Agent")}>
           {outdated.map((agent) => (
@@ -200,11 +210,7 @@ export function LocalAgentUpdatesGroup({
               <strong className="agent-update-name">{agent.name}</strong>
               <small className="agent-update-state">
                 {[
-                  agent.restartWhenIdle
-                    ? t("空闲后重启")
-                    : agent.busy
-                      ? t("正在执行任务")
-                      : t("空闲"),
+                  stateOf(agent),
                   agent.version ? formatAgentVersion(agent.version) : t("版本未上报"),
                 ].join(" · ")}
               </small>
@@ -252,5 +258,41 @@ export function LocalAgentUpdatesGroup({
       )}
       {error && <p className="settings-note error">{error}</p>}
     </div>
+  );
+}
+
+/**
+ * 设置 · 这台电脑 · 底部折叠的「高级」：代码更新后自动重启开关（默认开，一般只有经常合代码的开发者想关）。
+ * 旧版 Server 不支持自动重启时整块不显示。
+ */
+export function LocalAgentAdvancedSettings({ local }: { local: LocalAgentsState }) {
+  const [error, setError] = useState<string>();
+  if (!local.enabled || local.autoUpdate === undefined) return null;
+  return (
+    <details className="settings-group divided settings-advanced">
+      <summary>{t("高级")}</summary>
+      <SettingsSwitch
+        checked={local.autoUpdate}
+        disabled={!local.canManage}
+        label={t("代码更新后自动重启")}
+        description={t(
+          "合入或升级后，落后的 Agent 等手上的任务都做完再自动重启一次，不打断正在做的事；同一个版本只自动重启一次，两次至少隔 10 分钟",
+        )}
+        onChange={(checked) => {
+          setError(undefined);
+          local
+            .setAutoUpdate(checked)
+            .catch((reason: unknown) =>
+              setError(reason instanceof Error ? reason.message : String(reason)),
+            );
+        }}
+      />
+      <p className="settings-note">
+        {local.currentVersion
+          ? t("当前代码：{0}", { 0: formatAgentVersion(local.currentVersion) })
+          : t("判断不出当前代码的版本，不会自动重启。")}
+      </p>
+      {error && <p className="settings-note error">{error}</p>}
+    </details>
   );
 }

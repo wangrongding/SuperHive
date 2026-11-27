@@ -248,6 +248,8 @@ type Runtime = {
   /** 上次自动更新重启时的目标版本：同一个目标只自动重启一次，重启后仍判为旧就不再重试 */
   autoRestartedFor?: string | undefined;
   lastAutoRestartAt?: number | undefined;
+  /** 从什么时候起判为旧版本、对的是哪个当前版本：当前代码换了或不再落后就重新计 */
+  outdatedSince?: { key: string; at: number } | undefined;
   /** 这次启动没能用配置里的工作目录、退回了主目录（见 checkCwd） */
   cwdFallback?: CwdFallback | undefined;
 };
@@ -1214,6 +1216,8 @@ export class LocalAgentSupervisor {
       const busy = this.busyNames();
       let updating = false;
       for (const runtime of this.runtimes.values()) {
+        // 没人打开设置时也照常计时：落后了多久以检查时为准
+        this.noteOutdated(runtime);
         if (!runtime.child || runtime.transitioning) continue;
         const manual = runtime.pendingRestart;
         const update = !manual && autoUpdate && !updating && this.updateDue(runtime, current!);
@@ -1262,6 +1266,18 @@ export class LocalAgentSupervisor {
     if (!this.options.isAgentOnline(runtime.config.name)) return false;
     const running = this.options.runningVersion(runtime.config.name);
     return running ? isAgentOutdated(running, current, true) : true;
+  }
+
+  /** 记下从什么时候起落后于当前代码（当前代码换了就重新计），返回这个时间；不落后时清掉 */
+  private noteOutdated(runtime: Runtime, outdated = this.outdated(runtime)): number | undefined {
+    const current = this.current?.version;
+    if (!outdated || !current) {
+      runtime.outdatedSince = undefined;
+      return undefined;
+    }
+    const key = versionKey(current);
+    if (runtime.outdatedSince?.key !== key) runtime.outdatedSince = { key, at: this.now() };
+    return runtime.outdatedSince.at;
   }
 
   /** 这个名字是本机 Agent 时，它是否在跑旧代码；不是本机 Agent 返回 undefined */
@@ -1406,6 +1422,7 @@ export class LocalAgentSupervisor {
     const running = runtime.child ? this.options.runningVersion?.(config.name) : undefined;
     const outdated = this.outdated(runtime);
     const current = this.current?.version;
+    const outdatedSince = this.noteOutdated(runtime, outdated);
     let status: LocalAgentStatus;
     if (runtime.child) {
       status = this.options.isAgentOnline(config.name) ? "running" : "starting";
@@ -1439,6 +1456,9 @@ export class LocalAgentSupervisor {
       ...(running ? { version: running } : {}),
       ...(runtime.cwdFallback ? { cwdFallback: runtime.cwdFallback } : {}),
       ...(outdated ? { outdated: true } : {}),
+      ...(outdatedSince !== undefined
+        ? { outdatedSince: new Date(outdatedSince).toISOString() }
+        : {}),
       // 点过「重启」在等它忙完，或自动更新会在它空闲后重启它
       ...(runtime.pendingRestart ||
       (outdated &&

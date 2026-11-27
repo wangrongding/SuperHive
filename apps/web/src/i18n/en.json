@@ -1721,12 +1721,9 @@
   "版本未上报": "version not reported",
   "正在执行任务": "working on a task",
   "本机 Agent": "Local agents",
-  "合入或升级后，跑着的 Agent 仍是旧代码，要重启才用上新代码。「重启」会等它手上的任务都做完再重启，不打断正在做的事。": "After a merge or upgrade, running agents keep the old code until they restart. \"Restart\" waits for their current tasks to finish, so nothing in progress is interrupted.",
   "代码更新后自动重启": "Restart automatically after code updates",
-  "落后的 Agent 空闲后自动重启一次；同一个版本只自动重启一次，两次至少隔 10 分钟": "Outdated agents restart once when idle; at most once per version, and at least 10 minutes apart",
   "当前代码：{0}": "Current code: {0}",
   "判断不出当前代码的版本，不会自动重启。": "The current code version can't be determined, so nothing restarts automatically.",
-  "；{0} 个 Agent 在跑旧版本": "; {0} {0|agent is|agents are} on outdated code",
   "空闲后重启": "Restart when idle",
   "一行": "Line",
   "只看一行状态": "Show just the status line",
@@ -2578,7 +2575,6 @@
   "脚本": "Script",
   "{0}：会读 {1} 的目录，不用再装一份": "{0}: reads {1}'s folder, so no second copy is needed",
   "同名的已装到 {0} 个 CLI": "One with this name is in {0} CLIs",
-  "；都是最新的": "; all up to date",
   "查看全部 Agent": "See all agents",
   "在跑旧版本的 Agent": "Agents running old code",
   "等手上的任务都做完再重启，不打断正在做的事": "Restarts once its tasks are done, without interrupting them",
@@ -2611,5 +2607,9 @@
   "导入 {0} 套": "Import {0}",
   "从 cc-switch 导入（{0}）": "Import from cc-switch ({0})",
   "cc-switch 也在管 {0}，它记的当前供应商是「{1}」。这里切换后它不会跟着变；之后要在 cc-switch 里切换，先在这里切回「{2}」，否则 cc-switch 会把这里的地址和 key 存进「{1}」。": "cc-switch also manages {0} and thinks the current provider is \"{1}\". Switching here doesn't update cc-switch; before switching in cc-switch later, switch back to \"{2}\" here, or cc-switch will save this URL and key into \"{1}\".",
-  "{0} 的更多操作": "More actions for {0}"
+  "{0} 的更多操作": "More actions for {0}",
+  "{0} 个 Agent 在跑旧版本，一直没能自动重启": "{0} {0|agent is|agents are} on outdated code and haven't restarted automatically",
+  "自动重启已关，{0} 个 Agent 在跑旧版本，重启后才用上新代码": "Automatic restart is off; {0} {0|agent is|agents are} on outdated code until restarted",
+  "空闲后重启，已等 {0} 分钟": "Restart when idle, waiting {0} min",
+  "合入或升级后，落后的 Agent 等手上的任务都做完再自动重启一次，不打断正在做的事；同一个版本只自动重启一次，两次至少隔 10 分钟": "After a merge or upgrade, outdated agents restart once after their current tasks finish, so nothing in progress is interrupted; at most once per version, and at least 10 minutes apart"
 }

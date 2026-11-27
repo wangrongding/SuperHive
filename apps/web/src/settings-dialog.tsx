@@ -34,7 +34,7 @@ import {
 } from "./attention-alerts";
 import { playNotificationTone, type BrowserNotificationPermission } from "./browser-notify";
 import { HostManageNotice, KeepAwakeSettingsGroup } from "./host-settings";
-import { LocalAgentUpdatesGroup } from "./local-agent-updates";
+import { LocalAgentAdvancedSettings, LocalAgentUpdatesGroup } from "./local-agent-updates";
 import { NetworkProxySettingsGroup } from "./network-proxy-settings";
 import { RemoteJoinsGroup } from "./remote-joins-settings";
 import { PluginsSettingsPanel } from "./plugins";
@@ -501,6 +501,7 @@ export function SettingsDialog({
                 <RemoteJoinsGroup local={local} />
                 <NetworkProxySettingsGroup local={local} />
                 <KeepAwakeSettingsGroup local={local} />
+                <LocalAgentAdvancedSettings local={local} />
               </section>
             )}
             {settingsTab === "runtimes" && local.mode === "local" && (

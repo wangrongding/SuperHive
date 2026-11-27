@@ -89,6 +89,28 @@ describe("local agent auto-update", () => {
     await supervisor.shutdown();
   });
 
+  it("reports since when an agent has been outdated, restarting the clock when the current code changes", async () => {
+    const { supervisor, state, agent, tick } = setup();
+    state.busy.add("rd-omp");
+    const first = state.now;
+    await supervisor.checkUpdates();
+    expect(supervisor.get(agent.id).outdatedSince).toBe(new Date(first).toISOString());
+    // 一直忙着：时间不跟着往后挪
+    tick(60_000);
+    await supervisor.checkUpdates();
+    expect(supervisor.get(agent.id).outdatedSince).toBe(new Date(first).toISOString());
+    // 当前代码又换了：从现在重新计
+    state.current = { ...v2, commit: "c".repeat(40), fingerprint: "newer.tree" };
+    tick();
+    const second = state.now;
+    await supervisor.checkUpdates();
+    expect(supervisor.get(agent.id).outdatedSince).toBe(new Date(second).toISOString());
+    // 跟上了：不再报
+    state.running.set("rd-omp", state.current);
+    expect(supervisor.get(agent.id).outdatedSince).toBeUndefined();
+    await supervisor.shutdown();
+  });
+
   it("treats an online agent that reports no version as outdated, but not one that is still starting", async () => {
     const { supervisor, state, agent } = setup();
     state.busy.add("rd-omp");

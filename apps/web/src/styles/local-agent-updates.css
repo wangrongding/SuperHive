@@ -48,6 +48,8 @@
 
 /* 代码更新后自动重启 · 只列在跑旧版本的：一行名字 · 状态 · 版本 · 一个按钮，窄了先截状态 */
 .agent-updates.outdated li {
+  /* 网格项默认不小于内容宽度：窄屏下状态文字要能截断，按钮不被挤出去 */
+  min-width: 0;
   flex-wrap: nowrap;
   gap: 8px;
   min-height: 36px;
@@ -115,4 +117,33 @@
 /* 设置 · 这台电脑 · 带到别处的 Agent：上次退出的原因 */
 .agent-update-main small.remote-join-error {
   color: var(--danger);
+}
+
+/* 设置 · 这台电脑 · 需要人管时才出现的旧版本提示：一行说明在上，下面是这些 Agent */
+.agent-updates-notice .agent-updates-status {
+  margin-top: 0;
+}
+
+.agent-updates-notice .agent-updates-status .settings-note {
+  color: var(--text-secondary);
+}
+
+/* 设置 · 这台电脑 · 底部折叠的「高级」：自动重启开关 */
+.settings-advanced > summary {
+  padding: 4px 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.settings-advanced > summary:hover {
+  color: var(--text);
+}
+
+.settings-advanced[open] > summary {
+  margin-bottom: 4px;
+}
+
+.settings-advanced > .settings-note {
+  margin: 4px 0 0;
 }
