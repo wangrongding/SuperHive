@@ -196,3 +196,42 @@
   height: 20px;
   font-size: 8px;
 }
+
+/* 模型下拉（选项多时）：顶上过滤框固定，下面的列表限高、只在列表里滚动 */
+.select-panel.model-filter-panel {
+  gap: 4px;
+  overflow: hidden;
+}
+
+.model-filter-input {
+  flex: none;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.model-filter-input:focus {
+  border-color: var(--border-heavy);
+  outline: none;
+}
+
+.model-filter-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+
+.model-filter-custom .select-option-text > span {
+  font-family: var(--font-mono);
+}

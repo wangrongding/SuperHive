@@ -229,3 +229,151 @@ describe("ModelPicker hint", () => {
     );
   });
 });
+
+describe("ModelPicker with many models", () => {
+  const many = {
+    source: "runtime" as const,
+    efforts: [],
+    models: [
+      { id: "opus", label: "Opus" },
+      { id: "sonnet", label: "Sonnet" },
+      { id: "haiku", label: "Haiku" },
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true },
+      ...Array.from({ length: 56 }, (_, index) => ({ id: `gw-model-${index + 1}` })),
+    ],
+  };
+  const open = (props: Partial<Parameters<typeof ModelPicker>[0]> = {}) => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    render(
+      <ModelPicker
+        aria-label="模型"
+        data={many}
+        value=""
+        allowDefault
+        onChange={onChange}
+        onCommit={onCommit}
+        {...props}
+      />,
+    );
+    fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+    const filter = screen.getByRole("combobox", { name: "过滤模型" });
+    return { onChange, onCommit, filter };
+  };
+  const optionNames = () =>
+    screen
+      .getAllByRole("option")
+      .map((option) => option.querySelector(".select-option-text > span")!.textContent);
+
+  it("puts focus in the filter box and keeps the runtime default and aliases on top", () => {
+    const { filter } = open();
+    expect(document.activeElement).toBe(filter);
+    expect(optionNames().slice(0, 4)).toEqual(["运行时默认", "Opus", "Sonnet", "Haiku"]);
+    expect(screen.getAllByRole("option")).toHaveLength(61);
+    // 不再有单独的「手动输入…」
+    expect(screen.queryByRole("option", { name: /手动输入/ })).toBeNull();
+  });
+
+  it("filters by id or display name ignoring case, and picks with the arrow keys and Enter", () => {
+    const { filter, onChange, onCommit } = open();
+    fireEvent.change(filter, { target: { value: "OPUS 5" } });
+    expect(optionNames()).toEqual(["Claude Opus 5.5", "使用「OPUS 5」"]);
+    fireEvent.change(filter, { target: { value: "GW-MODEL-5" } });
+    expect(optionNames()).toEqual([
+      "gw-model-5",
+      "gw-model-50",
+      "gw-model-51",
+      "gw-model-52",
+      "gw-model-53",
+      "gw-model-54",
+      "gw-model-55",
+      "gw-model-56",
+      "使用「GW-MODEL-5」",
+    ]);
+    fireEvent.keyDown(filter, { key: "ArrowDown" });
+    fireEvent.keyDown(filter, { key: "ArrowDown" });
+    fireEvent.keyDown(filter, { key: "ArrowUp" });
+    fireEvent.keyDown(filter, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("gw-model-50");
+    expect(onCommit).toHaveBeenCalledWith("gw-model-50");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "模型" }));
+  });
+
+  it("offers the typed text as a model name when nothing matches", () => {
+    const { filter, onCommit } = open();
+    fireEvent.change(filter, { target: { value: "my-private-model" } });
+    expect(optionNames()).toEqual(["使用「my-private-model」"]);
+    fireEvent.keyDown(filter, { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledWith("my-private-model");
+  });
+
+  it("does not offer 「使用」 for an exact model name", () => {
+    const { filter } = open();
+    fireEvent.change(filter, { target: { value: "gw-model-56" } });
+    expect(optionNames()).toEqual(["gw-model-56"]);
+  });
+
+  it("shows a typed model name on the trigger without a separate input box", () => {
+    render(
+      <ModelPicker
+        aria-label="模型"
+        data={many}
+        value="my-private-model"
+        onChange={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "模型" }).textContent).toContain(
+      "my-private-model",
+    );
+    expect(screen.queryByRole("textbox", { name: "模型名" })).toBeNull();
+  });
+
+  it("closes with Esc and a click outside without closing the retry dialog", () => {
+    const onClose = vi.fn();
+    render(
+      <RetryModelDialog
+        agentName="rd-claude"
+        load={async () => many}
+        onRetry={() => undefined}
+        onClose={onClose}
+      />,
+    );
+    return waitFor(() =>
+      expect((screen.getByRole("combobox", { name: "模型" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    ).then(() => {
+      fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+      const filter = screen.getByRole("combobox", { name: "过滤模型" });
+      fireEvent.keyDown(filter, { key: "Escape" });
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("listbox")).toBeNull();
+      // 选一个再重试：只对这一次生效
+      fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+      fireEvent.change(screen.getByRole("combobox", { name: "过滤模型" }), {
+        target: { value: "gw-model-7" },
+      });
+      fireEvent.click(screen.getByRole("option", { name: /^gw-model-7$/ }));
+      expect(screen.getByRole("button", { name: "用 gw-model-7 重试" })).toBeTruthy();
+    });
+  });
+
+  it("keeps the plain list without a filter box for 8 options or fewer", () => {
+    render(
+      <ModelPicker
+        aria-label="模型"
+        data={{ source: "preset", efforts: [], models: many.models.slice(0, 4) }}
+        value=""
+        allowDefault
+        onChange={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("combobox", { name: "模型" }));
+    expect(screen.queryByRole("combobox", { name: "过滤模型" })).toBeNull();
+    expect(screen.getByRole("option", { name: /手动输入/ })).toBeTruthy();
+  });
+});

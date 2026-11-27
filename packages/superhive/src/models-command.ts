@@ -542,7 +542,10 @@ async function listClaude(
       );
     const fetched = await fetchClaudeModels(api, options.fetch);
     const configured = fallback();
-    const listed = fetched.map((model) => entry(model.id, model.label));
+    // 按模型名排序：网关返回的顺序每次不一样，排好后列表稳定，`hive models` 和网页看到的一致
+    const listed = fetched
+      .map((model) => entry(model.id, model.label))
+      .sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
     // 配置的默认模型不在列表里（例如带 [1M] 后缀）：放在别名后面，别名始终在最前
     const missing =
       configured && ![...aliases, ...listed].some((model) => model.id === configured)

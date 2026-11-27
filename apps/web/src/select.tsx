@@ -48,13 +48,20 @@ export type SelectProps<T extends string = string> = {
   menuMinWidth?: number;
 };
 
-type Placement = { left: number; top: number; width: number; maxHeight: number; above: boolean };
+export type Placement = {
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: number;
+  above: boolean;
+};
 
 const PANEL_MAX_HEIGHT = 300;
 const GAP = 4;
 const EDGE = 8;
 
-function place(trigger: HTMLElement, menuMinWidth = 0): Placement {
+/** 面板贴着触发框放：下面放不下就向上弹（模型下拉的过滤面板也用它） */
+export function place(trigger: HTMLElement, menuMinWidth = 0): Placement {
   const rect = trigger.getBoundingClientRect();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
@@ -74,7 +81,7 @@ function place(trigger: HTMLElement, menuMinWidth = 0): Placement {
   };
 }
 
-function Chevron() {
+export function Chevron() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <path
@@ -89,7 +96,7 @@ function Chevron() {
   );
 }
 
-function Check() {
+export function Check() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <path

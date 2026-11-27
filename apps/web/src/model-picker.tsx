@@ -1,10 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import { sortReasoningEfforts, type LocalAgentModelsResponse } from "@superhive/protocol";
 import { t } from "./i18n";
-import { Select, type SelectOption } from "./select";
+import { Check, Chevron, Select, place, type Placement, type SelectOption } from "./select";
 import { Button, IconButton } from "./button";
 
 const CUSTOM = "\u0000custom";
+/** 选项超过这么多就在面板顶上给过滤框（和状态栏「切换主 Agent」一致） */
+export const MODEL_FILTER_THRESHOLD = 8;
 
 /**
  * 选模型：列表从运行时拉（Server 的 /models），拉不到或列表里没有的可以手填。
@@ -56,8 +67,34 @@ export function ModelPicker({
       label: model.label ?? model.id,
       ...(model.label ? { description: model.id } : {}),
     })),
-    { value: CUSTOM, label: t("手动输入…"), description: t("列表里没有的模型名") },
   ];
+  // 选项多：用带过滤框的面板，手填也在过滤框里（过滤不到时「使用『xxx』」），不再另给输入框
+  if (data && options.length > MODEL_FILTER_THRESHOLD) {
+    return (
+      <div className="model-picker">
+        <div className="model-picker-row">
+          <FilterCombobox
+            {...(id ? { id } : {})}
+            {...(ariaLabel ? { "aria-label": ariaLabel } : {})}
+            value={value}
+            options={options}
+            disabled={disabled}
+            onChoose={(next) => {
+              onChange(next);
+              onCommit?.(next);
+            }}
+          />
+          {onRefresh && (
+            <Button disabled={disabled} onClick={onRefresh}>
+              {t("刷新")}
+            </Button>
+          )}
+        </div>
+        <ModelListHint data={data} />
+      </div>
+    );
+  }
+  options.push({ value: CUSTOM, label: t("手动输入…"), description: t("列表里没有的模型名") });
   // 没有可选的（拉不到、不是本机 Agent）又不能选默认：直接给手填框
   const editing =
     custom ||
@@ -112,6 +149,270 @@ export function ModelPicker({
       )}
       {data && <ModelListHint data={data} />}
     </div>
+  );
+}
+
+/** 过滤：模型名（id）或显示名里含有输入的字（不分大小写）；「运行时默认」的说明不算，免得总被带出来 */
+export function filterModelOptions(options: SelectOption[], query: string): SelectOption[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return options;
+  return options.filter((option) =>
+    [option.value, option.label].some((text) => text.toLocaleLowerCase().includes(needle)),
+  );
+}
+
+/**
+ * 选项多时的模型下拉：触发框长得和 Select 一样；打开后顶上是过滤框（焦点在框里），下面是限高、
+ * 只在自己里面滚动的列表。↑↓ 移动高亮、回车选中、Esc 收起（不关外面的弹窗）、Tab 收起。
+ * 输入的字不是列表里的某个模型名时，最后一项是「使用『xxx』」，回车或点它就把输入当模型名用。
+ */
+function FilterCombobox({
+  value,
+  options,
+  onChoose,
+  disabled,
+  id,
+  "aria-label": ariaLabel,
+}: {
+  value: string;
+  options: SelectOption[];
+  onChoose: (value: string) => void;
+  disabled: boolean;
+  id?: string;
+  "aria-label"?: string;
+}) {
+  const generated = useId();
+  const base = id ?? generated;
+  const listId = `${base}-listbox`;
+  const optionId = (index: number) => `${base}-option-${index}`;
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(-1);
+  const [placement, setPlacement] = useState<Placement>();
+
+  const typed = query.trim();
+  const matches = filterModelOptions(options, typed);
+  const exact = typed !== "" && options.some((option) => option.value === typed);
+  // 最后一项：把输入的字当模型名用
+  const items: Array<SelectOption & { custom?: boolean }> = [
+    ...matches,
+    ...(typed && !exact
+      ? [
+          {
+            value: typed,
+            label: t("使用「{0}」", { 0: typed }),
+            description: t("列表里没有的模型名"),
+            custom: true,
+          },
+        ]
+      : []),
+  ];
+  const selected = options.find((option) => option.value === value);
+  const shown = selected?.label ?? (value || t("选择模型"));
+
+  const close = useCallback((refocus: boolean) => {
+    setOpen(false);
+    setActive(-1);
+    setQuery("");
+    if (refocus) triggerRef.current?.focus();
+  }, []);
+  const show = () => {
+    if (disabled || !triggerRef.current) return;
+    setPlacement(place(triggerRef.current, 320));
+    setQuery("");
+    setActive(
+      Math.max(
+        0,
+        options.findIndex((option) => option.value === value),
+      ),
+    );
+    setOpen(true);
+  };
+  const choose = (index: number) => {
+    const item = items[index];
+    if (!item) return;
+    onChoose(item.value);
+    close(true);
+  };
+
+  // 打开后焦点放进过滤框；不滚动外面的弹窗
+  useLayoutEffect(() => {
+    if (open) inputRef.current?.focus({ preventScroll: true });
+  }, [open]);
+
+  // 高亮项始终在列表可见范围内（只滚列表自己）
+  useLayoutEffect(() => {
+    if (!open || active < 0) return;
+    const list = listRef.current;
+    const element = list?.querySelector<HTMLElement>(`[data-index="${active}"]`);
+    if (!list || !element) return;
+    if (element.offsetTop < list.scrollTop) list.scrollTop = element.offsetTop;
+    else if (element.offsetTop + element.offsetHeight > list.scrollTop + list.clientHeight)
+      list.scrollTop = element.offsetTop + element.offsetHeight - list.clientHeight;
+  }, [active, open]);
+
+  // 点外面收起；窗口缩放、外层滚动时重新定位（列表自己滚动不算）
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (triggerRef.current?.contains(target) || panelRef.current?.contains(target)))
+        return;
+      close(false);
+    };
+    const reposition = (event: Event) => {
+      if (event.target instanceof Node && panelRef.current?.contains(event.target)) return;
+      if (triggerRef.current) setPlacement(place(triggerRef.current, 320));
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [close, open]);
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        setActive((current) => Math.min(items.length - 1, current + 1));
+        return;
+      case "ArrowUp":
+        event.preventDefault();
+        setActive((current) => Math.max(0, current - 1));
+        return;
+      case "Enter":
+        event.preventDefault();
+        choose(active >= 0 && active < items.length ? active : 0);
+        return;
+      case "Escape":
+        event.preventDefault();
+        // 外面的弹窗也用 Esc 关闭：这里先吃掉，只收起下拉
+        event.stopPropagation();
+        event.nativeEvent.stopImmediatePropagation();
+        close(true);
+        return;
+      case "Tab":
+        close(false);
+        return;
+    }
+  };
+
+  const portalTarget =
+    (triggerRef.current?.closest("dialog[open]") as HTMLElement | null) ?? document.body;
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        id={id}
+        className={`select-trigger${open ? " open" : ""}`}
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        {...(ariaLabel ? { "aria-label": ariaLabel } : {})}
+        disabled={disabled}
+        onClick={() => (open ? close(true) : show())}
+        onKeyDown={(event) => {
+          if (open || disabled) return;
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            show();
+          }
+        }}
+      >
+        <span className={`select-value${selected || value ? "" : " placeholder"}`} title={shown}>
+          {shown}
+        </span>
+        <span className="select-chevron">
+          <Chevron />
+        </span>
+      </button>
+      {open &&
+        placement &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className={`select-panel model-filter-panel${placement.above ? " above" : ""}`}
+            style={{
+              left: placement.left,
+              width: placement.width,
+              maxHeight: placement.maxHeight,
+              ...(placement.above
+                ? { bottom: window.innerHeight - placement.top }
+                : { top: placement.top }),
+            }}
+          >
+            <input
+              ref={inputRef}
+              className="model-filter-input"
+              type="text"
+              role="combobox"
+              aria-label={t("过滤模型")}
+              aria-autocomplete="list"
+              aria-expanded="true"
+              aria-controls={listId}
+              {...(active >= 0 && active < items.length
+                ? { "aria-activedescendant": optionId(active) }
+                : {})}
+              value={query}
+              placeholder={t("过滤或输入模型名")}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setActive(0);
+              }}
+              onKeyDown={onKeyDown}
+            />
+            <ul
+              ref={listRef}
+              id={listId}
+              role="listbox"
+              className="model-filter-list"
+              {...(ariaLabel ? { "aria-label": ariaLabel } : {})}
+            >
+              {items.map((item, index) => (
+                <li
+                  key={`${item.custom ? "custom" : "option"}:${item.value}`}
+                  id={optionId(index)}
+                  data-index={index}
+                  role="option"
+                  aria-selected={!item.custom && item.value === value}
+                  className={`select-option${index === active ? " active" : ""}${
+                    item.custom ? " model-filter-custom" : ""
+                  }`}
+                  // 焦点留在过滤框里
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseMove={() => {
+                    if (index !== active) setActive(index);
+                  }}
+                  onClick={() => choose(index)}
+                >
+                  <span className="select-option-text">
+                    <span title={item.label}>{item.label}</span>
+                    {item.description && <small>{item.description}</small>}
+                  </span>
+                  <span className="select-check">
+                    {!item.custom && item.value === value && <Check />}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>,
+          portalTarget,
+        )}
+    </>
   );
 }
 

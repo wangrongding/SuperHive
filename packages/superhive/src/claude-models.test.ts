@@ -196,10 +196,12 @@ describe("fetchClaudeModels", () => {
 });
 
 describe("listModels for claude", () => {
-  it("keeps the aliases first, then the configured default, then the fetched models deduplicated", async () => {
+  it("keeps the aliases first, then the configured default, then the fetched models sorted by name and deduplicated", async () => {
     const fetchImpl = vi.fn(async () =>
       json({
         data: [
+          { id: "glm-5.3" },
+          { id: "claude-opus-5-10" },
           { id: "claude-opus-5-5", display_name: "Claude Opus 5.5" },
           { id: "sonnet" },
           { id: "claude-opus-5-5" },
@@ -223,10 +225,13 @@ describe("listModels for claude", () => {
       "haiku",
       "opusplan",
       "claude-opus-5-5[1M]",
+      // 网关给的顺序不稳定：按名字排（数字按大小），不是按返回顺序
       "claude-opus-5-5",
+      "claude-opus-5-10",
+      "glm-5.3",
     ]);
     expect(result.models.find((model) => model.isDefault)?.id).toBe("claude-opus-5-5[1M]");
-    expect(result.models.at(-1)).toEqual({ id: "claude-opus-5-5", label: "Claude Opus 5.5" });
+    expect(result.models[5]).toEqual({ id: "claude-opus-5-5", label: "Claude Opus 5.5" });
   });
 
   it("falls back to the aliases with a readable reason when the request fails, never with the key", async () => {
