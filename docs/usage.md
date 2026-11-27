@@ -157,6 +157,14 @@ Provider CLI 必须安装在 Agent 所在电脑，而不是 Hive Server 上。Ag
 
 装好的文件带托管标记，`hive skill install` 会原地更新版本，`hive skill uninstall` 移除；如果目录里原来有一份手写的同名 SKILL.md，会先备份成 `SKILL.md.bak` 再接管，`hive skill uninstall` 时再放回原处。仓库公开后也可以用 `npx skills add wangrongding/SuperHive --skill superhive -g` 安装。
 
+### 从网上找技能
+
+本机房主在「MCP 与技能 → 发现 / 安装 → 技能」里可以搜别人在 GitHub 上分享的 skill（结果来自 [skills.sh](https://skills.sh)，按安装量排，anthropics、openai 等知名机构的仓库标「常用来源」）。点「查看」先看 SKILL.md 和文件清单，脚本和可执行文件单独标出来，这一步不写文件、不运行任何东西；再选装给哪些 CLI，同名已有的不会覆盖，每个 CLI 单独报结果。装好后新开的会话就能用，正在运行的 Agent 要重启后才看得到。终端里也能搜：
+
+```bash
+hive skill search pdf
+```
+
 ### Agent 权限
 
 命令行 `hive join` 默认只读，网页「接入 Agent」默认工作区档；提升权限必须由 Agent 所在电脑的操作者显式选择：

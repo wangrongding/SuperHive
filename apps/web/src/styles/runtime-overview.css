@@ -795,3 +795,240 @@
     padding-left: 16px;
   }
 }
+
+/* 发现 / 安装 → 技能（runtime-skill-store.tsx） */
+.runtime-hub-kinds {
+  margin-bottom: 16px;
+}
+
+.skill-store-start {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.skill-store-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-store-start p,
+.skill-store-count {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.skill-store-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  list-style: none;
+}
+
+.skill-store-row {
+  display: grid;
+  /* 每行各自是 grid：安装量、已装两列给固定宽，上下对齐 */
+  grid-template-columns: auto minmax(0, 1fr) 104px 150px auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.skill-store-row + .skill-store-row {
+  border-top: 1px solid var(--border-light);
+}
+
+.skill-store-row:hover {
+  background: var(--bg-hover);
+}
+
+.skill-store-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.skill-store-main strong,
+.skill-store-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-store-main strong {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.skill-store-main small {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.skill-store-badge {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+
+.skill-store-installs {
+  text-align: right;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.runtime-drawer.wide {
+  width: min(640px, 100%);
+}
+
+.skill-drawer-origin {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--success-soft);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.skill-drawer-origin.warn {
+  background: var(--warning-soft);
+}
+
+.skill-drawer-origin a {
+  color: var(--accent);
+}
+
+.skill-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-drawer-section h4,
+.skill-drawer-md summary {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.skill-drawer-md summary {
+  cursor: pointer;
+}
+
+.skill-drawer-warn {
+  margin: 0;
+  color: var(--warning);
+  font-size: var(--text-sm);
+}
+
+.skill-drawer-files {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.skill-drawer-files li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+}
+
+.skill-drawer-files li + li {
+  border-top: 1px solid var(--border-light);
+}
+
+.skill-drawer-files code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.skill-drawer-files li.skipped code {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+.skill-drawer-tags {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+}
+
+.skill-drawer-tags em {
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-style: normal;
+}
+
+.skill-drawer-tags em.script {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.skill-drawer-tags em.binary {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.skill-drawer-tags small {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.skill-drawer-md pre {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.skill-drawer-targets-note,
+.skill-drawer-results {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.skill-drawer-targets-note li.muted {
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 720px) {
+  .skill-store-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .skill-store-installs,
+  .skill-store-row > .runtime-store-installed,
+  .skill-store-row > span:empty {
+    display: none;
+  }
+}

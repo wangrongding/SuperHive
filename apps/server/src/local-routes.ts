@@ -62,6 +62,7 @@ import { placeNamedCopy } from "./attachment-open.js";
 import type { LocalAgentSupervisor } from "./local-agents.js";
 import type { RuntimeCredentialStore } from "./runtime-credentials.js";
 import { registerRuntimeConfigRoutes } from "./runtime-config-routes.js";
+import type { SkillMarket } from "./skill-market.js";
 import { RuntimeConfigStore } from "./runtime-config.js";
 import type { AgentCliManager } from "./agent-clis.js";
 import { registerAgentCliRoutes } from "./agent-cli-routes.js";
@@ -224,6 +225,8 @@ export type LocalRoomActions = {
   attachmentFilesDir?: string;
   /** 运行时（Claude Code、Codex）全局配置里的接口地址和密钥 */
   runtimeCredentials?: RuntimeCredentialStore;
+  /** 从网上搜索、下载 skill；省略用真实网络（测试注入替身） */
+  skillMarket?: SkillMarket;
   /** 本机装的 Agent CLI：检测版本与一键升级 */
   agentClis?: AgentCliManager;
   npmUpdates?: NpmUpdates;
@@ -837,6 +840,7 @@ export function registerLocalAgentRoutes(
       credentials: rooms.runtimeCredentials,
       supervisor,
       authorizeLocal: (request, reply) => Boolean(authorize(request, reply, "local")),
+      ...(rooms.skillMarket ? { skillMarket: rooms.skillMarket } : {}),
     });
     if (rooms.remoteJoins) {
       registerRemoteJoinRoutes(app, {

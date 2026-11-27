@@ -148,6 +148,7 @@ hive autostart on|off|status  登录后自动启动 Hive Server
 hive join               加入 Hive（默认 provider 为 codex）
 hive mcp list           列出 Agent 会加载的本机 MCP 及开局 token 估算
 hive skill install|status|uninstall  把 SKILL.md 装进本机 Agent 的全局 skills 目录 / 查看版本 / 移除
+hive skill search <词>  在 skills.sh 上搜别人分享的 skill（--owner 限定 GitHub 用户、--json 输出 JSON；安装在网页里做）
 hive --skill            打印随包发布的 SKILL.md
 hive --version
 ```

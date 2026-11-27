@@ -114,6 +114,7 @@ import {
 import { MANAGE_GRANT_MS, registerLocalAgentRoutes } from "./local-routes.js";
 import type { RunJoinCli } from "./remote-join-routes.js";
 import type { RuntimeCredentialStore } from "./runtime-credentials.js";
+import type { SkillMarket } from "./skill-market.js";
 import type { AgentCliManager } from "./agent-clis.js";
 import { KeepAwake } from "./keep-awake.js";
 import { NetworkProxy, type StoredNetworkProxy, type SystemProxyReader } from "./network-proxy.js";
@@ -222,6 +223,8 @@ export type BuildAppOptions = {
   remoteJoins?: { dir: string; runJoinCli?: RunJoinCli };
   /** 运行时全局配置里的地址和密钥；省略即不提供（测试默认关闭，免得读写真实的 ~/.claude、~/.codex），由 index.ts 注入 */
   runtimeCredentials?: RuntimeCredentialStore;
+  /** 从网上搜索、下载 skill；省略用真实网络，测试注入替身 */
+  skillMarket?: SkillMarket;
   /** 本机 Agent CLI 的检测与升级；省略即不提供（测试默认关闭，免得真的跑登录 shell、查 npm），由 index.ts 注入 */
   agentClis?: AgentCliManager;
   /** IM 凭据加密密钥文件；省略时用进程内随机密钥（重启后已保存的连接需要重新扫码） */
@@ -1145,6 +1148,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ...(options.runtimeCredentials && !sandbox
       ? { runtimeCredentials: options.runtimeCredentials }
       : {}),
+    ...(options.skillMarket ? { skillMarket: options.skillMarket } : {}),
     ...(options.agentClis && !sandbox ? { agentClis: options.agentClis } : {}),
     ...(options.npmUpdates && !sandbox ? { npmUpdates: options.npmUpdates } : {}),
     slowOps: () => slowOps.list(),

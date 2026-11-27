@@ -3,6 +3,10 @@ import {
   putRuntimeMcpServerRequestSchema,
   runtimeInstallApplyRequestSchema,
   runtimeInstallRequestSchema,
+  skillInstallApplyRequestSchema,
+  skillInstallPreviewRequestSchema,
+  type SkillInstallPreview,
+  type SkillInstallResult,
   runtimeCredentialProviderSchema,
   serverText,
   syncRuntimeItemRequestSchema,
@@ -34,7 +38,8 @@ import {
   stalePlan,
   unknownRecipe,
 } from "./runtime-install.js";
-import { RuntimeSkillStore } from "./runtime-skills.js";
+import { RUNTIME_LABELS, RuntimeSkillStore } from "./runtime-skills.js";
+import { SkillInstallPlans, SkillMarket } from "./skill-market.js";
 import { errorText, hiveErrorBody } from "./texts.js";
 
 /**
@@ -53,6 +58,10 @@ const ERROR_STATUS: Record<string, number> = {
   RUNTIME_SKILL_EXISTS: 409,
   RUNTIME_INSTALL_UNKNOWN: 404,
   RUNTIME_INSTALL_PLAN_STALE: 409,
+  SKILL_MARKET_UNAVAILABLE: 502,
+  SKILL_MARKET_NOT_FOUND: 404,
+  SKILL_MARKET_BAD_PACKAGE: 422,
+  SKILL_MARKET_PLAN_STALE: 409,
 };
 
 export function registerRuntimeConfigRoutes(
@@ -62,9 +71,13 @@ export function registerRuntimeConfigRoutes(
     supervisor: LocalAgentSupervisor;
     /** 通过本机房主校验返回 true；不通过时已经发出了响应 */
     authorizeLocal: (request: FastifyRequest, reply: FastifyReply) => boolean;
+    /** 从网上搜索、下载 skill；测试注入替身，不真正访问外网 */
+    skillMarket?: SkillMarket;
   },
 ): void {
   const { credentials, supervisor, authorizeLocal } = options;
+  const market = options.skillMarket ?? new SkillMarket();
+  const skillPlans = new SkillInstallPlans();
   const plans = new InstallPlans();
   const store = credentials ? new RuntimeConfigStore(credentials) : undefined;
   const skills = credentials ? new RuntimeSkillStore(credentials) : undefined;
@@ -96,7 +109,7 @@ export function registerRuntimeConfigRoutes(
 
   function audit(
     request: FastifyRequest,
-    action: "view" | "update" | "delete" | "sync" | "install-preview" | "install",
+    action: "view" | "update" | "delete" | "sync" | "install-preview" | "install" | "skill-search",
     provider: RuntimeCredentialProvider,
     target: string[],
   ) {
@@ -499,6 +512,175 @@ export function registerRuntimeConfigRoutes(
         }
       }
       const result: RuntimeInstallResult = {
+        results,
+        overview: runtimeOverview(ok.store, ok.skills),
+      };
+      return result;
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  /* ---------- 从网上装 skill：skills.sh 搜索 → 下载到内存预览 → 按同一份内容写 ---------- */
+
+  const skillTargets = (skillStore: RuntimeSkillStore, name: string, dirName: string) =>
+    RUNTIME_CREDENTIAL_PROVIDERS.filter((provider) => skillStore.installed(provider)).map(
+      (provider) => {
+        const target = skillStore.installTarget(provider, name, dirName);
+        return {
+          provider,
+          path: target.path,
+          exists: target.exists,
+          sharedWith: target.sharedWith,
+        };
+      },
+    );
+
+  app.get<{ Querystring: { q?: string; owner?: string } }>(
+    "/api/local/skill-market/search",
+    async (request, reply) => {
+      if (!beginInstall(request, reply)) return reply;
+      const query = typeof request.query.q === "string" ? request.query.q : "";
+      const owner =
+        typeof request.query.owner === "string" && request.query.owner
+          ? request.query.owner
+          : undefined;
+      try {
+        const skills = await market.search(query, owner);
+        request.log.info(
+          { runtimeConfig: { by: "local-owner", action: "skill-search", count: skills.length } },
+          "runtime config skill-search",
+        );
+        return { query: query.trim(), skills };
+      } catch (error) {
+        return fail(reply, error);
+      }
+    },
+  );
+
+  app.post("/api/local/skill-market/preview", async (request, reply) => {
+    const ok = beginInstall(request, reply);
+    if (!ok) return reply;
+    const body = skillInstallPreviewRequestSchema.safeParse(request.body);
+    if (!body.success) return badRequest(reply);
+    try {
+      const pkg = await market.fetchSkill(body.data.source, body.data.skillId);
+      const { id, expiresAt } = skillPlans.create(pkg);
+      const preview: SkillInstallPreview = {
+        id,
+        expiresAt,
+        source: pkg.source,
+        skillId: pkg.skillId,
+        name: pkg.name,
+        description: pkg.description,
+        repoPath: pkg.repoPath,
+        ...(pkg.commit ? { commit: pkg.commit } : {}),
+        verified: pkg.verified,
+        url: pkg.url,
+        skillMd: pkg.skillMd.length > 200_000 ? pkg.skillMd.slice(0, 200_000) : pkg.skillMd,
+        files: pkg.files.map(({ path, size, kind, executable }) => ({
+          path,
+          size,
+          kind,
+          executable,
+        })),
+        skipped: pkg.skipped,
+        totalBytes: pkg.totalBytes,
+        targets: skillTargets(ok.skills, pkg.name, pkg.dirName),
+      };
+      request.log.info(
+        {
+          runtimeConfig: {
+            by: "local-owner",
+            action: "skill-preview",
+            skill: `${pkg.source}/${pkg.skillId}`,
+            commit: pkg.commit ?? "snapshot",
+          },
+        },
+        "runtime config skill-preview",
+      );
+      void reply.header("Cache-Control", "no-store");
+      return { preview };
+    } catch (error) {
+      return fail(reply, error);
+    }
+  });
+
+  /**
+   * 按预览时下载好的那一份写：逐个运行时独立写、独立报结果；同名已有的不覆盖。
+   * 同一批里前一个目录装好后，后面会读同一个目录的运行时报「已经能用」，不再装第二份
+   */
+  app.post("/api/local/skill-market/apply", async (request, reply) => {
+    const ok = beginInstall(request, reply);
+    if (!ok) return reply;
+    const body = skillInstallApplyRequestSchema.safeParse(request.body);
+    if (!body.success) return badRequest(reply);
+    try {
+      const pkg = skillPlans.take(body.data.planId);
+      const results: SkillInstallResult["results"] = [];
+      const written: string[] = [];
+      const targets = [...new Set(body.data.targets)];
+      // 动手前就已经有的才算「已存在」；写的过程中才出现的，是被这一批前面写的目录带上的
+      const existedBefore = new Set(
+        targets.filter(
+          (target) =>
+            ok.skills.installed(target) &&
+            ok.skills.installTarget(target, pkg.name, pkg.dirName).exists,
+        ),
+      );
+      for (const target of targets) {
+        if (!ok.skills.installed(target)) {
+          const text = serverText("error.runtimeInstall.runtime", {
+            name: pkg.name,
+            target: RUNTIME_LABELS[target],
+          });
+          results.push({ provider: target, status: "failed", error: zhText(text), text });
+          continue;
+        }
+        const before = ok.skills.installTarget(target, pkg.name, pkg.dirName);
+        if (before.exists) {
+          const shared = !existedBefore.has(target) && written.length > 0;
+          const text = shared
+            ? serverText("skillMarket.shared", { path: written[0]! })
+            : serverText("error.runtimeSkills.exists", {
+                target: RUNTIME_LABELS[target],
+                name: pkg.name,
+              });
+          results.push({
+            provider: target,
+            status: shared ? "shared" : "exists",
+            path: before.path,
+            error: zhText(text),
+            text,
+          });
+          continue;
+        }
+        try {
+          const file = ok.skills.installFiles(target, pkg.name, pkg.dirName, pkg.files);
+          written.push(file);
+          audit(request, "install", target, [
+            `skill:${pkg.name}`,
+            `source:${pkg.source}/${pkg.skillId}@${pkg.commit ?? "snapshot"}`,
+          ]);
+          results.push({ provider: target, status: "installed", path: file });
+        } catch (error) {
+          const text =
+            error instanceof HiveError && error.text
+              ? error.text
+              : serverText("error.runtimeSkills.moveFailed", {
+                  path: before.path,
+                  reason: (error as NodeJS.ErrnoException).code ?? "write error",
+                });
+          results.push({
+            provider: target,
+            status: "failed",
+            path: before.path,
+            error: zhText(text),
+            text,
+          });
+        }
+      }
+      const result: SkillInstallResult = {
         results,
         overview: runtimeOverview(ok.store, ok.skills),
       };

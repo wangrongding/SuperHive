@@ -93,8 +93,8 @@ export function RuntimeOverviewBlock({
   api: RuntimeOverviewApi;
   /** 点列头跳到那个 CLI 的配置；不给就不显示跳转 */
   onJump?: (provider: RuntimeCredentialProvider, section: RuntimeConfigSection) => void;
-  /** 去「发现 / 安装」 */
-  onDiscover?: () => void;
+  /** 去「发现 / 安装」的 MCP 或技能 */
+  onDiscover?: (kind: OverviewKind) => void;
   initialKind?: OverviewKind;
 }) {
   const [overview, setOverview] = useState<RuntimeOverview>();
@@ -197,9 +197,9 @@ export function RuntimeOverviewBlock({
               {t("手动添加")}
             </Button>
           )}
-          {kind === "mcp" && onDiscover && (
-            <Button size="sm" variant="primary" onClick={onDiscover}>
-              {t("发现更多 MCP")}
+          {onDiscover && (
+            <Button size="sm" variant="primary" onClick={() => onDiscover(kind)}>
+              {kind === "mcp" ? t("发现更多 MCP") : t("从网上找技能")}
             </Button>
           )}
         </span>
@@ -222,10 +222,10 @@ export function RuntimeOverviewBlock({
       ) : rows.length === 0 ? (
         <p className="settings-note">
           {kind === "mcp" ? t("还没有装任何 MCP。") : t("还没有技能。")}
-          {kind === "mcp" && onDiscover && (
+          {onDiscover && (
             <>
               {" "}
-              <Button size="sm" variant="link" onClick={onDiscover}>
+              <Button size="sm" variant="link" onClick={() => onDiscover(kind)}>
                 {t("去「发现 / 安装」挑一个")}
               </Button>
             </>

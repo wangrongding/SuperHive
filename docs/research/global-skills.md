@@ -27,9 +27,20 @@
 - **统一管理（参照 cc-switch）**：「Agent 运行时」顶上和底部状态栏的「MCP · 技能」进同一张表，一行一个 MCP / skill，每列一个 CLI。勾上写进那个 CLI 的全局配置，取消就停用；CLI 不支持停用时（Claude Code 的 MCP）取消就从它的配置里删掉，只剩最后一份时不让删，免得这一项彻底丢了。还没有的 CLI 勾上时从已有的复制：skill 复制整个目录到目标 CLI 自己的 skills 目录（软链展开成实际文件），MCP 连同环境变量的值写进目标的全局配置（复用 `putMcp`），远程 MCP 写死值的请求头按目标的写法转过去（Claude / Copilot / omp / opencode 是 `headers`，Codex 是 `http_headers`）。各家写法对不上的不硬转，整体拒绝并列出字段、提示到目标 CLI 里手动添加：Codex 的 `bearer_token_env_var`、`env_http_headers`、`cwd`、超时，Copilot 限定了的 `tools`，以及引用环境变量的值（`${X}`、`{env:X}`，各 CLI 展开规则不同，原样搬过去会变成字面量）；目标已有同名的就拒绝，不覆盖。新增 MCP 可以一次写进多个 CLI。插件、CLI 自带和 superhive 的 skill 不能复制。和 cc-switch 不同，**不另存一份主列表**：每次都从各 CLI 的配置文件读，在 Hive 外手改的也能读回来，不会被覆盖。
 - **权限**：接口都在 `/api/local/…` 下，和运行时配置一样只给 Server 所在电脑上的本机房主；访客、房主的其他设备、Agent 的令牌都拒绝。审计日志只记哪个运行时、哪个 skill、做了什么，不记内容。
 
+## 从网上装（借用 skills.sh）
+
+「MCP 与技能 → 发现 / 安装 → 技能」和 `hive skill search` 借用 [vercel-labs/skills](https://github.com/vercel-labs/skills)（`npx skills`，对照 1.9.1）背后的 skills.sh，但不调用它的 CLI，实现见 `apps/server/src/skill-market.ts`：
+
+- **搜索**：Server 代理 `GET https://skills.sh/api/search?q=…[&owner=…]`（不用认证，词少于 2 个字符它直接报错，一次最多回 100 条，字段 `id/source/skillId/name/installs`）。只认 GitHub 的 `owner/repo`，去掉控制字符，按安装量排序；anthropics、openai、vercel-labs、github 等知名机构的仓库标「常用来源」（`SKILL_POPULAR_OWNERS`），只是帮人挑，不代表审核过。
+- **预览**：先问 GitHub 当前提交号（`commits/HEAD`），按提交号取整棵树，按目录名（不行再读各 SKILL.md 的 name）找到这个 skill 的目录；文件内容先用 skills.sh 的 `/api/download/<owner>/<repo>/<skillId>` 快照（一次请求），每个文件按树里的 Git blob sha 核对，缺的和对不上的（二进制、快照落后）再从 `raw.githubusercontent.com/<repo>/<提交号>/…` 单独取。可执行位从树里读；软链、子模块、`metadata.json` 不装。GitHub 接口匿名额度 60 次/小时，用完或连不上时只用快照，面板上标「没有和 GitHub 核对」。限 300 个文件、单个 2 MB、总共 10 MB；路径带 `..`、绝对路径、反斜杠、控制字符、大小写重名的整包拒绝；只去这四个域名，跳到别处当失败。下载的内容放在 Server 内存里 10 分钟，预览不写文件、不执行任何东西，SKILL.md 只当文本显示，脚本、可执行、二进制单独标出。
+- **安装**：勾选要装给哪些 CLI，写的就是预览时那一份（计划用一次作废）。目录放进各 CLI 自己的主 skills 目录（上表第一个），目录名用仓库里的目录名；同名已有的不覆盖；先写临时目录再改名。同一批里前面装好的目录被后面的 CLI 共读到（例如 Claude Code 的目录 opencode 也读）时，后面那个报「已经能用」，不再装第二份；默认就不勾这种。装完靠上面的扫描读回来，每个 CLI 单独报结果。
+
+为什么不直接调 `npx skills add … -g -y -a … --copy`：它的目录映射和 Hive 的扫描对不上（Codex 它装到 `~/.agents/skills`，Hive 以 `~/.codex/skills` 为主；omp 不在它支持的 agent 里；默认还会先建 `~/.agents` 规范目录再软链）；要 Node ≥ 22.20，首次还要从 npm 下载执行一个包；匿名统计要靠 `DISABLE_TELEMETRY` / `DO_NOT_TRACK` 关。自己下载能做到：写进 Hive 扫描的那些目录、同名不覆盖、按提交号逐个核对、预览和安装是同一份内容、不在这台电脑上执行任何第三方代码。
+
 ## 没做的
 
 - 项目级 skills（`.claude/skills`、`.agents/skills`、`.opencode/skills` 等）：跟着仓库走，不在「全局」范围里。
 - Codex 插件、Copilot 插件带的 skills：目录结构各家不同，先不列。Claude Code 插件只列出、只读。
 - OpenClaw 的 bundled skills（`skills.allowBundled`）：在安装包里，不列。
 - 从备份目录一键恢复：先靠手动挪回。
+- 从网上装的 skill 记来源和提交号、检查更新：现在装完就和手动放进去的一样，不记来源。

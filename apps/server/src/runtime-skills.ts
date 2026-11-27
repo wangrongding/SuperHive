@@ -9,6 +9,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -716,6 +717,66 @@ export class RuntimeSkillStore {
       );
     }
     return { backup: this.display(target) };
+  }
+
+  /* ---------- 从网上装：写进各运行时自己的 skills 目录 ---------- */
+
+  /** 装 dirName 这个目录会写到哪里、是否已经有同名的、还有谁会读到那个目录 */
+  installTarget(provider: RuntimeCredentialProvider, name: string, dirName: string) {
+    const dir = path.join(this.spec(provider).primary, dirName);
+    return {
+      provider,
+      dir,
+      path: this.display(dir),
+      exists:
+        this.has(provider, name) ||
+        isDir(dir) ||
+        readText(path.join(dir, "SKILL.md")) !== undefined,
+      sharedWith: this.sharedWith(path.dirname(dir), provider),
+    };
+  }
+
+  /**
+   * 把下载好的文件写成 primary 目录下的 dirName：先写到同级临时目录再改名，中途失败不留半个 skill；
+   * 同名已有就不写。文件路径由调用方校验过（不含 ..、绝对路径）；可执行位按来源保留
+   */
+  installFiles(
+    provider: RuntimeCredentialProvider,
+    name: string,
+    dirName: string,
+    files: Array<{ path: string; data: Buffer; executable: boolean }>,
+  ): string {
+    const target = this.installTarget(provider, name, dirName);
+    if (target.exists) {
+      throw new HiveError(
+        "RUNTIME_SKILL_EXISTS",
+        serverText("error.runtimeSkills.exists", { target: RUNTIME_LABELS[provider], name }),
+      );
+    }
+    const temp = `${target.dir}.superhive-tmp-${randomBytes(6).toString("hex")}`;
+    try {
+      mkdirSync(path.dirname(target.dir), { recursive: true });
+      mkdirSync(temp, { mode: 0o755 });
+      for (const file of files) {
+        const out = path.join(temp, ...file.path.split("/"));
+        if (!out.startsWith(temp + path.sep)) throw invalid(file.path);
+        mkdirSync(path.dirname(out), { recursive: true });
+        writeFileSync(out, file.data, { mode: file.executable ? 0o755 : 0o644, flag: "wx" });
+      }
+      renameSync(temp, target.dir);
+    } catch (error) {
+      if (error instanceof HiveError) throw error;
+      throw new HiveError(
+        "RUNTIME_CREDENTIALS_WRITE_FAILED",
+        serverText("error.runtimeSkills.moveFailed", {
+          path: target.path,
+          reason: (error as NodeJS.ErrnoException).code ?? "error",
+        }),
+      );
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+    return target.path;
   }
 
   /* ---------- 同步：复制到别的运行时 ---------- */

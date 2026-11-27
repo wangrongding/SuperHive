@@ -43,6 +43,9 @@ import type {
   RuntimeInstallPlan,
   RuntimeInstallRequest,
   RuntimeInstallResult,
+  SkillInstallPreview,
+  SkillInstallResult,
+  SkillSearchResponse,
   RuntimeMcpServerInput,
   RuntimeOverview,
   RuntimeSkills,
@@ -316,6 +319,13 @@ export type LocalAgentsState = {
   applyRuntimeInstall(
     request: RuntimeInstallRequest & { planId: string },
   ): Promise<RuntimeInstallResult>;
+  /** 从网上装 skill：skills.sh 搜索、下载到 Server 内存里预览、按预览的那一份装进勾选的 CLI */
+  searchSkillMarket(query: string): Promise<SkillSearchResponse>;
+  previewSkillInstall(source: string, skillId: string): Promise<SkillInstallPreview>;
+  applySkillInstall(
+    planId: string,
+    targets: RuntimeCredentialProvider[],
+  ): Promise<SkillInstallResult>;
 };
 
 export type RuntimeSkillsResult = {
@@ -1236,6 +1246,35 @@ export function useLocalAgents(
     },
     [request],
   );
+  const searchSkillMarket = useCallback(
+    async (query: string) => {
+      const response = await request(
+        `/api/local/skill-market/search?${new URLSearchParams({ q: query })}`,
+      );
+      return (await response.json()) as SkillSearchResponse;
+    },
+    [request],
+  );
+  const previewSkillInstall = useCallback(
+    async (source: string, skillId: string) => {
+      const response = await request("/api/local/skill-market/preview", {
+        method: "POST",
+        body: JSON.stringify({ source, skillId }),
+      });
+      return ((await response.json()) as { preview: SkillInstallPreview }).preview;
+    },
+    [request],
+  );
+  const applySkillInstall = useCallback(
+    async (planId: string, targets: RuntimeCredentialProvider[]) => {
+      const response = await request("/api/local/skill-market/apply", {
+        method: "POST",
+        body: JSON.stringify({ planId, targets }),
+      });
+      return localizeServerPayload((await response.json()) as SkillInstallResult);
+    },
+    [request],
+  );
   const revokeAllOwnerDevices = useCallback(async () => {
     const response = await request("/api/local/owner-devices/revoke-all", { method: "POST" });
     return ((await response.json()) as { revoked: number }).revoked;
@@ -1378,6 +1417,9 @@ export function useLocalAgents(
     runtimeInstallCatalog,
     previewRuntimeInstall,
     applyRuntimeInstall,
+    searchSkillMarket,
+    previewSkillInstall,
+    applySkillInstall,
     providers,
     agents,
     removedAgents,

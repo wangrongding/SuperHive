@@ -1342,6 +1342,34 @@ export const serverTexts = {
     zh: "安装计划已过期，或者预览之后参数、目标或配置文件变了，什么都没写。请重新预览。",
     en: "The install plan expired, or the parameters, targets or config files changed after the preview. Nothing was written; preview again.",
   },
+  "error.skillMarket.query": {
+    zh: "搜索词要 2～100 个字，不能换行。",
+    en: "Search terms must be 2–100 characters with no line breaks.",
+  },
+  "error.skillMarket.unavailable": {
+    zh: "{site} 暂时连不上（{reason}），稍后再试。",
+    en: "Couldn't reach {site} ({reason}). Try again later.",
+  },
+  "error.skillMarket.notFound": {
+    zh: "在 {source} 里没找到 {skill}，可能已改名或删掉了。",
+    en: "{skill} wasn't found in {source}. It may have been renamed or removed.",
+  },
+  "error.skillMarket.tooLarge": {
+    zh: "{skill} 太大（{reason}），没有下载。",
+    en: "{skill} is too large ({reason}), so it wasn't downloaded.",
+  },
+  "error.skillMarket.badFile": {
+    zh: "{skill} 里的 {path} 有问题（{reason}），没有下载。",
+    en: "{path} in {skill} is unusable ({reason}), so nothing was downloaded.",
+  },
+  "error.skillMarket.planStale": {
+    zh: "预览已过期（超过 10 分钟）或已经装过一次，请重新打开预览。",
+    en: "The preview expired (after 10 minutes) or was already used. Open the preview again.",
+  },
+  "skillMarket.shared": {
+    zh: "通过 {path} 已经能用，没有再装一份",
+    en: "Already available through {path}, so no second copy was installed",
+  },
   "error.runtimeSkills.moveFailed": {
     zh: "没能处理 {path}：{reason}",
     en: "Couldn't process {path}: {reason}",

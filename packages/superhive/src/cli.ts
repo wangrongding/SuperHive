@@ -9,6 +9,7 @@ import { DOCS_URL } from "./docs-url.js";
 import { shouldExitAfterCommand } from "./electron-exit.js";
 import { mcpCommand } from "./mcp-command.js";
 import { modelsCommand } from "./models-command.js";
+import { skillSearchCommand } from "./skill-search.js";
 import { agentsCommand, leaveCommand } from "./remote-join-command.js";
 import { run } from "./run.js";
 import { redirectOutputToLog } from "./self-log.js";
@@ -55,6 +56,7 @@ SuperHive（命令：hive；未全局安装时用 npx superhive 代替 hive）
   hive skill status   查看各 Agent 的安装状态与版本
   hive skill uninstall [claude|codex|openclaw]
                       移除装进去的 SKILL.md（缺省=全部）
+  hive skill search <词>  在 skills.sh 上搜别人分享的 skill（安装请到网页「MCP 与技能」里预览后装）
 
 运行 hive <命令> --help 查看详细选项。
 文档：${DOCS_URL}
@@ -117,11 +119,14 @@ async function main(): Promise<void> {
     if (sub === "install") return skillInstallCommand(args, { version, skillText: readSkill() });
     if (sub === "status") return skillStatusCommand({ version, skillText: readSkill() });
     if (sub === "uninstall") return skillUninstallCommand(args);
+    if (sub === "search") return skillSearchCommand(args);
     if (!sub) {
       process.stdout.write(readSkill());
       return;
     }
-    throw new Error(`未知的子命令：“skill ${sub}”。可用：install、status、uninstall。\n${usage}`);
+    throw new Error(
+      `未知的子命令：“skill ${sub}”。可用：install、status、uninstall、search。\n${usage}`,
+    );
   }
   if (command === "start") return startService();
   if (command === "stop" || command === "off") return stopService();

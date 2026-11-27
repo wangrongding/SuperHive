@@ -10,6 +10,7 @@ import { failureKindSchema } from "./failure-kind.js";
 import { serverTextSchema } from "./server-text.js";
 import { worktreeCleanupEventSchema } from "./worktree.js";
 import { pluginsChangedEventSchema } from "./plugin-manifest.js";
+import { SKILL_ID_PATTERN, SKILL_SOURCE_PATTERN } from "./skill-market.js";
 
 export const LIMITS = {
   /**
@@ -2146,6 +2147,80 @@ export const runtimeInstallResultSchema = z.object({
   ),
   overview: runtimeOverviewSchema,
 });
+/**
+ * 从网上装 skill（只限本机房主）：搜索见 skill-market.ts。预览时 Server 把这个 skill 的文件下载到内存，
+ * 给人看 SKILL.md 和文件清单（预览不写文件、不执行任何东西）；确认后按同一份下载好的内容写进勾选的运行时，
+ * 同名已存在的不覆盖。装完照旧从各运行时的 skills 目录扫描读回来。
+ */
+export const skillInstallPreviewRequestSchema = z.object({
+  source: z.string().regex(SKILL_SOURCE_PATTERN),
+  skillId: z.string().regex(SKILL_ID_PATTERN),
+});
+export const skillInstallFileSchema = z.object({
+  /** 相对 skill 目录，/ 分隔 */
+  path: z.string(),
+  size: z.number(),
+  /** script：脚本（按扩展名、#! 开头或可执行位认）；binary：二进制；doc：Markdown / 文本；other：其它 */
+  kind: z.enum(["doc", "script", "binary", "other"]),
+  executable: z.boolean(),
+});
+export const skillInstallTargetSchema = z.object({
+  provider: runtimeCredentialProviderSchema,
+  /** 会写到的目录（家目录写成 ~） */
+  path: z.string(),
+  /** 这个运行时里已经有同名的：不会覆盖 */
+  exists: z.boolean(),
+  /** 别的运行时也会读这个目录，装进去它们也能用上 */
+  sharedWith: z.array(runtimeCredentialProviderSchema),
+});
+export const skillInstallPreviewSchema = z.object({
+  id: z.string(),
+  expiresAt: z.number(),
+  source: z.string(),
+  skillId: z.string(),
+  name: z.string(),
+  description: z.string(),
+  /** 仓库里 skill 目录的位置，例如 skills/pdf；仓库根目录是空字符串 */
+  repoPath: z.string(),
+  /** 固定的提交号；退回 skills.sh 快照时没有 */
+  commit: z.string().optional(),
+  /** true：从 GitHub 按提交号下载、逐个文件核对过 blob sha；false：GitHub 暂时用不了，用的 skills.sh 快照 */
+  verified: z.boolean(),
+  /** 在 GitHub 上看这个 skill */
+  url: z.string(),
+  /** SKILL.md 原文，只当文本显示 */
+  skillMd: z.string(),
+  files: z.array(skillInstallFileSchema),
+  /** 没下载的：软链、子模块、太大的 */
+  skipped: z.array(
+    z.object({ path: z.string(), reason: z.enum(["symlink", "submodule", "excluded"]) }),
+  ),
+  totalBytes: z.number(),
+  targets: z.array(skillInstallTargetSchema),
+});
+export const skillInstallApplyRequestSchema = z.object({
+  planId: z.string().max(64),
+  targets: z.array(runtimeCredentialProviderSchema).min(1).max(6),
+});
+export const skillInstallResultSchema = z.object({
+  results: z.array(
+    z.object({
+      provider: runtimeCredentialProviderSchema,
+      /** installed：装好了；exists：已有同名、没覆盖；shared：通过同批装进的另一个目录已经能用；failed：没装上 */
+      status: z.enum(["installed", "exists", "shared", "failed"]),
+      path: z.string().optional(),
+      error: z.string().optional(),
+      text: serverTextSchema.optional(),
+    }),
+  ),
+  overview: runtimeOverviewSchema,
+});
+export type SkillInstallPreviewRequest = z.infer<typeof skillInstallPreviewRequestSchema>;
+export type SkillInstallFile = z.infer<typeof skillInstallFileSchema>;
+export type SkillInstallTarget = z.infer<typeof skillInstallTargetSchema>;
+export type SkillInstallPreview = z.infer<typeof skillInstallPreviewSchema>;
+export type SkillInstallApplyRequest = z.infer<typeof skillInstallApplyRequestSchema>;
+export type SkillInstallResult = z.infer<typeof skillInstallResultSchema>;
 export type McpCatalogParam = z.infer<typeof mcpCatalogParamSchema>;
 export type McpCatalogCategory = z.infer<typeof mcpCatalogCategorySchema>;
 export type McpCatalogEntry = z.infer<typeof mcpCatalogEntrySchema>;
@@ -2365,6 +2440,7 @@ export * from "./docs-links.js";
 export * from "./network-proxy.js";
 export * from "./remote-join.js";
 export * from "./plugin-manifest.js";
+export * from "./skill-market.js";
 export type {
   NpmUpdateInfo,
   NpmUpdateBlocker,
