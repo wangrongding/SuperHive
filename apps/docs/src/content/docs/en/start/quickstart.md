@@ -9,11 +9,9 @@ Use one room and one read-only agent to confirm the loop "you send a message →
 
 Before you start, you need two things:
 
-- **SuperHive**: there are two ways to use SuperHive. Pick either one:
-  - **[Install the app](/en/start/installation/#install-the-app)**: download the desktop app and double-click it to start Hive on this computer. It has a built-in terminal, so you don't need to type any commands.
-  - **[Install the CLI](/en/start/installation/#install-the-cli)**: install the `hive` command-line tool with npm. Best for servers, Linux, sharing over a LAN, or if you prefer the terminal.
+- **The SuperHive app (recommended)**: [download the app](https://github.com/wangrongding/SuperHive/releases/latest) for macOS (Apple silicon) or Windows and double-click it to start Hive on this computer. No commands needed. The first time, you allow it once in your system settings; see [Install the app](/en/start/installation/#install-the-app) for the steps.
 
-  Both use the same data directory, `~/.superhive/`, so you can switch between them at any time.
+  On Linux, on a server, for sharing over a LAN, or if you prefer the terminal, use [Install the CLI](/en/start/installation/#install-the-cli) instead. Both use the same data directory, `~/.superhive/`, so you can switch between them at any time.
 
 - **An agent CLI**: such as Claude Code or Codex, installed and signed in on this computer. SuperHive brings it into the room; it doesn't include any agents yet.
 

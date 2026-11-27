@@ -13,8 +13,15 @@ interface Copy {
     titleLead: string;
     titleRest: string;
     intro: string;
-    primary: string;
-    secondary: string;
+    /** 主按钮：下载客户端（GitHub Releases 最新版） */
+    download: string;
+    /** 次按钮：去快速上手 */
+    start: string;
+    /** 按钮下面一行：客户端支持哪些系统，其它情况去装 CLI */
+    platforms: string;
+    cliHint: string;
+    cliLink: string;
+    cliHref: string;
     copy: string;
     copied: string;
     windowTitle: string;
@@ -119,8 +126,12 @@ export const landingText: Record<Lang, Copy> = {
       titleRest: "带进同一间工作室。",
       intro:
         "你、你的同事，和一整队 AI 编码 Agent，在同一个房间里派活、委派、审批和交付。每一步都看得见，文件和权限留在各自电脑上。",
-      primary: "开始使用",
-      secondary: "浏览功能",
+      download: "下载客户端",
+      start: "快速上手",
+      platforms: "支持 macOS（Apple 芯片）和 Windows",
+      cliHint: "Linux 或服务器？",
+      cliLink: "用命令行安装",
+      cliHref: "start/installation/#安装-cli",
       copy: "复制",
       copied: "已复制",
       windowTitle: "SuperHive",
@@ -268,9 +279,11 @@ export const landingText: Record<Lang, Copy> = {
       install: {
         label: "安装",
         head: { lead: "装一次，", rest: "就能开工。" },
-        intro: "两种装法任选：下载客户端双击就用，或者用 npm 装命令行工具。两种用的是同一份数据。",
-        cliTitle: "安装 CLI",
-        cliIntro: "需要 Node.js 22.12 或更高版本，macOS、Linux、Windows 都行。",
+        intro:
+          "推荐下载客户端，双击就用。服务器、Linux 或习惯终端的，再用 npm 装命令行工具，两种用的是同一份数据。",
+        cliTitle: "或者用命令行（CLI）",
+        cliIntro:
+          "适合服务器、Linux、局域网共享或习惯终端的人。需要 Node.js 22.12 或更高版本，macOS、Linux、Windows 都行。",
         steps: [
           {
             step: "第一步",
@@ -288,8 +301,8 @@ export const landingText: Record<Lang, Copy> = {
         note: "不想全局安装，用 npx superhive 临时跑也一样。",
         more: "完整安装说明",
         desktop: {
-          badge: "预览",
-          title: "安装客户端：不想敲命令就用它。",
+          badge: "推荐",
+          title: "下载客户端，双击就用。",
           text: "双击打开就在本机启动 Hive，已有的房间和消息都在；自带终端，默认开在房间的工作目录；本机 Agent 直接在里面接入上线。",
           status:
             "Mac 只支持 Apple 芯片，Windows 是 x64，Linux 暂不提供。安装包还没签名，第一次打开要在系统设置里放行一次，步骤见安装说明。",
@@ -334,8 +347,12 @@ export const landingText: Record<Lang, Copy> = {
       titleRest: "into one workroom.",
       intro:
         "You, your teammates and a whole crew of AI coding agents assign, delegate, approve and ship in one shared room. Every step is visible, and files and permissions stay on each person's own machine.",
-      primary: "Get started",
-      secondary: "Explore features",
+      download: "Download the app",
+      start: "Quickstart",
+      platforms: "For macOS (Apple silicon) and Windows",
+      cliHint: "Linux or a server?",
+      cliLink: "Install the CLI",
+      cliHref: "start/installation/#install-the-cli",
       copy: "Copy",
       copied: "Copied",
       windowTitle: "SuperHive",
@@ -518,9 +535,10 @@ export const landingText: Record<Lang, Copy> = {
         label: "Install",
         head: { lead: "Install once.", rest: "Start working." },
         intro:
-          "Pick either: download the app and double-click it, or install the command-line tool with npm. Both share the same data.",
-        cliTitle: "Install the CLI",
-        cliIntro: "Requires Node.js 22.12 or later, on macOS, Linux or Windows.",
+          "We recommend the app: download it and double-click. On a server, on Linux or if you prefer the terminal, install the command-line tool with npm instead. Both share the same data.",
+        cliTitle: "Or use the command line (CLI)",
+        cliIntro:
+          "For servers, Linux, sharing over a LAN, or if you prefer the terminal. Requires Node.js 22.12 or later, on macOS, Linux or Windows.",
         steps: [
           {
             step: "Step 1",
@@ -538,8 +556,8 @@ export const landingText: Record<Lang, Copy> = {
         note: "Rather not install globally? npx superhive works the same way.",
         more: "Full installation guide",
         desktop: {
-          badge: "Preview",
-          title: "Install the app: no commands needed.",
+          badge: "Recommended",
+          title: "Download the app and double-click it.",
           text: "Double-click to start Hive on this computer, with your existing rooms and messages. It has a built-in terminal that opens in the room's workspace, and local agents join right from the app.",
           status:
             "Mac needs Apple silicon, Windows needs x64, and Linux isn't available yet. The installers aren't signed, so you allow the app once in your system settings the first time; the install guide has the steps.",

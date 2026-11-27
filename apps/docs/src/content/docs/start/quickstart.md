@@ -9,11 +9,9 @@ description: 打开 SuperHive、建一个练习房间、接入一个只读 Agent
 
 开始之前准备两样东西：
 
-- **SuperHive**：有两种方式都可以使用 SuperHive，装法任选一种：
-  - **[安装客户端](/start/installation/#安装客户端)**：下载桌面应用，双击打开就在本机启动 Hive，自带终端，不用敲命令。
-  - **[安装 CLI](/start/installation/#安装-cli)**：用 npm 装命令行工具 `hive`，适合服务器、Linux、局域网共享或习惯终端的人。
+- **SuperHive 客户端（推荐）**：[下载客户端](https://github.com/wangrongding/SuperHive/releases/latest)，支持 macOS（Apple 芯片）和 Windows，双击打开就在本机启动 Hive，不用敲命令。第一次打开要在系统设置里放行一次，步骤见 [安装客户端](/start/installation/#安装客户端)。
 
-  两种装法用的是同一份数据目录 `~/.superhive/`，可以随时换着用。
+  Linux、服务器、局域网共享或习惯终端的，改用 [安装 CLI](/start/installation/#安装-cli)。两种用的是同一份数据目录 `~/.superhive/`，可以随时换着用。
 
 - **一个 Agent CLI**：例如 Claude Code 或 Codex，在这台电脑上装好并登录。SuperHive 负责把它接进房间，目前不自带 Agent。
 

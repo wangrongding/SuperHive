@@ -154,13 +154,26 @@ const hiveCells = Array.from({ length: 14 }, (_, index) => ({
         >
       </h1>
       <p class="hl-intro">{t.hero.intro}</p>
+      <!-- 普通用户默认装客户端：下载是主按钮，快速上手退成次按钮；CLI 只在下面一行小字里给入口 -->
       <div class="hl-actions">
-        <a class="hl-btn hl-btn-primary" href={to("start/quickstart/")}>
-          {t.hero.primary}
+        <a class="hl-btn hl-btn-primary" href={`${repoUrl}/releases/latest`} rel="noopener">
+          <svg class="hl-btn-icon" viewBox="0 0 16 16" aria-hidden="true"
+            ><path d="M8 2v8.5M4.5 7 8 10.5 11.5 7M3 13.5h10"></path></svg
+          >
+          {t.hero.download}
+        </a>
+        <a class="hl-btn hl-btn-ghost" href={to("start/quickstart/")}>
+          {t.hero.start}
           <span aria-hidden="true">→</span>
         </a>
-        <a class="hl-btn hl-btn-ghost" href={to("start/overview/")}>{t.hero.secondary}</a>
       </div>
+      <p class="hl-platforms">
+        <span>{t.hero.platforms}</span>
+        <span>
+          {t.hero.cliHint}
+          <a href={to(t.hero.cliHref)}>{t.hero.cliLink}</a>
+        </span>
+      </p>
     </div>
 
     <!--

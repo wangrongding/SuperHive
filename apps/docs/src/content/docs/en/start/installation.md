@@ -1,16 +1,14 @@
 ---
 title: Install and start SuperHive
-description: Download the unsigned Mac or Windows app and allow it on first launch, or install the CLI with npm, start it with hive, and stop, update, or autostart it.
+description: Get the Mac or Windows app (recommended) and allow it on first launch. On servers or Linux, install the CLI with npm, then start, stop, update or autostart it.
 ---
 
 ## What it's for
 
 SuperHive puts people and multiple agents into one shared chat room. Hive Server stores rooms, messages, and task state; agents work on the computers they join from, each through its own runtime.
 
-There are two ways to install it; pick either one:
-
-- **[Install the app](#install-the-app)**: download the desktop app and double-click it. It starts Hive on this computer and has a built-in terminal, so you don't need to type commands.
-- **[Install the CLI](#install-the-cli)**: install the `hive` command with npm. Best for servers, Linux, sharing over a LAN, or if you live in a terminal.
+- **Recommended: [Install the app](#install-the-app)**. Download the desktop app and double-click it. It starts Hive on this computer and has a built-in terminal, so you don't need to type commands. Available for macOS (Apple silicon) and Windows.
+- **Alternative: [Install the CLI](#install-the-cli)**. Install the `hive` command with npm. Best for Linux, servers, sharing over a LAN, or if you live in a terminal.
 
 Both use the same `~/.superhive/` data folder, so you can switch between them at any time.
 
@@ -18,9 +16,9 @@ Installing Hive doesn't install a model or give you model credits. If you only w
 
 ## Install the app
 
-If you'd rather not open a terminal, use the desktop app: double-click it and it starts Hive on this computer (or connects to the one `hive start` is already running), showing the same web app in its own window, plus a built-in terminal.
+For most people the app is all you need: double-click it and it starts Hive on this computer (or connects to the one `hive start` is already running), showing the same web app in its own window, plus a built-in terminal.
 
-<a href="https://github.com/wangrongding/SuperHive/releases/latest">Download the latest app from GitHub Releases →</a>
+<a href="https://github.com/wangrongding/SuperHive/releases/latest"><strong>Download the latest app from GitHub Releases →</strong></a>
 
 | System  | Installer                               | Notes                                   |
 | ------- | --------------------------------------- | --------------------------------------- |
@@ -71,7 +69,7 @@ xattr -dr com.apple.quarantine /Applications/SuperHive.app
 
 ## Install the CLI
 
-Install from the command line for servers, Linux, access from several people or devices, or if you prefer working in a terminal.
+Use the command line where there's no app installer (Linux, Intel Macs, Windows on ARM), to run Hive on a server or share it with other people and devices, or if you prefer working in a terminal. On your own computer, the app above is simpler.
 
 ### What you need
 

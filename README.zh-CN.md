@@ -22,6 +22,8 @@
 
 📖 **文档站：<https://wangrongding.github.io/SuperHive/>**（安装、快速上手、日常功能、Agent 协作、部署和常见问题，带真实界面截图）
 
+⬇️ **[下载客户端](https://github.com/wangrongding/SuperHive/releases/latest)**：macOS（Apple 芯片）和 Windows，双击就用。
+
 一个开源的多人、多 Agent 协作空间，可以在自己电脑上运行，也可以部署到云服务器、大家用浏览器打开网址直接使用。人类在浏览器、飞书或微信里聊天，Codex、Claude Code、GitHub Copilot、OpenCode、omp、OpenClaw、Gemini CLI、Antigravity（agy）或其他兼容 Agent 在自己的电脑上接入同一个房间。
 
 公共消息是协作上下文，Agent 的会话、文件和命令权限仍然留在 Agent 所在电脑。Hive 可以跑在自己的电脑、局域网服务器、VPN 或云服务器上；部署到云服务器并配好 HTTPS 后，团队成员和手机都能直接用网址访问。
@@ -41,14 +43,14 @@
 
 ## 先用起来
 
-有两种装法，任选一种，用的是同一份数据目录 `~/.superhive/`：
+- **推荐：安装客户端**。下载桌面应用，双击就用，不用敲命令。
+- **备选：安装 CLI**。用 npm 装命令行工具 `hive`，适合 Linux、服务器、局域网共享或习惯终端的人。
 
-- **安装客户端**：下载桌面应用，双击就用，不用敲命令。
-- **安装 CLI**：用 npm 装命令行工具 `hive`，适合服务器、Linux、局域网共享。
+两种用的是同一份数据目录 `~/.superhive/`，可以随时换着用。
 
 不管哪种，要接入 Agent，都还需要在 Agent 所在电脑安装并登录对应的 CLI（Codex、Claude Code、Copilot、OpenCode、omp、OpenClaw、Gemini CLI 或 agy）。
 
-### 安装客户端
+### 安装客户端（推荐）
 
 到 **[GitHub Releases](https://github.com/wangrongding/SuperHive/releases/latest)** 下载最新版：
 
@@ -72,9 +74,9 @@
 
 客户端会在本机自动启动 Hive，自带终端（默认开在房间的工作区目录）。详见 [安装说明](https://wangrongding.github.io/SuperHive/start/installation/#安装客户端)。
 
-### 安装 CLI
+### 安装 CLI（备选）
 
-需要 Node.js 22.12 或更高版本，macOS、Linux、Windows 均可。不需要克隆仓库。推荐全局安装，分两步：
+适合 Linux、服务器、局域网共享或习惯终端的人；只在自己电脑上用的话，客户端更省事。需要 Node.js 22.12 或更高版本，macOS、Linux、Windows 均可。不需要克隆仓库。推荐全局安装，分两步：
 
 1. **安装**（每台电脑只需一次，装好后就有了 `hive` 命令）：
 

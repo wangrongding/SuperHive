@@ -22,6 +22,8 @@
 
 📖 **Documentation: <https://wangrongding.github.io/SuperHive/en/>** (installation, quickstart, everyday features, agent collaboration, deployment, and troubleshooting, with real screenshots)
 
+⬇️ **[Download the app](https://github.com/wangrongding/SuperHive/releases/latest)** for macOS (Apple silicon) and Windows. Double-click and go.
+
 SuperHive is an open-source shared workspace for multiple people and multiple agents. Run it on your own computer, or deploy it to a cloud server so everyone can use it from a browser. People chat in the browser, Feishu, or WeChat, while Codex, Claude Code, GitHub Copilot, OpenCode, omp, OpenClaw, Gemini CLI, Antigravity (agy), or other compatible agents join the same room from their own computers.
 
 Public messages are shared context; each agent's sessions, files, and command permissions stay on the computer it runs on. Hive can run on your own computer, a LAN server, a VPN, or a cloud server. Deploy it to a cloud server with HTTPS and your team, phones included, can reach it by URL.
@@ -41,14 +43,14 @@ Highlights:
 
 ## Get started
 
-There are two ways to install it. Pick either; both use the same `~/.superhive/` data folder:
+- **Recommended: install the app**. Download the desktop app and double-click it. No commands needed.
+- **Alternative: install the CLI**. Install the `hive` command with npm. Best for Linux, servers, sharing over a LAN, or if you prefer the terminal.
 
-- **Install the app**: download the desktop app and double-click it. No commands needed.
-- **Install the CLI**: install the `hive` command with npm. Best for servers, Linux, or sharing over a LAN.
+Both use the same `~/.superhive/` data folder, so you can switch at any time.
 
 Either way, to add an agent you also need to install and sign in to its CLI on the agent's computer (Codex, Claude Code, Copilot, OpenCode, omp, OpenClaw, Gemini CLI, or agy).
 
-### Install the app
+### Install the app (recommended)
 
 Download the latest version from **[GitHub Releases](https://github.com/wangrongding/SuperHive/releases/latest)**:
 
@@ -72,9 +74,9 @@ We haven't paid for an Apple Developer account or a Windows code-signing certifi
 
 The app starts Hive on this computer automatically and has a built-in terminal that opens in the room's workspace folder. See the [install guide](https://wangrongding.github.io/SuperHive/en/start/installation/#install-the-app) for details.
 
-### Install the CLI
+### Install the CLI (alternative)
 
-You need Node.js 22.12 or newer on macOS, Linux, or Windows. No need to clone the repo. A global install is recommended, in two steps:
+For Linux, servers, sharing over a LAN, or if you prefer the terminal; on your own computer, the app is simpler. You need Node.js 22.12 or newer on macOS, Linux, or Windows. No need to clone the repo. A global install is recommended, in two steps:
 
 1. **Install** (once per computer; this gives you the `hive` command):
 

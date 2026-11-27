@@ -599,6 +599,37 @@
   background: color-mix(in srgb, var(--hl-surface) 80%, transparent);
 }
 
+.hl-btn-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 首屏按钮下面一行：客户端支持的系统，以及 Linux / 服务器去装 CLI 的入口 */
+.hl-platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.1rem;
+  justify-content: center;
+  margin: 1rem 0 0;
+  color: var(--hl-dim);
+  font-size: 0.875rem;
+}
+
+.hl-platforms a {
+  color: var(--hl-c1);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.hl-platforms a:hover {
+  text-decoration: underline;
+}
+
 .hl-cmd {
   display: flex;
   align-items: center;
@@ -2037,6 +2068,10 @@ html .hl .cm.cm.cm {
   .hl-actions .hl-btn {
     flex: 1 1 auto;
     justify-content: center;
+  }
+
+  .hl-platforms {
+    justify-content: flex-start;
   }
 
   .hl-window-wrap {

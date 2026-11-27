@@ -1,16 +1,14 @@
 ---
 title: 安装与启动 SuperHive
-description: 两种装法：下载 Mac / Windows 客户端双击就用（含未签名安装包的放行步骤），或用 npm 全局安装 SuperHive CLI、以 hive 命令启动，并安全地停止、更新和配置开机自启。
+description: 推荐下载 Mac / Windows 客户端，双击就用（含未签名安装包的放行步骤）；服务器、Linux 或习惯终端的，用 npm 全局安装 SuperHive CLI、以 hive 命令启动，并安全地停止、更新和配置开机自启。
 ---
 
 ## 有什么用
 
 SuperHive 把人和多个 Agent 放进同一个共享聊天室。Hive Server 负责保存房间、消息和任务状态；Agent 则在接入它的电脑上，通过各自的 Runtime 工作。
 
-有两种装法，任选一种：
-
-- **[安装客户端](#安装客户端)**：下载桌面应用，双击打开就在本机启动 Hive，自带终端，不用敲命令。
-- **[安装 CLI](#安装-cli)**：用 npm 装命令行工具 `hive`，适合服务器、Linux、局域网共享或习惯终端的人。
+- **推荐：[安装客户端](#安装客户端)**。下载桌面应用，双击打开就在本机启动 Hive，自带终端，不用敲命令。支持 macOS（Apple 芯片）和 Windows。
+- **备选：[安装 CLI](#安装-cli)**。用 npm 装命令行工具 `hive`，适合 Linux、服务器、局域网共享或习惯终端的人。
 
 两种装法用的是同一份数据目录 `~/.superhive/`，可以随时换着用。
 
@@ -18,9 +16,9 @@ SuperHive 把人和多个 Agent 放进同一个共享聊天室。Hive Server 负
 
 ## 安装客户端
 
-不想开终端敲命令，就用客户端：双击打开，它会在本机启动 Hive（`hive start` 已经起了就直接连上），窗口里就是同一个网页，还多一个内置终端。
+大多数人用客户端就够了：双击打开，它会在本机启动 Hive（`hive start` 已经起了就直接连上），窗口里就是同一个网页，还多一个内置终端。
 
-<a href="https://github.com/wangrongding/SuperHive/releases/latest">到 GitHub Releases 下载最新版客户端 →</a>
+<a href="https://github.com/wangrongding/SuperHive/releases/latest"><strong>到 GitHub Releases 下载最新版客户端 →</strong></a>
 
 | 系统    | 安装包                               | 说明                                   |
 | ------- | ------------------------------------ | -------------------------------------- |
@@ -71,7 +69,7 @@ xattr -dr com.apple.quarantine /Applications/SuperHive.app
 
 ## 安装 CLI
 
-用命令行安装，适合服务器、Linux、需要多人或跨设备访问，或者习惯在终端里工作的人。
+没有客户端安装包的系统（Linux、Intel 芯片的 Mac、ARM 版 Windows），或者要跑在服务器上、给多人或其他设备访问、习惯在终端里工作的，用命令行安装。在自己电脑上用的话，上面的客户端更省事。
 
 ### 需要准备什么
 
