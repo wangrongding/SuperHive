@@ -218,6 +218,8 @@ export const approvalRefSchema = z.object({
 /** 点选产生的答案：正文由服务端按已存的题目生成，这里只记下所选，供界面高亮 */
 export const questionAnswerSchema = z.object({
   questionMessageId: z.string().uuid(),
+  /** 提问的序号：隔了很久才回答时，Agent 端据此按 seq+id 补拉提问原文；旧消息没有这个字段 */
+  questionSeq: z.number().int().positive().optional(),
   selected: z.array(z.string().regex(/^[A-Z]$/)).max(LIMITS.maxQuestionOptions),
   other: z.string().max(LIMITS.maxQuestionOtherLength).optional(),
 });

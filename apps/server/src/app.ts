@@ -2537,6 +2537,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       replyToMessageId: question.id,
       answer: {
         questionMessageId: question.id,
+        questionSeq: question.seq,
         selected: ordered.map((option) => option.key),
         ...(other ? { other } : {}),
       },

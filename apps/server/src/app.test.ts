@@ -2556,7 +2556,12 @@ describe("invocation lifecycle, budgets, whiteboard and inbox", () => {
       expect(answer).toMatchObject({
         content: "选择 A：提交改动；C：写文档；其它：顺便推送",
         replyToMessageId: question!.id,
-        answer: { questionMessageId: question!.id, selected: ["A", "C"], other: "顺便推送" },
+        answer: {
+          questionMessageId: question!.id,
+          questionSeq: question!.seq,
+          selected: ["A", "C"],
+          other: "顺便推送",
+        },
       });
 
       // 同一 clientMessageId 的重试拿回已发出的答案；换个标签页再答被拒绝

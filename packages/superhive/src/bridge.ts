@@ -1,4 +1,5 @@
 import { bridgeText, bridgeTextZh, said, type BridgeText } from "./bridge-text.js";
+import { loadAnsweredQuestions } from "./question-context.js";
 import { loadReceiptResults } from "./receipt-context.js";
 import {
   TaskWorkspaceBusyError,
@@ -1315,7 +1316,8 @@ export class AgentBridge {
       } else {
         const runtime = this.responder;
         const note = this.takeWorkspaceNote([message]);
-        const steer = buildSteerPrompt(message, await this.attachmentPaths([message]));
+        const [answered] = await this.answeredQuestions([message], []);
+        const steer = buildSteerPrompt(message, await this.attachmentPaths([message]), answered);
         const prompt = note ? `${note}\n\n${steer}` : steer;
         if (
           this.active === active &&
@@ -2849,9 +2851,10 @@ export class AgentBridge {
     const membersUpdate = membersSnapshot
       ? diffPromptContext(membersSnapshot, previous?.members, full)
       : undefined;
-    const receiptResults = await loadReceiptResults(triggers, context, (seq, id) =>
-      this.room.fetchMessageAt(seq, id),
-    );
+    const [receiptResults, answeredQuestions] = await Promise.all([
+      loadReceiptResults(triggers, context, (seq, id) => this.room.fetchMessageAt(seq, id)),
+      this.answeredQuestions(triggers, context),
+    ]);
     const attachmentPaths = await this.attachmentPaths([
       ...context,
       ...triggers,
@@ -2866,6 +2869,7 @@ export class AgentBridge {
       messages: context,
       triggers,
       receiptResults,
+      answeredQuestions,
       contextBudgetTokens: contextBudgetFromEnv(),
       mode: full ? "full" : "brief",
       agentName: this.options.username,
@@ -2891,6 +2895,19 @@ export class AgentBridge {
   }
 
   /** 为消息里的附件准备本机路径；拿不到的只在日志里记一笔，Agent 仍可改用 hive_attachment_read */
+  /** 触发消息是对提问的回答时，找回那条提问（隔了很久才答，提问往往已不在上下文里） */
+  private answeredQuestions(triggers: ChatMessage[], context: ChatMessage[]) {
+    return loadAnsweredQuestions(
+      triggers,
+      context,
+      (seq, id) => this.room.fetchMessageAt(seq, id),
+      (id) => this.room.fetchMessageById(id),
+    ).catch((error: unknown) => {
+      this.log(`[hive] ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    });
+  }
+
   private async attachmentPaths(messages: ChatMessage[]): Promise<AttachmentPaths> {
     const cache = this.attachments;
     if (!cache) return {};

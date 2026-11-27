@@ -257,6 +257,24 @@ export class RoomClient {
     return payload.messages.find((message) => message.id === id && message.seq === seq);
   }
 
+  /** 按 ID 读一条消息（不知道序号时用，例如手打回复的提问）；不在本房间或读不到时返回 undefined */
+  async fetchMessageById(id: string): Promise<ChatMessage | undefined> {
+    const url = new URL(
+      `/api/rooms/${encodeURIComponent(this.options.roomId)}/messages`,
+      this.options.serverUrl,
+    );
+    url.searchParams.set("messageId", id);
+    url.searchParams.set("limit", "1");
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.options.token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error(`无法读取消息 (${response.status})`);
+    const payload = (await response.json()) as MessagesResponse;
+    return payload.messages.find((message) => message.id === id);
+  }
+
   async fetchMessages(afterSeq: number): Promise<{ messages: ChatMessage[]; latestSeq: number }> {
     const all: ChatMessage[] = [];
     let cursor = afterSeq;

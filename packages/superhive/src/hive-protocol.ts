@@ -39,6 +39,10 @@ export type ChatMessage = {
   todoHandoff?: { todoId: string; notes: string };
   /** 网页「引用回复」引用的原消息；正文开头照样有给人看的 Markdown 引用块 */
   quote?: { messageId: string; seq: number; senderName: string };
+  /** kind=question 且带选项时的题目定义 */
+  question?: { options: { key: string; label: string }[]; multiple: boolean };
+  /** 网页点选提交的回答：指向所回答的提问；questionSeq 旧消息没有 */
+  answer?: { questionMessageId: string; questionSeq?: number; selected: string[]; other?: string };
 };
 
 export type Attachment = {

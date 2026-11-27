@@ -105,6 +105,9 @@ class FakeRoom {
   async fetchMessageAt(messageSeq: number, id: string) {
     return this.messages.find((message) => message.seq === messageSeq && message.id === id);
   }
+  async fetchMessageById(id: string) {
+    return this.messages.find((message) => message.id === id);
+  }
   async fetchWhiteboard() {
     this.whiteboardCalls += 1;
     return this.whiteboard;
@@ -524,6 +527,40 @@ describe("AgentBridge", () => {
     expect(responder.calls[0]?.prompt).toContain(result.content);
     responder.finish();
     await waitUntil(() => room.statuses(receipt.id).includes("completed"));
+  });
+
+  it("回答隔了很久才到：提问早于本轮上下文时补拉原文并标注回答哪一问", async () => {
+    const question = chat({
+      senderType: "agent",
+      senderName: "agent-a",
+      kind: "question",
+      content: "@Alice ❓ 群-351 选哪种做法？",
+      mentions: ["Alice"],
+    });
+    const chatter = chat({ content: "接管一直闪", mentions: [] });
+    const answer = chat({
+      content: "其它：这个问题是谁提出来的啊?",
+      mentions: [],
+      replyToMessageId: question.id,
+      answer: {
+        questionMessageId: question.id,
+        questionSeq: question.seq,
+        selected: [],
+        other: "这个问题是谁提出来的啊?",
+      },
+    });
+    room.messages.push(question, chatter, answer);
+    // 提问在上次处理过的序号之前：本轮上下文里没有它
+    await startBridge({ ...baseState(), lastProcessedSeq: question.seq });
+    room.handlers.onMention(answer, answer.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    const prompt = responder.calls[0]!.prompt;
+    expect(prompt).toContain(
+      `[回答提问] 这是 Alice 对 #${question.seq} id=${question.id} 提问（agent-a 提的）的回答`,
+    );
+    expect(prompt).toContain("群-351 选哪种做法");
+    responder.finish();
+    await waitUntil(() => room.statuses(answer.id).includes("completed"));
   });
 
   it("hands off only after the setup turn ends, with a new cwd, session and full context", async () => {

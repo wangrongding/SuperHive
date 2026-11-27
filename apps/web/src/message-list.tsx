@@ -92,6 +92,8 @@ type QuoteState = {
   loaded: boolean;
   excerpt?: string;
   body?: string;
+  /** 这是对 Agent 提问的回答：卡片标「回答」，摘录是提问本身；正文照常显示 */
+  answer?: boolean;
 };
 
 /** 对话流：消息、日期与话题分隔、Agent 的「思考中」卡片和「正在处理」一行 */
@@ -328,10 +330,41 @@ export function MessageList({
     () => new Set(messages.filter((message) => !message.deletedAt).map((message) => message.id)),
     [messages],
   );
+  /**
+   * 回答 Agent 提问的消息（点选回答，或手打回复了一条提问）：顶上画一张「回答 #N」卡片，
+   * 隔了很久才回答时也看得出答的是哪一问；点了跳回提问。
+   */
+  const answerStateOf = useCallback(
+    (message: ChatMessage): QuoteState | undefined => {
+      if (message.senderType !== "human") return undefined;
+      const questionId = message.answer?.questionMessageId ?? message.replyToMessageId;
+      if (!questionId) return undefined;
+      const question = messageById.get(questionId);
+      if (question ? question.kind !== "question" : !message.answer) return undefined;
+      const seq = question?.seq ?? message.answer?.questionSeq;
+      if (!seq) return undefined;
+      const excerpt = question?.content
+        ? plainPreview(question.content)
+            .replace(/^(?:@\S+\s+)*❓\s*/u, "")
+            .slice(0, 120)
+        : undefined;
+      return {
+        messageId: questionId,
+        seq,
+        senderName: question?.senderName ?? "",
+        gone: recalledMessageIds.has(questionId) || Boolean(question?.deletedAt),
+        loaded: loadedMessageIds.has(questionId),
+        answer: true,
+        ...(excerpt ? { excerpt } : {}),
+      };
+    },
+    [messageById, recalledMessageIds, loadedMessageIds],
+  );
   /** 引用了别的消息：正文开头的引用块拆出来画成卡片；原消息撤回了只说「不可见」 */
   const quoteStateOf = useCallback(
     (message: ChatMessage): QuoteState | undefined => {
-      if (message.deletedAt || !message.quote) return undefined;
+      if (message.deletedAt) return undefined;
+      if (!message.quote) return answerStateOf(message);
       const { messageId, seq, senderName } = message.quote;
       const split = splitQuote(messageBodyContent(message), seq);
       const original = messageById.get(messageId);
@@ -344,7 +377,7 @@ export function MessageList({
         ...(split ? { excerpt: split.excerpt, body: split.body } : {}),
       };
     },
-    [messageById, recalledMessageIds, loadedMessageIds],
+    [messageById, recalledMessageIds, loadedMessageIds, answerStateOf],
   );
   const formatMessageTime = useCallback(
     (iso: string) =>
@@ -1404,24 +1437,31 @@ function MessageItem({
 function QuoteCard({ quote, onOpen }: { quote: QuoteState; onOpen: () => void }) {
   const head = (
     <span className="message-quote-head">
-      <Icon name="quote" size={12} />
+      <Icon name={quote.answer ? "help" : "quote"} size={12} />
+      {quote.answer && <span className="message-quote-label">{t("回答提问")}</span>}
       <span className="message-quote-seq">#{quote.seq}</span>
-      <strong>{quote.senderName}</strong>
+      {quote.senderName && <strong>{quote.senderName}</strong>}
     </span>
   );
   if (quote.gone) {
     return (
-      <div className="message-quote gone">
+      <div className={`message-quote gone${quote.answer ? " answer" : ""}`}>
         {head}
-        <span className="message-quote-excerpt">{t("原消息已不可见")}</span>
+        <span className="message-quote-excerpt">
+          {quote.answer ? t("原提问已不可见") : t("原消息已不可见")}
+        </span>
       </div>
     );
   }
   return (
     <button
       type="button"
-      className="message-quote"
-      aria-label={t("跳到引用的原消息 #{0}（{1}）", { 0: quote.seq, 1: quote.senderName })}
+      className={`message-quote${quote.answer ? " answer" : ""}`}
+      aria-label={
+        quote.answer
+          ? t("跳到回答的提问 #{0}", { 0: quote.seq })
+          : t("跳到引用的原消息 #{0}（{1}）", { 0: quote.seq, 1: quote.senderName })
+      }
       onClick={(event) => {
         event.stopPropagation();
         onOpen();

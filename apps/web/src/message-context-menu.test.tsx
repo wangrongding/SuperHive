@@ -439,3 +439,74 @@ describe("引用卡片", () => {
     expect(screen.queryByRole("button", { name: /跳到引用的原消息/ })).toBeNull();
   });
 });
+
+describe("回答提问的卡片", () => {
+  const asked: ChatMessage = {
+    ...reply,
+    id: "00000000-0000-4000-8000-000000000004",
+    seq: 4,
+    kind: "question",
+    content: "@Alice ❓ 群-351 选哪种做法？\nA. 先停掉接管\nB. 换一台云机",
+    question: {
+      options: [
+        { key: "A", label: "先停掉接管" },
+        { key: "B", label: "换一台云机" },
+      ],
+      multiple: false,
+    },
+  };
+  const answered: ChatMessage = {
+    ...question,
+    id: "00000000-0000-4000-8000-000000000005",
+    seq: 5,
+    content: "其它：这个问题是谁提出来的啊?",
+    mentions: [],
+    replyToMessageId: asked.id,
+    answer: {
+      questionMessageId: asked.id,
+      questionSeq: 4,
+      selected: [],
+      other: "这个问题是谁提出来的啊?",
+    },
+  };
+
+  it("点选回答顶上显示「回答提问 #4」和提问摘要，点了跳回提问", () => {
+    const { props, jump } = makeProps([asked, answered]);
+    render(<Harness props={props} />);
+    const card = screen.getByRole("button", { name: "跳到回答的提问 #4" });
+    expect(card.textContent).toContain("回答提问");
+    expect(card.textContent).toContain("#4");
+    expect(card.textContent).toContain("群-351 选哪种做法");
+    expect(card.textContent).not.toContain("@Alice");
+    // 回答正文照常显示
+    expect(screen.getByText("其它：这个问题是谁提出来的啊?")).toBeTruthy();
+    act(() => card.click());
+    expect(jump.jumpToMessage).toHaveBeenCalledWith(asked.id);
+  });
+
+  it("提问早已不在已载入的消息里：按 questionSeq 补拉定位", () => {
+    const { props, jump } = makeProps([answered]);
+    render(<Harness props={props} />);
+    fireEvent.click(screen.getByRole("button", { name: "跳到回答的提问 #4" }));
+    expect(jump.locateMessage).toHaveBeenCalledWith({ messageId: asked.id, messageSeq: 4 });
+  });
+
+  it("手打回复提问同样显示；回复普通消息不显示", () => {
+    const typed = { ...answered, answer: undefined, content: "选 A 吧" };
+    const { props } = makeProps([asked, typed]);
+    render(<Harness props={props} />);
+    expect(screen.getByRole("button", { name: "跳到回答的提问 #4" })).toBeTruthy();
+    cleanup();
+    const plain = { ...typed, replyToMessageId: reply.id };
+    const second = makeProps([reply, plain]);
+    render(<Harness props={second.props} />);
+    expect(screen.queryByRole("button", { name: /跳到回答的提问/ })).toBeNull();
+  });
+
+  it("提问撤回了：显示原提问已不可见", () => {
+    const { props } = makeProps([{ ...asked, content: "", deletedAt: at }, answered]);
+    render(<Harness props={props} />);
+    expect(screen.getByText("原提问已不可见")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /跳到回答的提问/ })).toBeNull();
+  });
+});
