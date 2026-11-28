@@ -2349,7 +2349,8 @@ export function App({
                           onSelect: () => act("restart"),
                         },
                         {
-                          label: t("停止"),
+                          // 叫「下线」不叫「停止」：和「停止这一轮」分开，一看就知道是让 Agent 离线
+                          label: t("下线"),
                           danger: true,
                           disabled: !local.canManage,
                           onSelect: () => act("stop"),

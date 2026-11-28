@@ -97,7 +97,7 @@ describe("AgentSettingsDialog", () => {
       });
       const header = dialog.querySelector("header")!;
       expect(within(header).getByText(new RegExp(t("运行中")))).toBeTruthy();
-      for (const name of [t("重启"), t("立即重启"), t("停止"), t("日志")]) {
+      for (const name of [t("重启"), t("立即重启"), t("下线"), t("日志")]) {
         expect(within(header).getByRole("button", { name })).toBeTruthy();
       }
 
@@ -667,7 +667,7 @@ describe("AgentSettingsDialog", () => {
     expect(screen.getByRole("button", { name: "立即重启" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "重启" }));
     await waitFor(() => expect(act).toHaveBeenCalledWith(agent.id, "restart"));
-    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    fireEvent.click(screen.getByRole("button", { name: "下线" }));
     await waitFor(() => expect(act).toHaveBeenCalledWith(agent.id, "stop"));
 
     rerender(

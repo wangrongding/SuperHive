@@ -416,7 +416,7 @@ export function AgentSettingsDialog({
                       disabled={acting !== undefined || !local.canManage}
                       onClick={() => void control("stop")}
                     >
-                      {acting === "stop" ? t("停止中…") : t("停止")}
+                      {acting === "stop" ? t("下线中…") : t("下线")}
                     </Button>
                   </>
                 ) : (

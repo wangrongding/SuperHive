@@ -1722,7 +1722,7 @@ export const localAgentStatusLabels: Record<LocalAgent["status"], string> = loca
   starting: t("启动中"),
   running: t("运行中"),
   restarting: t("重启中"),
-  stopped: t("已停止"),
+  stopped: t("已下线"),
   crashed: t("已崩溃"),
 }));
 
