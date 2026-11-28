@@ -9,6 +9,7 @@ import {
   readTelemetryQueue,
   readTelemetryState,
   writeTelemetryState,
+  type TelemetryRunMode,
 } from "./telemetry-core.js";
 
 const dirs: string[] = [];
@@ -21,9 +22,14 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function run(args: string[], env: NodeJS.ProcessEnv = {}, dir = tempDir()) {
+function run(
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+  dir = tempDir(),
+  runMode: TelemetryRunMode = "source",
+) {
   const output: string[] = [];
-  telemetryCommand(args, { env, dir, write: (text) => output.push(text) });
+  telemetryCommand(args, { env, dir, runMode, write: (text) => output.push(text) });
   return { text: output.join("\n"), dir };
 }
 
@@ -38,10 +44,35 @@ const queued = (dir: string) =>
   ]);
 
 describe("hive telemetry", () => {
-  it("shows that it is on by default, recorded locally only without an endpoint", () => {
+  it("is on by default and, installed from npm or the desktop app, reports to the built-in Umami", () => {
+    for (const runMode of ["npm", "desktop"] as const) {
+      const { text } = run(["status"], {}, tempDir(), runMode);
+      expect(text).toContain("匿名使用统计：开\n");
+      expect(text).toContain("上报到：https://60.205.92.58（自部署的 Umami）");
+      expect(text).toContain("hive telemetry off");
+    }
+  });
+
+  it("running from source only records locally unless SUPERHIVE_TELEMETRY_URL is set", () => {
     const { text } = run(["status"]);
-    expect(text).toContain("匿名使用统计：开（还没配上报地址：只在本机记录，一条都不发）");
-    expect(text).toContain("hive telemetry off");
+    expect(text).toContain(
+      "匿名使用统计：开（源码运行默认不上报：只在本机记录，一条都不发；要发设 SUPERHIVE_TELEMETRY_URL）",
+    );
+    expect(text).not.toContain("上报到");
+    expect(
+      run(["status"], { SUPERHIVE_TELEMETRY_URL: "https://stats.example.com" }).text,
+    ).toContain("上报到：https://stats.example.com（自部署的 Umami）");
+    // 设错了不退回内置地址
+    expect(
+      run(["status"], { SUPERHIVE_TELEMETRY_URL: "stats.example.com" }, tempDir(), "npm").text,
+    ).toContain("SUPERHIVE_TELEMETRY_URL 不是 http(s) 地址：只在本机记录，一条都不发");
+  });
+
+  it("works out the run mode from where this copy of superhive lives", () => {
+    // 跑测试时就在仓库里：按源码运行算
+    const output: string[] = [];
+    telemetryCommand(["status"], { env: {}, dir: tempDir(), write: (text) => output.push(text) });
+    expect(output.join("\n")).toContain("源码运行默认不上报");
   });
 
   it("explains why it is off when the environment blocks it", () => {

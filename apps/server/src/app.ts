@@ -144,7 +144,11 @@ import {
 } from "./incidents.js";
 import { IncidentStore } from "./incident-store.js";
 import { Telemetry, type TelemetryOptions } from "./telemetry.js";
-import { TELEMETRY_AGENT_PROVIDERS, type TelemetryUpdateFailure } from "./telemetry-core.js";
+import {
+  TELEMETRY_AGENT_PROVIDERS,
+  telemetryRunMode,
+  type TelemetryUpdateFailure,
+} from "./telemetry-core.js";
 import { IncidentDesk, type IncidentGit } from "./incident-desk.js";
 import { ImHub } from "./im/im-hub.js";
 import { ImStore } from "./im/im-store.js";
@@ -575,8 +579,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ? new Telemetry({
         ...options.telemetry,
         version: feedback?.version ?? "0.0.0",
-        // 桌面端跑的是打包进去的 npm 产物，按 Electron 认
-        runMode: process.versions.electron ? "desktop" : (feedback?.runMode ?? "npm"),
+        // 按这份代码在哪认：桌面端安装包、npm 装的、源码运行（源码运行默认不上报）
+        runMode: telemetryRunMode(import.meta.dirname, options.telemetry.env),
         sandbox,
         log: (message, detail) => app.log.info(detail ?? {}, message),
         snapshot: () => {

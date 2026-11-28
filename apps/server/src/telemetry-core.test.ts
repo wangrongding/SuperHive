@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { docsUrl } from "@superhive/protocol";
 import {
+  DEFAULT_TELEMETRY_ENDPOINT,
   DEFAULT_TELEMETRY_SITE,
   QUEUE_LIMIT,
   TELEMETRY_DOCS_URL,
@@ -21,6 +22,7 @@ import {
   telemetryBlocker,
   telemetryEndpoint,
   telemetryRequestBody,
+  telemetryRunMode,
   telemetrySite,
   telemetryUserAgent,
   writeTelemetryState,
@@ -98,13 +100,27 @@ describe("telemetryBlocker", () => {
 });
 
 describe("telemetryEndpoint", () => {
-  it("has no built-in endpoint, so nothing is sent until one is configured", () => {
-    expect(telemetryEndpoint({})).toBeUndefined();
+  it("sends npm and desktop installs to the project's own Umami by default", () => {
+    expect(DEFAULT_TELEMETRY_ENDPOINT).toBe("https://60.205.92.58");
+    expect(telemetryEndpoint({}, "npm")).toBe("https://60.205.92.58/api/batch");
+    expect(telemetryEndpoint({}, "desktop")).toBe("https://60.205.92.58/api/batch");
   });
 
-  it("accepts only http(s) addresses from the environment", () => {
-    expect(telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: "file:///etc/passwd" })).toBeUndefined();
-    expect(telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: "not a url" })).toBeUndefined();
+  it("never uses the built-in endpoint when running from source, only an explicit one", () => {
+    expect(telemetryEndpoint({}, "source")).toBeUndefined();
+    expect(telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: "  " }, "source")).toBeUndefined();
+    expect(
+      telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: "https://stats.example.com" }, "source"),
+    ).toBe("https://stats.example.com/api/batch");
+  });
+
+  it("accepts only http(s) addresses from the environment, without falling back to the built-in one", () => {
+    for (const runMode of ["npm", "desktop", "source"] as const) {
+      expect(
+        telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: "file:///etc/passwd" }, runMode),
+      ).toBeUndefined();
+      expect(telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: "not a url" }, runMode)).toBeUndefined();
+    }
   });
 
   it.each([
@@ -116,7 +132,42 @@ describe("telemetryEndpoint", () => {
     ["https://stats.example.com/api/send", "https://stats.example.com/api/batch"],
     ["https://stats.example.com/api/batch?x=1#y", "https://stats.example.com/api/batch"],
   ])("sends %s to Umami's batch endpoint", (base, url) => {
-    expect(telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: base })).toBe(url);
+    expect(telemetryEndpoint({ SUPERHIVE_TELEMETRY_URL: base }, "npm")).toBe(url);
+  });
+});
+
+describe("telemetryRunMode", () => {
+  it.each([
+    // npm、pnpm、bun、npx 装的都在 node_modules 里
+    ["/usr/local/lib/node_modules/superhive/dist/server", "npm"],
+    ["/Users/a/Library/pnpm/global/5/.pnpm/superhive@0.4.9/node_modules/superhive/dist", "npm"],
+    ["/Users/a/.npm/_npx/1a2b/node_modules/superhive/dist/server", "npm"],
+    ["C:\\Users\\a\\AppData\\Roaming\\npm\\node_modules\\superhive\\dist\\server", "npm"],
+    // 仓库里：tsx 跑源码、自己 build 出来的 dist
+    ["/Users/a/Coding/ai-hive/apps/server/src", "source"],
+    ["/Users/a/Coding/ai-hive/packages/superhive/dist/server", "source"],
+    ["/Users/a/node_modules_backup/superhive/dist", "source"],
+  ] as const)("counts %s as %s", (location, runMode) => {
+    expect(telemetryRunMode(location, {}, false)).toBe(runMode);
+  });
+
+  it("counts only the packaged desktop app as desktop", () => {
+    const location = "/Applications/SuperHive.app/Contents/Resources/app/superhive/dist/server";
+    expect(telemetryRunMode(location, { HIVE_DESKTOP_PACKAGED: "1" }, true)).toBe("desktop");
+    // 没打包的桌面端（开发时 pnpm dev、冒烟测试）
+    expect(telemetryRunMode(location, {}, true)).toBe("source");
+    // 不在 Electron 里时这个变量不算数（比如安装包里的 Agent 又在仓库里起了开发 Server）
+    expect(
+      telemetryRunMode(
+        "/Users/a/Coding/ai-hive/apps/server/src",
+        { HIVE_DESKTOP_PACKAGED: "1" },
+        false,
+      ),
+    ).toBe("source");
+  });
+
+  it("treats this repository as running from source", () => {
+    expect(telemetryRunMode(import.meta.dirname, {}, false)).toBe("source");
   });
 });
 

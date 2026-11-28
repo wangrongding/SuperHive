@@ -1221,6 +1221,7 @@ function runApp(): void {
       agentCli: agentCliCommand(),
       launcher: `SuperHive Desktop ${app.getVersion()}`,
       home: homedir(),
+      packaged: app.isPackaged,
     });
     owned = server;
     void server.exited.then((code) => {

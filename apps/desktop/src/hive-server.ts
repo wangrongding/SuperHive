@@ -219,6 +219,11 @@ export async function startServer(options: {
   launcher: string;
   /** 用户主目录：Server 的 cwd 和新建 Agent、房间工作区的默认目录 */
   home: string;
+  /**
+   * 是不是安装包（app.isPackaged）。是的话带上 HIVE_DESKTOP_PACKAGED=1，匿名使用统计按桌面版算、
+   * 用内置上报地址；没打包的（开发时 pnpm dev、冒烟测试）按源码运行算，默认不上报。
+   */
+  packaged: boolean;
   readyTimeoutMs?: number;
 }): Promise<OwnedServer> {
   const dataDir = options.dataDir;
@@ -239,7 +244,10 @@ export async function startServer(options: {
     HIVE_LOCAL_AGENT_CLI: JSON.stringify(options.agentCli),
     // 已经是桌面端拉起的，不要再有别的程序替它开浏览器
     HIVE_NO_OPEN: "1",
+    ...(options.packaged ? { HIVE_DESKTOP_PACKAGED: "1" } : {}),
   });
+  // 没打包时也不能从外面继承（比如从安装包里的 Agent 终端又起了一个开发版桌面端）
+  if (!options.packaged) delete env.HIVE_DESKTOP_PACKAGED;
 
   const child = await options.fork(options.serverEntry, env, options.home);
   const logFd = openSync(logPath, "a", 0o600);

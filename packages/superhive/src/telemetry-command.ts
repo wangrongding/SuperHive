@@ -16,9 +16,11 @@ import {
   telemetryDir,
   telemetryEndpoint,
   telemetryRequestBody,
+  telemetryRunMode,
   telemetrySite,
   type TelemetryBlocker,
   type TelemetryEventName,
+  type TelemetryRunMode,
 } from "./telemetry-core.js";
 
 const BLOCKER_TEXT: Record<TelemetryBlocker, string> = {
@@ -42,10 +44,16 @@ const usage = `用法：
 export type TelemetryCommandOptions = {
   env?: NodeJS.ProcessEnv;
   dir?: string;
+  /** 这份 superhive 的运行方式，决定用不用内置上报地址；默认按代码所在位置认 */
+  runMode?: TelemetryRunMode;
   write?: (text: string) => void;
 };
 
-export function telemetryStatusText(env: NodeJS.ProcessEnv, dir: string): string {
+export function telemetryStatusText(
+  env: NodeJS.ProcessEnv,
+  dir: string,
+  runMode: TelemetryRunMode = telemetryRunMode(import.meta.dirname, env),
+): string {
   const blocker = telemetryBlocker(env);
   const { state, stored } = readTelemetryState(dir);
   const enabled = state.enabled !== false;
@@ -56,11 +64,16 @@ export function telemetryStatusText(env: NodeJS.ProcessEnv, dir: string): string
   } else if (!enabled) {
     lines.push("匿名使用统计：关（你选了关闭，打开用 hive telemetry on）");
   } else {
+    const endpoint = telemetryEndpoint(env, runMode);
     lines.push(
-      telemetryEndpoint(env)
+      endpoint
         ? "匿名使用统计：开"
-        : "匿名使用统计：开（还没配上报地址：只在本机记录，一条都不发）",
+        : env.SUPERHIVE_TELEMETRY_URL?.trim()
+          ? "匿名使用统计：开（SUPERHIVE_TELEMETRY_URL 不是 http(s) 地址：只在本机记录，一条都不发）"
+          : "匿名使用统计：开（源码运行默认不上报：只在本机记录，一条都不发；要发设 SUPERHIVE_TELEMETRY_URL）",
     );
+    if (endpoint)
+      lines.push(`  上报到：${endpoint.replace(/\/api\/batch$/, "")}（自部署的 Umami）`);
     lines.push(
       `  等着发的数据：${readTelemetryQueue(dir).length} 条（hive telemetry preview 查看）`,
     );
@@ -82,7 +95,7 @@ export function telemetryCommand(args: string[], options: TelemetryCommandOption
     return;
   }
   if (sub === "status") {
-    write(telemetryStatusText(env, dir));
+    write(telemetryStatusText(env, dir, options.runMode));
     return;
   }
   if (sub === "on" || sub === "off") {

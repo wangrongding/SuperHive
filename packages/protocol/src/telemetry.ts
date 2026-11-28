@@ -16,7 +16,7 @@ export const telemetryStatusSchema = z.object({
   blocker: telemetryBlockerSchema.optional(),
   /** 随机安装 ID（被挡住、还没生成时没有） */
   installId: z.string().optional(),
-  /** 配了上报地址；没配时只在本机记录，一条都不发 */
+  /** 有上报地址（npm、桌面版用内置的；源码运行要显式设 SUPERHIVE_TELEMETRY_URL）；没有时只在本机记录，一条都不发 */
   endpoint: z.boolean(),
   /** 本地队列里等着发的条数 */
   queued: z.number().int().min(0),

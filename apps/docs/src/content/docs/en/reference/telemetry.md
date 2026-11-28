@@ -5,8 +5,8 @@ description: "SuperHive records anonymous, coarse usage statistics by default: e
 
 SuperHive records anonymous usage statistics by default: only coarse numbers such as the version, the operating system, which features were used and whether updates worked, so we can decide what to fix and build first. **No messages, paths, names or keys**, and you can turn it off at any time. The approach follows Next.js and Homebrew: on by default, you are told the first time, and one switch or one environment variable turns it off.
 
-:::note[This version sends nothing]
-The statistics service isn't live yet and the built-in endpoint is empty: data is only recorded on this computer, you can preview it at any time, and nothing is sent. When a service is connected, the release notes will say so.
+:::note[Where it goes]
+npm installs and the desktop app send to the project's self-hosted [Umami](https://umami.is) at `https://60.205.92.58` by default. Running from source (`pnpm dev` in the repository, your own build, or an unpackaged desktop app) sends nothing by default and only records on this computer; to send, set `SUPERHIVE_TELEMETRY_URL` explicitly, see [Uploads and retention](#uploads-and-retention).
 :::
 
 ## Turn it off
@@ -135,7 +135,7 @@ For example `"counts_external_invocation": 2, "counts_internal_server": 1`.
 - The content of messages, attachments, questions, boards and tasks
 - File paths, working directories, repository names and URLs
 - Room names, room IDs, people's names, agent names and usernames
-- Hostnames and IP addresses (the Server neither records nor forwards them. The statistics service is a self-hosted Umami: it does not store IP addresses and only uses the request's IP to roughly work out the country, region and city)
+- Hostnames and IP addresses (the Server neither records nor forwards them. The statistics service is the project's self-hosted Umami: it does not store IP addresses and only uses the IP to roughly work out the country and region; the city derived from the IP is cleared within an hour)
 - Tokens, keys, passwords or any other credentials
 - Raw error messages, logs and command-line arguments
 
@@ -148,5 +148,6 @@ This doesn't rely on being careful about what to send. Only a whitelist is accep
 - When the network is down or the statistics service has an error, unsent events stay on this computer and are retried later: first after 1 hour, doubling after each failure in a row, up to 1 day. Events the service explicitly rejects are dropped. Upload errors never affect any feature.
 - At most 200 unsent events are kept locally; when full, the oldest are dropped.
 - Data received by the statistics service is kept for 90 days and then deleted.
-- The endpoint is empty by default. To send to your own Umami, set `SUPERHIVE_TELEMETRY_URL=https://your-umami-address` before starting (only http and https are accepted; uploads go to its `/api/batch`), and put your site's websiteId in `SUPERHIVE_TELEMETRY_SITE`.
+- npm installs and the desktop app send to `https://60.205.92.58` by default (the project's self-hosted Umami, uploads go to its `/api/batch`); running from source sends nothing by default.
+- To send to your own Umami, set `SUPERHIVE_TELEMETRY_URL=https://your-umami-address` before starting (only http and https are accepted; uploads go to its `/api/batch`), and put your site's websiteId in `SUPERHIVE_TELEMETRY_SITE`. This also works when running from source; if it isn't an http(s) address, nothing is sent and the default endpoint is not used instead.
 - The install ID, the switch and unsent data live in `~/.superhive/telemetry/`. Use `SUPERHIVE_TELEMETRY_DIR` to move them.

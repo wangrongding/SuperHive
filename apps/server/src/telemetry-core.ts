@@ -9,7 +9,8 @@
  * - queue.jsonl：等着上报的事件，一行一条，最多 QUEUE_LIMIT 条，超出丢最旧的
  *
  * 只有 Server 往外发（apps/server 的 telemetry.ts），CLI 只往队列里追加。
- * 上报地址默认为空：没配地址时只在本机记录、可以预览，一条都不发。
+ * npm 安装和桌面端安装包默认发到项目自部署的 Umami（DEFAULT_TELEMETRY_ENDPOINT）；源码运行默认不发，
+ * 只在本机记录、可以预览（见 telemetryRunMode、telemetryEndpoint）。
  * 统计服务是自部署的 Umami（https://umami.is）：发出去的请求体由 telemetryRequestBody 生成，
  * 一条事件对应 Umami 的一条 { type: "event", payload }，预览看到的也是它。
  *
@@ -33,10 +34,11 @@ import path from "node:path";
 /** 上报的数据格式版本：字段有不兼容的改动时加一 */
 export const TELEMETRY_SCHEMA = 1;
 /**
- * 上报地址（Umami 的根地址，例如 https://stats.example.com）。统计服务定下来之前为空：一条都不发，
- * 只在本机记录。也可以用环境变量 SUPERHIVE_TELEMETRY_URL 指定（自己部署统计服务、或调试时用）。
+ * 内置的上报地址：项目自部署的 Umami 的根地址。只给 npm 安装和桌面端安装包用；源码运行不用它，
+ * 免得开发、测试时起的 Server 往正式统计里灌数据。环境变量 SUPERHIVE_TELEMETRY_URL 可以换
+ * （自己部署统计服务、或调试时用），源码运行也认它。
  */
-export const DEFAULT_TELEMETRY_ENDPOINT = "";
+export const DEFAULT_TELEMETRY_ENDPOINT = "https://60.205.92.58";
 /** Umami 里 SuperHive 这个站点的 websiteId；环境变量 SUPERHIVE_TELEMETRY_SITE 可以换 */
 export const DEFAULT_TELEMETRY_SITE = "b2d13ec6-3fa6-47bf-9cbd-7317357517fc";
 /** 每条事件在 Umami 里记的域名：只是个标签，不对应真实网站 */
@@ -337,12 +339,33 @@ export function telemetryBlocker(
 }
 
 /**
- * 真正发往的地址：Umami 的 {根地址}/api/batch。环境变量优先，其次内置地址；都没有或不是 http(s)
- * 地址时为 undefined（不发）。根地址可以带子路径（Umami 挂在反向代理的 /umami 下）；
- * 写成 …/api/send 或 …/api/batch 也认。
+ * 运行方式（公共字段 runMode），也决定用不用内置上报地址（见 telemetryEndpoint）。
+ * location 是这份代码所在的目录（import.meta.dirname）：
+ * - 在 Electron 里：桌面端安装包起 Server 时带 HIVE_DESKTOP_PACKAGED=1，算 desktop；没带的是没打包的
+ *   桌面端（开发时 pnpm dev、冒烟测试），算 source
+ * - 装在 node_modules 里（npm、pnpm、bun、yarn 全局安装，npx）算 npm
+ * - 其余（仓库里用 tsx 跑、自己 build 出来的 dist、pnpm link）算 source
  */
-export function telemetryEndpoint(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const raw = env.SUPERHIVE_TELEMETRY_URL?.trim() || DEFAULT_TELEMETRY_ENDPOINT;
+export function telemetryRunMode(
+  location: string,
+  env: NodeJS.ProcessEnv = process.env,
+  electron = Boolean(process.versions.electron),
+): TelemetryRunMode {
+  if (electron) return env.HIVE_DESKTOP_PACKAGED === "1" ? "desktop" : "source";
+  return /[\\/]node_modules[\\/]/.test(location) ? "npm" : "source";
+}
+
+/**
+ * 真正发往的地址：Umami 的 {根地址}/api/batch。环境变量 SUPERHIVE_TELEMETRY_URL 优先；没设时 npm 和
+ * 桌面端用内置地址，源码运行为 undefined（不发）。设了但不是 http(s) 地址时也是 undefined，不退回内置地址。
+ * 根地址可以带子路径（Umami 挂在反向代理的 /umami 下）；写成 …/api/send 或 …/api/batch 也认。
+ */
+export function telemetryEndpoint(
+  env: NodeJS.ProcessEnv,
+  runMode: TelemetryRunMode,
+): string | undefined {
+  const raw =
+    env.SUPERHIVE_TELEMETRY_URL?.trim() || (runMode === "source" ? "" : DEFAULT_TELEMETRY_ENDPOINT);
   if (!raw) return undefined;
   try {
     const url = new URL(raw);

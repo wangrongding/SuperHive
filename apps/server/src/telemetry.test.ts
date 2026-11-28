@@ -66,8 +66,11 @@ function sent(fetch: ReturnType<typeof make>["fetch"], call = 0) {
 }
 
 describe("Telemetry", () => {
-  it("is on by default and records locally, but never sends without an endpoint", async () => {
-    const { telemetry, fetch } = make();
+  it("is on by default and, running from source, records locally but never sends", async () => {
+    const log = vi.fn();
+    const { telemetry, fetch } = make({ runMode: "source", log });
+    telemetry.start();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("running from source"));
     expect(telemetry.status()).toMatchObject({
       active: true,
       enabled: true,
@@ -99,11 +102,46 @@ describe("Telemetry", () => {
         data: expect.objectContaining({
           schema: 1,
           version: "0.4.9",
-          runMode: "desktop",
+          runMode: "source",
           feature: "room_create",
         }),
       },
     });
+  });
+
+  it.each(["npm", "desktop"] as const)(
+    "installed as %s, sends to the project's own Umami without any configuration",
+    async (runMode) => {
+      const { telemetry, fetch } = make({ runMode });
+      expect(telemetry.status().endpoint).toBe(true);
+      telemetry.feature("room_create");
+      await telemetry.flush();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(sent(fetch).url).toBe("https://60.205.92.58/api/batch");
+      expect(sent(fetch).body[0]!.payload.data).toMatchObject({ runMode });
+    },
+  );
+
+  it("sends from source only to an explicitly configured endpoint", async () => {
+    const { telemetry, fetch } = make({ runMode: "source", env: endpoint });
+    expect(telemetry.status().endpoint).toBe(true);
+    telemetry.feature("room_create");
+    await telemetry.flush();
+    expect(sent(fetch).url).toBe(batchUrl);
+  });
+
+  it("does not fall back to the built-in endpoint when SUPERHIVE_TELEMETRY_URL is wrong", async () => {
+    const log = vi.fn();
+    const { telemetry, fetch } = make({
+      env: { SUPERHIVE_TELEMETRY_URL: "stats.example.com" },
+      log,
+    });
+    telemetry.start();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("not an http(s) URL"));
+    telemetry.feature("room_create");
+    await telemetry.flush();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(telemetry.status()).toMatchObject({ endpoint: false, queued: 1 });
   });
 
   it("uses the website ID from SUPERHIVE_TELEMETRY_SITE", () => {

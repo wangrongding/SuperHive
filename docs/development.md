@@ -227,7 +227,7 @@ HIVE_AGENT_TOKEN       hive join 的 token（代替 --token，不出现在进程
 HIVE_CLAUDE_KEEPALIVE_MS  Claude Code 进程一轮结束后保留多久给下一轮复用（毫秒，默认 600000；0 = 每轮新起进程）
 NO_UPDATE_NOTIFIER=1   关闭新版本提示
 SUPERHIVE_TELEMETRY=0  关闭匿名使用统计（DO_NOT_TRACK=1、CI、沙箱、测试环境同样一律不记），见文档站「使用统计」
-SUPERHIVE_TELEMETRY_URL  使用统计的上报地址：自部署 Umami 的根地址（http/https，发到它的 /api/batch）；默认为空，只在本机记录、不发送
+SUPERHIVE_TELEMETRY_URL  使用统计的上报地址：Umami 的根地址（http/https，发到它的 /api/batch）。npm 安装和桌面版默认发到项目自部署的 https://60.205.92.58；源码运行（pnpm dev、自己 build 的、没打包的桌面端）默认不发，设了它才发。冒烟测试跑 npm 包或桌面端安装包时设 SUPERHIVE_TELEMETRY=0（web-update 冒烟和桌面端 Playwright 已设）
 SUPERHIVE_TELEMETRY_SITE  Umami 的 websiteId（UUID），默认是内置的 SuperHive 站点
 SUPERHIVE_TELEMETRY_DIR  使用统计的安装 ID、开关和待发队列放哪，默认 ~/.superhive/telemetry
 ```

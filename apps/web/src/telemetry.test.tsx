@@ -23,7 +23,7 @@ const status = (patch: Partial<TelemetryStatus> = {}): TelemetryStatus => ({
   active: true,
   enabled: true,
   installId: "8d0f3c1e-2a4b-4c6d-8e9f-0a1b2c3d4e5f",
-  endpoint: false,
+  endpoint: true,
   queued: 2,
   noticePending: true,
   ...patch,
@@ -57,7 +57,8 @@ describe("TelemetryNotice", () => {
     render(<TelemetryNotice local={local} delayMs={0} />);
     expect(await screen.findByRole("region", { name: "匿名使用统计" })).toBeTruthy();
     expect(screen.getByText(/不收消息、路径、名字和 key/)).toBeTruthy();
-    expect(screen.getByText(/还没接统计服务/)).toBeTruthy();
+    // npm、桌面版有上报地址：不说「只留在这台电脑上」
+    expect(screen.queryByText(/这台电脑上/)).toBeNull();
     expect(screen.getByRole("link", { name: "了解详情" }).getAttribute("href")).toContain(
       "reference/telemetry/",
     );
@@ -68,6 +69,11 @@ describe("TelemetryNotice", () => {
     render(<TelemetryNotice local={local} delayMs={0} />);
     await waitFor(() => expect(local.telemetry).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("region", { name: "匿名使用统计" })).toBeNull();
+  });
+
+  it("says the data stays local when running from source", async () => {
+    render(<TelemetryNotice local={api(status({ endpoint: false }))} delayMs={0} />);
+    expect(await screen.findByText("源码运行默认不上报，数据只留在这台电脑上。")).toBeTruthy();
   });
 
   it("turns statistics off from the card", async () => {
@@ -113,12 +119,19 @@ describe("TelemetrySettingsGroup", () => {
     renderGroup(local);
     const toggle = await screen.findByRole("switch", { name: /匿名使用统计/ });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByText("还没接统计服务：数据只记在这台电脑上，不会发出去。")).toBeTruthy();
+    expect(screen.queryByText(/源码运行默认不上报/)).toBeNull();
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
     expect(local.updateTelemetry).toHaveBeenCalledWith(false);
     // 关了就没有要发的数据：不再给「查看」按钮
     expect(screen.queryByRole("button", { name: /查看要发送的数据/ })).toBeNull();
+  });
+
+  it("says nothing is sent when running from source", async () => {
+    renderGroup(api(status({ endpoint: false })));
+    expect(
+      await screen.findByText("源码运行默认不上报：数据只记在这台电脑上，不会发出去。"),
+    ).toBeTruthy();
   });
 
   it("shows the raw JSON that would be sent, and hides it again", async () => {

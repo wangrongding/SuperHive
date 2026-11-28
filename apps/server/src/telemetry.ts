@@ -4,7 +4,8 @@
  *
  * - 一律不报：设置里关了（或 hive telemetry off）、SUPERHIVE_TELEMETRY=0、DO_NOT_TRACK=1、CI、沙箱、测试。
  *   这时什么都不记，也不建文件。
- * - 上报地址默认为空（DEFAULT_TELEMETRY_ENDPOINT）：只在本机记录、可以预览，一条都不发。
+ * - npm 安装和桌面端安装包默认发到项目自部署的 Umami（DEFAULT_TELEMETRY_ENDPOINT）；源码运行默认不发，
+ *   只在本机记录、可以预览，要发得显式设 SUPERHIVE_TELEMETRY_URL（见 telemetryEndpoint）。
  * - 发给自部署的 Umami：{地址}/api/batch，一次最多 TELEMETRY_BATCH_LIMIT 条，请求头带 SuperHive 的 UA
  *   （不带 Umami 会当机器人丢掉）。网络不通、服务出错（408、429、5xx）时放回本机队列，过一会儿再发：
  *   第一次等 1 小时，连续失败每次翻倍，最多等 1 天；队列最多 200 条，满了丢最旧的。
@@ -101,7 +102,7 @@ export class Telemetry {
   constructor(private readonly options: TelemetryOptions) {
     const env = options.env ?? process.env;
     this.blocker = options.sandbox ? "sandbox" : telemetryBlocker(env);
-    this.endpoint = telemetryEndpoint(env);
+    this.endpoint = telemetryEndpoint(env, options.runMode);
     this.site = telemetrySite(env);
     this.userAgent = telemetryUserAgent(
       telemetryContext({ version: options.version, runMode: options.runMode, locale: "other" }),
@@ -113,10 +114,13 @@ export class Telemetry {
   start(): void {
     if (this.active()) {
       this.state();
+      const env = this.options.env ?? process.env;
       this.options.log?.(
         this.endpoint
           ? "Anonymous usage statistics are on; turn them off in Settings or with `hive telemetry off`"
-          : "Anonymous usage statistics are on, recorded locally only (no endpoint configured, nothing is sent)",
+          : env.SUPERHIVE_TELEMETRY_URL?.trim()
+            ? "Anonymous usage statistics are on, recorded locally only (SUPERHIVE_TELEMETRY_URL is not an http(s) URL, nothing is sent)"
+            : "Anonymous usage statistics are on, recorded locally only (running from source, nothing is sent unless SUPERHIVE_TELEMETRY_URL is set)",
       );
     }
     const tick = () => {

@@ -3,12 +3,13 @@
 // 和 local-agents.js 一起用（它负责假装页面开在 Server 所在电脑上）：
 //   pnpm screenshot --url "$SANDBOX_URL/?telemetry=on" --init-script scripts/fixtures/local-agents.js \
 //     --init-script scripts/fixtures/telemetry.js --action settings:computer
-// ?telemetry=on 开着、首次告知还没弹；?telemetry=seen 开着、已经告知过；?telemetry=blocked 被 DO_NOT_TRACK 挡住
+// ?telemetry=on 开着、首次告知还没弹；?telemetry=seen 开着、已经告知过；?telemetry=blocked 被 DO_NOT_TRACK 挡住；
+// ?telemetry=source 源码运行：开着、首次告知还没弹，但没有上报地址（其它几种按 npm 安装算，有内置地址）
 (() => {
   const mode = new URLSearchParams(location.search).get("telemetry") ?? "on";
   const context = {
     version: "0.4.9",
-    runMode: "npm",
+    runMode: mode === "source" ? "source" : "npm",
     os: "darwin",
     arch: "arm64",
     locale: "zh-CN",
@@ -64,14 +65,14 @@
   let installId = "8d0f3c1e-2a4b-4c6d-8e9f-0a1b2c3d4e5f";
   let enabled = true;
   let queued = events.length;
-  let noticePending = mode === "on";
+  let noticePending = mode === "on" || mode === "source";
   const blocker = mode === "blocked" ? "do_not_track" : undefined;
   const status = () => ({
     active: enabled && !blocker,
     enabled,
     ...(blocker ? { blocker } : {}),
     installId,
-    endpoint: false,
+    endpoint: mode !== "source",
     queued: enabled && !blocker ? queued : 0,
     noticePending: noticePending && enabled && !blocker,
   });

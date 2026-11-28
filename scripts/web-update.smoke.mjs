@@ -227,6 +227,8 @@ try {
     HIVE_NO_OPEN: "1",
     HIVE_IM_WECHAT: "0",
     HIVE_WORKTREE_DEPS: "0",
+    // 装的是 npm 包，按 npm 安装算会用内置上报地址：冒烟测试不往正式统计里发
+    SUPERHIVE_TELEMETRY: "0",
     HIVE_ECHO_DELAY_MS: "120000",
     HIVE_LOCAL_AGENT_CLI: JSON.stringify([
       process.execPath,

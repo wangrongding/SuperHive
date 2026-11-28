@@ -153,6 +153,7 @@ describe("server environment", () => {
         agentCli: ["/app/SuperHive", "--superhive-cli"],
         launcher: "test",
         home: "/Users/rd",
+        packaged: true,
       }),
     ).rejects.toThrow("stop here");
     expect(forked).toHaveLength(1);
@@ -160,5 +161,31 @@ describe("server environment", () => {
     expect(forked[0]!.env.HIVE_LAUNCH_DIR).toBe("/Users/rd");
     // 没传 host 时只听本机（桌面端按「允许局域网设备访问」显式传，默认开启时传 0.0.0.0）
     expect(forked[0]!.env.HIVE_HOST).toBe("127.0.0.1");
+    // 安装包：匿名使用统计按桌面版算
+    expect(forked[0]!.env.HIVE_DESKTOP_PACKAGED).toBe("1");
+  });
+
+  it("marks only the packaged app, so development builds count as running from source", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "superhive-desktop-env-"));
+    const forked: Array<Record<string, string>> = [];
+    await expect(
+      startServer({
+        fork: async (_entry, env) => {
+          forked.push(env);
+          throw new Error("stop here");
+        },
+        serverEntry: "/app/server/index.js",
+        staticDir: "/app/web",
+        dataDir: dir,
+        port: 1,
+        // 从安装包里的终端又起了开发版：外面带进来的也去掉
+        env: { PATH: "/usr/bin", HIVE_DESKTOP_PACKAGED: "1" },
+        agentCli: ["/app/SuperHive", "--superhive-cli"],
+        launcher: "test",
+        home: "/Users/rd",
+        packaged: false,
+      }),
+    ).rejects.toThrow("stop here");
+    expect(forked[0]).not.toHaveProperty("HIVE_DESKTOP_PACKAGED");
   });
 });

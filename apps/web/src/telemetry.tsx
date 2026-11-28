@@ -161,7 +161,9 @@ export function TelemetrySettingsGroup({ local }: { local: LocalAgentsState }) {
         <p className="settings-note">{t("只能在运行 Hive Server 的那台电脑上改。")}</p>
       )}
       {status.active && !status.endpoint && (
-        <p className="settings-note">{t("还没接统计服务：数据只记在这台电脑上，不会发出去。")}</p>
+        <p className="settings-note">
+          {t("源码运行默认不上报：数据只记在这台电脑上，不会发出去。")}
+        </p>
       )}
       <div className="telemetry-actions">
         {status.active && (
@@ -273,7 +275,7 @@ export function TelemetryNotice({
               )}
             </p>
             {status && !status.endpoint && (
-              <p className="update-card-text">{t("现在还没接统计服务，数据只留在这台电脑上。")}</p>
+              <p className="update-card-text">{t("源码运行默认不上报，数据只留在这台电脑上。")}</p>
             )}
             {error && <p className="update-card-text error">{error}</p>}
             <div className="update-card-actions">
