@@ -306,6 +306,247 @@ describe("ClaudeCodeResponder", () => {
     expect(killed).toBe(false);
   });
 
+  /** 假的 Claude CLI：记下写进标准输入的每一行，测试里按需吐出 stream-json 事件 */
+  function fakeClaude() {
+    const fake = {
+      written: [] as Record<string, unknown>[],
+      killed: false,
+      ended: false,
+      emit: (() => undefined) as (line: object) => void,
+      requests: (subtype: string) =>
+        fake.written.filter(
+          (line) =>
+            line.type === "control_request" &&
+            (line.request as { subtype?: string } | undefined)?.subtype === subtype,
+        ) as { request_id: string; request: Record<string, unknown> }[],
+      steers: () =>
+        fake.written.filter((line) => line.type === "user").slice(1) as { uuid: string }[],
+    };
+    const runner: CommandRunner = (_command, _args, options) =>
+      new Promise((_resolve, reject) => {
+        fake.emit = (line) => options.onStdout?.(`${JSON.stringify(line)}\n`);
+        options.signal?.addEventListener("abort", () => {
+          fake.killed = true;
+          reject(new AgentCancelledError());
+        });
+        fake.written.push(JSON.parse(String(options.input)));
+        options.onStdin?.({
+          write: (text) => fake.written.push(JSON.parse(text)),
+          // 中断后关输入，Claude 以非零码退出
+          end: () => {
+            fake.ended = true;
+            reject(new Error("运行进程异常退出（1）。"));
+          },
+        });
+      });
+    return { fake, runner };
+  }
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("discards steers still in Claude's queue when stopping, and returns them to the Bridge queue (#7593)", async () => {
+    const { fake, runner } = fakeClaude();
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/w",
+      hive,
+      runner,
+      interruptTimeoutMs: 60_000,
+    });
+    const stop = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "做事", signal: stop.signal });
+    await tick();
+    fake.emit({ type: "system", subtype: "status", status: "requesting" });
+    const first = responder.steer("补充一");
+    const second = responder.steer("补充二");
+    const [a, b] = fake.steers().map((line) => line.uuid);
+    fake.emit({ type: "command_lifecycle", command_uuid: a, state: "queued" });
+    fake.emit({ type: "command_lifecycle", command_uuid: b, state: "queued" });
+    stop.abort();
+    // 停下后不再接引导
+    await expect(responder.steer("再补充")).resolves.toBe(false);
+    const [interrupt] = fake.requests("interrupt");
+    expect(interrupt?.request).toEqual({ subtype: "interrupt", cancel_queued: true });
+    // 2.1.332：排队的引导随中断作废，答复里列出来，接着以 error_during_execution 收尾
+    fake.emit({ type: "command_lifecycle", command_uuid: a, state: "cancelled" });
+    fake.emit({ type: "command_lifecycle", command_uuid: b, state: "cancelled" });
+    fake.emit({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: interrupt!.request_id,
+        response: { still_queued: [], cancelled: [a, b] },
+      },
+    });
+    fake.emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      session_id: "s",
+    });
+    await expect(reply).rejects.toBeInstanceOf(AgentCancelledError);
+    // 没被处理的引导退回排队；不用结束进程
+    await expect(first).resolves.toBe(false);
+    await expect(second).resolves.toBe(false);
+    expect(fake.killed).toBe(false);
+    expect(fake.requests("cancel_async_message")).toEqual([]);
+  });
+
+  it("kills Claude at once when it picks up queued steers after the interrupt, and keeps those steers out of the queue", async () => {
+    // 老版本（或撤回没赶上）：中断只停当前这一步，结果出来后 Claude 接着处理排队的两条，在同一进程里再跑一轮
+    const { fake, runner } = fakeClaude();
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/w",
+      hive,
+      runner,
+      interruptTimeoutMs: 60_000,
+    });
+    const stop = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "做事", signal: stop.signal });
+    await tick();
+    fake.emit({ type: "system", subtype: "status", status: "requesting" });
+    const first = responder.steer("补充一");
+    const second = responder.steer("补充二");
+    const [a, b] = fake.steers().map((line) => line.uuid);
+    stop.abort();
+    const [interrupt] = fake.requests("interrupt");
+    fake.emit({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: interrupt!.request_id,
+        response: { still_queued: [a, b] },
+      },
+    });
+    // 还排着的逐条按 uuid 撤回；Claude 回答没撤成（已经被取走）
+    const cancels = fake.requests("cancel_async_message");
+    expect(cancels.map((line) => line.request.message_uuid)).toEqual([a, b]);
+    for (const cancel of cancels)
+      fake.emit({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: cancel.request_id,
+          response: { cancelled: false },
+        },
+      });
+    fake.emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      session_id: "s",
+    });
+    expect(fake.killed).toBe(false);
+    // 又开了新一轮：回放第一条、发起请求 → 立即结束进程，不等它跑完
+    fake.emit({ type: "user", isReplay: true, uuid: a, message: { role: "user", content: [] } });
+    expect(fake.killed).toBe(true);
+    await expect(reply).rejects.toThrow(/又接着处理排队的消息/);
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
+    // 第一条已经被 Claude 收进对话：算这一轮的，不能退回排队重跑；第二条没有回放，退回排队
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(false);
+  });
+
+  it("treats a new model request after a confirmed interrupt as Claude carrying on", async () => {
+    const { fake, runner } = fakeClaude();
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/w",
+      hive,
+      runner,
+      interruptTimeoutMs: 60_000,
+    });
+    const stop = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "做事", signal: stop.signal });
+    await tick();
+    stop.abort();
+    const [interrupt] = fake.requests("interrupt");
+    fake.emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: interrupt!.request_id, response: {} },
+    });
+    fake.emit({ type: "stream_event", event: { type: "message_start", message: { id: "m2" } } });
+    expect(fake.killed).toBe(true);
+    await expect(reply).rejects.toBeInstanceOf(AgentExecutionUncertainError);
+  });
+
+  it("withdraws a still-queued steer by uuid when the CLI ignores cancel_queued", async () => {
+    const { fake, runner } = fakeClaude();
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/w",
+      hive,
+      runner,
+      interruptTimeoutMs: 60_000,
+    });
+    const stop = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "做事", signal: stop.signal });
+    await tick();
+    const steered = responder.steer("补充");
+    const [uuid] = fake.steers().map((line) => line.uuid);
+    stop.abort();
+    const [interrupt] = fake.requests("interrupt");
+    // 更老的版本：答复里什么都不列，没收下的引导全部按 uuid 撤一遍
+    fake.emit({
+      type: "control_response",
+      response: { subtype: "success", request_id: interrupt!.request_id },
+    });
+    const [cancel] = fake.requests("cancel_async_message");
+    expect(cancel?.request).toEqual({ subtype: "cancel_async_message", message_uuid: uuid });
+    fake.emit({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: cancel!.request_id,
+        response: { cancelled: true, message_uuid: uuid },
+      },
+    });
+    await expect(steered).resolves.toBe(false);
+    fake.emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      session_id: "s",
+    });
+    await expect(reply).rejects.toBeInstanceOf(AgentCancelledError);
+    expect(fake.killed).toBe(false);
+  });
+
+  it("settles a stop that lands between turns without waiting for a result that never comes", async () => {
+    const { fake, runner } = fakeClaude();
+    const responder = new ClaudeCodeResponder({
+      command: "claude",
+      cwd: "/w",
+      hive,
+      runner,
+      interruptTimeoutMs: 60_000,
+    });
+    const stop = new AbortController();
+    const reply = responder.reply({ instructions: "r", prompt: "做事", signal: stop.signal });
+    await tick();
+    const steered = responder.steer("补充");
+    const [uuid] = fake.steers().map((line) => line.uuid);
+    // 第一轮刚出完结果，引导还在排队：输入开着等它
+    fake.emit({ type: "result", is_error: false, result: "第一段", session_id: "s" });
+    expect(fake.ended).toBe(false);
+    stop.abort();
+    const [interrupt] = fake.requests("interrupt");
+    fake.emit({ type: "command_lifecycle", command_uuid: uuid, state: "cancelled" });
+    fake.emit({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: interrupt!.request_id,
+        response: { still_queued: [], cancelled: [uuid] },
+      },
+    });
+    // 没有在跑的一轮，不会再有结果：直接收尾
+    expect(fake.ended).toBe(true);
+    await expect(reply).rejects.toBeInstanceOf(AgentCancelledError);
+    await expect(steered).resolves.toBe(false);
+    expect(fake.killed).toBe(false);
+  });
+
   it("hands a workspace tool-permission prompt to a human and answers Claude with the decision", async () => {
     const written: string[] = [];
     let emit: (line: object) => void = () => undefined;

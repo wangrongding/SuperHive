@@ -63,8 +63,15 @@ export class ClaudeStream {
     postTokens?: number;
     durationMs?: number;
   }) => void;
-  /** 控制请求（例如 interrupt）的答复 */
-  onControlResponse?: (requestId: string, ok: boolean) => void;
+  /** 控制请求（例如 interrupt、cancel_async_message）的答复；payload 是答复里的 response 对象（没有时为 undefined） */
+  onControlResponse?: (requestId: string, ok: boolean, payload?: Record<string, unknown>) => void;
+  /**
+   * 写进去的消息在 Claude Code 队列里的去向（command_lifecycle，msg_lifecycle_v1）：
+   * queued 排上队、started 被一轮取走、completed 处理完、cancelled 被撤回或随中断作废
+   */
+  onLifecycle?: (uuid: string, state: string) => void;
+  /** 开始向模型发请求（system/status requesting 或 message_start）：说明 Claude 正在跑一轮 */
+  onRequest?: () => void;
   /** Claude 要求宿主批准一次工具调用（--permission-prompt-tool stdio 时的 can_use_tool） */
   onPermissionRequest?: (
     requestId: string,
@@ -292,7 +299,11 @@ export class ClaudeStream {
     if (event.type === "control_response") {
       const response = object(event.response);
       if (typeof response?.request_id === "string") {
-        this.onControlResponse?.(response.request_id, response.subtype === "success");
+        this.onControlResponse?.(
+          response.request_id,
+          response.subtype === "success",
+          object(response.response),
+        );
       }
       return;
     }
@@ -301,8 +312,14 @@ export class ClaudeStream {
       if (typeof event.session_id === "string") this.session(event.session_id);
       return;
     }
+    if (event.type === "command_lifecycle") {
+      if (typeof event.command_uuid === "string" && typeof event.state === "string")
+        this.onLifecycle?.(event.command_uuid, event.state);
+      return;
+    }
     if (event.type === "system" && event.subtype === "status") {
       if (event.status === "compacting") this.onCompacting?.();
+      if (event.status === "requesting") this.onRequest?.();
       return;
     }
     if (event.type === "system" && event.subtype === "compact_boundary") {
@@ -369,6 +386,7 @@ export class ClaudeStream {
         this.thinking.clear();
         this.account(message, message?.id);
         this.recovered();
+        this.onRequest?.();
         this.emit({ kind: "activity", phase: "thinking" });
       } else if (stream?.type === "message_delta") {
         const buckets = anthropicBuckets(stream.usage);

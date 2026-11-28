@@ -77,6 +77,8 @@ type ClaudeTurn = {
   stdin?: { write: (text: string) => void; end: () => void };
   /** 已经关闭输入、不再接收引导 */
   closed: boolean;
+  /** 已经请求停止：不再接新的引导 */
+  stopping: boolean;
   /** 写进去、还没被 Claude 收进对话的引导：uuid → 收下后的回调 */
   unacked: Map<string, (accepted: boolean) => void>;
 };
@@ -158,7 +160,7 @@ export class ClaudeCodeResponder implements AgentResponder {
    */
   async steer(prompt: string): Promise<boolean> {
     const turn = this.turn;
-    if (!turn || turn.closed || !turn.stdin) return false;
+    if (!turn || turn.closed || turn.stopping || !turn.stdin) return false;
     const uuid = randomUUID();
     const accepted = new Promise<boolean>((resolve) => turn.unacked.set(uuid, resolve));
     turn.stdin.write(userLine(prompt, uuid));
@@ -333,7 +335,7 @@ export class ClaudeCodeResponder implements AgentResponder {
       input.onUsage?.(stream.usage());
     };
     input.onRuntimeEvent?.({ kind: "activity", phase: "starting" });
-    const turn: ClaudeTurn = { closed: false, unacked: new Map() };
+    const turn: ClaudeTurn = { closed: false, stopping: false, unacked: new Map() };
     this.turn = turn;
     const keepAliveMs = this.options.keepAliveMs ?? 0;
     // 这一轮停在常驻进程里等下一轮（不关输入）：交给下面 await 的那个 Promise
@@ -355,11 +357,19 @@ export class ClaudeCodeResponder implements AgentResponder {
     if (input.onHiveTools) stream.onHiveTools = input.onHiveTools;
     stream.onCompacting = () => input.onProgress?.("正在自动压缩上下文");
     if (input.onCompacted) stream.onCompacted = input.onCompacted;
-    stream.onUserAck = (uuid) => {
+    /** 引导被 Claude 收进了对话（回放或被一轮取走）：算插进去了，不会再退回排队 */
+    const taken = (uuid: string) => {
       const resolve = turn.unacked.get(uuid);
       if (!resolve) return;
       turn.unacked.delete(uuid);
       resolve(true);
+    };
+    /** 引导确定没被处理（撤回成功、随中断作废）：退回排队 */
+    const withdrawn = (uuid: string) => {
+      const resolve = turn.unacked.get(uuid);
+      if (!resolve) return;
+      turn.unacked.delete(uuid);
+      resolve(false);
     };
     const settleTurn = () => {
       turn.closed = true;
@@ -368,28 +378,98 @@ export class ClaudeCodeResponder implements AgentResponder {
       if (this.turn === turn) this.turn = undefined;
     };
     /**
-     * 停止：先用 stream-json 的 control_request interrupt 请 Claude 停在当前这一步——它会终止正在跑的工具、
-     * 答复 control_response 并以 error_during_execution 结束这一轮，这样能确认确实停下（会话也还在，可以重试）。
-     * 中断请求发不出去、或超时没有确认，才结束进程，那时只能按结果未知处理。
+     * 停止：用 stream-json 的 control_request interrupt 请 Claude 停在当前这一步，并带上 cancel_queued，
+     * 把已经写进标准输入、还在它队列里的引导一并作废（2.1.332 起，init 里的 interrupt_cancel_queued_v1；
+     * 老版本不认这个字段，答复里列出还排着的 still_queued，再按 uuid 逐条 cancel_async_message 撤回）。
+     * Claude 会终止正在跑的工具、答复 control_response 并以 error_during_execution 结束这一轮，这样能确认确实停下
+     * （会话也还在，可以重试）。不带 cancel_queued 时它停下后会接着处理排队的消息、在同一进程里再跑一轮，
+     * 界面就一直「停止中」，退回排队的引导还会再跑一次（#7593）。
+     * 中断请求发不出去、超时没有确认，或者确认停下后 Claude 又开始了新的一轮，都结束进程，只能按结果未知处理。
      */
     // 结束进程用的开关属于进程：复用时沿用常驻进程的
     const kill = reuse ? previous.kill : new AbortController();
-    const interrupt = { requestId: "", acked: false, settled: false };
+    const interrupt = {
+      requestId: "",
+      acked: false,
+      settled: false,
+      /** 确认停下后 Claude 又跑起来了（排队的消息没撤掉）：结束了进程 */
+      resumed: false,
+      /** 没等到确认停下就结束了进程 */
+      forced: false,
+    };
+    /** 撤回引导的请求：request_id → 引导的 uuid */
+    const cancels = new Map<string, string>();
+    /** 出过结果、还没开始下一轮：这时停止不会再有结果，确认后直接收尾 */
+    let between = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let exitTimer: NodeJS.Timeout | undefined;
+    const write = (line: Record<string, unknown>) => turn.stdin?.write(`${JSON.stringify(line)}\n`);
+    const cancelSteer = (uuid: string) => {
+      if (!turn.unacked.has(uuid) || [...cancels.values()].includes(uuid)) return;
+      const requestId = `cancel-${randomUUID()}`;
+      cancels.set(requestId, uuid);
+      write({
+        type: "control_request",
+        request_id: requestId,
+        request: { subtype: "cancel_async_message", message_uuid: uuid },
+      });
+    };
+    /** 确认停下：关输入让进程退出；过了时限还不退就结束它（还有引导没着落时按结果未知） */
+    const settleStop = () => {
+      if (interrupt.settled) return;
+      interrupt.settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      if (!turn.closed) {
+        turn.closed = true;
+        turn.stdin?.end();
+      }
+      exitTimer = setTimeout(() => {
+        if (turn.unacked.size > 0) interrupt.resumed = true;
+        kill.abort();
+      }, this.options.interruptTimeoutMs ?? 5_000);
+      exitTimer.unref?.();
+    };
+    /** 确认停下后又有新动静（发请求、收进排队的消息）：Claude 在接着干活，立即结束进程 */
+    const resumedAfterStop = () => {
+      if (!interrupt.acked || kill.signal.aborted) return;
+      interrupt.resumed = true;
+      if (killTimer) clearTimeout(killTimer);
+      kill.abort();
+    };
     const onAbort = () => {
       if (!turn.stdin || turn.closed) {
         kill.abort();
         return;
       }
+      turn.stopping = true;
       interrupt.requestId = `interrupt-${randomUUID()}`;
-      // 停下以后不再接引导；还没收下的引导退回排队
-      for (const resolve of turn.unacked.values()) resolve(false);
-      turn.unacked.clear();
-      turn.stdin.write(
-        `${JSON.stringify({ type: "control_request", request_id: interrupt.requestId, request: { subtype: "interrupt" } })}\n`,
-      );
-      killTimer = setTimeout(() => kill.abort(), this.options.interruptTimeoutMs ?? 5_000);
+      // 还没收下的引导先不判：看 Claude 的答复，作废了的退回排队，已经收进对话的算这一轮的（随这一轮一起停）
+      write({
+        type: "control_request",
+        request_id: interrupt.requestId,
+        request: { subtype: "interrupt", cancel_queued: true },
+      });
+      killTimer = setTimeout(() => {
+        interrupt.forced = true;
+        kill.abort();
+      }, this.options.interruptTimeoutMs ?? 5_000);
       killTimer.unref?.();
+    };
+    stream.onUserAck = (uuid) => {
+      taken(uuid);
+      resumedAfterStop();
+    };
+    stream.onLifecycle = (uuid, state) => {
+      if (state === "cancelled") withdrawn(uuid);
+      else if (state === "started") {
+        taken(uuid);
+        resumedAfterStop();
+      }
+      if (interrupt.acked && between && turn.unacked.size === 0) settleStop();
+    };
+    stream.onRequest = () => {
+      between = false;
+      resumedAfterStop();
     };
     stream.onPermissionRequest = (requestId, request) => {
       const answer = (allow: boolean, message?: string) => {
@@ -422,26 +502,52 @@ export class ClaudeCodeResponder implements AgentResponder {
           () => answer(false),
         );
     };
-    stream.onControlResponse = (requestId, ok) => {
-      if (requestId === interrupt.requestId && ok) interrupt.acked = true;
-    };
-    stream.onResult = (result) => {
-      // 中断确认后出的这个结果就是这一轮的收尾：确认停下，关输入让进程退出
-      if (interrupt.acked) {
-        interrupt.settled = true;
-        if (killTimer) clearTimeout(killTimer);
-        if (!turn.closed) {
-          turn.closed = true;
-          turn.stdin?.end();
-        }
+    stream.onControlResponse = (requestId, ok, payload) => {
+      const steer = cancels.get(requestId);
+      if (steer !== undefined) {
+        cancels.delete(requestId);
+        // cancelled=false：已经被一轮取走（会有回放），或者 Claude 不撤；留给回放和收尾判断
+        if (ok && payload?.cancelled === true) withdrawn(steer);
+        if (interrupt.acked && between && turn.unacked.size === 0) settleStop();
         return;
       }
+      if (requestId !== interrupt.requestId || !ok) return;
+      interrupt.acked = true;
+      const list = (value: unknown) =>
+        Array.isArray(value)
+          ? value.filter((item): item is string => typeof item === "string")
+          : [];
+      for (const uuid of list(payload?.cancelled)) withdrawn(uuid);
+      // 还排着的（老版本不认 cancel_queued）逐条撤回；答复里什么都没列的更老版本，没收下的全撤一遍
+      const queued =
+        payload && Array.isArray(payload.still_queued)
+          ? list(payload.still_queued)
+          : [...turn.unacked.keys()];
+      for (const uuid of queued) cancelSteer(uuid);
+      // 停的时候没有在跑的一轮（刚出完结果、引导还没开始）：不会再有结果，引导有了着落就收尾
+      if (between && turn.unacked.size === 0) settleStop();
+    };
+    stream.onResult = (result) => {
+      between = true;
+      // 中断确认后出的这个结果就是这一轮的收尾：确认停下，关输入让进程退出
+      if (interrupt.acked) {
+        settleStop();
+        return;
+      }
+      // 停止请求发出后、确认前出的结果（这一轮恰好跑完）：等确认再收尾，不再接着停在常驻进程里
+      if (turn.stopping) return;
       closeIfIdle(result);
     };
     if (input.signal?.aborted) onAbort();
     else input.signal?.addEventListener("abort", onAbort, { once: true });
     const stoppedCleanly = () =>
-      Boolean(input.signal?.aborted && interrupt.settled && !kill.signal.aborted);
+      Boolean(
+        input.signal?.aborted && interrupt.settled && !interrupt.resumed && !interrupt.forced,
+      );
+    const clearStopTimers = () => {
+      if (killTimer) clearTimeout(killTimer);
+      if (exitTimer) clearTimeout(exitTimer);
+    };
     let warm: WarmClaude;
     if (reuse) {
       warm = previous;
@@ -485,10 +591,15 @@ export class ClaudeCodeResponder implements AgentResponder {
     } catch (error) {
       settleTurn();
       reportUsage();
-      if (killTimer) clearTimeout(killTimer);
+      clearStopTimers();
       input.signal?.removeEventListener("abort", onAbort);
       // 中断后 Claude 以非零码退出是正常的：已经确认停下
       if (stoppedCleanly()) throw new AgentCancelledError();
+      if (interrupt.resumed) {
+        throw new AgentExecutionUncertainError(
+          "停下后 Claude Code 又接着处理排队的消息，已结束它的进程；这期间可能已做了部分操作，结果未知。",
+        );
+      }
       if (error instanceof AgentCancelledError) {
         throw new AgentExecutionUncertainError(
           "已请求终止 Claude 主进程，但工具子进程是否停止尚未确认。",
@@ -520,11 +631,17 @@ export class ClaudeCodeResponder implements AgentResponder {
       warm.route = () => undefined;
     }
     settleTurn();
-    if (killTimer) clearTimeout(killTimer);
+    clearStopTimers();
     input.signal?.removeEventListener("abort", onAbort);
     if (stoppedCleanly()) {
       reportUsage();
       throw new AgentCancelledError();
+    }
+    if (interrupt.resumed) {
+      reportUsage();
+      throw new AgentExecutionUncertainError(
+        "停下后 Claude Code 又接着处理排队的消息，已结束它的进程；这期间可能已做了部分操作，结果未知。",
+      );
     }
     if (result !== "parked") {
       if (this.warm === warm) this.warm = undefined;
