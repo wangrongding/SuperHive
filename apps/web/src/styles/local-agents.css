@@ -113,11 +113,12 @@
 }
 
 /* ---------- 第 3 步：在本机启动 ---------- */
+/* 离线成员右边的「启动」「重新接入」：和行同一行，不另起一行把行撑高 */
 .member-recovery-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
 }
 
 .member.muted:has(.member-recovery-actions) {

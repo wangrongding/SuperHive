@@ -162,7 +162,7 @@ import { Composer } from "./composer";
 import { Tooltip } from "./tooltip";
 import { useAppLoadingStatus, useAppReady } from "./boot-splash";
 import type { LoadingStatus } from "./loading-status";
-import { Button } from "./button";
+import { Button, IconButton } from "./button";
 import { StatusBar } from "./status-bar";
 import { UpdateCorner } from "./update-corner";
 import {
@@ -1122,7 +1122,6 @@ export function App({
       <span className="member-recovery-actions">
         <Button
           size="sm"
-          variant="ghost"
           aria-label={t("启动 {0}", { 0: participant.username })}
           disabled={agent.status !== "stopped" && agent.status !== "crashed"}
           onClick={() =>
@@ -1140,20 +1139,19 @@ export function App({
       <span className="member-recovery-actions">
         <Button
           size="sm"
-          variant="ghost"
           aria-label={t("重新接入 {0}", { 0: participant.username })}
           onClick={(event) => openRejoinAgent(participant, event.currentTarget)}
         >
           {t("重新接入")}
         </Button>
-        <Button
+        <IconButton
           size="sm"
-          variant="ghost"
-          aria-label={t("从列表隐藏 {0}", { 0: participant.username })}
+          label={t("从列表隐藏 {0}", { 0: participant.username })}
+          tooltip={t("从列表隐藏")}
           onClick={() => void hideRemovedMember(participant)}
         >
-          {t("从列表隐藏")}
-        </Button>
+          <Icon name="close" size={14} />
+        </IconButton>
       </span>
     ) : null;
   }
