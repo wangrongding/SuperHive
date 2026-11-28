@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { confirmAction } from "./confirm-dialog";
 import type { RemoteJoin } from "@superhive/protocol";
 import { agentProviderLabel } from "./agent-setup";
 import { Button } from "./button";
@@ -92,16 +93,14 @@ export function RemoteJoinsGroup({ local }: { local: LocalAgentsState }) {
         ? t("{0} 已重新上线。", { 0: join.name })
         : t("{0} 已在后台启动，还在连接。", { 0: join.name });
     });
-  const leave = (join: RemoteJoin) => {
-    if (
-      !window.confirm(
-        t("让 {0} 退出 {1} 的房间？它会离线，对方房间里不再有它；要再加入需要对方重新邀请。", {
-          0: join.name,
-          1: serverLabel(join.server),
-        }),
-      )
-    )
-      return;
+  const leave = async (join: RemoteJoin) => {
+    const confirmed = await confirmAction({
+      title: t("让 {0} 退出 {1} 的房间？", { 0: join.name, 1: serverLabel(join.server) }),
+      message: t("它会离线，要再加入得对方重新邀请。"),
+      confirmLabel: t("退出房间"),
+      danger: true,
+    });
+    if (!confirmed) return;
     run(join, async () => {
       const result = await local.removeRemoteJoin(join.id, true);
       return result.left

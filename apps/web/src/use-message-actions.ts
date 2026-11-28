@@ -1,4 +1,5 @@
 import { useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { confirmAction } from "./confirm-dialog";
 import type { ChatMessage, Invocation, WhiteboardEntry } from "@superhive/protocol";
 import { createClientMessageId } from "./client-id";
 import { BUDGET_EXTEND_TURNS } from "./invocations";
@@ -137,13 +138,13 @@ export function useMessageActions({
     sendClientEvent({ type: "invocation.steer", invocationId: invocation.id }, t("无法插入。"));
   }
 
-  function preemptInvocation(invocation: Invocation) {
-    const confirmed = window.confirm(
-      t(
-        "停下 @{0} 正在执行的任务，改做这条？\n\n正在执行的那一轮会被中断，结果可能是「已停止」或「结果未知」，做到一半的改动不会自动撤回、也不会自动重跑。",
-        { 0: invocation.agentName },
-      ),
-    );
+  async function preemptInvocation(invocation: Invocation) {
+    const confirmed = await confirmAction({
+      title: t("停下 @{0} 当前的任务，改做这条？", { 0: invocation.agentName }),
+      message: t("正在做的那一轮会被中断，做到一半的改动不会撤回，也不会重跑。"),
+      confirmLabel: t("停下并改做"),
+      danger: true,
+    });
     if (!confirmed) return;
     sendClientEvent({ type: "invocation.preempt", invocationId: invocation.id }, t("无法停下。"));
   }
@@ -155,8 +156,14 @@ export function useMessageActions({
     );
   }
 
-  function removeWhiteboardEntry(entry: WhiteboardEntry) {
-    if (!window.confirm(t("永久删除这条历史事项？此操作无法恢复。"))) return;
+  async function removeWhiteboardEntry(entry: WhiteboardEntry) {
+    const confirmed = await confirmAction({
+      title: t("永久删除这条历史事项？"),
+      message: t("删除后无法恢复。"),
+      confirmLabel: t("删除"),
+      danger: true,
+    });
+    if (!confirmed) return;
     sendClientEvent(
       { type: "whiteboard.remove", entryId: entry.id, updatedAt: entry.updatedAt },
       t("无法移除白板条目。"),

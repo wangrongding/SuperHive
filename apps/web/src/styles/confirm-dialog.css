@@ -1,0 +1,57 @@
+/*
+ * 统一的确认弹窗（confirm-dialog.tsx）：替代 window.confirm。
+ * 比设置、邀请这些弹窗都高一层（它们最高 90），比悬停提示低；窄屏也是居中小卡片，不铺满。
+ */
+.confirm-dialog-layer {
+  position: fixed;
+  z-index: 1150;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.confirm-dialog-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-scrim);
+  animation: fade-in var(--duration) ease-out;
+}
+
+.confirm-dialog {
+  position: relative;
+  width: min(420px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  padding: 20px;
+  border-radius: var(--radius-2xl);
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-dialog);
+  outline: none;
+  animation: pop-in var(--duration) var(--ease-out);
+}
+
+.confirm-dialog h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.confirm-dialog p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.confirm-dialog .dialog-actions {
+  margin-top: 12px;
+}

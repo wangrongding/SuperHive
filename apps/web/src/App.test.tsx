@@ -4003,7 +4003,6 @@ describe("App mention autocomplete", () => {
       summary: "Directory reservation",
     };
     whiteboardApi.entries = [ready, blockedEntry, directory];
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     act(() =>
       socket.serverEvent({
         type: "room.snapshot",
@@ -4068,6 +4067,9 @@ describe("App mention autocomplete", () => {
       within(board).queryByRole("button", { name: "从白板移除：等待数据库迁移权限" }),
     ).toBeNull();
     await user.click(within(board).getByRole("button", { name: "归档事项：api" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "归档" }),
+    );
     await waitFor(() => expect(within(board).queryByText(ready.summary)).toBeNull());
     expect(whiteboardApi.requests).toEqual([
       { action: "archive", entries: [{ id: ready.id, updatedAt: ready.updatedAt }] },
@@ -4079,6 +4081,8 @@ describe("App mention autocomplete", () => {
     await user.click(
       within(board).getByRole("button", { name: "从白板移除：登录 API 已合入，可以接前端" }),
     );
+    const removeDialog = await screen.findByRole("alertdialog", { name: "永久删除这条历史事项？" });
+    await user.click(within(removeDialog).getByRole("button", { name: "删除" }));
     expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
       type: "whiteboard.remove",
       entryId: ready.id,

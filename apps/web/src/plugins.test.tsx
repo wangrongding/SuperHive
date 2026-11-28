@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalPlugin, PluginSummary } from "@superhive/protocol";
 import {
@@ -184,14 +184,17 @@ describe("设置 · 插件", () => {
         },
       }),
     ]);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
     render(<PluginsSettingsPanel api={api} />);
     const revoke = await screen.findByRole("button", { name: "撤销" });
     fireEvent.click(revoke);
+    let dialog = await screen.findByRole("alertdialog", { name: "撤销 骰子？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(api.revokePlugin).not.toHaveBeenCalled();
     fireEvent.click(revoke);
+    dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(api.revokePlugin).toHaveBeenCalledWith("dice"));
-    expect(confirm).toHaveBeenCalledTimes(2);
 
     const save = await screen.findByRole("button", { name: "全部移除" });
     expect((save as HTMLButtonElement).disabled).toBe(true);

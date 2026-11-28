@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InviteDialog } from "./invite-dialog";
@@ -106,6 +106,64 @@ describe("InviteDialog 在局域网关着时", () => {
     expect(screen.queryByRole("button", { name: "复制链接" })).toBeNull();
     expect(screen.getByRole("button", { name: "续期" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "撤销" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "DELETE")).toBe(true));
+  });
+});
+
+describe("InviteDialog 撤销邀请", () => {
+  it("已经有人用过的链接，撤销前在确认弹窗里写明会断开几个人", async () => {
+    const user = userEvent.setup();
+    const calls: { url: string; method: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, method: init?.method ?? "GET" });
+        if (init?.method) return new Response("{}", { status: 200 });
+        return new Response(
+          JSON.stringify({
+            invites: [
+              {
+                id: "00000000-0000-4000-8000-000000000003",
+                roomId: "general",
+                createdAt: new Date().toISOString(),
+                expiresAt: null,
+                allowAgents: false,
+                showTrace: true,
+                uses: 2,
+                token: "hvi_used",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const onClose = vi.fn();
+    render(
+      <InviteDialog
+        base="http://hive"
+        adminToken="t"
+        roomId="general"
+        linkFor={(token) => `http://hive/#invite=${token}`}
+        onClose={onClose}
+      />,
+    );
+    const revoke = await screen.findByRole("button", { name: "撤销" });
+    await user.click(revoke);
+    let dialog = await screen.findByRole("alertdialog", { name: "撤销这个邀请链接？" });
+    expect(dialog.textContent).toContain("凭它加入的 2 人会立即被断开。");
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    // Esc 只关确认弹窗，邀请弹窗还在
+    await user.click(revoke);
+    await screen.findByRole("alertdialog");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(revoke);
+    dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "撤销" }));
     await waitFor(() => expect(calls.some((call) => call.method === "DELETE")).toBe(true));
   });
 });

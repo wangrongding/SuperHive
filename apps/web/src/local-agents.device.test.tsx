@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalAgent } from "@superhive/protocol";
 import { HostManageNotice, OwnerDevicesPanel } from "./host-settings";
@@ -204,6 +205,36 @@ describe("房主设备上的本机功能", () => {
     expect(screen.queryByText("房主接入令牌（高级）")).toBeNull();
     expect(screen.getAllByRole("button", { name: "退出登录" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: /退出其他所有设备|全部退出/ })).toBeNull();
+  });
+
+  it("退出其他所有设备先确认：危险操作默认停在取消上，确认了才退出", async () => {
+    const user = userEvent.setup();
+    const devices = [
+      { id: DEVICE_ID, name: "iPhone", source: "pair", createdAt: "", lastSeenAt: "" },
+      { id: "other", name: "iPad", source: "im", createdAt: "", lastSeenAt: "" },
+    ];
+    const revokeAllOwnerDevices = vi.fn(async () => undefined);
+    const local = {
+      enabled: true,
+      mode: "device",
+      deviceId: DEVICE_ID,
+      canManage: true,
+      ownerDevices: async () => devices,
+      hostApprovers: async () => [],
+      revokeAllOwnerDevices,
+    } as unknown as LocalAgentsState;
+    render(<OwnerDevicesPanel local={local} />);
+    const button = await screen.findByRole("button", { name: "退出其他所有设备" });
+    await user.click(button);
+    let dialog = await screen.findByRole("alertdialog", { name: "退出其他所有已登录的设备？" });
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(revokeAllOwnerDevices).not.toHaveBeenCalled();
+    await user.click(button);
+    dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "全部退出" }));
+    await waitFor(() => expect(revokeAllOwnerDevices).toHaveBeenCalledOnce());
   });
 });
 

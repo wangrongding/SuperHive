@@ -23,6 +23,7 @@
 @import "./styles/worktrees.css";
 @import "./styles/workspace.css";
 @import "./styles/confirm-popover.css";
+@import "./styles/confirm-dialog.css";
 @import "./styles/tooltip.css";
 @import "./styles/local-agents.css";
 @import "./styles/stepper.css";

@@ -138,7 +138,7 @@ export function AppDialog({
 }
 
 /** Tab / Shift+Tab 在弹窗里循环，不跑到被遮住的页面上；焦点在弹出菜单（portal）里时不管 */
-function trapTab(event: KeyboardEvent<HTMLDivElement>, dialog: HTMLDivElement | null) {
+export function trapTab(event: KeyboardEvent<HTMLElement>, dialog: HTMLElement | null) {
   if (!dialog || !(event.target instanceof Node) || !dialog.contains(event.target)) return;
   const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
     (element) => !element.closest("[inert], [hidden]"),

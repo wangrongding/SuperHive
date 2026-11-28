@@ -112,6 +112,39 @@ describe("我的 IM 连接", () => {
     expect(within(second).getByText(/待发 5 条/)).toBeTruthy();
   });
 
+  it("断开先确认：说清消息不再进房间、凭据会删除；Esc 只关确认，不关 IM 弹窗", async () => {
+    const calls = mockServer((route) => {
+      if (route.url === "/api/im/channels")
+        return { feishu: { enabled: true }, wechat: { enabled: false } };
+      if (route.url === "/api/im/connections") return { connections: [feishu] };
+      return {};
+    });
+    const onClose = vi.fn();
+    render(
+      <ImDialog
+        base="http://hive"
+        adminToken="t"
+        roomId="build"
+        ownerName="rd"
+        rooms={[{ id: "build", name: "build" }]}
+        onClose={onClose}
+      />,
+    );
+    const disconnect = await screen.findByRole("button", { name: "断开" });
+    const deleted = () => calls.some((call) => call.method === "DELETE");
+    fireEvent.click(disconnect);
+    let dialog = await screen.findByRole("alertdialog", { name: "断开这个 IM？" });
+    expect(dialog.textContent).toContain("保存的凭据也会删除");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(deleted()).toBe(false);
+    fireEvent.click(disconnect);
+    dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "断开" }));
+    await waitFor(() => expect(deleted()).toBe(true));
+  });
+
   it("卡片上四项直接是下拉：显示当前值，选了就改默认房间、接收范围、推送档位、语言", async () => {
     const calls = mockServer((route) => {
       if (route.url === "/api/im/channels")

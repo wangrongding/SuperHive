@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { confirmAction } from "./confirm-dialog";
 import type { KeepAwakeSettings, KeepAwakeState } from "@superhive/protocol";
 import type { LocalAgentsState, HostApprover, OwnerDevice } from "./local-agents";
 import { SettingsSwitch } from "./settings-switch";
@@ -488,9 +489,14 @@ export function OwnerDevicesPanel({ local }: { local: LocalAgentsState }) {
             size="sm"
             tone="danger"
             className="settings-button"
-            onClick={() => {
-              if (!window.confirm(t("退出其他所有已登录的设备？手机丢了或怀疑被盗用时用。")))
-                return;
+            onClick={async () => {
+              const confirmed = await confirmAction({
+                title: t("退出其他所有已登录的设备？"),
+                message: t("那些设备要重新登录才能用。手机丢了或怀疑被盗用时用。"),
+                confirmLabel: t("全部退出"),
+                danger: true,
+              });
+              if (!confirmed) return;
               local.revokeAllOwnerDevices().then(refresh, fail);
             }}
           >

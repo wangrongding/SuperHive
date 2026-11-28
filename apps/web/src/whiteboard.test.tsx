@@ -67,12 +67,14 @@ describe("WhiteboardPanel lifecycle", () => {
     const callbacks = props();
     const task = entry("task");
     const directory = entry("worktree:cleaned", { slot: "milestone" });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const { rerender } = render(
       <WhiteboardPanel {...callbacks} entries={asMap([task, directory])} />,
     );
     await user.click(screen.getByRole("button", { name: "选择可归档事项" }));
     await user.click(screen.getByRole("button", { name: "归档所选 (1)" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "归档" }),
+    );
     expect(callbacks.onArchive).toHaveBeenCalledWith([task], true);
     const archivedTask = { ...task, archivedAt: "2026-11-16T00:01:00Z" };
     const archivedDirectory = { ...directory, archivedAt: "2026-11-16T00:01:00Z" };
@@ -148,7 +150,6 @@ describe("WhiteboardPanel lifecycle", () => {
     const callbacks = props();
     const ready = entry("ready");
     const milestone = entry("milestone", { slot: "milestone" });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(
       <WhiteboardPanel
         {...callbacks}
@@ -169,8 +170,10 @@ describe("WhiteboardPanel lifecycle", () => {
     await user.click(pick);
     expect(screen.getByText("已选择 2 条")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "归档所选 (2)" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "归档所选 2 条事项？" });
+    expect(callbacks.onArchive).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "归档" }));
     expect(callbacks.onArchive).toHaveBeenCalledWith([ready, milestone], true);
-    expect(window.confirm).toHaveBeenCalledOnce();
     // 没有选中时批量条整条收起
     await waitFor(() => expect(screen.queryByRole("group", { name: "批量操作" })).toBeNull());
   });
@@ -224,13 +227,17 @@ describe("WhiteboardPanel lifecycle", () => {
   it("cancels archives and displays failed operations without hiding their entries", async () => {
     const user = userEvent.setup();
     const callbacks = props();
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     callbacks.onArchive.mockRejectedValue(new Error("conflict"));
     render(<WhiteboardPanel {...callbacks} entries={asMap([entry("ready")])} />);
     await user.click(screen.getByRole("button", { name: "归档事项：ready" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "取消" }),
+    );
     expect(callbacks.onArchive).not.toHaveBeenCalled();
-    confirm.mockReturnValue(true);
     await user.click(screen.getByRole("button", { name: "归档事项：ready" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "归档" }),
+    );
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("conflict"));
     expect(screen.getByText("Summary ready")).toBeTruthy();
   });

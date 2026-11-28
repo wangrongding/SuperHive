@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { confirmAction } from "./confirm-dialog";
 import { BranchGlyph } from "./worktree-switcher";
 import { TerminalDock, useDesktopTerminal } from "./terminal-dock";
 import { useSlowOps } from "./slow-ops";
@@ -2188,7 +2189,12 @@ export function App({
       } catch (reason) {
         // 正在执行：提醒一次，确认了照样打开
         if ((reason as { code?: string }).code !== "AGENT_BUSY") throw reason;
-        if (!window.confirm(t("{0}\n\n仍要打开吗？", { 0: (reason as Error).message }))) return;
+        const open = await confirmAction({
+          title: t("{0} 正在执行，仍要在终端打开？", { 0: agent.name }),
+          message: (reason as Error).message,
+          confirmLabel: t("仍要打开"),
+        });
+        if (!open) return;
         await local.openTerminal(agent.id, currentRoomId, true);
       }
       setGotoNotice(t("已在终端打开 {0} 的会话；用完退出后再在房间里 @ 它。", { 0: agent.name }));
@@ -2900,14 +2906,13 @@ export function App({
           onDismiss={dismissInvocations}
           usageRoomId={currentRoomId}
           loadUsage={loadUsage}
-          onStartTopic={() => {
-            if (
-              window.confirm(
-                t(
-                  "开启新话题后，房间里的 Agent 都会丢弃之前的会话、从新会话开始；历史消息保留。继续吗？",
-                ),
-              )
-            ) {
+          onStartTopic={async () => {
+            const confirmed = await confirmAction({
+              title: t("开启新话题？"),
+              message: t("房间里的 Agent 都会丢掉之前的会话，从头开始；历史消息保留。"),
+              confirmLabel: t("开启新话题"),
+            });
+            if (confirmed) {
               startNewTopic();
               closeActivity();
             }

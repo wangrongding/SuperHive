@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { confirmAction } from "./confirm-dialog";
 import { createPortal } from "react-dom";
 import type { Invite, Participant } from "@superhive/protocol";
 import {
@@ -283,14 +284,15 @@ export function InviteDialog({
               <Button
                 size="sm"
                 tone="danger"
-                onClick={() => {
+                onClick={async () => {
                   if (
                     invite.uses === 0 ||
-                    window.confirm(
-                      t("撤销后，凭这个链接加入的 {0} 人会立即被断开。确定撤销？", {
-                        0: invite.uses,
-                      }),
-                    )
+                    (await confirmAction({
+                      title: t("撤销这个邀请链接？"),
+                      message: t("凭它加入的 {0} 人会立即被断开。", { 0: invite.uses }),
+                      confirmLabel: t("撤销"),
+                      danger: true,
+                    }))
                   ) {
                     void revokeInvite(base, adminToken, invite.id).then(refresh, fail);
                   }

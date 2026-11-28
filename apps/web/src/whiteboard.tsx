@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { confirmAction } from "./confirm-dialog";
 import {
   isTaskDirectoryEntry,
   type WhiteboardEntry,
@@ -203,11 +204,11 @@ export function WhiteboardPanel({
     const archive = view === "current";
     if (
       archive &&
-      !window.confirm(
-        t("归档所选 {0} 条事项？请保留待 review 或仍用于当前协作的成果。归档后可从历史恢复。", {
-          0: items.length,
-        }),
-      )
+      !(await confirmAction({
+        title: t("归档所选 {0} 条事项？", { 0: items.length }),
+        message: t("待 review 或还在用的成果先别归档。归档后可以从历史恢复。"),
+        confirmLabel: t("归档"),
+      }))
     )
       return;
     setBusy(true);

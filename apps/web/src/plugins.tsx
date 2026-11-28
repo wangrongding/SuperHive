@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { confirmAction } from "./confirm-dialog";
 import type {
   LocalPlugin,
   PluginContext,
@@ -382,16 +383,14 @@ export function PluginsSettingsPanel({ api }: { api: LocalPluginsApi }) {
                   return t("已批准 {0}。", { 0: plugin.name ?? plugin.id });
                 })
               }
-              onRevoke={() => {
-                if (
-                  !window.confirm(
-                    t(
-                      "撤销 {0}？打开着的面板会立即关掉，/ 命令失效，它写进运行时的 MCP 也会删掉。",
-                      { 0: plugin.name ?? plugin.id },
-                    ),
-                  )
-                )
-                  return;
+              onRevoke={async () => {
+                const confirmed = await confirmAction({
+                  title: t("撤销 {0}？", { 0: plugin.name ?? plugin.id }),
+                  message: t("打开着的面板会关掉，/ 命令失效，它写进运行时的 MCP 也会删掉。"),
+                  confirmLabel: t("撤销"),
+                  danger: true,
+                });
+                if (!confirmed) return;
                 run(plugin.id, async () => {
                   await api.revokePlugin(plugin.id);
                   return t("已撤销 {0}。", { 0: plugin.name ?? plugin.id });

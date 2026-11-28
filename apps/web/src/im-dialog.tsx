@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { confirmAction } from "./confirm-dialog";
 import type { ImChannel, ImChannelsInfo, ImConnection, ImLoginView } from "@superhive/protocol";
 import {
   IM_CHANNEL_LABELS,
@@ -394,16 +395,14 @@ export function ImDialog({
                       update(setImConnectionPaused(base, adminToken, connection.id, paused))
                     }
                     onRescan={() => openAdd(connection.channel)}
-                    onRemove={() => {
-                      if (
-                        window.confirm(
-                          t(
-                            "断开后，这个 IM 发来的消息不再进入房间，保存的凭据也会删除。确定断开？",
-                          ),
-                        )
-                      ) {
-                        update(removeImConnection(base, adminToken, connection.id));
-                      }
+                    onRemove={async () => {
+                      const confirmed = await confirmAction({
+                        title: t("断开这个 IM？"),
+                        message: t("它发来的消息不再进入房间，保存的凭据也会删除。"),
+                        confirmLabel: t("断开"),
+                        danger: true,
+                      });
+                      if (confirmed) update(removeImConnection(base, adminToken, connection.id));
                     }}
                     onLevel={(level) =>
                       update(setImDeliveryLevel(base, adminToken, connection.id, level))
