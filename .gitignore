@@ -31,3 +31,6 @@ ChatGPT.md
 /apps/desktop/test-results/
 /apps/desktop/playwright-report/
 /apps/desktop/screenshots/
+
+# Agent 和本机调试的临时产物（截图、报告、开发版桌面端数据目录等），不进仓库
+.artifacts/
