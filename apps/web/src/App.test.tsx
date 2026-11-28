@@ -163,6 +163,8 @@ const whiteboardApi: {
 } = { entries: [], requests: [] };
 
 /** 房间产物接口与按 afterSeq 补拉的历史消息 */
+/** 读这些附件时回 410：撤回或过期 */
+const goneAttachments = new Set<string>();
 const artifactsApi: { artifacts: Artifact[]; history: ChatMessage[]; requests: string[] } = {
   artifacts: [],
   history: [],
@@ -218,6 +220,7 @@ describe("App mention autocomplete", () => {
   beforeEach(() => {
     FakeWebSocket.instances.length = 0;
     FakeNotification.instances.length = 0;
+    goneAttachments.clear();
     crossRoom.mentions = [];
     crossRoom.invocations = [];
     delete crossRoom.onlineInvocationIds;
@@ -477,6 +480,8 @@ describe("App mention autocomplete", () => {
         }
         // 附件正文：Markdown 标题里带上附件 ID 的末尾，分得清是哪一版
         const attachment = /\/api\/attachments\/([0-9a-f-]+)$/.exec(url);
+        if (attachment && goneAttachments.has(attachment[1]!))
+          return jsonResponse({ error: "gone" }, 410);
         if (attachment) return new Response(`# 版本 ${attachment[1]!.slice(-4)}`);
         return jsonResponse({ error: "not found" }, 404);
       }),
@@ -2851,6 +2856,266 @@ describe("App mention autocomplete", () => {
     expect(workspace.classList.contains("preview-docked")).toBe(false);
     expect(workspace.classList.contains("members-collapsed")).toBe(true);
     expect(localStorage.getItem("superhive.members-collapsed")).toBe("true");
+  });
+
+  it("右侧栏按房间记住：A 停靠预览、B 切到进展，来回切换各自恢复；别的房间的新文件不挤掉；刷新后也恢复", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
+    Object.assign(URL, { createObjectURL: () => "blob:doc", revokeObjectURL: () => {} });
+    // 切回房间会恢复对话的滚动位置；jsdom 没有 scrollTo
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: () => {},
+    });
+    const view = render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    const agent = participant("00000000-0000-4000-8000-000000000002", "rd-codex", "agent");
+    const withFile = (roomId: string, seq: number, name: string): ChatMessage => ({
+      id: `00000000-0000-4000-8000-${String(5000 + seq).padStart(12, "0")}`,
+      roomId,
+      seq,
+      senderId: agent.id,
+      senderName: agent.username,
+      senderType: "agent",
+      content: `${roomId} 第 ${seq} 条`,
+      mentions: [],
+      traceId: "00000000-0000-4000-8000-000000000011",
+      hopCount: 0,
+      createdAt: new Date().toISOString(),
+      attachments: [
+        {
+          id: `00000000-0000-4000-8000-${String(6000 + seq).padStart(12, "0")}`,
+          name,
+          mime: "text/markdown",
+          size: 100 + seq,
+          kind: "text",
+          sha256: "c".repeat(64),
+        },
+      ],
+    });
+    const generalFile = withFile("general", 1, "plan.md");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, agent],
+        messages: [generalFile],
+        latestSeq: 1,
+      }),
+    );
+    const workspace = document.querySelector(".workspace")!;
+    const sidebar = screen.getByRole("complementary", { name: "成员列表" });
+    const list = () =>
+      within(document.querySelector(".message-list")!.shadowRoot as unknown as HTMLElement);
+    await user.click(await list().findByRole("button", { name: "预览 plan.md" }));
+    const dialog = await screen.findByRole("dialog", { name: "预览 plan.md" });
+    await user.click(within(dialog).getByRole("button", { name: "在右侧栏打开" }));
+    expect(await within(sidebar).findByRole("heading", { name: "版本 6001" })).toBeTruthy();
+
+    // 切到 frontend：没有停靠的预览，显示侧栏标签页；在这里切到「进展」
+    const roomsPanel = screen.getByLabelText("房间列表");
+    await user.click(within(roomsPanel).getByRole("button", { name: /# frontend/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const frontendSocket = FakeWebSocket.instances[1]!;
+    act(() => frontendSocket.open());
+    const frontendSelf = { ...self, roomId: "frontend" };
+    act(() =>
+      frontendSocket.serverEvent({
+        type: "room.snapshot",
+        self: frontendSelf,
+        participants: [frontendSelf, agent],
+        messages: [],
+        latestSeq: 0,
+      }),
+    );
+    expect(workspace.classList.contains("preview-docked")).toBe(false);
+    const tabs = within(sidebar).getByRole("tablist", { name: "侧栏视图" });
+    expect(within(tabs).getByRole("tab", { name: /成员/ }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    await user.click(within(tabs).getByRole("tab", { name: /进展/ }));
+    expect(within(tabs).getByRole("tab", { name: /进展/ }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    // frontend 收到新文件：不会自己停靠，也不影响 general 记着的预览
+    act(() =>
+      frontendSocket.serverEvent({
+        type: "message.created",
+        message: withFile("frontend", 2, "other.md"),
+      }),
+    );
+    expect(workspace.classList.contains("preview-docked")).toBe(false);
+
+    // 切回 general：预览照旧停靠在右侧栏
+    await user.click(within(roomsPanel).getByRole("button", { name: /# general/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(3));
+    const backSocket = FakeWebSocket.instances[2]!;
+    act(() => backSocket.open());
+    act(() =>
+      backSocket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self, agent],
+        messages: [generalFile],
+        latestSeq: 1,
+      }),
+    );
+    expect(workspace.classList.contains("preview-docked")).toBe(true);
+    expect(await within(sidebar).findByRole("heading", { name: "版本 6001" })).toBeTruthy();
+    // 只记标识，不记文件内容
+    const stored = localStorage.getItem("superhive.room-side.alice")!;
+    expect(JSON.parse(stored)).toMatchObject({
+      general: { preview: { attachment: { id: generalFile.attachments![0]!.id }, seq: 1 } },
+      frontend: { tab: "whiteboard" },
+    });
+    expect(stored).not.toContain("版本 6001");
+
+    // 再去 frontend：还是「进展」
+    await user.click(within(roomsPanel).getByRole("button", { name: /# frontend/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(4));
+    expect(
+      within(within(sidebar).getByRole("tablist", { name: "侧栏视图" }))
+        .getByRole("tab", { name: /进展/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+
+    // 刷新（重新挂载）后回到 general：从本机记录恢复
+    view.unmount();
+    localStorage.setItem("superhive.room", "general");
+    window.location.hash = "#general";
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(5));
+    expect(
+      await within(screen.getByRole("complementary", { name: "成员列表" })).findByRole("heading", {
+        name: "版本 6001",
+      }),
+    ).toBeTruthy();
+    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+  });
+
+  it("记着的预览已经没了：来源消息被撤回、或附件读不到时，静默回到侧栏标签页", async () => {
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
+    const attachment = {
+      id: "00000000-0000-4000-8000-000000007001",
+      name: "gone.md",
+      mime: "text/markdown",
+      size: 10,
+      kind: "text" as const,
+      sha256: "c".repeat(64),
+    };
+    const record = (seq: number, id = attachment.id) =>
+      JSON.stringify({
+        general: { at: 1, preview: { attachment: { ...attachment, id }, senderId: "x", seq } },
+      });
+    // 1. 附件读不到（410）：不显示报错，直接回到标签页
+    goneAttachments.add(attachment.id);
+    localStorage.setItem("superhive.room-side.alice", record(9));
+    const first = render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    await waitFor(() =>
+      expect(document.querySelector(".workspace")!.classList.contains("preview-docked")).toBe(
+        false,
+      ),
+    );
+    expect(screen.queryByText("附件已撤回或过期")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("superhive.room-side.alice")!)).toEqual({});
+    first.unmount();
+
+    // 2. 来源消息已经加载、而且被撤回了
+    localStorage.setItem(
+      "superhive.room-side.alice",
+      record(3, "00000000-0000-4000-8000-000000007002"),
+    );
+    render(<App />);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const socket = FakeWebSocket.instances[1]!;
+    act(() => socket.open());
+    const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+    act(() =>
+      socket.serverEvent({
+        type: "room.snapshot",
+        self,
+        participants: [self],
+        messages: [
+          {
+            id: "00000000-0000-4000-8000-000000007003",
+            roomId: "general",
+            seq: 3,
+            senderId: "x",
+            senderName: "rd-codex",
+            senderType: "agent",
+            content: "",
+            mentions: [],
+            traceId: "00000000-0000-4000-8000-000000000011",
+            hopCount: 0,
+            createdAt: new Date().toISOString(),
+            deletedAt: new Date().toISOString(),
+          },
+        ],
+        latestSeq: 3,
+      }),
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".workspace")!.classList.contains("preview-docked")).toBe(
+        false,
+      ),
+    );
+    expect(screen.getByRole("tablist", { name: "侧栏视图" })).toBeTruthy();
+  });
+
+  it("窄屏切回房间不自动弹出盖住对话的预览，和以前一样收起", async () => {
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
+    localStorage.setItem(
+      "superhive.room-side.alice",
+      JSON.stringify({
+        general: {
+          at: 1,
+          tab: "whiteboard",
+          preview: {
+            attachment: {
+              id: "00000000-0000-4000-8000-000000007101",
+              name: "plan.md",
+              mime: "text/markdown",
+              size: 10,
+              kind: "text",
+              sha256: "c".repeat(64),
+            },
+            senderId: "x",
+            seq: 1,
+          },
+        },
+      }),
+    );
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 1100px"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      onchange: null,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    try {
+      render(<App />);
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const workspace = document.querySelector(".workspace")!;
+      expect(workspace.classList.contains("preview-docked")).toBe(false);
+      // 标签页照样记着
+      const tabs = screen.getByRole("tablist", { name: "侧栏视图" });
+      expect(within(tabs).getByRole("tab", { name: /进展/ }).getAttribute("aria-selected")).toBe(
+        "true",
+      );
+    } finally {
+      window.matchMedia = original;
+    }
   });
 
   it("asks returning users to grant notification permission from an in-app prompt", async () => {

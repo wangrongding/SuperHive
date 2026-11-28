@@ -126,6 +126,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { RuntimeHubDialog } from "./runtime-hub";
 import { AgentSetupDialog } from "./agent-setup-dialog";
 import { SidePanel } from "./side-panel";
+import { previewGone, useRoomSide } from "./room-side-state";
 import {
   PluginSidePanel,
   pluginPanelKey,
@@ -255,7 +256,10 @@ export function App({
       ),
     [participants],
   );
-  const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("members");
+  /* 右侧栏按房间记住：当前标签页、停靠的文件预览，切回来照旧（见 room-side-state） */
+  const roomSide = useRoomSide(username, currentRoomId);
+  const setSidePanelTab = roomSide.setTab;
+  const setDockedPreview = roomSide.setPreview;
   /** 有新附件或撤回时加一，产物面板和入口角标据此刷新 */
   const [artifactsEpoch, setArtifactsEpoch] = useState(0);
   /* 「产物」大面板：和「代码」一样从头部打开，默认铺满窗口；两个面板同时只开一个 */
@@ -263,15 +267,17 @@ export function App({
   const artifactsButtonRef = useRef<HTMLButtonElement>(null);
   /*
    * 停靠在右侧栏的文件预览：占用成员栏的位置（成员栏收起时也会露出来），对话和输入框照常能用；
-   * popped 时临时放大回弹窗。senderId、seq 用来认新版本：同一个人在本房间后来又发了同名文件
+   * popped 时临时放大回弹窗。senderId、seq 用来认新版本：同一个人在本房间后来又发了同名文件。
+   * 来源消息被撤回、不再带这个附件时当它没了
    */
-  const [dockedPreview, setDockedPreview] = useState<{
-    roomId: string;
-    attachment: Attachment;
-    senderId: string;
-    seq: number;
-    popped?: boolean;
-  }>();
+  const storedDockedPreview = roomSide.preview;
+  const dockedPreview =
+    storedDockedPreview && !previewGone(storedDockedPreview, messages)
+      ? storedDockedPreview
+      : undefined;
+  useEffect(() => {
+    if (storedDockedPreview && !dockedPreview) setDockedPreview(undefined);
+  }, [dockedPreview, setDockedPreview, storedDockedPreview]);
   // 跨房间入口：搜索、提及我、Agent 任务
   const [activityView, setActivityView] = useState<ActivityView>();
   const [gotoOpen, setGotoOpen] = useState(false);
@@ -803,10 +809,9 @@ export function App({
   const [activePluginPanel, setActivePluginPanel] = useState<PluginPanelKey>();
   const [pluginCommand, setPluginCommand] = useState<PluginCommandDispatch>();
   const pluginCommandNonce = useRef(0);
-  useEffect(() => {
-    // 插件被撤销：「插件」标签页跟着消失，退回成员
-    if (!hasPluginPanels && sidePanelTab === "plugins") setSidePanelTab("members");
-  }, [hasPluginPanels, sidePanelTab]);
+  // 插件被撤销（或这个房间还没加载出插件）：「插件」标签页跟着消失，先显示成员，记下的选择不动
+  const sidePanelTab: SidePanelTab =
+    roomSide.tab === "plugins" && !hasPluginPanels ? "members" : roomSide.tab;
   /** 输入框里的 /命令：认出是插件声明的就交给它的面板，不当消息发出去 */
   const interceptPluginCommand = useCallback((content: string) => {
     const match = matchPluginCommand(content, pluginsRef.current);
@@ -1354,10 +1359,14 @@ export function App({
     ],
   );
 
-  // 换房间收起停靠的预览：附件属于原来的房间
+  // 切回房间：停靠的预览按房间记着，照旧停靠在右侧栏（放大的弹窗收回侧栏，不突然盖住页面）。
+  // 窄屏的右侧栏是盖在对话上的抽屉，切回来不自动弹出，和以前一样收起
   useEffect(() => {
-    setDockedPreview((current) => (current?.roomId === currentRoomId ? current : undefined));
-  }, [currentRoomId]);
+    const narrow = window.matchMedia?.("(max-width: 1100px)").matches;
+    setDockedPreview((current) =>
+      !current || narrow ? undefined : current.popped ? { ...current, popped: false } : current,
+    );
+  }, [currentRoomId, setDockedPreview]);
 
   useEffect(() => {
     localStorage.setItem(storedRoomKey, currentRoomId);
@@ -2814,6 +2823,7 @@ export function App({
           base={base}
           token={authToken}
           onClose={closeDockedPreview}
+          onUnavailable={dockedPreview.restored ? closeDockedPreview : undefined}
           onDock={() => setDockedPreview((current) => current && { ...current, popped: false })}
           notice={dockedNewerNotice}
         />

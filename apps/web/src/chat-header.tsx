@@ -7,7 +7,6 @@ import {
   type SetStateAction,
 } from "react";
 import type {
-  Attachment,
   ChatMessage,
   Invocation,
   Participant,
@@ -18,6 +17,7 @@ import { BranchGlyph, WorktreeSwitcher } from "./worktree-switcher";
 import { WorkspaceGlyph } from "./workspace-panel";
 import { BUDGET_EXTEND_TURNS, currentPausedInvocations } from "./invocations";
 import type { LocalAgentsState } from "./local-agents";
+import type { DockedPreview } from "./room-side-state";
 import { t } from "./i18n";
 import {
   storedMembersCollapsedKey,
@@ -101,12 +101,7 @@ export function ChatHeader({
   previewDocked: boolean;
   membersCollapsed: boolean;
   setMembersCollapsed: Dispatch<SetStateAction<boolean>>;
-  setDockedPreview: Dispatch<
-    SetStateAction<
-      | { roomId: string; attachment: Attachment; senderId: string; seq: number; popped?: boolean }
-      | undefined
-    >
-  >;
+  setDockedPreview: Dispatch<SetStateAction<DockedPreview | undefined>>;
   /** 内置终端开关：只有在桌面端里才传，浏览器里没有这个按钮 */
   terminal?: { open: boolean; toggle: () => void };
 }) {

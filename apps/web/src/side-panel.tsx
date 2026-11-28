@@ -23,7 +23,7 @@ import { memberModel, useRuntimeModels, type RuntimeModelLists } from "./agent-m
 import { MemberSandboxBadge } from "./member-sandbox";
 import { GuestMemberActions, GuestAccessBadge } from "./invite-dialog";
 import { agentProviderLabel, participantStatusLabel } from "./agent-setup";
-import type { Attachment, Participant, WhiteboardEntry } from "@superhive/protocol";
+import type { Participant, WhiteboardEntry } from "@superhive/protocol";
 import type {
   Dispatch,
   SetStateAction,
@@ -34,6 +34,7 @@ import type {
 import type { LocalAgentsState } from "./local-agents";
 import type { GuestAccess } from "./access-gate";
 import { IconButton } from "./button";
+import type { DockedPreview } from "./room-side-state";
 
 /** 右侧栏：成员、进展、定时三个标签页，或停靠在这里的文件预览 */
 export function SidePanel({
@@ -103,9 +104,7 @@ export function SidePanel({
   closeMobilePanel: (restoreFocus?: boolean) => void;
   currentRoomId: string;
   dockedNewerNotice: ReactNode | undefined;
-  dockedPreview:
-    | { roomId: string; attachment: Attachment; senderId: string; seq: number; popped?: boolean }
-    | undefined;
+  dockedPreview: DockedPreview | undefined;
   guest: GuestAccess | undefined;
   isLeadAgent: (participant: Participant) => boolean;
   isOwner: boolean;
@@ -129,12 +128,7 @@ export function SidePanel({
   progressGroups: Record<ProgressGroup, ProgressItem[]>;
   removeWhiteboardEntry: (entry: WhiteboardEntry) => void;
   resizePanel: (panel: ResizablePanel, width: number) => void;
-  setDockedPreview: Dispatch<
-    SetStateAction<
-      | { roomId: string; attachment: Attachment; senderId: string; seq: number; popped?: boolean }
-      | undefined
-    >
-  >;
+  setDockedPreview: Dispatch<SetStateAction<DockedPreview | undefined>>;
   setError: Dispatch<SetStateAction<string | undefined>>;
   setGuestAgentDialogOpen: Dispatch<SetStateAction<boolean>>;
   setInviteDialogOpen: Dispatch<SetStateAction<boolean>>;
@@ -172,6 +166,7 @@ export function SidePanel({
             token={authToken}
             docked
             onClose={closeDockedPreview}
+            onUnavailable={dockedPreview.restored ? closeDockedPreview : undefined}
             onUndock={() => setDockedPreview((current) => current && { ...current, popped: true })}
             notice={dockedNewerNotice}
           />
