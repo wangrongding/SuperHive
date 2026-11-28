@@ -145,3 +145,212 @@
     display: none;
   }
 }
+
+/* 「全部升级」：列表上方一行 */
+.status-runtimes-batch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 8px 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.status-runtimes-batch > span {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 批量升级确认：每个 CLI 一行命令，太多时框里滚动（弹层和卡片共用） */
+.cli-batch-confirm {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.cli-batch-commands {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+
+.cli-batch-commands li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cli-batch-commands li > span {
+  color: var(--text);
+}
+
+.cli-batch-commands .agent-cli-command {
+  margin: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
+}
+
+.cli-batch-hint {
+  color: var(--text-tertiary);
+}
+
+/* 只能手动升级时建议的命令 + 复制 */
+.cli-copy-command {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cli-copy-command .agent-cli-command {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 右下角提醒卡片 */
+.cli-update-card {
+  display: contents;
+}
+
+.cli-update-card .update-card {
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.cli-update-rows {
+  display: grid;
+  gap: 2px;
+  margin: 0 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cli-update-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 26px;
+  min-width: 0;
+  font-size: var(--text-xs);
+}
+
+.cli-update-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cli-update-versions {
+  flex: 1 0 auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: right;
+}
+
+.cli-update-row.manual {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 4px 0;
+}
+
+.cli-update-row.manual > .cli-copy-command,
+.cli-update-row.manual > .cli-update-reason {
+  grid-column: 1 / -1;
+}
+
+.cli-update-reason {
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
+.cli-update-section {
+  display: block;
+  margin: 2px 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.cli-update-manual {
+  padding-top: 6px;
+  border-top: 1px solid var(--border-light);
+  margin-right: 6px;
+}
+
+.cli-update-manual .cli-update-rows {
+  margin-right: 0;
+}
+
+.cli-update-state {
+  display: grid;
+  flex: 0 0 16px;
+  place-items: center;
+  height: 16px;
+  color: var(--text-tertiary);
+}
+
+.cli-update-row.done .cli-update-state {
+  color: var(--success);
+}
+
+.cli-update-row.failed .cli-update-state,
+.cli-update-row.failed .cli-update-detail {
+  color: var(--danger);
+}
+
+.cli-update-state .update-notice-spinner {
+  color: var(--accent);
+}
+
+.cli-update-dot {
+  width: 9px;
+  height: 9px;
+  border: 1.5px dashed currentColor;
+  border-radius: 50%;
+}
+
+.cli-update-detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cli-update-failure {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding-left: 24px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.cli-update-failure .agent-cli-output {
+  max-height: 160px;
+  font-size: 11px;
+}

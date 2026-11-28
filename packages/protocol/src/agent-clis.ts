@@ -57,6 +57,8 @@ export const agentCliUpdatePlanSchema = z.discriminatedUnion("kind", [
     reasonText: serverTextSchema.optional(),
     /** 官方安装说明 */
     url: z.string().optional(),
+    /** 建议人自己在终端里跑的命令（只展示、可复制，服务端不执行）；拿不准的不给 */
+    command: z.string().optional(),
   }),
 ]);
 
@@ -88,7 +90,8 @@ export const agentCliJobSchema = z.object({
   tool: agentCliToolSchema,
   action: z.enum(["install", "upgrade"]),
   command: z.string(),
-  state: z.enum(["running", "succeeded", "failed"]),
+  /** queued：核对通过，等别的 CLI 跑完腾出名额 */
+  state: z.enum(["queued", "running", "succeeded", "failed"]),
   /** 最近一行输出（节流、截断） */
   progress: z.string(),
   startedAt: z.string(),
@@ -98,6 +101,8 @@ export const agentCliJobSchema = z.object({
   reasonText: serverTextSchema.optional(),
   /** 失败时输出的末几行 */
   error: z.string().optional(),
+  /** 失败时的完整输出（去掉颜色，最多末尾 16000 字）；和末几行一样时不带 */
+  output: z.string().optional(),
   /** 升级前命令行默认那处的版本 */
   versionBefore: z.string().nullable().optional(),
   /** 升级后重新探测到的版本 */

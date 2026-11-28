@@ -73,16 +73,20 @@ const job = (overrides: Partial<AgentCliJob> = {}): AgentCliJob => ({
 function api(tools: AgentCliWithAgents[] = [codex(), claude()]) {
   return {
     agentClis: vi.fn<
-      (refresh?: boolean) => Promise<{ tools: AgentCliWithAgents[]; job: AgentCliJob | null }>
+      (refresh?: boolean) => Promise<{
+        tools: AgentCliWithAgents[];
+        job: AgentCliJob | null;
+        jobs?: AgentCliJob[];
+      }>
     >(async () => ({ tools, job: null })),
-    agentCliCurrent: vi.fn<() => Promise<AgentCliJob | null>>(async () => null),
+    agentCliCurrent: vi.fn<() => Promise<AgentCliJob[]>>(async () => []),
     upgradeAgentCli: vi.fn<(tool: string, command: string) => Promise<AgentCliJob>>(async () =>
       job(),
     ),
     installAgentCli: vi.fn<(tool: string, command: string) => Promise<AgentCliJob>>(async () =>
       job({ tool: "claude", action: "install", command: INSTALL, versionBefore: null }),
     ),
-    agentCliJob: vi.fn(async () => job()),
+    agentCliJob: vi.fn<(id: string) => Promise<AgentCliJob>>(async () => job()),
     act: vi.fn(async () => undefined),
     // 配置面板用的接口：这些用例不打开面板
     runtimeCredentials: vi.fn(async () => []),
@@ -259,6 +263,49 @@ describe("AgentClisGroup", () => {
     expect(alert.textContent).toContain("npm error code EACCES");
   });
 
+  it("runs two CLIs at once, shows a queued one, and retries a failed one with its full output", async () => {
+    const gemini = codex({
+      tool: "gemini",
+      name: "Gemini CLI",
+      package: "@google/gemini-cli",
+      plan: { kind: "anchored", command: "npm i -g @google/gemini-cli@latest" },
+    });
+    const client = api([codex(), gemini]);
+    client.agentClis.mockImplementation(async () => ({
+      tools: [codex(), gemini],
+      job: null,
+      jobs: [job(), job({ id: "job-2", tool: "gemini", state: "queued" })],
+    }));
+    const failed = job({
+      state: "failed",
+      reason: "命令连续 3 分钟没有任何输出，像是卡住了，已停止。",
+      error: "npm http fetch GET",
+      output: "npm warn deprecated\nnpm http fetch GET",
+    });
+    client.agentCliJob.mockImplementation(async (id: string) =>
+      id === "job-1" ? failed : job({ id: "job-2", tool: "gemini", state: "queued" }),
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<AgentClisGroup api={client} />);
+    const geminiCard = await screen.findByRole("region", { name: "Gemini CLI" });
+    expect(geminiCard.textContent).toContain("排队中，等别的 CLI 升完…");
+    expect(screen.getByText("正在处理 Codex、Gemini CLI，可以同时操作其它 CLI。")).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(JOB_POLL_MS);
+    });
+    const codexCard = screen.getByRole("region", { name: "Codex" });
+    const alert = within(codexCard).getByRole("alert");
+    expect(alert.textContent).toContain("卡住了");
+    expect(within(alert).getByText("查看完整输出")).toBeTruthy();
+    expect(alert.textContent).toContain("npm warn deprecated");
+    // 排队的那个还在轮询
+    expect(client.agentCliJob).toHaveBeenCalledWith("job-2");
+    await act(async () => {
+      fireEvent.click(within(alert).getByRole("button", { name: "再试一次" }));
+    });
+    expect(client.upgradeAgentCli).toHaveBeenCalledWith("codex", COMMAND);
+  });
+
   it("shows the server's refusal next to the button", async () => {
     const client = api();
     client.upgradeAgentCli.mockRejectedValue(
@@ -272,7 +319,7 @@ describe("AgentClisGroup", () => {
     expect(await screen.findByText(/升级命令和你确认的不一样/)).toBeTruthy();
   });
 
-  it("shows progress right after confirming, and disables the other buttons with a reason", async () => {
+  it("shows progress right after confirming, and leaves the other CLIs usable", async () => {
     let resolve!: (value: AgentCliJob) => void;
     const client = api([codex(), claude({ plan: { kind: "anchored", command: INSTALL } })]);
     client.upgradeAgentCli.mockImplementation(
@@ -281,7 +328,7 @@ describe("AgentClisGroup", () => {
     render(<AgentClisGroup api={client} />);
     fireEvent.click(await screen.findByRole("button", { name: "升级到 0.170.0" }));
     fireEvent.click(screen.getByRole("button", { name: "升级" }));
-    // 服务端还在核对命令：这一行已经在进行中，确认按钮 busy，其它按钮停用并说明原因
+    // 服务端还在核对命令：这一行已经在进行中，确认按钮 busy；别的 CLI 可以同时装、升级
     const codexCard = screen.getByRole("region", { name: "Codex" });
     expect(codexCard.getAttribute("aria-busy")).toBe("true");
     expect(codexCard.textContent).toContain("正在核对命令…");
@@ -293,18 +340,14 @@ describe("AgentClisGroup", () => {
     expect(
       confirmButton?.hasAttribute("disabled") || confirmButton?.getAttribute("aria-busy"),
     ).toBeTruthy();
-    const install = screen.getByRole("button", {
-      name: "安装",
-      description: "正在升级 Codex，完成后再试",
-    });
-    expect(install.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("正在升级 Codex，完成后才能操作其它 CLI。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "安装" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByText("正在升级 Codex，可以同时操作其它 CLI。")).toBeTruthy();
     expect(screen.getByRole("button", { name: "重新检测" }).hasAttribute("disabled")).toBe(true);
 
     await act(async () => resolve(job({ progress: "npm http fetch GET 200" })));
     expect(codexCard.textContent).toContain("npm http fetch GET 200");
     expect(screen.queryByText("正在核对命令…")).toBeNull();
-    expect(screen.getByRole("button", { name: "安装" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "安装" }).hasAttribute("disabled")).toBe(false);
   });
 
   it("restores a running job from the current-task endpoint before detection finishes", async () => {
@@ -316,15 +359,15 @@ describe("AgentClisGroup", () => {
           finishList = () => done({ tools: [codex()], job: null });
         }),
     );
-    client.agentCliCurrent.mockResolvedValue(job({ progress: "reify: timing" }));
+    client.agentCliCurrent.mockResolvedValue([job({ progress: "reify: timing" })]);
     render(<AgentClisGroup api={client} />);
-    expect(await screen.findByText("正在升级 Codex，完成后才能操作其它 CLI。")).toBeTruthy();
+    expect(await screen.findByText("正在升级 Codex，可以同时操作其它 CLI。")).toBeTruthy();
     await act(async () => finishList());
     expect(screen.getByRole("region", { name: "Codex" }).textContent).toContain("reify: timing");
     // 已经结束的旧结果不翻出来
     cleanup();
     const later = api();
-    later.agentCliCurrent.mockResolvedValue(job({ state: "succeeded", versionAfter: "0.170.0" }));
+    later.agentCliCurrent.mockResolvedValue([job({ state: "succeeded", versionAfter: "0.170.0" })]);
     render(<AgentClisGroup api={later} />);
     await screen.findByRole("region", { name: "Codex" });
     expect(screen.queryByText(/已升级到/)).toBeNull();
@@ -391,7 +434,7 @@ describe("AgentClisGroup", () => {
     expect(await screen.findByText("正在重新安装…", { selector: "span" })).toBeTruthy();
     expect(screen.queryByText("正在升级…")).toBeNull();
     // 列表上方的提示也一样
-    expect(screen.getByText("正在重新安装 Codex，完成后才能操作其它 CLI。")).toBeTruthy();
+    expect(screen.getByText("正在重新安装 Codex，可以同时操作其它 CLI。")).toBeTruthy();
     expect(screen.queryByText(/正在升级 Codex/)).toBeNull();
 
     // 原来那一处查不到版本：做完说「已重新安装」，不说「已升级到」

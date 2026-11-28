@@ -150,13 +150,16 @@ export type LocalAgentsState = {
   setHostApprover(connectionId: string, allowed: boolean): Promise<HostApprover[]>;
   revokeAllOwnerDevices(): Promise<number>;
   /** 本机：装了哪些 Agent CLI、版本、来源和升级命令；refresh 时重新探测 */
-  agentClis(refresh?: boolean): Promise<{ tools: AgentCliWithAgents[]; job: AgentCliJob | null }>;
+  agentClis(
+    refresh?: boolean,
+  ): Promise<{ tools: AgentCliWithAgents[]; job: AgentCliJob | null; jobs?: AgentCliJob[] }>;
   /** 本机：执行页面确认过的升级命令（服务端重新算一遍，对不上不执行） */
   upgradeAgentCli(tool: AgentCliTool, command: string): Promise<AgentCliJob>;
   /** 本机：执行页面确认过的全局安装命令 */
   installAgentCli(tool: AgentCliTool, command: string): Promise<AgentCliJob>;
   /** 本机：正在跑（或最近一次）的安装、升级任务 */
-  agentCliCurrent(): Promise<AgentCliJob | null>;
+  /** 各 CLI 还没结束（或最近一次）的任务 */
+  agentCliCurrent(): Promise<AgentCliJob[]>;
   agentCliJob(id: string): Promise<AgentCliJob>;
   providers: LocalProviderInfo[] | undefined;
   agents: LocalAgent[];
@@ -1080,7 +1083,11 @@ export function useLocalAgents(
     async (refresh = false) => {
       const response = await request(`/api/local/agent-clis${refresh ? "?refresh=1" : ""}`);
       return localizeServerPayload(
-        (await response.json()) as { tools: AgentCliWithAgents[]; job: AgentCliJob | null },
+        (await response.json()) as {
+          tools: AgentCliWithAgents[];
+          job: AgentCliJob | null;
+          jobs?: AgentCliJob[];
+        },
       );
     },
     [request],
@@ -1105,7 +1112,11 @@ export function useLocalAgents(
   );
   const agentCliCurrent = useCallback(async () => {
     const response = await request("/api/local/agent-clis/current");
-    return localizeServerPayload(((await response.json()) as { job: AgentCliJob | null }).job);
+    const body = localizeServerPayload(
+      (await response.json()) as { job: AgentCliJob | null; jobs?: AgentCliJob[] },
+    );
+    // 老服务端只有 job 一个
+    return body.jobs ?? (body.job ? [body.job] : []);
   }, [request]);
   const agentCliJob = useCallback(
     async (id: string) => {

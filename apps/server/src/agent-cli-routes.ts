@@ -9,6 +9,7 @@ import { errorText, hiveErrorBody } from "./texts.js";
  * 本机 Agent CLI 的检测与升级接口：只限本机房主（local 级，和运行时地址与密钥一样），
  * 房主的其他设备、Agent 的总令牌、别的电脑都拒绝。会在这台电脑上跑升级命令，所以命令不从请求里拿：
  * 请求只带页面确认过的那条命令，服务端重新算一遍，一字不差才执行。
+ * 不同 CLI 可以同时升级（最多 3 个在跑，多的排队），同一个 CLI 有任务没结束时 409。
  */
 
 const ERROR_STATUS: Record<string, number> = {
@@ -58,6 +59,8 @@ export function registerAgentCliRoutes(
       return {
         tools: tools.map((tool) => ({ ...tool, agents: agentsOf(tool.tool) })),
         job: manager.current() ?? null,
+        // 每个 CLI 最近一个任务：能同时升级好几个，页面按行恢复进度和结果
+        jobs: manager.jobsByTool(),
       };
     },
   );
@@ -99,7 +102,7 @@ export function registerAgentCliRoutes(
   app.get("/api/local/agent-clis/current", async (request, reply) => {
     if (!authorizeLocal(request, reply)) return reply;
     if (!manager) return disabled(reply);
-    return { job: manager.current() ?? null };
+    return { job: manager.current() ?? null, jobs: manager.jobsByTool() };
   });
 
   app.get<{ Params: { id: string } }>("/api/local/agent-clis/jobs/:id", async (request, reply) => {

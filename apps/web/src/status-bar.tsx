@@ -53,6 +53,7 @@ import {
   statusAgentClisLabel,
   useStatusAgentClis,
 } from "./status-runtimes";
+import { CliUpdateCard } from "./cli-update-card";
 import "./styles/status-bar.css";
 
 /* ---------- 纯函数：每一项显示什么（单独测） ---------- */
@@ -1013,6 +1014,14 @@ export function StatusBar(props: StatusBarProps) {
           )}
         />
       </div>
+      {runtimeOwner && (
+        <CliUpdateCard
+          state={agentClis}
+          api={local}
+          paused={settingsOpen}
+          openSettings={() => openSettings("runtimes")}
+        />
+      )}
     </footer>
   );
 }

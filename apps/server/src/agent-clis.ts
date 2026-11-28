@@ -27,7 +27,8 @@ import { findWindowsCommand, resolveCommand } from "./windows-command.js";
  * - 来源：按入口路径和真实路径推断（nvm、Homebrew、volta、bun、pnpm、npm 全局前缀、官方安装器……）。
  * - 升级：命令锚定到命令行实际用的那一处（登录 shell PATH 里排第一的那处），用绝对路径加引号；
  *   认不出来源的不执行，提示用原来的方式升级。新版要求的 Node 本机不满足时不给升级。
- * - 执行：全局一次只跑一个；进度只留最近一行（节流、截断），失败给输出末几行。
+ * - 执行：最多同时跑 MAX_CONCURRENT 个，多出来的排队；同一个 CLI 同一时间只有一个任务。进度只留最近一行
+ *   （节流、截断），失败给输出末几行和完整输出；连续 STALL_MS 没有任何输出判定卡住并停掉。
  * 工具名只来自 TOOLS 白名单，命令里拼进去的只有白名单里的包名和探测到的绝对路径。
  */
 
@@ -119,6 +120,12 @@ const PROBE_TIMEOUT_MS = 10_000;
 const LOGIN_SHELL_TIMEOUT_MS = 8_000;
 const REGISTRY_TIMEOUT_MS = 8_000;
 const UPGRADE_TIMEOUT_MS = 15 * 60_000;
+/** 同时最多跑几个安装 / 升级：npm 等包管理器各装各的包可以并行，再多容易抢带宽、互相拖慢 */
+export const MAX_CONCURRENT = 3;
+/** 连续这么久没有任何输出就算卡住（等网络、等交互输入），停掉 */
+const STALL_MS = 3 * 60_000;
+/** 失败时保留的完整输出（去掉颜色，取末尾） */
+const OUTPUT_MAX = 16_000;
 const PROGRESS_MAX = 200;
 const PROGRESS_THROTTLE_MS = 150;
 const ERROR_TAIL_LINES = 8;
@@ -441,8 +448,24 @@ export type PlanContext = {
 
 type PackageCommand = { command: string } | { missing: string } | undefined;
 
-function manual(text: ServerText, url?: string): AgentCliUpdatePlan {
-  return { kind: "manual", reason: zhText(text), reasonText: text, ...(url ? { url } : {}) };
+function manual(text: ServerText, url?: string, command?: string): AgentCliUpdatePlan {
+  return {
+    kind: "manual",
+    reason: zhText(text),
+    reasonText: text,
+    ...(url ? { url } : {}),
+    ...(command ? { command } : {}),
+  };
+}
+
+/**
+ * 只能手动升级时建议人自己跑的命令（只展示、不执行）：有自带升级子命令的用这一处自己的
+ * （它认得自己的安装渠道），否则用 npm 装最新版；都没有就不给。
+ */
+function manualCommand(tool: AgentCliTool, bin: string | undefined) {
+  const spec = TOOLS[tool];
+  if (spec.officialUpdate) return `${bin ? shellQuote(bin) : tool} ${spec.officialUpdate}`;
+  return spec.package ? `npm i -g ${spec.package}@latest` : undefined;
 }
 
 function packageCommand(
@@ -522,12 +545,20 @@ export function planUpdate(
       context.bundled && tool !== "omp" && isInside(install.path, context.bundled.prefix, "win32")
         ? windowsNpmInstall(context.bundled, TOOLS[tool])
         : undefined;
-    return command ? { kind: "anchored", command } : manual(serverText("agentCli.manual.windows"));
+    return command
+      ? { kind: "anchored", command }
+      : manual(serverText("agentCli.manual.windows"), undefined, manualCommand(tool, undefined));
   }
   const spec = TOOLS[tool];
   const bin = install.path;
   const real = install.realPath;
-  const unknown = () => manual(serverText("agentCli.manual.unknownSource", { path: bin }));
+  const unknown = () =>
+    manual(
+      serverText("agentCli.manual.unknownSource", { path: bin }),
+      undefined,
+      // 认不出来源：只建议它自带的升级命令，不猜包管理器
+      TOOLS[tool].officialUpdate && safePath(bin) ? manualCommand(tool, bin) : undefined,
+    );
   if (!safePath(bin) || !safePath(real)) return unknown();
   const r = lower(real);
   const official = spec.officialUpdate ? `${shellQuote(bin)} ${spec.officialUpdate}` : undefined;
@@ -552,7 +583,11 @@ export function planUpdate(
   if (cask || formula) {
     const brew = path.posix.join(path.posix.dirname(bin), "brew");
     if (!context.isExecutable(brew)) {
-      return manual(serverText("agentCli.manual.noManager", { path: bin, manager: "brew" }));
+      return manual(
+        serverText("agentCli.manual.noManager", { path: bin, manager: "brew" }),
+        undefined,
+        cask ? `brew upgrade --cask ${cask}` : `brew upgrade ${formula}`,
+      );
     }
     return {
       kind: "anchored",
@@ -584,6 +619,8 @@ export function planUpdate(
   if (fallback && "missing" in fallback) {
     return manual(
       serverText("agentCli.manual.noManager", { path: bin, manager: fallback.missing }),
+      undefined,
+      manualCommand(tool, bin),
     );
   }
   return unknown();
@@ -692,6 +729,16 @@ export function lastLine(text: string): string | undefined {
     : line.length > PROGRESS_MAX
       ? `${line.slice(0, PROGRESS_MAX - 1)}…`
       : line;
+}
+
+/** 完整输出：去掉颜色和回车覆盖的半行、去掉空行 */
+function cleanOutput(text: string): string {
+  return text
+    .replace(ANSI, "")
+    .split(/\r\n|\n/)
+    .map((line) => (line.split("\r").at(-1) ?? "").trimEnd())
+    .filter((line) => line.trim())
+    .join("\n");
 }
 
 function tailLines(text: string, count: number): string {
@@ -876,6 +923,10 @@ export type AgentCliManagerOptions = {
   realpath?: (file: string) => string;
   now?: () => number;
   upgradeTimeoutMs?: number;
+  /** 连续多久没有输出算卡住；默认 3 分钟 */
+  stallMs?: number;
+  /** 同时最多跑几个；默认 MAX_CONCURRENT */
+  maxConcurrent?: number;
   /** 桌面端自带的 node；默认读 SUPERHIVE_BUNDLED_NODE */
   bundledNode?: string | undefined;
   /** 用自带 npm 安装时的全局前缀；默认读 SUPERHIVE_AGENT_CLIS_DIR */
@@ -899,11 +950,18 @@ export class AgentCliManager {
   private readonly realpath: (file: string) => string;
   private readonly now: () => number;
   private readonly upgradeTimeoutMs: number;
+  private readonly stallMs: number;
+  private readonly maxConcurrent: number;
   private loginPathCache?: { at: number; value: Promise<string> };
   private detectCache?: { at: number; value: Promise<Record<AgentCliTool, Detected>> } | undefined;
   private readonly latestCache = new Map<string, { at: number; value: Promise<string | null> }>();
   private readonly jobs = new Map<string, AgentCliJob>();
-  private running: AgentCliJob | undefined;
+  /** 还没结束的任务（核对命令中、排队、在跑、核对版本中），一个 CLI 最多一个 */
+  private readonly active = new Map<AgentCliTool, AgentCliJob>();
+  /** 已经启动了命令、占着并发名额的任务 */
+  private readonly spawned = new Set<string>();
+  /** 核对通过、等名额的任务（先来先跑） */
+  private readonly queue: Array<{ job: AgentCliJob; loginPath: string }> = [];
 
   constructor(private readonly options: AgentCliManagerOptions = {}) {
     this.platform = options.platform ?? process.platform;
@@ -916,6 +974,8 @@ export class AgentCliManager {
     this.realpath = options.realpath ?? defaultRealpath;
     this.now = options.now ?? Date.now;
     this.upgradeTimeoutMs = options.upgradeTimeoutMs ?? UPGRADE_TIMEOUT_MS;
+    this.stallMs = options.stallMs ?? STALL_MS;
+    this.maxConcurrent = Math.max(1, options.maxConcurrent ?? MAX_CONCURRENT);
   }
 
   /** 登录 shell 的 PATH 合并本进程的 PATH（登录 shell 在前） */
@@ -1349,22 +1409,28 @@ export class AgentCliManager {
     return this.jobs.get(id);
   }
 
-  /** 正在跑（含还在核对命令）或最近一次的安装、升级 */
+  /** 正在进行（含还在核对命令、排队）或最近一次的安装、升级 */
   current(): AgentCliJob | undefined {
-    return this.running ?? [...this.jobs.values()].at(-1);
+    return [...this.active.values()][0] ?? [...this.jobs.values()].at(-1);
+  }
+
+  /** 每个 CLI 最近一个任务（进行中的优先）：页面刷新后恢复每一行的进度和结果 */
+  jobsByTool(): AgentCliJob[] {
+    const latest = new Map<AgentCliTool, AgentCliJob>();
+    for (const job of this.jobs.values()) latest.set(job.tool, job);
+    for (const [tool, job] of this.active) latest.set(tool, job);
+    return [...latest.values()].map((job) => ({ ...job }));
   }
 
   /**
    * 执行页面确认过的安装或升级：重新探测这一个工具、重新算命令，和确认的那条一字不差才执行。
-   * 一次只跑一个；返回刚开始的任务，进度经 job(id) 取。
+   * 不同 CLI 可以同时进行，最多同时跑 maxConcurrent 个，多出来的排队（state: queued）；
+   * 同一个 CLI 已经有任务没结束时拒绝。返回刚开始的任务，进度经 job(id) 取。
    */
   async start(tool: AgentCliTool, action: AgentCliAction, confirmed: string): Promise<AgentCliJob> {
     const spec = TOOLS[tool];
-    if (this.running) {
-      throw new HiveError(
-        "AGENT_CLI_BUSY",
-        serverText("error.agentCli.busy", { tool: TOOLS[this.running.tool].name }),
-      );
+    if (this.active.has(tool)) {
+      throw new HiveError("AGENT_CLI_BUSY", serverText("error.agentCli.busy", { tool: spec.name }));
     }
     // 先占住并登记，免得两个请求同时探测完都去执行；核对期间刷新页面也能看到它在进行
     const job: AgentCliJob = {
@@ -1376,7 +1442,7 @@ export class AgentCliManager {
       progress: "",
       startedAt: new Date(this.now()).toISOString(),
     };
-    this.running = job;
+    this.active.set(tool, job);
     this.jobs.set(job.id, job);
     try {
       const loginPath = await this.loginPath();
@@ -1430,12 +1496,27 @@ export class AgentCliManager {
         );
       }
       job.versionBefore = info.version;
-      this.run(job, loginPath);
+      if (this.spawned.size >= this.maxConcurrent) {
+        job.state = "queued";
+        this.queue.push({ job, loginPath });
+      } else this.run(job, loginPath);
       return { ...job };
     } catch (error) {
-      if (this.running === job) this.running = undefined;
+      if (this.active.get(tool) === job) this.active.delete(tool);
       this.jobs.delete(job.id);
       throw error;
+    }
+  }
+
+  /** 任务结束：放开这个 CLI 和并发名额，排队的接着跑 */
+  private release(job: AgentCliJob) {
+    if (this.active.get(job.tool) === job) this.active.delete(job.tool);
+    this.spawned.delete(job.id);
+    while (this.spawned.size < this.maxConcurrent && this.queue.length) {
+      const next = this.queue.shift()!;
+      next.job.state = "running";
+      next.job.startedAt = new Date(this.now()).toISOString();
+      this.run(next.job, next.loginPath);
     }
   }
 
@@ -1445,6 +1526,7 @@ export class AgentCliManager {
   }
 
   private run(job: AgentCliJob, loginPath: string) {
+    this.spawned.add(job.id);
     let output = "";
     let pending: string | undefined;
     let lastPush = 0;
@@ -1463,12 +1545,15 @@ export class AgentCliManager {
       job.reason = zhText(text);
       job.reasonText = text;
       if (tail) job.error = tail;
-      if (this.running === job) this.running = undefined;
+      const full = cleanOutput(output);
+      if (full && full !== tail) job.output = full;
+      this.release(job);
     };
     const finish = (code: number | null, error?: Error | ServerText) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(stall);
       if (flush) clearTimeout(flush);
       push();
       job.finishedAt = new Date(this.now()).toISOString();
@@ -1506,7 +1591,7 @@ export class AgentCliManager {
               );
             } else {
               job.state = "succeeded";
-              if (this.running === job) this.running = undefined;
+              this.release(job);
             }
           });
         return;
@@ -1528,6 +1613,20 @@ export class AgentCliManager {
         }),
       );
     }, this.upgradeTimeoutMs);
+    // 卡住：连续 stallMs 没有任何输出（每来一段输出重新计时）
+    let stall: ReturnType<typeof setTimeout> | undefined;
+    const watch = () => {
+      clearTimeout(stall);
+      stall = setTimeout(() => {
+        child.kill();
+        finish(
+          null,
+          serverText("error.agentCli.stalled", {
+            minutes: Math.max(1, Math.round(this.stallMs / 60_000)),
+          }),
+        );
+      }, this.stallMs);
+    };
     try {
       child = this.spawnUpgrade(job.command, {
         ...withPath(this.env, loginPath, this.platform),
@@ -1541,8 +1640,10 @@ export class AgentCliManager {
       finish(null, error instanceof Error ? error : new Error(String(error)));
       return;
     }
+    watch();
     child.onOutput((chunk) => {
-      output = (output + chunk).slice(-16_000);
+      if (!settled) watch();
+      output = (output + chunk).slice(-OUTPUT_MAX);
       const line = lastLine(chunk);
       if (line === undefined) return;
       pending = line;

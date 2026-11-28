@@ -220,3 +220,31 @@
   flex-shrink: 0;
   gap: 6px;
 }
+
+/* 排队中：空心圆，和转圈区分开（不只靠颜色） */
+.agent-cli-queued {
+  width: 10px;
+  height: 10px;
+  border: 1.5px dashed var(--text-tertiary);
+  border-radius: 50%;
+}
+
+/* 失败后的完整输出：默认收起 */
+.agent-cli-full-output {
+  margin-top: 6px;
+}
+
+.agent-cli-full-output > summary {
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.agent-cli-full-output .agent-cli-output {
+  max-height: 240px;
+}
+
+.agent-cli-retry {
+  margin-top: 8px;
+}

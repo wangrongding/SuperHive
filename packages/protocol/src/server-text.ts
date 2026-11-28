@@ -1581,8 +1581,8 @@ export const serverTexts = {
   "error.request.invalid": { zh: "参数不正确。", en: "Invalid parameters." },
   "error.request.missingActor": { zh: "缺少操作人。", en: "The acting person is missing." },
   "error.agentCli.busy": {
-    zh: "{tool} 正在升级，等它结束再试。一次只升级一个 CLI。",
-    en: "{tool} is being updated. Wait for it to finish; only one CLI is updated at a time.",
+    zh: "{tool} 已经在安装或升级了，等它结束再试。",
+    en: "{tool} is already being installed or updated. Wait for it to finish.",
   },
   "error.agentCli.planChanged": {
     zh: "{tool} 的安装情况变了，升级命令和你确认的不一样，没有执行。请刷新后重新确认。",
@@ -1627,6 +1627,10 @@ export const serverTexts = {
   "error.agentCli.timeout": {
     zh: "命令超过 {minutes} 分钟还没结束，已停止。",
     en: "The command didn't finish within {minutes} minutes and was stopped.",
+  },
+  "error.agentCli.stalled": {
+    zh: "命令连续 {minutes} 分钟没有任何输出，像是卡住了，已停止。",
+    en: "The command printed nothing for {minutes} minutes and looked stuck, so it was stopped.",
   },
   "error.agentCli.spawnFailed": {
     zh: "命令没能启动：{reason}",

@@ -17,14 +17,14 @@ import {
 } from "./runtime-config-panel";
 import { hasRuntimeConfig } from "./runtime-credentials";
 import "./styles/agent-clis.css";
-import { Tooltip } from "./tooltip";
 import { Button } from "./button";
 
 /**
  * 这台电脑装了哪些 Agent CLI（只在 Server 所在电脑上的本机房主页面显示）：版本、安装位置与来源、
- * 有没有新版；没装的可以一键全局安装，装了的可以一键升级。执行前把要在这台电脑上跑的命令原样给人确认，
- * 全局一次只跑一个：点了确认这一行立刻进入进行中，其它按钮停用并说明原因；进度只显示最近一行，
- * 失败显示输出末几行，结束后自动重新检测。刷新页面时先取当前任务，接着显示进度。
+ * 有没有新版；没装的可以一键全局安装，装了的可以一键升级。执行前把要在这台电脑上跑的命令原样给人确认。
+ * 不同 CLI 可以同时进行（服务端最多同时跑 3 个，多的排队），同一个 CLI 有任务时它的按钮停用；
+ * 进度只显示最近一行，失败显示输出末几行、可展开完整输出、可以单独重试，结束后自动重新检测。
+ * 刷新页面时先取各 CLI 的当前任务，接着显示进度。
  */
 
 export type AgentClisApi = Pick<
@@ -72,9 +72,90 @@ const sourceLabel = (source: AgentCliSource) =>
 const errorMessage = (reason: unknown) =>
   reason instanceof Error ? reason.message : String(reason);
 
-/** 任务还没结束：在跑，或者成功了但还没重新探测到版本 */
+/** 任务还没结束：排队、在跑，或者成功了但还没重新探测到版本 */
 export const pending = (job: AgentCliJob) =>
-  job.state === "running" || (job.state === "succeeded" && job.versionAfter === undefined);
+  job.state === "queued" ||
+  job.state === "running" ||
+  (job.state === "succeeded" && job.versionAfter === undefined);
+
+/** 接口返回的各 CLI 任务（老服务端只有 job 一个） */
+export function jobsOf(result: { job: AgentCliJob | null; jobs?: AgentCliJob[] | undefined }) {
+  return result.jobs ?? (result.job ? [result.job] : []);
+}
+
+/**
+ * 合进页面已有的任务：服务端还没结束的接上进度；本页已经在跟的不覆盖（以本页轮询为准）；
+ * 已经结束的旧结果不再翻出来。
+ */
+export function adoptJobs(
+  current: Readonly<Record<string, AgentCliJob>>,
+  incoming: readonly AgentCliJob[],
+): Record<string, AgentCliJob> {
+  let next: Record<string, AgentCliJob> | undefined;
+  for (const job of incoming) {
+    if (!pending(job)) continue;
+    const mine = current[job.tool];
+    if (mine && (mine.id === job.id || pending(mine))) continue;
+    next ??= { ...current };
+    next[job.tool] = job;
+  }
+  return next ?? (current as Record<string, AgentCliJob>);
+}
+
+/**
+ * 按 JOB_POLL_MS 查所有没结束的任务；有任务结束时调 onSettled（重新检测）。
+ * 设置里的卡片和状态栏共用。
+ */
+export function useJobPolling(
+  jobs: Readonly<Record<string, AgentCliJob>>,
+  setJobs: (update: (current: Record<string, AgentCliJob>) => Record<string, AgentCliJob>) => void,
+  agentCliJob: ((id: string) => Promise<AgentCliJob>) | undefined,
+  onSettled: () => void,
+  onError: (reason: unknown) => void,
+  paused = false,
+) {
+  const ids = Object.values(jobs)
+    .filter(pending)
+    .map((job) => job.id)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!ids || !agentCliJob || paused) return;
+    let stopped = false;
+    const list = ids.split(",");
+    const timer = window.setInterval(() => {
+      void Promise.all(
+        list.map((id) =>
+          agentCliJob(id).then(
+            (next) => next,
+            (reason: unknown) => {
+              if (!stopped) onError(reason);
+              return undefined;
+            },
+          ),
+        ),
+      ).then((results) => {
+        if (stopped) return;
+        setJobs((current) => {
+          let next = current;
+          for (const job of results) {
+            if (!job) continue;
+            const mine = current[job.tool];
+            if (mine && mine.id !== job.id) continue;
+            next = next === current ? { ...current } : next;
+            next[job.tool] = job;
+          }
+          return next;
+        });
+        if (results.some((job) => job && !pending(job))) onSettled();
+      });
+    }, JOB_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [ids, agentCliJob, onSettled, onError, paused, setJobs]);
+}
 
 /**
  * 这个 CLI 的按钮做什么：没装是安装、装了是升级；offered 表示给不给按钮（有可执行的命令、Node 够新，
@@ -104,21 +185,20 @@ export function cliPlan(info: AgentCliInfo): {
 /** reinstall：装了但跑不起来时走升级流程，文案按「重新安装」说 */
 type Activity = { tool: string; name: string; action: AgentCliAction; reinstall?: boolean };
 
-/** 正在做的事，给列表上方的提示和其它卡片按钮的悬停提示用 */
-function activityText(activity: Activity, kind: "note" | "retry"): string {
-  const name = { 0: activity.name };
-  if (kind === "note") {
-    return activity.action === "install"
-      ? t("正在安装 {0}，完成后才能操作其它 CLI。", name)
-      : activity.reinstall
-        ? t("正在重新安装 {0}，完成后才能操作其它 CLI。", name)
-        : t("正在升级 {0}，完成后才能操作其它 CLI。", name);
+/** 列表上方的提示：正在做的是哪些 */
+function activityText(activities: readonly Activity[]): string {
+  if (activities.length > 1) {
+    return t("正在处理 {0}，可以同时操作其它 CLI。", {
+      0: activities.map((activity) => activity.name).join(t("、")),
+    });
   }
+  const activity = activities[0]!;
+  const name = { 0: activity.name };
   return activity.action === "install"
-    ? t("正在安装 {0}，完成后再试", name)
+    ? t("正在安装 {0}，可以同时操作其它 CLI。", name)
     : activity.reinstall
-      ? t("正在重新安装 {0}，完成后再试", name)
-      : t("正在升级 {0}，完成后再试", name);
+      ? t("正在重新安装 {0}，可以同时操作其它 CLI。", name)
+      : t("正在升级 {0}，可以同时操作其它 CLI。", name);
 }
 
 export function AgentClisGroup({
@@ -136,8 +216,8 @@ export function AgentClisGroup({
   focusKey?: number | undefined;
 }) {
   const [tools, setTools] = useState<AgentCliWithAgents[]>();
-  const [job, setJob] = useState<AgentCliJob | null>(null);
-  const [starting, setStarting] = useState<Activity>();
+  const [jobs, setJobs] = useState<Record<string, AgentCliJob>>({});
+  const [starting, setStarting] = useState<Record<string, Activity>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const { agentClis, agentCliCurrent, agentCliJob, runtimeCredentials } = api;
@@ -155,9 +235,9 @@ export function AgentClisGroup({
       );
   }, [runtimeCredentials]);
 
-  const adopt = useCallback((next: AgentCliJob | null) => {
+  const adopt = useCallback((incoming: AgentCliJob[]) => {
     // 打开页面时有任务在跑：接着显示进度；已经结束的旧结果不再翻出来
-    if (next && pending(next)) setJob((current) => current ?? next);
+    setJobs((current) => adoptJobs(current, incoming));
   }, []);
 
   const load = useCallback(
@@ -167,7 +247,7 @@ export function AgentClisGroup({
       try {
         const result = await agentClis(refresh);
         setTools(result.tools);
-        adopt(result.job);
+        adopt(jobsOf(result));
       } catch (reason) {
         setError(errorMessage(reason));
       } finally {
@@ -199,54 +279,50 @@ export function AgentClisGroup({
   }, [focusTool, hasTools, focusKey]);
 
   // 任务进行中：轮询进度；结束后重新检测一次（服务端已作废检测缓存）
-  const jobId = job && pending(job) ? job.id : undefined;
-  useEffect(() => {
-    if (!jobId) return;
-    let stopped = false;
-    const timer = window.setInterval(() => {
-      agentCliJob(jobId).then(
-        (next) => {
-          if (stopped) return;
-          setJob(next);
-          if (!pending(next)) void load(false);
-        },
-        (reason: unknown) => !stopped && setError(errorMessage(reason)),
-      );
-    }, JOB_POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, [jobId, agentCliJob, load]);
+  const reload = useCallback(() => void load(false), [load]);
+  const onPollError = useCallback((reason: unknown) => setError(errorMessage(reason)), []);
+  useJobPolling(jobs, setJobs, agentCliJob, reload, onPollError);
 
-  const running = job && job.state === "running" ? job : undefined;
-  const activity: Activity | undefined =
-    starting ??
-    (running
-      ? {
-          tool: running.tool,
-          name: tools?.find((tool) => tool.tool === running.tool)?.name ?? TOOL_NAMES[running.tool],
-          action: running.action,
-          // 升级前查不到版本就是重新安装（和进度行的判断一致）
-          reinstall: running.action === "upgrade" && running.versionBefore === null,
-        }
-      : undefined);
+  const activities: Activity[] = [];
+  for (const key of new Set([...Object.keys(starting), ...Object.keys(jobs)])) {
+    const job = jobs[key];
+    const activity =
+      starting[key] ??
+      (job && pending(job)
+        ? {
+            tool: job.tool,
+            // 检测结果还没回来时（刷新后先恢复了进行中的任务）用内置的名字
+            name: tools?.find((tool) => tool.tool === key)?.name ?? TOOL_NAMES[job.tool],
+            action: job.action,
+            // 升级前查不到版本就是重新安装（和进度行的判断一致）
+            reinstall: job.action === "upgrade" && job.versionBefore === null,
+          }
+        : undefined);
+    if (activity) activities.push(activity);
+  }
 
   const start = async (info: AgentCliWithAgents, action: AgentCliAction, command: string) => {
-    setStarting({
-      tool: info.tool,
-      name: info.name,
-      action,
-      reinstall: action === "upgrade" && info.status === "broken",
-    });
+    setStarting((current) => ({
+      ...current,
+      [info.tool]: {
+        tool: info.tool,
+        name: info.name,
+        action,
+        reinstall: action === "upgrade" && info.status === "broken",
+      },
+    }));
     try {
       const next =
         action === "install"
           ? await api.installAgentCli(info.tool, command)
           : await api.upgradeAgentCli(info.tool, command);
-      setJob(next);
+      setJobs((current) => ({ ...current, [next.tool]: next }));
     } finally {
-      setStarting(undefined);
+      setStarting((current) => {
+        const next = { ...current };
+        delete next[info.tool];
+        return next;
+      });
     }
   };
 
@@ -257,17 +333,21 @@ export function AgentClisGroup({
           <h4>{t("已安装的 Agent CLI")}</h4>
           <p>
             {t(
-              "检测这台电脑上装了哪些 Agent CLI、版本和安装位置（按登录终端的 PATH 查找）。安装和升级会在这台电脑上执行包管理器命令，执行前先给你确认，一次只跑一个。",
+              "检测这台电脑上装了哪些 Agent CLI、版本和安装位置（按登录终端的 PATH 查找）。安装和升级会在这台电脑上执行包管理器命令，执行前先给你确认，最多同时跑 3 个。",
             )}
           </p>
         </div>
-        <Button size="sm" disabled={loading || Boolean(activity)} onClick={() => void load(true)}>
+        <Button
+          size="sm"
+          disabled={loading || activities.length > 0}
+          onClick={() => void load(true)}
+        >
           {loading ? t("正在检测…") : t("重新检测")}
         </Button>
       </div>
-      {activity && (
+      {activities.length > 0 && (
         <p className="settings-note" role="status">
-          {activityText(activity, "note")}
+          {activityText(activities)}
         </p>
       )}
       {!tools && loading && <p className="settings-note">{t("正在检测…")}</p>}
@@ -276,8 +356,8 @@ export function AgentClisGroup({
           key={tool.tool}
           api={api}
           info={tool}
-          job={job?.tool === tool.tool ? job : undefined}
-          activity={activity}
+          job={jobs[tool.tool]}
+          mine={activities.some((activity) => activity.tool === tool.tool)}
           configurable={
             hasRuntimeConfig(tool.tool) &&
             (tool.status !== "notInstalled" || configured.has(tool.tool))
@@ -297,7 +377,7 @@ function AgentCliCard({
   api,
   info,
   job,
-  activity,
+  mine,
   configurable,
   focused,
   focusKey,
@@ -307,7 +387,8 @@ function AgentCliCard({
   api: AgentClisApi;
   info: AgentCliWithAgents;
   job: AgentCliJob | undefined;
-  activity: Activity | undefined;
+  /** 这个 CLI 正在安装 / 升级（含刚点了确认、还在核对命令） */
+  mine: boolean;
   configurable: boolean;
   /** 从接入 Agent 弹窗跳过来看这个 CLI：能配置就直接展开配置面板 */
   focused: boolean;
@@ -325,8 +406,6 @@ function AgentCliCard({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const primary = info.installations.find((install) => install.pathDefault);
   const { action, command, offered, reinstall } = cliPlan(info);
-  const mine = activity?.tool === info.tool;
-  const other = activity && !mine ? activity : undefined;
 
   const confirm = async () => {
     if (!command) return;
@@ -381,18 +460,16 @@ function AgentCliCard({
             </Button>
           )}
           {(offered || mine) && (
-            <Tooltip content={other ? activityText(other, "retry") : undefined}>
-              <Button
-                ref={buttonRef}
-                size="sm"
-                aria-expanded={confirming}
-                disabled={Boolean(activity) || submitting}
-                onClick={() => setConfirming(true)}
-              >
-                {mine && <span className="agent-cli-spinner" aria-hidden />}
-                {label}
-              </Button>
-            </Tooltip>
+            <Button
+              ref={buttonRef}
+              size="sm"
+              aria-expanded={confirming}
+              disabled={mine || submitting}
+              onClick={() => setConfirming(true)}
+            >
+              {mine && <span className="agent-cli-spinner" aria-hidden />}
+              {label}
+            </Button>
           )}
         </div>
       </div>
@@ -434,13 +511,20 @@ function AgentCliCard({
           })}
         </p>
       )}
-      {mine && !job && (
+      {mine && !(job && pending(job)) && (
         <div className="agent-cli-job" role="status">
           <span className="agent-cli-spinner" aria-hidden />
           <span>{t("正在核对命令…")}</span>
         </div>
       )}
-      {job && <JobStatus api={api} info={info} job={job} />}
+      {job && !(mine && !pending(job)) && (
+        <JobStatus
+          api={api}
+          info={info}
+          job={job}
+          {...(offered && command && !mine ? { onRetry: () => onStart(action, command) } : {})}
+        />
+      )}
       {confirming && command && (
         <ConfirmPopover
           ariaLabel={
@@ -580,18 +664,66 @@ function Installations({ installations }: { installations: AgentCliInstallation[
   );
 }
 
+/** 「重启这 N 个 Agent」：一个个重启，最后一句话说结果。单个 CLI 的结果和批量更新的卡片共用 */
+export function useRestartAgents(api: Pick<AgentClisApi, "act">) {
+  const [restarting, setRestarting] = useState(false);
+  const [result, setResult] = useState<string>();
+  const restart = async (agents: readonly { id: string; name: string }[]) => {
+    setRestarting(true);
+    setResult(undefined);
+    const failed: string[] = [];
+    for (const agent of agents) {
+      try {
+        await api.act(agent.id, "restart");
+      } catch {
+        failed.push(agent.name);
+      }
+    }
+    setRestarting(false);
+    setResult(
+      failed.length
+        ? t("这些 Agent 没能重启：{0}", { 0: failed.join(t("、")) })
+        : t("已重启 {0} 个 Agent", { 0: agents.length }),
+    );
+  };
+  return { restarting, result, restart };
+}
+
+/** 失败时的完整输出：默认收起，点开在框里滚动看 */
+export function JobOutput({ job }: { job: AgentCliJob }) {
+  if (!job.output) return job.error ? <pre className="agent-cli-output">{job.error}</pre> : null;
+  return (
+    <details className="agent-cli-full-output">
+      <summary>{t("查看完整输出")}</summary>
+      <pre className="agent-cli-output">{job.output}</pre>
+    </details>
+  );
+}
+
 export function JobStatus({
   api,
   info,
   job,
+  onRetry,
 }: {
   api: Pick<AgentClisApi, "act">;
   info: AgentCliWithAgents;
   job: AgentCliJob;
+  /** 失败后单独再试一次（同一条已确认过的命令）；不给就不显示按钮 */
+  onRetry?: () => Promise<void>;
 }) {
-  const [restarting, setRestarting] = useState(false);
-  const [restartResult, setRestartResult] = useState<string>();
+  const { restarting, result: restartResult, restart } = useRestartAgents(api);
+  const [retryError, setRetryError] = useState<string>();
   const live = info.agents.filter((agent) => agent.status !== "stopped");
+
+  if (job.state === "queued") {
+    return (
+      <div className="agent-cli-job" role="status">
+        <span className="agent-cli-queued" aria-hidden />
+        <span>{t("排队中，等别的 CLI 升完…")}</span>
+      </div>
+    );
+  }
 
   if (pending(job)) {
     return (
@@ -618,30 +750,24 @@ export function JobStatus({
             ? t("安装失败：{0}", { 0: job.reason ?? "" })
             : t("升级失败：{0}", { 0: job.reason ?? "" })}
         </p>
-        {job.error && <pre className="agent-cli-output">{job.error}</pre>}
+        {job.output && job.error && <pre className="agent-cli-output">{job.error}</pre>}
+        <JobOutput job={job} />
+        {onRetry && (
+          <Button
+            size="sm"
+            className="agent-cli-retry"
+            onClick={() => {
+              setRetryError(undefined);
+              onRetry().catch((reason: unknown) => setRetryError(errorMessage(reason)));
+            }}
+          >
+            {t("再试一次")}
+          </Button>
+        )}
+        {retryError && <p className="settings-note error">{retryError}</p>}
       </div>
     );
   }
-
-  const restart = async () => {
-    setRestarting(true);
-    setRestartResult(undefined);
-    const failed: string[] = [];
-    for (const agent of live) {
-      try {
-        await api.act(agent.id, "restart");
-      } catch {
-        failed.push(agent.name);
-      }
-    }
-    setRestarting(false);
-    setRestartResult(
-      failed.length
-        ? t("这些 Agent 没能重启：{0}", { 0: failed.join(t("、")) })
-        : t("已重启 {0} 个 Agent", { 0: live.length }),
-    );
-  };
-
   if (job.action === "install") {
     return (
       <div className="agent-cli-job done" role="status">
@@ -679,7 +805,7 @@ export function JobStatus({
           size="sm"
           className="agent-cli-restart"
           disabled={restarting}
-          onClick={() => void restart()}
+          onClick={() => void restart(live)}
         >
           {restarting ? t("正在重启…") : t("重启这 {0} 个 Agent", { 0: live.length })}
         </Button>

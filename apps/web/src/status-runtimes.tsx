@@ -2,10 +2,19 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 import type { AgentCliJob } from "@superhive/protocol";
 import { t } from "./i18n";
 import type { AgentCliWithAgents, LocalAgentsState } from "./local-agents";
-import { CommandSteps, JOB_POLL_MS, JobStatus, TOOL_NAMES, cliPlan, pending } from "./agent-clis";
+import {
+  CommandSteps,
+  JobStatus,
+  TOOL_NAMES,
+  adoptJobs,
+  cliPlan,
+  jobsOf,
+  pending,
+  useJobPolling,
+} from "./agent-clis";
+import { copyTextToClipboard } from "./clipboard";
 import { Button } from "./button";
 import { Icon } from "./app-icons";
-import { Tooltip } from "./tooltip";
 import "./styles/status-runtimes.css";
 
 /**
@@ -27,15 +36,43 @@ export function upgradableClis(tools: readonly AgentCliWithAgents[] | undefined)
   return (tools ?? []).filter((tool) => tool.status !== "notInstalled" && tool.updateAvailable);
 }
 
+/** 有新版、能一键升级的：「全部升级」跑这些 */
+export function batchClis(tools: readonly AgentCliWithAgents[] | undefined) {
+  return upgradableClis(tools).filter((tool) => {
+    const plan = cliPlan(tool);
+    return plan.action === "upgrade" && plan.offered && Boolean(plan.command);
+  });
+}
+
+/** 有新版、但只能手动升级的（认不出来源、Windows、新版要更新的 Node 等） */
+export function manualClis(tools: readonly AgentCliWithAgents[] | undefined) {
+  const batch = new Set(batchClis(tools).map((tool) => tool.tool));
+  return upgradableClis(tools).filter((tool) => !batch.has(tool.tool));
+}
+
 export type StatusAgentClis = {
   tools: AgentCliWithAgents[] | undefined;
-  job: AgentCliJob | null;
-  /** 刚点了确认、还在等服务端核对命令的那个 CLI */
-  starting: string | undefined;
+  /** 每个 CLI 最近一个任务（本页发起的，或打开页面时服务端还没结束的） */
+  jobs: Readonly<Record<string, AgentCliJob>>;
+  /** 刚点了确认、还在等服务端核对命令的 CLI */
+  starting: readonly string[];
+  /** 批量升级时没能开始的（命令变了、已是最新等），按 CLI 记原因 */
+  startErrors: Readonly<Record<string, string>>;
   error: string | undefined;
+  /** 成功取到检测结果的次数：提醒卡片等「延迟后这一次」的结果 */
+  loads: number;
   reload: () => void;
   upgrade: (info: AgentCliWithAgents, command: string) => Promise<void>;
+  /** 同时开始几个升级（服务端最多同时跑 3 个，多的排队）；没能开始的记进 startErrors，不抛 */
+  upgradeMany: (infos: readonly AgentCliWithAgents[]) => Promise<void>;
 };
+
+/** 正在装或升级的 CLI（含还在核对命令的） */
+export function busyClis(state: Pick<StatusAgentClis, "jobs" | "starting">): string[] {
+  const busy = new Set(state.starting);
+  for (const job of Object.values(state.jobs)) if (pending(job)) busy.add(job.tool);
+  return [...busy];
+}
 
 /** paused：设置弹窗开着时不取（设置页自己在取、在跑），关上后重新取一次接上 */
 export function useStatusAgentClis(
@@ -43,9 +80,11 @@ export function useStatusAgentClis(
   paused: boolean,
 ): StatusAgentClis {
   const [tools, setTools] = useState<AgentCliWithAgents[]>();
-  const [job, setJob] = useState<AgentCliJob | null>(null);
-  const [starting, setStarting] = useState<string>();
+  const [jobs, setJobs] = useState<Record<string, AgentCliJob>>({});
+  const [starting, setStarting] = useState<string[]>([]);
+  const [startErrors, setStartErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string>();
+  const [loads, setLoads] = useState(0);
   const agentClis = api?.agentClis;
   const agentCliJob = api?.agentCliJob;
   const upgradeAgentCli = api?.upgradeAgentCli;
@@ -64,10 +103,9 @@ export function useStatusAgentClis(
         if (!alive.current) return;
         setTools(result.tools);
         setError(undefined);
+        setLoads((count) => count + 1);
         // 打开页面时有任务在跑：接着显示进度；已经结束的旧结果不再翻出来
-        const next = result.job;
-        if (next && pending(next))
-          setJob((current) => (current && pending(current) ? current : next));
+        setJobs((current) => adoptJobs(current, jobsOf(result)));
       },
       (reason: unknown) => alive.current && setError(errorMessage(reason)),
     );
@@ -77,62 +115,74 @@ export function useStatusAgentClis(
     if (!paused) load();
   }, [paused, load]);
 
-  // 任务进行中：查进度；结束后重新检测一次（服务端已作废检测缓存）
-  const jobId = job && pending(job) ? job.id : undefined;
-  useEffect(() => {
-    if (!jobId || !agentCliJob || paused) return;
-    let stopped = false;
-    const timer = window.setInterval(() => {
-      agentCliJob(jobId).then(
-        (next) => {
-          if (stopped) return;
-          setJob(next);
-          if (!pending(next)) load();
-        },
-        (reason: unknown) => !stopped && setError(errorMessage(reason)),
-      );
-    }, JOB_POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, [jobId, agentCliJob, load, paused]);
+  // 任务进行中：查进度；有任务结束就重新检测一次（服务端已作废检测缓存）
+  const onPollError = useCallback(
+    (reason: unknown) => alive.current && setError(errorMessage(reason)),
+    [],
+  );
+  useJobPolling(jobs, setJobs, agentCliJob, load, onPollError, paused);
 
   const upgrade = useCallback(
     async (info: AgentCliWithAgents, command: string) => {
       if (!upgradeAgentCli) return;
-      setStarting(info.tool);
+      setStarting((current) => [...current, info.tool]);
+      setStartErrors((current) => {
+        const next = { ...current };
+        delete next[info.tool];
+        return next;
+      });
       try {
         const next = await upgradeAgentCli(info.tool, command);
-        if (alive.current) setJob(next);
+        if (alive.current) setJobs((current) => ({ ...current, [next.tool]: next }));
       } finally {
-        if (alive.current) setStarting(undefined);
+        if (alive.current) setStarting((current) => current.filter((tool) => tool !== info.tool));
       }
     },
     [upgradeAgentCli],
   );
 
-  return { tools, job, starting, error, reload: load, upgrade };
+  const upgradeMany = useCallback(
+    async (infos: readonly AgentCliWithAgents[]) => {
+      await Promise.all(
+        infos.map(async (info) => {
+          const { command } = cliPlan(info);
+          if (!command) return;
+          try {
+            await upgrade(info, command);
+          } catch (reason) {
+            if (alive.current) {
+              setStartErrors((current) => ({ ...current, [info.tool]: errorMessage(reason) }));
+            }
+          }
+        }),
+      );
+    },
+    [upgrade],
+  );
+
+  return { tools, jobs, starting, startErrors, error, loads, reload: load, upgrade, upgradeMany };
 }
 
 /** 状态栏按钮上显示什么 */
-export function statusAgentClisLabel(state: Pick<StatusAgentClis, "tools" | "job" | "starting">): {
+export function statusAgentClisLabel(state: Pick<StatusAgentClis, "tools" | "jobs" | "starting">): {
   label: string;
   tooltip: string;
   tone: "update" | "busy" | undefined;
 } {
   const installed = (state.tools ?? []).filter((tool) => tool.status !== "notInstalled");
-  const running = state.job && pending(state.job) ? state.job : undefined;
-  const busyTool = running?.tool ?? state.starting;
-  if (busyTool) {
+  const busy = busyClis(state);
+  if (busy.length) {
+    const job = state.jobs[busy[0]!];
     const name =
-      state.tools?.find((tool) => tool.tool === busyTool)?.name ??
-      TOOL_NAMES[busyTool as keyof typeof TOOL_NAMES] ??
-      busyTool;
+      state.tools?.find((tool) => tool.tool === busy[0])?.name ??
+      TOOL_NAMES[busy[0] as keyof typeof TOOL_NAMES] ??
+      busy[0];
     const label =
-      running?.action === "install"
-        ? t("正在安装 {0}…", { 0: name })
-        : t("正在升级 {0}…", { 0: name });
+      busy.length > 1
+        ? t("正在升级 {0} 个 CLI…", { 0: busy.length })
+        : job && pending(job) && job.action === "install"
+          ? t("正在安装 {0}…", { 0: name })
+          : t("正在升级 {0}…", { 0: name });
     return { label, tooltip: t("Agent 运行时：{0}", { 0: label }), tone: "busy" };
   }
   const upgradable = upgradableClis(state.tools);
@@ -160,18 +210,18 @@ export function StatusAgentClisPopover({
   api: StatusAgentClisApi;
   openSettings: () => void;
 }) {
-  const { tools, job, starting, error, reload } = state;
+  const { tools, jobs, starting, startErrors, error, reload } = state;
   // 弹层打开时取一次（服务端有缓存，不会每次都重新检测）
   useEffect(() => {
     reload();
   }, [reload]);
   const [confirming, setConfirming] = useState<string>();
+  const [batchOpen, setBatchOpen] = useState(false);
   const installed = (tools ?? []).filter((tool) => tool.status !== "notInstalled");
   const missing = (tools ?? []).filter((tool) => tool.status === "notInstalled");
-  const busyTool = (job && pending(job) ? job.tool : undefined) ?? starting;
-  const busyName = busyTool
-    ? (tools?.find((tool) => tool.tool === busyTool)?.name ?? busyTool)
-    : undefined;
+  const busy = busyClis(state);
+  // 还没在跑的、能一键升级的：两个以上才给「全部升级」
+  const startable = batchClis(tools).filter((tool) => !busy.includes(tool.tool));
   // 有新版的排前面
   const sorted = [...installed].sort(
     (a, b) => Number(b.updateAvailable) - Number(a.updateAvailable),
@@ -181,6 +231,30 @@ export function StatusAgentClisPopover({
     <>
       <section className="status-popover-section status-runtimes">
         {!tools && !error && <p className="status-popover-note">{t("正在检测…")}</p>}
+        {startable.length > 1 && !batchOpen && (
+          <div className="status-runtimes-batch">
+            <span>{t("{0} 个可以一键升级", { 0: startable.length })}</span>
+            <Button
+              size="sm"
+              onClick={() => {
+                setConfirming(undefined);
+                setBatchOpen(true);
+              }}
+            >
+              {t("全部升级")}
+            </Button>
+          </div>
+        )}
+        {batchOpen && (
+          <BatchConfirm
+            items={startable}
+            onCancel={() => setBatchOpen(false)}
+            onConfirm={() => {
+              setBatchOpen(false);
+              void state.upgradeMany(startable);
+            }}
+          />
+        )}
         {tools && !installed.length && (
           <p className="status-popover-note">{t("这台电脑还没装 Agent CLI。")}</p>
         )}
@@ -191,11 +265,14 @@ export function StatusAgentClisPopover({
                 key={info.tool}
                 info={info}
                 api={api}
-                job={job?.tool === info.tool ? job : undefined}
-                starting={starting === info.tool}
-                busyName={busyTool && busyTool !== info.tool ? busyName : undefined}
+                job={jobs[info.tool]}
+                starting={starting.includes(info.tool)}
+                startError={startErrors[info.tool]}
                 confirming={confirming === info.tool}
-                setConfirming={(open) => setConfirming(open ? info.tool : undefined)}
+                setConfirming={(open) => {
+                  setBatchOpen(false);
+                  setConfirming(open ? info.tool : undefined);
+                }}
                 upgrade={(command) => state.upgrade(info, command)}
               />
             ))}
@@ -225,7 +302,7 @@ function CliRow({
   api,
   job,
   starting,
-  busyName,
+  startError,
   confirming,
   setConfirming,
   upgrade,
@@ -234,8 +311,8 @@ function CliRow({
   api: StatusAgentClisApi;
   job: AgentCliJob | undefined;
   starting: boolean;
-  /** 别的 CLI 正在装或升级：这一行的按钮停用 */
-  busyName: string | undefined;
+  /** 「全部升级」时这一项没能开始的原因 */
+  startError: string | undefined;
   confirming: boolean;
   setConfirming: (open: boolean) => void;
   upgrade: (command: string) => Promise<void>;
@@ -312,20 +389,18 @@ function CliRow({
       <div className="status-runtimes-head">
         <span className="status-runtimes-name">{info.name}</span>
         <span className="status-runtimes-version">{version}</span>
-        {!mine && canUpgrade && !confirming && (
-          <Tooltip content={busyName ? t("正在升级 {0}，完成后再试", { 0: busyName }) : undefined}>
-            <Button
-              ref={buttonRef}
-              size="sm"
-              disabled={Boolean(busyName) || submitting}
-              aria-label={
-                reinstall ? t("重新安装 {0}", { 0: info.name }) : t("升级 {0}", { 0: info.name })
-              }
-              onClick={() => setConfirming(true)}
-            >
-              {reinstall ? t("重新安装") : t("升级")}
-            </Button>
-          </Tooltip>
+        {!mine && canUpgrade && !confirming && job?.state !== "failed" && (
+          <Button
+            ref={buttonRef}
+            size="sm"
+            disabled={submitting}
+            aria-label={
+              reinstall ? t("重新安装 {0}", { 0: info.name }) : t("升级 {0}", { 0: info.name })
+            }
+            onClick={() => setConfirming(true)}
+          >
+            {reinstall ? t("重新安装") : t("升级")}
+          </Button>
         )}
       </div>
       {info.nodeGap && (
@@ -337,7 +412,10 @@ function CliRow({
         </p>
       )}
       {info.updateAvailable && info.plan?.kind === "manual" && (
-        <p className="status-popover-note">{info.plan.reason}</p>
+        <>
+          <p className="status-popover-note">{info.plan.reason}</p>
+          {info.plan.command && <CopyCommand command={info.plan.command} />}
+        </>
       )}
       {confirming && command && (
         <div
@@ -372,17 +450,112 @@ function CliRow({
           </div>
         </div>
       )}
-      {starting && !job && (
+      {starting && !(job && pending(job)) && (
         <div className="agent-cli-job" role="status">
           <span>{t("正在核对命令…")}</span>
         </div>
       )}
-      {job && <JobStatus api={api} info={info} job={job} />}
-      {error && (
+      {job && !(starting && !pending(job)) && (
+        <JobStatus
+          api={api}
+          info={info}
+          job={job}
+          // 失败了单独再试：同一条已经确认过的命令（服务端会重新核对，变了就不执行）
+          {...(canUpgrade && command && !starting ? { onRetry: () => upgrade(command) } : {})}
+        />
+      )}
+      {(error ?? startError) && (
         <p className="status-popover-note error" role="alert">
-          {error}
+          {error ?? startError}
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * 「全部升级」的确认：一行一个 CLI 和要跑的命令，太多时框里滚动；Esc 只收起确认。
+ * 状态栏弹层和右下角提醒卡片共用。
+ */
+export function BatchConfirm({
+  items,
+  onCancel,
+  onConfirm,
+}: {
+  items: readonly AgentCliWithAgents[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    confirmRef.current?.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div
+      className="cli-batch-confirm"
+      role="group"
+      aria-label={t("确认升级 {0} 个 CLI", { 0: items.length })}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
+      <span>{t("将在这台电脑上运行：")}</span>
+      <ul className="cli-batch-commands">
+        {items.map((info) => (
+          <li key={info.tool}>
+            <span>{info.name}</span>
+            <code className="agent-cli-command" title={cliPlan(info).command}>
+              {cliPlan(info).command}
+            </code>
+          </li>
+        ))}
+      </ul>
+      <span className="cli-batch-hint">
+        {t("最多同时跑 3 个；正在用这些 CLI 的 Agent 不会自动重启，升完再重启。")}
+      </span>
+      <div className="status-runtimes-actions">
+        <Button size="sm" onClick={onCancel}>
+          {t("取消")}
+        </Button>
+        <Button ref={confirmRef} size="sm" variant="primary" onClick={onConfirm}>
+          {t("升级 {0} 个", { 0: items.length })}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** 只能手动升级时建议的命令：等宽显示，旁边「复制」，复制后短暂显示「已复制」 */
+export function CopyCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <div className="cli-copy-command">
+      <code className="agent-cli-command">{command}</code>
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t("复制命令")}
+        onClick={() =>
+          void copyTextToClipboard(command).then(
+            () => {
+              setFailed(false);
+              setCopied(true);
+            },
+            () => setFailed(true),
+          )
+        }
+      >
+        {copied ? t("已复制") : failed ? t("复制失败") : t("复制")}
+      </Button>
+    </div>
   );
 }

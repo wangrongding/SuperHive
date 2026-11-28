@@ -316,6 +316,54 @@ describe("planUpdate", () => {
     ).toMatchObject({ kind: "manual", reasonText: { key: "agentCli.manual.windows" } });
   });
 
+  it("suggests a copyable command for manual-only updates, but only when it knows one", () => {
+    const cask = install(
+      "codex",
+      "/opt/homebrew/bin/codex",
+      "/opt/homebrew/Caskroom/codex/0.1/codex",
+    );
+    expect(planUpdate("codex", cask, mac())).toMatchObject({
+      kind: "manual",
+      command: "brew upgrade --cask codex",
+    });
+    const nvm = "/Users/a/.nvm/versions/node/v22.1.0/bin";
+    expect(
+      planUpdate(
+        "gemini",
+        install("gemini", `${nvm}/gemini`, `${nvm}/../lib/node_modules/@google/gemini-cli/x.js`),
+        mac(),
+      ),
+    ).toMatchObject({ kind: "manual", command: "npm i -g @google/gemini-cli@latest" });
+    // 认不出来源：只给它自带的升级命令（锚定到这一处），没有就不给
+    expect(planUpdate("codex", install("codex", "/Users/a/bin/codex"), mac())).toMatchObject({
+      kind: "manual",
+      command: "'/Users/a/bin/codex' update",
+    });
+    expect(
+      planUpdate("copilot", install("copilot", "/Users/a/bin/copilot"), mac()),
+    ).not.toHaveProperty("command");
+    expect(
+      planUpdate(
+        "claude",
+        { path: "/a\n/claude", realPath: "/a/claude", source: "unknown" },
+        mac(),
+      ),
+    ).not.toHaveProperty("command");
+    expect(
+      planUpdate("copilot", install("copilot", "C:/npm/copilot.cmd"), {
+        ...mac(),
+        platform: "win32",
+      }),
+    ).toMatchObject({ kind: "manual", command: "npm i -g @github/copilot@latest" });
+    expect(
+      planUpdate(
+        "omp",
+        install("omp", "/nix/store/abc-omp/bin/omp", "/nix/store/abc-omp/bin/omp"),
+        mac(),
+      ),
+    ).not.toHaveProperty("command");
+  });
+
   it("quotes paths so they can't inject shell syntax", () => {
     const evil = "/Users/a/x'; touch /tmp/pwned; echo '/.local/bin/claude";
     const plan = planUpdate(
@@ -451,6 +499,8 @@ function manager(options: {
   engines?: Record<string, string>;
   spawn?: SpawnUpgrade;
   upgradeTimeoutMs?: number;
+  stallMs?: number;
+  maxConcurrent?: number;
 }) {
   const fetchJson = vi.fn(async (url: string) => {
     const tags = /\/-\/package\/(.+)\/dist-tags$/.exec(url);
@@ -475,6 +525,8 @@ function manager(options: {
       fetchJson,
       spawnUpgrade,
       ...(options.upgradeTimeoutMs ? { upgradeTimeoutMs: options.upgradeTimeoutMs } : {}),
+      ...(options.stallMs ? { stallMs: options.stallMs } : {}),
+      ...(options.maxConcurrent ? { maxConcurrent: options.maxConcurrent } : {}),
     }),
   };
 }
@@ -639,12 +691,22 @@ describe("AgentCliManager without an npm package (agy)", () => {
 });
 
 describe("AgentCliManager upgrade", () => {
-  async function setup(options: { upgradeTimeoutMs?: number } = {}) {
+  async function setup(
+    options: { upgradeTimeoutMs?: number; stallMs?: number; maxConcurrent?: number } = {},
+  ) {
     const { bin, script } = sandbox();
     const nvm = bin(".nvm/versions/node/v22.1.0/bin");
     const pkg = bin(".nvm/versions/node/v22.1.0/lib/node_modules/@openai/codex/bin");
     const real = script(pkg, "codex.js", 'echo "codex-cli 0.160.0"');
     symlinkSync(real, path.join(nvm, "codex"));
+    // 再装两个 npm 包：并发、排队用
+    for (const [name, pkgName, version] of [
+      ["gemini", "@google/gemini-cli", "0.70.0"],
+      ["copilot", "@github/copilot", "1.0.1"],
+    ] as const) {
+      const dir = bin(`.nvm/versions/node/v22.1.0/lib/node_modules/${pkgName}/bin`);
+      symlinkSync(script(dir, `${name}.js`, `echo "${version}"`), path.join(nvm, name));
+    }
     script(nvm, "npm", "exit 0");
     const children: FakeUpgrade[] = [];
     const spawn = vi.fn<SpawnUpgrade>(() => {
@@ -654,14 +716,20 @@ describe("AgentCliManager upgrade", () => {
     });
     const made = manager({
       loginPath: nvm,
-      latest: { "@openai/codex": "0.170.0" },
+      latest: {
+        "@openai/codex": "0.170.0",
+        "@google/gemini-cli": "0.71.0",
+        "@github/copilot": "1.1.0",
+      },
       spawn,
       ...options,
     });
-    const codex = (await made.clis.list()).find((item) => item.tool === "codex")!;
-    const command = (codex.plan as { command: string }).command;
+    const list = await made.clis.list();
+    const planOf = (tool: string) =>
+      (list.find((item) => item.tool === tool)!.plan as { command: string }).command;
+    const command = planOf("codex");
     const bump = () => script(pkg, "codex.js", 'echo "codex-cli 0.170.0"');
-    return { ...made, spawn, children, command, bump, nvm };
+    return { ...made, spawn, children, command, bump, nvm, planOf };
   }
 
   it("runs only the confirmed command, one at a time, with throttled single-line progress", async () => {
@@ -680,9 +748,11 @@ describe("AgentCliManager upgrade", () => {
       command,
       expect.objectContaining({ PATH: `${nvm}:/usr/bin:/bin` }),
     );
-    // 全局一次一个
+    // 同一个 CLI 同时只有一个任务；别的 CLI 不受影响（这里 claude 没装，按「不能升级」拒绝）
     await expect(clis.upgrade("codex", command)).rejects.toMatchObject({ code: "AGENT_CLI_BUSY" });
-    await expect(clis.upgrade("claude", "x")).rejects.toMatchObject({ code: "AGENT_CLI_BUSY" });
+    await expect(clis.upgrade("claude", "x")).rejects.toMatchObject({
+      code: "AGENT_CLI_NOT_UPGRADABLE",
+    });
 
     const child = children[0]!;
     child.write("npm http fetch GET 200 https://registry.npmjs.org/@openai%2fcodex 12ms\n");
@@ -752,6 +822,62 @@ describe("AgentCliManager upgrade", () => {
     await vi.waitFor(() => expect(clis.job(job.id)?.state).toBe("failed"));
     expect(children[0]!.killed).toBe(true);
     expect(clis.job(job.id)!.reasonText).toMatchObject({ key: "error.agentCli.timeout" });
+  });
+
+  it("runs different CLIs at the same time, queues past the limit and starts the next when one ends", async () => {
+    const { clis, children, command, planOf } = await setup({ maxConcurrent: 2 });
+    const codex = await clis.upgrade("codex", command);
+    const gemini = await clis.upgrade("gemini", planOf("gemini"));
+    const copilot = await clis.upgrade("copilot", planOf("copilot"));
+    expect([codex.state, gemini.state, copilot.state]).toEqual(["running", "running", "queued"]);
+    expect(children).toHaveLength(2);
+    // 排队中的也算没结束：同一个 CLI 不能再排一次
+    await expect(clis.upgrade("copilot", planOf("copilot"))).rejects.toMatchObject({
+      code: "AGENT_CLI_BUSY",
+    });
+    expect(clis.jobsByTool().map((job) => [job.tool, job.state])).toEqual([
+      ["codex", "running"],
+      ["gemini", "running"],
+      ["copilot", "queued"],
+    ]);
+    // 一个失败了腾出名额，排队的接着跑
+    children[0]!.exit(1);
+    expect(clis.job(codex.id)?.state).toBe("failed");
+    expect(clis.job(copilot.id)?.state).toBe("running");
+    expect(children).toHaveLength(3);
+    expect(children[2]).toBeDefined();
+    // 失败的单独重试，不影响别的
+    await expect(clis.upgrade("codex", command)).resolves.toMatchObject({ state: "queued" });
+    children[1]!.exit(1);
+    await vi.waitFor(() => expect(children).toHaveLength(4));
+    expect(clis.jobsByTool().find((job) => job.tool === "codex")).toMatchObject({
+      state: "running",
+    });
+  });
+
+  it("stops a command that prints nothing for the stall window, and keeps the full output", async () => {
+    const { clis, children, command } = await setup({ stallMs: 80 });
+    const job = await clis.upgrade("codex", command);
+    const child = children[0]!;
+    // 一直有输出就不算卡住
+    for (let i = 0; i < 4; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      child.write(`line ${i}\n`);
+    }
+    expect(clis.job(job.id)?.state).toBe("running");
+    child.write(Array.from({ length: 12 }, (_, i) => `more ${i}`).join("\n") + "\n");
+    await vi.waitFor(() => expect(clis.job(job.id)?.state).toBe("failed"));
+    expect(child.killed).toBe(true);
+    const failed = clis.job(job.id)!;
+    expect(failed.reasonText).toMatchObject({
+      key: "error.agentCli.stalled",
+      params: { minutes: 1 },
+    });
+    expect(failed.error!.split("\n")).toHaveLength(8);
+    expect(failed.output!.split("\n")).toHaveLength(16);
+    expect(failed.output).toMatch(/^line 0\n/);
+    // 停掉后可以重试
+    await expect(clis.upgrade("codex", command)).resolves.toMatchObject({ state: "running" });
   });
 });
 
@@ -1250,7 +1376,7 @@ describe("AgentCliManager install", () => {
         (
           await app.inject({ method: "GET", url: "/api/local/agent-clis/current", headers: owner })
         ).json(),
-      ).toEqual({ job: null });
+      ).toEqual({ job: null, jobs: [] });
       const started = await app.inject({
         method: "POST",
         url: "/api/local/agent-clis/codex/install",
