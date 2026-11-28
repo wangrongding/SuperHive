@@ -9,6 +9,7 @@ import {
   type Snapshot,
 } from "./room-client.js";
 import type { ChatMessage, RoomSummary, ServerEvent } from "./hive-protocol.js";
+import { isServerUnavailable } from "./bridge.js";
 
 function waitFor<T>(
   register: (resolve: (value: T) => void) => void,
@@ -68,6 +69,43 @@ describe("RoomClient", () => {
     expect(await client.fetchMessageAt(message.seq, message.id)).toBeUndefined();
     await expect(client.fetchMessageAt(message.seq, message.id)).rejects.toThrow("403");
   });
+
+  it.each([
+    ["fetchMessages", (room: RoomClient) => room.fetchMessages(0)],
+    ["fetchWhiteboard", (room: RoomClient) => room.fetchWhiteboard()],
+    ["fetchParticipants", (room: RoomClient) => room.fetchParticipants()],
+  ] as const)(
+    "gives up on %s when the server accepts the request but never answers",
+    async (_name, read) => {
+      // Server 在、但卡住不回（机器负载很高时就这样）：按时限放弃并报超时，Bridge 当成连不上、等它恢复，
+      // 而不是一直挂到 Node 默认的 5 分钟
+      const fetchMock = vi.fn(
+        (_url: unknown, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      client = new RoomClient(
+        {
+          serverUrl: "http://hive.test:8787",
+          roomId: "general",
+          username: "test-agent",
+          token: "test-token",
+          requestTimeoutMs: 30,
+        },
+        { onSnapshot: () => undefined, onMention: () => undefined, onError: () => undefined },
+      );
+      const failure = await read(client).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toMatchObject({ name: "TimeoutError" });
+      expect(isServerUnavailable(failure)).toBe(true);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+    1_000,
+  );
 
   it("reports a failed snapshot catch-up instead of crashing, then reconnects for a fresh snapshot", async () => {
     server = new WebSocketServer({ host: "127.0.0.1", port: 0 });

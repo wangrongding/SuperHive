@@ -1657,7 +1657,12 @@ export class AgentBridge {
     let flushPendingTrace: () => void = () => undefined;
     let stopWatchingRuntime: () => void = () => undefined;
     try {
-      const context = await this.room.fetchMessages(this.state.lastProcessedSeq);
+      // 还没开工：Server 连不上或卡住不回（读请求到时限放弃）时等它回来，不当成一次失败去累计重试次数
+      const context = await this.whenOnline(
+        "拉取这一轮的上下文",
+        () => this.room.fetchMessages(this.state.lastProcessedSeq),
+        () => !active.controller.signal.aborted,
+      );
       // 先落盘执行意图，再调用 Provider：崩溃后据此判定"结果未知"而不是重跑
       this.state.inflight = {
         executionId,

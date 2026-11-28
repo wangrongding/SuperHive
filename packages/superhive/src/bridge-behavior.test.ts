@@ -74,10 +74,12 @@ class FakeRoom {
   participantCalls = 0;
   /** 模拟 Server 重启：接下来这么多次补拉/发送都连不上 */
   offlineCalls = 0;
+  /** 连不上时抛什么；默认是连接断开，也可以换成 Server 在但答不上来时的超时 */
+  offlineError = () => new Error("聊天室连接已断开，稍后将自动重试。");
   private offline(): void {
     if (this.offlineCalls > 0) {
       this.offlineCalls -= 1;
-      throw new Error("聊天室连接已断开，稍后将自动重试。");
+      throw this.offlineError();
     }
   }
 
@@ -1370,6 +1372,43 @@ describe("AgentBridge", () => {
     // 没有把整轮当失败重跑
     expect(responder.calls).toHaveLength(1);
     expect(room.statuses(mention.id)).not.toContain("failed");
+  });
+
+  /** RoomClient 读请求到时限放弃时抛的错误（AbortSignal.timeout） */
+  const requestTimeout = () =>
+    new DOMException("The operation was aborted due to timeout", "TimeoutError");
+
+  it("waits for a Server that is too slow to answer the catch-up after the reply", async () => {
+    await startBridge(baseState());
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    // 模型已经给出结果，这时机器很忙、Server 在但答不上来：补拉回复前后的消息超时两次后恢复
+    room.offlineError = requestTimeout;
+    room.offlineCalls = 2;
+    responder.finish("忙的时候做完的");
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    expect(room.sent).toEqual([expect.objectContaining({ content: "忙的时候做完的" })]);
+    expect(responder.calls).toHaveLength(1);
+    expect(room.statuses(mention.id)).not.toContain("failed");
+  });
+
+  it("waits for a Server that is too slow to answer when a turn starts instead of counting failed attempts", async () => {
+    // 开工前拉这一轮的上下文就超时：还什么都没做，等 Server 回来再开工；
+    // 不然负载高时每次 10 秒超时、三次就判失败，比不设时限一直等还糟
+    await startBridge(baseState());
+    room.offlineError = requestTimeout;
+    room.offlineCalls = 2;
+    const mention = chat();
+    room.messages.push(mention);
+    room.handlers.onMention(mention, mention.seq, false);
+    await waitUntil(() => responder.calls.length === 1);
+    responder.finish("好了");
+    await waitUntil(() => room.statuses(mention.id).includes("completed"));
+    expect(room.reports.map((report) => report.progress ?? "").join("\n")).not.toMatch(/尝试失败/);
+    expect(room.statuses(mention.id)).not.toContain("failed");
+    expect(room.sent).toHaveLength(1);
   });
 
   it("strips the attachment directive from the reply and reports files it could not publish", async () => {

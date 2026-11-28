@@ -12,6 +12,13 @@ import type {
 import WebSocket from "ws";
 import { runningCodeVersion, type AgentCodeVersion } from "./code-version.js";
 
+/**
+ * 读房间数据（消息、白板、成员）的 HTTP 请求最多等多久：和按序号、按 ID 读一条消息用的是同一个接口、同一个时限。
+ * 本机 Server 正常几十毫秒就回；卡住不回时按时限放弃，抛 TimeoutError，Bridge 当成连不上、等它恢复，
+ * 不会一直挂到 Node 默认的 5 分钟
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+
 export class RoomClientError extends Error {
   constructor(
     message: string,
@@ -43,6 +50,8 @@ export type RoomClientOptions = {
   workspace?: { cwd: string; roomWorkspace?: string; note?: string; noSandbox?: boolean };
   /** 被房主暂停（SESSION_PAUSED）后隔多久再试着重连；默认 45 秒 */
   pausedRetryMs?: number;
+  /** 读房间数据的请求时限；默认 REQUEST_TIMEOUT_MS，测试注入 */
+  requestTimeoutMs?: number;
 };
 
 export type Snapshot = {
@@ -209,13 +218,18 @@ export class RoomClient {
     this.sendRaw({ type: "invocation.trace", messageId, steps });
   }
 
+  /** 一次读请求的时限（连同读响应体） */
+  private deadline(): AbortSignal {
+    return AbortSignal.timeout(this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
+  }
+
   async fetchWhiteboard(): Promise<WhiteboardEntry[]> {
     const response = await fetch(
       new URL(
         `/api/rooms/${encodeURIComponent(this.options.roomId)}/whiteboard`,
         this.options.serverUrl,
       ),
-      { headers: { Authorization: `Bearer ${this.options.token}` } },
+      { headers: { Authorization: `Bearer ${this.options.token}` }, signal: this.deadline() },
     );
     // 旧版服务端没有白板接口，视为空白板
     if (response.status === 404) return [];
@@ -229,7 +243,7 @@ export class RoomClient {
         `/api/rooms/${encodeURIComponent(this.options.roomId)}/participants`,
         this.options.serverUrl,
       ),
-      { headers: { Authorization: `Bearer ${this.options.token}` } },
+      { headers: { Authorization: `Bearer ${this.options.token}` }, signal: this.deadline() },
     );
     if (!response.ok) throw new Error(`无法读取房间成员 (${response.status})`);
     return ((await response.json()) as { participants: Participant[] }).participants;
@@ -250,7 +264,7 @@ export class RoomClient {
     url.searchParams.set("limit", "1");
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${this.options.token}` },
-      signal: AbortSignal.timeout(10_000),
+      signal: this.deadline(),
     });
     if (!response.ok) throw new Error(`无法读取子任务结果 (${response.status})`);
     const payload = (await response.json()) as MessagesResponse;
@@ -267,7 +281,7 @@ export class RoomClient {
     url.searchParams.set("limit", "1");
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${this.options.token}` },
-      signal: AbortSignal.timeout(10_000),
+      signal: this.deadline(),
     });
     if (response.status === 404) return undefined;
     if (!response.ok) throw new Error(`无法读取消息 (${response.status})`);
@@ -286,8 +300,10 @@ export class RoomClient {
       );
       url.searchParams.set("afterSeq", String(cursor));
       url.searchParams.set("limit", "500");
+      // 每一页各自计时：卡住的那一页按时限放弃，已经拉到的页不白等
       const response = await fetch(url, {
         headers: { Authorization: `Bearer ${this.options.token}` },
+        signal: this.deadline(),
       });
       if (!response.ok) throw new Error(`无法补拉公共消息 (${response.status})`);
       const payload = (await response.json()) as MessagesResponse;
