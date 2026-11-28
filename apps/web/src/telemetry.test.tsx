@@ -57,6 +57,7 @@ describe("TelemetryNotice", () => {
     render(<TelemetryNotice local={local} delayMs={0} />);
     expect(await screen.findByRole("region", { name: "匿名使用统计" })).toBeTruthy();
     expect(screen.getByText(/不收消息、路径、名字和 key/)).toBeTruthy();
+    expect(screen.getByText(/每天最多上报一次/)).toBeTruthy();
     // npm、桌面版有上报地址：不说「只留在这台电脑上」
     expect(screen.queryByText(/这台电脑上/)).toBeNull();
     expect(screen.getByRole("link", { name: "了解详情" }).getAttribute("href")).toContain(
@@ -119,6 +120,7 @@ describe("TelemetrySettingsGroup", () => {
     renderGroup(local);
     const toggle = await screen.findByRole("switch", { name: /匿名使用统计/ });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/每天最多上报一次/)).toBeTruthy();
     expect(screen.queryByText(/源码运行默认不上报/)).toBeNull();
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));

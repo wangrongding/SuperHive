@@ -77,7 +77,7 @@ Each time you run `hive` in a terminal it does a quick version check: it waits a
 | `hive telemetry status`  | Shows whether statistics are on, why they're off, and whether an endpoint is set | Also what `hive telemetry` alone does                                        |
 | `hive telemetry off`     | Turns anonymous usage statistics off                                             | Deletes anything not yet sent                                                |
 | `hive telemetry on`      | Turns them back on                                                               | Still off while an environment variable such as `DO_NOT_TRACK=1` blocks them |
-| `hive telemetry preview` | Prints the raw JSON of the next upload                                           | Same as **View data to be sent** in Settings                                 |
+| `hive telemetry preview` | Prints the raw JSON waiting to be sent                                           | Same as **View data to be sent** in Settings                                 |
 | `hive telemetry reset`   | Switches to a new random install ID                                              | Deletes anything not yet sent under the old ID                               |
 
 For what is and isn't collected, see [Usage statistics](/en/reference/telemetry/).

@@ -1,10 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentCliUpdateResult, buildApp } from "./app.js";
 import type { AgentCliJob } from "@superhive/protocol";
-import { readTelemetryQueue } from "./telemetry-core.js";
+import { dayOf, readTelemetryQueue, readTelemetryState } from "./telemetry-core.js";
+import { Peer } from "./test-peer.js";
 
 const cli = { command: "/usr/bin/node", args: ["/opt/superhive/dist/cli.js"] };
 const probe = async () => ({ installed: false, version: null });
@@ -194,6 +196,42 @@ describe("telemetry routes", () => {
     });
     expect((await app.inject({ url: "/api/meta" })).json().telemetry).toBeUndefined();
     expect(readTelemetryQueue(dir)).toEqual([]);
+  });
+});
+
+describe("whether anyone is using it", () => {
+  it("marks the day when a person sends a message, not when an agent does", async () => {
+    const { app, dir } = await setup();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const url = `ws://127.0.0.1:${(app.server.address() as AddressInfo).port}/ws`;
+    const join = async (username: string, participantType: "human" | "agent") => {
+      const peer = await Peer.connect(url);
+      cleanups.push(() => peer.socket.close());
+      peer.send({
+        type: "participant.join",
+        roomId: "general",
+        token: "join-token",
+        username,
+        participantType,
+      });
+      await peer.next((event) => event.type === "room.snapshot");
+      return peer;
+    };
+    const say = async (peer: Peer, content: string) => {
+      peer.send({ type: "message.send", content, clientMessageId: content });
+      await peer.next(
+        (event) => event.type === "message.created" && event.message.clientMessageId === content,
+      );
+    };
+    const agent = await join("rd-claude", "agent");
+    await say(agent, "agent 自己说话");
+    expect(readTelemetryState(dir).state.activeDay).toBeUndefined();
+
+    const human = await join("rd", "human");
+    await say(human, "有人在用");
+    expect(readTelemetryState(dir).state.activeDay).toBe(dayOf(Date.now()));
+    // 只记日期，消息内容和条数都不进统计
+    expect(JSON.stringify(readTelemetryState(dir).state)).not.toContain("有人在用");
   });
 });
 

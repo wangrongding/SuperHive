@@ -5,10 +5,11 @@
  * apps/server 的 telemetry-core.test.ts 核对两份一致），改动请两边同步。只用 Node 自带模块。
  *
  * 同一台电脑上的 Server、桌面端、CLI 共用一份数据，放在 ~/.superhive/telemetry/：
- * - state.json：开关、安装 ID、首次告知弹过没有、各功能第一次用到的日期、上次心跳的日期
+ * - state.json：开关、安装 ID、首次告知弹过没有、各功能第一次用到的日期、心跳和上报的日期、
+ *   当天还没定下来的心跳（见 TelemetryState）
  * - queue.jsonl：等着上报的事件，一行一条，最多 QUEUE_LIMIT 条，超出丢最旧的
  *
- * 只有 Server 往外发（apps/server 的 telemetry.ts），CLI 只往队列里追加。
+ * 只有 Server 往外发（apps/server 的 telemetry.ts），每天最多一次、跟心跳一起发；CLI 只往队列里追加。
  * npm 安装和桌面端安装包默认发到项目自部署的 Umami（DEFAULT_TELEMETRY_ENDPOINT）；源码运行默认不发，
  * 只在本机记录、可以预览（见 telemetryRunMode、telemetryEndpoint）。
  * 统计服务是自部署的 Umami（https://umami.is）：发出去的请求体由 telemetryRequestBody 生成，
@@ -43,9 +44,7 @@ export const DEFAULT_TELEMETRY_ENDPOINT = "https://60.205.92.58";
 export const DEFAULT_TELEMETRY_SITE = "b2d13ec6-3fa6-47bf-9cbd-7317357517fc";
 /** 每条事件在 Umami 里记的域名：只是个标签，不对应真实网站 */
 export const TELEMETRY_HOSTNAME = "superhive.app";
-/** 一次请求最多带几条事件（Umami 的 /api/batch 一次最多收 500 条） */
-export const TELEMETRY_BATCH_LIMIT = 50;
-/** 本地队列最多留多少条，超出丢最旧的 */
+/** 本地队列最多留多少条，超出丢最旧的；每天一次把它们放进一个请求发完（Umami 的 /api/batch 一次最多收 500 条） */
 export const QUEUE_LIMIT = 200;
 /** 「使用统计」文档 */
 export const TELEMETRY_DOCS_URL = "https://wangrongding.github.io/SuperHive/reference/telemetry/";
@@ -105,21 +104,20 @@ export const TELEMETRY_UPDATE_FAILURES = [
   "not_managed",
   "unknown",
 ] as const;
-/** 故障单的类别：是谁的问题（origin）× 从哪来（source） */
-export const TELEMETRY_INCIDENT_CATEGORIES = ["internal", "external", "unknown"].flatMap((origin) =>
-  ["invocation", "server", "protocol", "web"].map((source) => `${origin}.${source}`),
-);
-
 type EnumField = { kind: "enum"; values: readonly string[]; required?: boolean };
 type CountsField = { kind: "counts"; keys: readonly string[]; max: number; required?: boolean };
 type TelemetryField = EnumField | CountsField;
 
 /** 全部事件和字段：只有枚举和计数 */
 export const TELEMETRY_EVENTS = {
-  /** 每天一次：本机 Agent 按 CLI 类型分的数量、房间数的区间 */
+  /**
+   * 每天（UTC）一条：本机 Agent 按 CLI 类型分的数量、房间数的区间，以及那天有没有人发过消息
+   * （active，区分「Server 开着」和「真有人在用」；不带条数）
+   */
   heartbeat: {
     agents: { kind: "counts", keys: TELEMETRY_AGENT_PROVIDERS, max: 99 },
     rooms: { kind: "enum", values: TELEMETRY_ROOM_BUCKETS, required: true },
+    active: { kind: "enum", values: ["yes", "no"], required: true },
   },
   /** 关键功能第一次用到（每台电脑每个功能只记一次） */
   feature_first_used: {
@@ -133,10 +131,6 @@ export const TELEMETRY_EVENTS = {
     /** Agent CLI：哪一个、是安装还是升级 */
     target: { kind: "enum", values: TELEMETRY_AGENT_PROVIDERS },
     action: { kind: "enum", values: ["install", "upgrade"] },
-  },
-  /** 上次心跳以来新出现的故障，按类别计数（随每天的心跳一起记） */
-  incident_counts: {
-    counts: { kind: "counts", keys: TELEMETRY_INCIDENT_CATEGORIES, max: 9999, required: true },
   },
 } as const satisfies Record<string, Record<string, TelemetryField>>;
 
@@ -246,7 +240,7 @@ export function hourOf(ms: number): string {
   return new Date(Math.floor(ms / 3_600_000) * 3_600_000).toISOString();
 }
 
-/** UTC 日期（YYYY-MM-DD）：心跳按它一天一次 */
+/** UTC 日期（YYYY-MM-DD）：心跳和上报都按它一天一次 */
 export function dayOf(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
@@ -404,14 +398,22 @@ export type TelemetryState = {
   noticeShownAt?: string;
   /** 功能 → 第一次用到的日期（UTC） */
   firstUsed: Partial<Record<TelemetryFeature, string>>;
-  /** 上次心跳的日期（UTC） */
+  /** 最近一条心跳记的是哪天（UTC）：记进队列以后，这天就不再记 */
   heartbeatDay?: string;
+  /**
+   * 开着、但当天还没人发过消息时先记下的心跳（active=no）：当天有人发消息就换成 active=yes 记进队列；
+   * 一直没人发，到了之后哪天再按 active=no 记进队列
+   */
+  pendingHeartbeat?: TelemetryEvent;
+  /** 最近哪天（UTC）有人（不是 Agent）发过消息：心跳的 active 按它定 */
+  activeDay?: string;
+  /** 最近一次上报是哪天（UTC）：每天最多发一次，不管成没成 */
+  sentDay?: string;
   /** 本机房主网页的界面语言 */
   uiLocale?: TelemetryLocale;
-  /** 上次心跳以来新出现的故障（按类别），下次心跳时一起记 */
-  incidentCounts?: Record<string, number>;
 };
 
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const stateFile = (dir: string) => path.join(dir, "state.json");
 const queueFile = (dir: string) => path.join(dir, "queue.jsonl");
 
@@ -429,24 +431,23 @@ function parseState(raw: unknown): TelemetryState | undefined {
       if (typeof day === "string") firstUsed[feature] = day;
     }
   }
-  const incidentCounts: Record<string, number> = {};
-  if (isRecord(raw.incidentCounts)) {
-    for (const key of TELEMETRY_INCIDENT_CATEGORIES) {
-      const count = raw.incidentCounts[key];
-      if (typeof count === "number" && Number.isInteger(count) && count > 0) {
-        incidentCounts[key] = count;
-      }
-    }
-  }
+  const pending = sanitizeEvent(raw.pendingHeartbeat);
+  const day = (value: unknown) =>
+    typeof value === "string" && DAY_PATTERN.test(value) ? value : undefined;
+  const heartbeatDay = day(raw.heartbeatDay);
+  const activeDay = day(raw.activeDay);
+  const sentDay = day(raw.sentDay);
   const uiLocale = pick(TELEMETRY_LOCALES, raw.uiLocale);
   return {
     ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
     installId: raw.installId,
     ...(typeof raw.noticeShownAt === "string" ? { noticeShownAt: raw.noticeShownAt } : {}),
     firstUsed,
-    ...(typeof raw.heartbeatDay === "string" ? { heartbeatDay: raw.heartbeatDay } : {}),
+    ...(heartbeatDay ? { heartbeatDay } : {}),
+    ...(pending?.event === "heartbeat" ? { pendingHeartbeat: pending } : {}),
+    ...(activeDay ? { activeDay } : {}),
+    ...(sentDay ? { sentDay } : {}),
     ...(uiLocale ? { uiLocale } : {}),
-    ...(Object.keys(incidentCounts).length ? { incidentCounts } : {}),
   };
 }
 
@@ -483,6 +484,14 @@ export function writeTelemetryState(dir: string, state: TelemetryState): void {
   writeAtomic(stateFile(dir), `${JSON.stringify(state, null, 2)}\n`);
 }
 
+/** 去掉还没发的：待定的心跳、记着的「当天有人发过消息」 */
+function withoutUnsent(state: TelemetryState): TelemetryState {
+  const rest = { ...state };
+  delete rest.pendingHeartbeat;
+  delete rest.activeDay;
+  return rest;
+}
+
 /** 打开或关闭（自己选过了，首次告知不用再弹）；关闭时把还没发的数据一起删掉 */
 export function setTelemetryEnabled(
   dir: string,
@@ -491,7 +500,7 @@ export function setTelemetryEnabled(
 ): TelemetryState {
   const current = readTelemetryState(dir).state;
   const state = {
-    ...current,
+    ...(enabled ? current : withoutUnsent(current)),
     enabled,
     noticeShownAt: current.noticeShownAt ?? new Date(now).toISOString(),
   };
@@ -502,10 +511,29 @@ export function setTelemetryEnabled(
 
 /** 换一个新的安装 ID；还没发的数据一起删掉，新旧 ID 对不上 */
 export function resetTelemetryId(dir: string): TelemetryState {
-  const state = { ...readTelemetryState(dir).state, installId: randomUUID() };
+  const state = { ...withoutUnsent(readTelemetryState(dir).state), installId: randomUUID() };
   writeTelemetryState(dir, state);
   clearTelemetryQueue(dir);
   return state;
+}
+
+/** 待定的心跳按现在的情况补上 active：那天有人发过消息就是 yes */
+export function settleHeartbeat(
+  pending: TelemetryEvent,
+  activeDay: string | undefined,
+): TelemetryEvent {
+  return {
+    ...pending,
+    props: { ...pending.props, active: activeDay === pending.time.slice(0, 10) ? "yes" : "no" },
+  };
+}
+
+/** 等着发的全部事件：队列里的，加上还没定下来的心跳（预览和条数用它，看到的就是会发出去的） */
+export function telemetryOutbox(dir: string, state: TelemetryState): TelemetryEvent[] {
+  const queue = readTelemetryQueue(dir);
+  return state.pendingHeartbeat
+    ? [...queue, settleHeartbeat(state.pendingHeartbeat, state.activeDay)]
+    : queue;
 }
 
 /* ---------- 本地队列 ---------- */
@@ -635,7 +663,7 @@ export function umamiEvent(site: string, installId: string, event: TelemetryEven
   };
 }
 
-/** 要发出去的请求体（预览看到的就是它；真正发送时按 TELEMETRY_BATCH_LIMIT 条一批分开发） */
+/** 要发出去的请求体（预览看到的就是它） */
 export function telemetryRequestBody(
   site: string,
   installId: string,

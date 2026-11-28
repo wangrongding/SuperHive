@@ -21,6 +21,7 @@ import {
   takeTelemetryQueue,
   telemetryBlocker,
   telemetryEndpoint,
+  telemetryOutbox,
   telemetryRequestBody,
   telemetryRunMode,
   telemetrySite,
@@ -186,7 +187,9 @@ describe("Umami request body", () => {
   const site = "b2d13ec6-3fa6-47bf-9cbd-7317357517fc";
   it("turns each event into one Umami event with the install ID as its distinct ID", () => {
     const [body] = telemetryRequestBody(site, installId, [
-      sanitized(event({ agents: { claude: 3, codex: 1 }, rooms: "2-5" }, "heartbeat")),
+      sanitized(
+        event({ agents: { claude: 3, codex: 1 }, rooms: "2-5", active: "yes" }, "heartbeat"),
+      ),
     ]);
     expect(body).toEqual({
       type: "event",
@@ -209,6 +212,7 @@ describe("Umami request body", () => {
           agents_claude: 3,
           agents_codex: 1,
           rooms: "2-5",
+          active: "yes",
         },
       },
     });
@@ -219,12 +223,14 @@ describe("Umami request body", () => {
   it("flattens counters into single-level string and number fields", () => {
     const [body] = telemetryRequestBody(site, installId, [
       sanitized(
-        event({ counts: { "external.invocation": 2, "internal.server": 1 } }, "incident_counts"),
+        event({ agents: { claude: 2, opencode: 1 }, rooms: "1", active: "no" }, "heartbeat"),
       ),
     ]);
     expect(body!.payload.data).toMatchObject({
-      counts_external_invocation: 2,
-      counts_internal_server: 1,
+      agents_claude: 2,
+      agents_opencode: 1,
+      rooms: "1",
+      active: "no",
     });
     for (const value of Object.values(body!.payload.data)) {
       expect(["string", "number"]).toContain(typeof value);
@@ -285,7 +291,10 @@ describe("event whitelist", () => {
   it("drops the whole event when a required field is missing or wrong", () => {
     expect(sanitizeEvent(event({ feature: "/Users/rd/secret" }))).toBeUndefined();
     expect(sanitizeEvent(event({}))).toBeUndefined();
-    expect(sanitizeEvent(event({ rooms: "many" }, "heartbeat"))).toBeUndefined();
+    expect(sanitizeEvent(event({ rooms: "many", active: "yes" }, "heartbeat"))).toBeUndefined();
+    // active 只能是 yes / no，不带条数；缺了整条丢掉
+    expect(sanitizeEvent(event({ rooms: "1", active: 3 }, "heartbeat"))).toBeUndefined();
+    expect(sanitizeEvent(event({ rooms: "1" }, "heartbeat"))).toBeUndefined();
   });
 
   it("drops unknown events, bad times and bad common fields", () => {
@@ -305,11 +314,19 @@ describe("event whitelist", () => {
   it("keeps only known counter keys and caps the counts", () => {
     const clean = sanitizeEvent(
       event(
-        { agents: { claude: 3, codex: 1000, "rd's-agent": 2, opencode: 0 }, rooms: "6-20" },
+        {
+          agents: { claude: 3, codex: 1000, "rd's-agent": 2, opencode: 0 },
+          rooms: "6-20",
+          active: "yes",
+        },
         "heartbeat",
       ),
     );
-    expect(clean?.props).toEqual({ agents: { claude: 3, codex: 99 }, rooms: "6-20" });
+    expect(clean?.props).toEqual({
+      agents: { claude: 3, codex: 99 },
+      rooms: "6-20",
+      active: "yes",
+    });
   });
 
   it("lists only enums and counters (no free text fields)", () => {
@@ -336,7 +353,7 @@ describe("local queue and state", () => {
   it("keeps at most QUEUE_LIMIT events, dropping the oldest", () => {
     const dir = tempDir();
     const many = Array.from({ length: QUEUE_LIMIT + 50 }, (_, index) =>
-      event({ agents: { claude: index + 1 }, rooms: "1" }, "heartbeat"),
+      event({ agents: { claude: index + 1 }, rooms: "1", active: "yes" }, "heartbeat"),
     );
     for (let index = 0; index < many.length; index += 25) {
       appendTelemetryEvents(dir, many.slice(index, index + 25));
@@ -397,19 +414,76 @@ describe("local queue and state", () => {
   it("turning off deletes what has not been sent; reset changes the ID and deletes it too", () => {
     const dir = tempDir();
     const { state } = readTelemetryState(dir);
-    writeTelemetryState(dir, state);
+    const unsent = {
+      pendingHeartbeat: sanitized(event({ rooms: "1", active: "no" }, "heartbeat")),
+      activeDay: "2026-11-28",
+    };
+    writeTelemetryState(dir, { ...state, ...unsent });
     appendTelemetryEvents(dir, [event()]);
     const off = setTelemetryEnabled(dir, false);
     expect(off.enabled).toBe(false);
     expect(off.noticeShownAt).toBeDefined();
     expect(readTelemetryQueue(dir)).toEqual([]);
+    expect(readTelemetryState(dir).state).not.toHaveProperty("pendingHeartbeat");
+    expect(readTelemetryState(dir).state).not.toHaveProperty("activeDay");
 
     setTelemetryEnabled(dir, true);
+    writeTelemetryState(dir, { ...readTelemetryState(dir).state, ...unsent });
     appendTelemetryEvents(dir, [event()]);
     const reset = resetTelemetryId(dir);
     expect(reset.installId).not.toBe(state.installId);
     expect(readTelemetryState(dir).state.installId).toBe(reset.installId);
     expect(readTelemetryQueue(dir)).toEqual([]);
+    expect(readTelemetryState(dir).state).not.toHaveProperty("pendingHeartbeat");
+  });
+
+  it("keeps the day markers and the pending heartbeat, dropping malformed ones", () => {
+    const dir = tempDir();
+    const { state } = readTelemetryState(dir);
+    const pendingHeartbeat = sanitized(event({ rooms: "1", active: "no" }, "heartbeat"));
+    writeTelemetryState(dir, {
+      ...state,
+      heartbeatDay: "2026-11-27",
+      activeDay: "2026-11-28",
+      sentDay: "2026-11-27",
+      pendingHeartbeat,
+    });
+    expect(readTelemetryState(dir).state).toMatchObject({
+      heartbeatDay: "2026-11-27",
+      activeDay: "2026-11-28",
+      sentDay: "2026-11-27",
+      pendingHeartbeat,
+    });
+    writeFileSync(
+      path.join(dir, "state.json"),
+      JSON.stringify({
+        ...state,
+        heartbeatDay: "yesterday",
+        sentDay: 3,
+        // 待定的只能是心跳，字段照样按白名单校验
+        pendingHeartbeat: event(),
+      }),
+    );
+    const read = readTelemetryState(dir).state;
+    expect(read).not.toHaveProperty("heartbeatDay");
+    expect(read).not.toHaveProperty("sentDay");
+    expect(read).not.toHaveProperty("pendingHeartbeat");
+  });
+
+  it("previews the pending heartbeat with active set from whether anyone has spoken that day", () => {
+    const dir = tempDir();
+    const { state } = readTelemetryState(dir);
+    appendTelemetryEvents(dir, [event()]);
+    const pendingHeartbeat = sanitized(event({ rooms: "1", active: "no" }, "heartbeat"));
+    expect(telemetryOutbox(dir, state).map((item) => item.event)).toEqual(["feature_first_used"]);
+    const outbox = (activeDay?: string) =>
+      telemetryOutbox(dir, { ...state, pendingHeartbeat, ...(activeDay ? { activeDay } : {}) });
+    expect(outbox().map((item) => [item.event, item.props.active])).toEqual([
+      ["feature_first_used", undefined],
+      ["heartbeat", "no"],
+    ]);
+    expect(outbox("2026-11-27").at(-1)!.props.active).toBe("no");
+    expect(outbox("2026-11-28").at(-1)!.props.active).toBe("yes");
   });
 
   it("starts over with a fresh random ID when the state file is missing or corrupted", () => {

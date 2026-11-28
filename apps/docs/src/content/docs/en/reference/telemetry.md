@@ -3,7 +3,7 @@ title: "Usage statistics: what we collect, what we don't, how to turn it off"
 description: "SuperHive records anonymous, coarse usage statistics by default: every field and event, how to preview and turn them off, retention, and what we never collect."
 ---
 
-SuperHive records anonymous usage statistics by default: only coarse numbers such as the version, the operating system, which features were used and whether updates worked, so we can decide what to fix and build first. **No messages, paths, names or keys**, and you can turn it off at any time. The approach follows Next.js and Homebrew: on by default, you are told the first time, and one switch or one environment variable turns it off.
+SuperHive records anonymous usage statistics by default: only coarse numbers such as the version, the operating system, whether anyone used it each day, which features were used and whether updates worked, sent at most once a day, so we can decide what to fix and build first. **No messages, paths, names or keys**, and you can turn it off at any time. The approach follows Next.js and Homebrew: on by default, you are told the first time, and one switch or one environment variable turns it off.
 
 :::note[Where it goes]
 npm installs and the desktop app send to the project's self-hosted [Umami](https://umami.is) at `https://60.205.92.58` by default. Running from source (`pnpm dev` in the repository, your own build, or an unpackaged desktop app) sends nothing by default and only records on this computer; to send, set `SUPERHIVE_TELEMETRY_URL` explicitly, see [Uploads and retention](#uploads-and-retention).
@@ -24,10 +24,10 @@ Once turned off, nothing more is recorded and **anything not yet sent is deleted
 
 ## Preview what would be sent
 
-- In the web UI, open **Settings → This computer → Anonymous usage statistics** and click **View data to be sent**. It shows the raw JSON of the next upload to the statistics service.
+- In the web UI, open **Settings → This computer → Anonymous usage statistics** and click **View data to be sent**. It shows the raw JSON waiting to be sent to the statistics service, including today's `heartbeat` if it hasn't gone out yet.
 - In a terminal, run `hive telemetry preview`. It prints the same content.
 
-The statistics service is a self-hosted [Umami](https://umami.is), and each event is one Umami `event`. An upload body looks like this (an array of at most 50 events):
+The statistics service is a self-hosted [Umami](https://umami.is), and each event is one Umami `event`. An upload body looks like this (an array with everything waiting to be sent):
 
 ```json
 [
@@ -50,7 +50,8 @@ The statistics service is a self-hosted [Umami](https://umami.is), and each even
         "locale": "zh-CN",
         "agents_claude": 2,
         "agents_codex": 1,
-        "rooms": "2-5"
+        "rooms": "2-5",
+        "active": "yes"
       }
     }
   }
@@ -83,10 +84,13 @@ Each event's own fields go into `data` too, in a single level; count fields are 
 
 ### `heartbeat`: once a day
 
-| Field    | Content                                                                                                                                                                                                                            |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agents` | Number of local agents per CLI type, flattened to `agents_type`. The only types are `codex`, `claude`, `copilot`, `opencode`, `omp`, `openclaw`, `gemini` and `agy`; types with no agents are left out, and each count stops at 99 |
-| `rooms`  | The range the room count falls in: `0`, `1`, `2-5`, `6-20` or `21+`                                                                                                                                                                |
+One per day (UTC), to count how many computers run SuperHive each day and how many of them are actually used. It is recorded the first time someone sends a message that day (`active` is `yes`) and sent right away. If SuperHive runs all day without anyone sending a message, that day gets `active` set to `no` and is sent the next day (or the next time it starts). Days when SuperHive isn't running have none.
+
+| Field    | Content                                                                                                                                                                                                                                                                    |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents` | Number of local agents per CLI type, flattened to `agents_type`. The only types are `codex`, `claude`, `copilot`, `opencode`, `omp`, `openclaw`, `gemini` and `agy`; types with no agents are left out, and each count stops at 99                                         |
+| `rooms`  | The range the room count falls in: `0`, `1`, `2-5`, `6-20` or `21+`                                                                                                                                                                                                        |
+| `active` | Whether anyone sent a message in any room that day: `yes` or `no`. Messages from the owner, members and guests count (including ones coming in from Feishu (Lark) and other IMs); messages from agents and scheduled tasks don't. Only yes or no, never a count or content |
 
 ### `feature_first_used`: the first use of a key feature
 
@@ -121,15 +125,6 @@ Failure categories (`reason`):
 | `agent_cli` | `timeout`, `stalled`, `exit_code`, `spawn_failed`, `version_unknown`, `version_unchanged`, `install_broken`      |
 | Any         | `unknown` (doesn't fit the categories above)                                                                     |
 
-### `incident_counts`: incidents counted by category
-
-Recorded together with the daily `heartbeat`, and only when there were incidents since the last one. `counts` counts occurrences per "origin_source", flattened to `counts_origin_source`; each count stops at 9999:
-
-- Origin: `internal` (a problem in SuperHive itself), `external` (models, network and other outside causes) or `unknown`
-- Source: `invocation` (an agent turn failed), `server` (a Server exception), `protocol` (a received event failed validation) or `web` (a web page error)
-
-For example `"counts_external_invocation": 2, "counts_internal_server": 1`.
-
 ## What we promise never to collect
 
 - The content of messages, attachments, questions, boards and tasks
@@ -144,8 +139,8 @@ This doesn't rely on being careful about what to send. Only a whitelist is accep
 ## Uploads and retention
 
 - Only the Hive Server sends anything. The web UI, the desktop app and the `hive` command only hand events to the local Server or write them to the local queue.
-- Data is sent once an hour, or earlier once 50 events have built up, at most 50 per request.
-- When the network is down or the statistics service has an error, unsent events stay on this computer and are retried later: first after 1 hour, doubling after each failure in a row, up to 1 day. Events the service explicitly rejects are dropped. Upload errors never affect any feature.
+- Data is sent at most once a day (UTC), together with the `heartbeat`: everything waiting (first uses of features, update results) goes out in that one request and is never sent on its own.
+- When the network is down or the statistics service has an error, unsent events stay on this computer and go out with the next upload (the next day); there is no retry on the same day. Events the service explicitly rejects are dropped. Upload errors never affect any feature.
 - At most 200 unsent events are kept locally; when full, the oldest are dropped.
 - Data received by the statistics service is kept for 90 days and then deleted.
 - npm installs and the desktop app send to `https://60.205.92.58` by default (the project's self-hosted Umami, uploads go to its `/api/batch`); running from source sends nothing by default.

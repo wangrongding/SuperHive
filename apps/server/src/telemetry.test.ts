@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,11 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+const endpoint = { SUPERHIVE_TELEMETRY_URL: "https://stats.example.com" };
+const batchUrl = "https://stats.example.com/api/batch";
+const HOUR = 60 * 60_000;
+const DAY = 24 * HOUR;
+
 function make(options: Partial<TelemetryOptions> = {}) {
   let now = Date.UTC(2026, 10, 28, 4, 30);
   // 默认像 Umami 的 /api/batch 一样全部收下
@@ -39,6 +44,8 @@ function make(options: Partial<TelemetryOptions> = {}) {
     now: () => now,
     fetch: fetch as unknown as typeof globalThis.fetch,
     snapshot: () => ({ agents: { claude: 2, codex: 1 }, rooms: 3 }),
+    // 有人发消息后的定时器默认不让它跑：用例里自己调 heartbeat()
+    activityDelayMs: DAY,
     ...options,
   });
   instances.push(telemetry);
@@ -48,12 +55,13 @@ function make(options: Partial<TelemetryOptions> = {}) {
     advance: (ms: number) => {
       now += ms;
     },
+    /** 有人发了消息，当天的心跳随即定下来（不等定时器） */
+    speak: () => {
+      telemetry.humanMessage();
+      telemetry.heartbeat();
+    },
   };
 }
-
-const endpoint = { SUPERHIVE_TELEMETRY_URL: "https://stats.example.com" };
-const batchUrl = "https://stats.example.com/api/batch";
-const HOUR = 60 * 60_000;
 
 type Sent = Array<{ type: string; payload: Record<string, unknown> & { data: object } }>;
 function sent(fetch: ReturnType<typeof make>["fetch"], call = 0) {
@@ -68,7 +76,7 @@ function sent(fetch: ReturnType<typeof make>["fetch"], call = 0) {
 describe("Telemetry", () => {
   it("is on by default and, running from source, records locally but never sends", async () => {
     const log = vi.fn();
-    const { telemetry, fetch } = make({ runMode: "source", log });
+    const { telemetry, fetch, speak } = make({ runMode: "source", log });
     telemetry.start();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("running from source"));
     expect(telemetry.status()).toMatchObject({
@@ -78,18 +86,13 @@ describe("Telemetry", () => {
       noticePending: true,
     });
     telemetry.feature("room_create");
-    telemetry.heartbeat();
-    for (let index = 0; index < 60; index += 1)
-      telemetry.record("update_result", {
-        kind: "desktop",
-        outcome: "success",
-      });
+    speak();
     await telemetry.flush();
     expect(fetch).not.toHaveBeenCalled();
-    expect(telemetry.status().queued).toBe(62);
+    expect(telemetry.status().queued).toBe(2);
     // 预览就是要发给 Umami 的请求体
     const payload = telemetry.preview()!;
-    expect(payload).toHaveLength(62);
+    expect(payload).toHaveLength(2);
     expect(payload[0]).toMatchObject({
       type: "event",
       payload: {
@@ -112,9 +115,9 @@ describe("Telemetry", () => {
   it.each(["npm", "desktop"] as const)(
     "installed as %s, sends to the project's own Umami without any configuration",
     async (runMode) => {
-      const { telemetry, fetch } = make({ runMode });
+      const { telemetry, fetch, speak } = make({ runMode });
       expect(telemetry.status().endpoint).toBe(true);
-      telemetry.feature("room_create");
+      speak();
       await telemetry.flush();
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(sent(fetch).url).toBe("https://60.205.92.58/api/batch");
@@ -123,22 +126,22 @@ describe("Telemetry", () => {
   );
 
   it("sends from source only to an explicitly configured endpoint", async () => {
-    const { telemetry, fetch } = make({ runMode: "source", env: endpoint });
+    const { telemetry, fetch, speak } = make({ runMode: "source", env: endpoint });
     expect(telemetry.status().endpoint).toBe(true);
-    telemetry.feature("room_create");
+    speak();
     await telemetry.flush();
     expect(sent(fetch).url).toBe(batchUrl);
   });
 
   it("does not fall back to the built-in endpoint when SUPERHIVE_TELEMETRY_URL is wrong", async () => {
     const log = vi.fn();
-    const { telemetry, fetch } = make({
+    const { telemetry, fetch, speak } = make({
       env: { SUPERHIVE_TELEMETRY_URL: "stats.example.com" },
       log,
     });
     telemetry.start();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("not an http(s) URL"));
-    telemetry.feature("room_create");
+    speak();
     await telemetry.flush();
     expect(fetch).not.toHaveBeenCalled();
     expect(telemetry.status()).toMatchObject({ endpoint: false, queued: 1 });
@@ -153,9 +156,9 @@ describe("Telemetry", () => {
 
   it("posts Umami's batch format with a SuperHive User-Agent and empties the queue", async () => {
     const log = vi.fn();
-    const { telemetry, fetch } = make({ env: endpoint, log });
+    const { telemetry, fetch, speak } = make({ env: endpoint, log });
     telemetry.feature("invite_member");
-    telemetry.heartbeat();
+    speak();
     await telemetry.flush();
     expect(fetch).toHaveBeenCalledTimes(1);
     const { url, headers, body } = sent(fetch);
@@ -168,121 +171,229 @@ describe("Telemetry", () => {
     expect(body.map((item) => item.payload.name)).toEqual(["feature_first_used", "heartbeat"]);
     expect(body[1]!.payload).toMatchObject({
       id: telemetry.status().installId,
-      data: { agents_claude: 2, agents_codex: 1, rooms: "2-5" },
+      data: { agents_claude: 2, agents_codex: 1, rooms: "2-5", active: "yes" },
     });
     expect(telemetry.status().queued).toBe(0);
     expect(log).toHaveBeenCalledWith("Usage statistics sent (2 of 2 event(s) accepted)");
   });
 
-  it("keeps the events when the network is down and retries an hour later", async () => {
+  it("sends at most once a day, and only together with a heartbeat", async () => {
+    const dir = tempDir();
+    const { telemetry, fetch, advance, speak } = make({ dir, env: endpoint });
+    // 只有功能事件、心跳还没定下来：不发（这次没发，也不能耽误后面该发的）
+    telemetry.feature("room_create");
+    telemetry.heartbeat();
+    await telemetry.flush();
+    expect(fetch).not.toHaveBeenCalled();
+    // 预览里能看到待定的心跳
+    expect(telemetry.status().queued).toBe(2);
+    expect(telemetry.preview()!.map((item) => item.payload.data)).toEqual([
+      expect.objectContaining({ feature: "room_create" }),
+      expect.objectContaining({ rooms: "2-5", active: "no" }),
+    ]);
+
+    speak();
+    await telemetry.flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sent(fetch).body.map((item) => item.payload.data)).toEqual([
+      expect.objectContaining({ feature: "room_create" }),
+      expect.objectContaining({ active: "yes" }),
+    ]);
+
+    // 当天再有事件、再查几次：都留到明天
+    telemetry.feature("code_panel");
+    telemetry.record("update_result", { kind: "npm", outcome: "success" });
+    for (let hour = 0; hour < 5; hour += 1) {
+      advance(HOUR);
+      speak();
+      await telemetry.flush();
+    }
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(readTelemetryQueue(dir)).toHaveLength(2);
+
+    // 第二天有人发消息：新一天的心跳和昨天留下的一起发
+    advance(DAY);
+    speak();
+    await telemetry.flush();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(sent(fetch, 1).body.map((item) => item.payload.name)).toEqual([
+      "feature_first_used",
+      "update_result",
+      "heartbeat",
+    ]);
+  });
+
+  it("settles a day nobody spoke as active=no once it is over, and sends it then", async () => {
     const { telemetry, fetch, advance } = make({ env: endpoint });
+    telemetry.heartbeat();
+    advance(10 * HOUR);
+    telemetry.heartbeat();
+    await telemetry.flush();
+    expect(fetch).not.toHaveBeenCalled();
+
+    advance(DAY);
+    telemetry.heartbeat();
+    await telemetry.flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [heartbeat] = sent(fetch).body;
+    // 记在那天第一次看到的整点上
+    expect(heartbeat!.payload).toMatchObject({
+      name: "heartbeat",
+      timestamp: Date.UTC(2026, 10, 28, 4) / 1000,
+      data: { active: "no" },
+    });
+    expect(sent(fetch).body).toHaveLength(1);
+    // 新的一天又是待定
+    expect(telemetry.preview()!.map((item) => item.payload.data)).toEqual([
+      expect.objectContaining({ active: "no" }),
+    ]);
+  });
+
+  it("settles the heartbeat a minute after the day's first message and sends it", async () => {
+    const dir = tempDir();
+    const { telemetry, fetch } = make({ dir, env: endpoint, activityDelayMs: 0 });
+    telemetry.heartbeat();
+    telemetry.humanMessage();
+    telemetry.humanMessage();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    expect(sent(fetch).body.map((item) => item.payload.data)).toEqual([
+      expect.objectContaining({ active: "yes" }),
+    ]);
+    expect(readTelemetryState(dir).state).toMatchObject({
+      heartbeatDay: "2026-11-28",
+      activeDay: "2026-11-28",
+      sentDay: "2026-11-28",
+    });
+    expect(readTelemetryState(dir).state).not.toHaveProperty("pendingHeartbeat");
+  });
+
+  it("only remembers the day someone spoke, not how many messages", () => {
+    const dir = tempDir();
+    const { telemetry } = make({ dir });
+    telemetry.status();
+    const before = statSync(path.join(dir, "state.json")).mtimeMs;
+    telemetry.humanMessage();
+    const after = statSync(path.join(dir, "state.json")).mtimeMs;
+    for (let index = 0; index < 20; index += 1) telemetry.humanMessage();
+    expect(statSync(path.join(dir, "state.json")).mtimeMs).toBe(after);
+    expect(after).toBeGreaterThanOrEqual(before);
+    const raw = JSON.parse(readFileSync(path.join(dir, "state.json"), "utf8")) as object;
+    expect(raw).toMatchObject({ activeDay: "2026-11-28" });
+    expect(Object.values(raw)).not.toContain(21);
+  });
+
+  it("picks up a heartbeat an earlier run left pending", async () => {
+    const dir = tempDir();
+    // 这天开着、没人发消息就关了
+    const first = make({ dir });
+    first.telemetry.heartbeat();
+    first.telemetry.close();
+    // 这天有人发了消息，没等心跳定下来就关了
+    const second = make({ dir });
+    second.advance(DAY);
+    second.telemetry.heartbeat();
+    second.telemetry.humanMessage();
+    second.telemetry.close();
+    // 几天后再开
+    const third = make({ dir });
+    third.advance(4 * DAY);
+    third.telemetry.heartbeat();
+    expect(
+      readTelemetryQueue(dir).map((item) => [item.time.slice(0, 10), item.props.active]),
+    ).toEqual([
+      ["2026-11-28", "no"],
+      ["2026-11-29", "yes"],
+    ]);
+    expect(readTelemetryState(dir).state.pendingHeartbeat?.time.slice(0, 10)).toBe("2026-12-02");
+  });
+
+  it("keeps what did not go out for the next day", async () => {
+    const { telemetry, fetch, advance, speak } = make({ env: endpoint });
     fetch.mockRejectedValueOnce(new Error("offline"));
     telemetry.feature("code_panel");
+    speak();
     await telemetry.flush();
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(telemetry.status().queued).toBe(1);
-    // 等待期里不再发（攒够一批提前发也不发）
-    telemetry.feature("room_create");
-    await telemetry.flush();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(telemetry.status().queued).toBe(2);
+    // 当天不再试
     advance(HOUR);
     await telemetry.flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // 第二天：哪怕还没人发消息，昨天的心跳也在队列里，照常发
+    advance(DAY);
+    telemetry.heartbeat();
+    await telemetry.flush();
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(sent(fetch, 1).body.map((item) => item.payload.data)).toEqual([
-      expect.objectContaining({ feature: "code_panel" }),
-      expect.objectContaining({ feature: "room_create" }),
+    expect(sent(fetch, 1).body.map((item) => item.payload.name)).toEqual([
+      "feature_first_used",
+      "heartbeat",
     ]);
-    expect(telemetry.status().queued).toBe(0);
-  });
-
-  it.each([500, 502, 503, 429, 408])("retries later when the service answers %i", async (code) => {
-    const { telemetry, fetch } = make({ env: endpoint });
-    fetch.mockResolvedValueOnce(new Response("busy", { status: code }));
-    telemetry.feature("code_panel");
-    await telemetry.flush();
     expect(telemetry.status().queued).toBe(1);
   });
 
-  it("waits twice as long after each failure in a row, up to a day", async () => {
-    const { telemetry, fetch, advance } = make({ env: endpoint });
-    fetch.mockRejectedValue(new Error("offline"));
-    telemetry.feature("code_panel");
-    const attempts: number[] = [];
-    for (let hour = 0; hour < 60; hour += 1) {
-      const before = fetch.mock.calls.length;
+  it.each([500, 502, 503, 429, 408])(
+    "keeps the events when the service answers %i",
+    async (code) => {
+      const { telemetry, fetch, speak } = make({ env: endpoint });
+      fetch.mockResolvedValueOnce(new Response("busy", { status: code }));
+      speak();
       await telemetry.flush();
-      if (fetch.mock.calls.length > before) attempts.push(hour);
-      advance(HOUR);
-    }
-    // 第 0 小时失败，隔 1、2、4、8、16 小时，之后每次隔 24 小时
-    expect(attempts).toEqual([0, 1, 3, 7, 15, 31, 55]);
-    expect(telemetry.status().queued).toBe(1);
-  });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(telemetry.status().queued).toBe(1);
+    },
+  );
 
-  it("drops a batch the service rejects outright instead of retrying it", async () => {
-    const { telemetry, fetch } = make({ env: endpoint });
+  it("drops what the service rejects outright instead of sending it again", async () => {
+    const { telemetry, fetch, speak } = make({ env: endpoint });
     fetch.mockResolvedValueOnce(Response.json({ error: "Bad request" }, { status: 400 }));
-    telemetry.feature("code_panel");
+    speak();
     await telemetry.flush();
     expect(telemetry.status().queued).toBe(0);
-    // 没进等待期：新的照常发
-    telemetry.feature("room_create");
-    await telemetry.flush();
-    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("retries when Umami accepted none of the batch, but drops events it rejected", async () => {
-    const { telemetry, fetch, advance } = make({ env: endpoint });
+  it("keeps the events when Umami accepted none of them, but drops ones it rejected", async () => {
+    const dir = tempDir();
+    const { telemetry, fetch, advance, speak } = make({ dir, env: endpoint });
     fetch.mockResolvedValueOnce(Response.json({ size: 2, processed: 0, errors: 2, details: [] }));
     telemetry.feature("code_panel");
-    telemetry.feature("room_create");
+    speak();
     await telemetry.flush();
     expect(telemetry.status().queued).toBe(2);
 
-    advance(HOUR);
+    advance(DAY);
     fetch.mockResolvedValueOnce(Response.json({ size: 2, processed: 1, errors: 1, details: [] }));
     await telemetry.flush();
-    expect(telemetry.status().queued).toBe(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(readTelemetryQueue(dir)).toEqual([]);
   });
 
-  it("sends at most 50 events per request and keeps the rest when one fails", async () => {
+  it("sends everything queued in a single request", async () => {
     const dir = tempDir();
-    const { telemetry, fetch } = make({ dir, env: endpoint, batchSize: 1000 });
+    const { telemetry, fetch, speak } = make({ dir, env: endpoint });
     for (let index = 0; index < 120; index += 1)
       telemetry.record("update_result", { kind: "npm", outcome: "success" });
-    fetch.mockImplementationOnce(async (_url, init) => {
-      const size = (JSON.parse(String(init.body)) as unknown[]).length;
-      return Response.json({ size, processed: size, errors: 0 });
-    });
-    fetch.mockRejectedValueOnce(new Error("offline"));
+    speak();
     await telemetry.flush();
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(sent(fetch, 0).body).toHaveLength(50);
-    expect(sent(fetch, 1).body).toHaveLength(50);
-    // 第一批收下了；第二批失败，它和第三批留着下次发
-    expect(readTelemetryQueue(dir)).toHaveLength(70);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sent(fetch).body).toHaveLength(121);
+    expect(readTelemetryQueue(dir)).toEqual([]);
   });
 
   it("doesn't put events back when turned off or reset while sending", async () => {
     for (const change of ["off", "reset"] as const) {
       const dir = tempDir();
-      const { telemetry, fetch } = make({ dir, env: endpoint });
+      const { telemetry, fetch, speak } = make({ dir, env: endpoint });
       telemetry.feature("code_panel");
+      speak();
       fetch.mockImplementationOnce(async () => {
         if (change === "off") telemetry.setEnabled(false);
         else telemetry.resetInstallId();
         throw new Error("offline");
       });
       await telemetry.flush();
+      expect(fetch).toHaveBeenCalledTimes(1);
       expect(readTelemetryQueue(dir)).toEqual([]);
     }
-  });
-
-  it("sends early once the batch size is reached", async () => {
-    const { telemetry, fetch } = make({ env: endpoint, batchSize: 3 });
-    for (let index = 0; index < 3; index += 1)
-      telemetry.record("update_result", { kind: "npm", outcome: "success" });
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
   });
 
   it("records nothing and creates no files when blocked by the environment", async () => {
@@ -293,11 +404,10 @@ describe("Telemetry", () => {
       { NODE_ENV: "test", ...endpoint },
     ]) {
       const dir = tempDir();
-      const { telemetry, fetch } = make({ dir, env });
+      const { telemetry, fetch, speak } = make({ dir, env });
       telemetry.start();
       telemetry.feature("room_create");
-      telemetry.heartbeat();
-      telemetry.incident("internal", "server");
+      speak();
       await telemetry.flush();
       expect(telemetry.status()).toMatchObject({ active: false, noticePending: false, queued: 0 });
       expect(telemetry.preview()).toBeNull();
@@ -311,11 +421,14 @@ describe("Telemetry", () => {
   });
 
   it("stops recording when turned off and deletes what was not sent", async () => {
-    const { telemetry, fetch } = make({ env: endpoint });
+    const dir = tempDir();
+    const { telemetry, fetch, speak } = make({ dir, env: endpoint });
     telemetry.feature("room_create");
-    expect(telemetry.setEnabled(false)).toMatchObject({ active: false, enabled: false, queued: 0 });
-    telemetry.feature("code_panel");
     telemetry.heartbeat();
+    expect(telemetry.setEnabled(false)).toMatchObject({ active: false, enabled: false, queued: 0 });
+    expect(readTelemetryState(dir).state).not.toHaveProperty("pendingHeartbeat");
+    telemetry.feature("code_panel");
+    speak();
     await telemetry.flush();
     expect(fetch).not.toHaveBeenCalled();
     expect(telemetry.setEnabled(true)).toMatchObject({ active: true, noticePending: false });
@@ -328,7 +441,9 @@ describe("Telemetry", () => {
     setTelemetryEnabled(dir, false);
     expect(telemetry.active()).toBe(false);
     telemetry.feature("room_create");
+    telemetry.humanMessage();
     expect(readTelemetryQueue(dir)).toEqual([]);
+    expect(readTelemetryState(dir).state).not.toHaveProperty("activeDay");
   });
 
   it("records each feature's first use only once per computer", () => {
@@ -347,30 +462,22 @@ describe("Telemetry", () => {
     ]);
   });
 
-  it("sends a heartbeat once per day with agent counts, a room bucket and incident counts", () => {
+  it("records one heartbeat per day with agent counts, a room bucket and whether anyone spoke", () => {
     const dir = tempDir();
-    const { telemetry, advance } = make({ dir });
-    telemetry.incident("external", "invocation");
-    telemetry.incident("external", "invocation");
-    telemetry.incident("internal", "server");
-    telemetry.heartbeat();
-    telemetry.heartbeat();
-    advance(60 * 60_000);
+    const { telemetry, advance, speak } = make({ dir });
+    speak();
+    speak();
+    advance(HOUR);
     telemetry.heartbeat();
     expect(readTelemetryQueue(dir).map(({ event, props }) => ({ event, props }))).toEqual([
-      { event: "heartbeat", props: { agents: { claude: 2, codex: 1 }, rooms: "2-5" } },
       {
-        event: "incident_counts",
-        props: { counts: { "external.invocation": 2, "internal.server": 1 } },
+        event: "heartbeat",
+        props: { agents: { claude: 2, codex: 1 }, rooms: "2-5", active: "yes" },
       },
     ]);
-    advance(24 * 60 * 60_000);
-    telemetry.heartbeat();
-    expect(readTelemetryQueue(dir).map((event) => event.event)).toEqual([
-      "heartbeat",
-      "incident_counts",
-      "heartbeat",
-    ]);
+    advance(DAY);
+    speak();
+    expect(readTelemetryQueue(dir).map((event) => event.event)).toEqual(["heartbeat", "heartbeat"]);
   });
 
   it("shows the first-time notice only once, also after a restart", () => {
@@ -386,6 +493,7 @@ describe("Telemetry", () => {
     const { telemetry } = make();
     const before = telemetry.status().installId;
     telemetry.feature("room_create");
+    telemetry.heartbeat();
     const after = telemetry.resetInstallId();
     expect(after.installId).not.toBe(before);
     expect(after.queued).toBe(0);
@@ -404,7 +512,7 @@ describe("Telemetry", () => {
 
   it("sends events that the CLI appended to the shared queue", async () => {
     const dir = tempDir();
-    const { telemetry, fetch } = make({ dir, env: endpoint });
+    const { telemetry, fetch, speak } = make({ dir, env: endpoint });
     telemetry.status();
     appendTelemetryEvents(dir, [
       {
@@ -414,6 +522,7 @@ describe("Telemetry", () => {
         props: { kind: "npm", outcome: "success" },
       },
     ]);
+    speak();
     await telemetry.flush();
     expect(sent(fetch).body[0]!.payload).toMatchObject({
       name: "update_result",

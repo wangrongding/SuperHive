@@ -1733,9 +1733,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   /** 记一次故障：出错只写日志，不能让归档本身影响正在处理的请求 */
   function recordIncident(occurrence: Parameters<IncidentDesk["record"]>[0]): void {
     try {
-      // 重复上报（断线重发）返回 undefined，不重复计数
-      if (incidentDesk.record(occurrence))
-        telemetry?.incident(occurrence.origin, occurrence.source);
+      incidentDesk.record(occurrence);
     } catch (error) {
       app.log.warn({ err: error }, "incident record failed");
     }
@@ -2178,6 +2176,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const result = database.createMessage(participant, input);
     if (!result.created) return result;
     const message = result.message;
+    // 匿名使用统计：这天有人在用（心跳的 active）。定时任务的触发消息、房间提示虽以人的名义发出，那时人并不在场
+    if (participant.type === "human" && message.kind !== "schedule" && message.kind !== "notice")
+      telemetry?.humanMessage();
     broadcast(participant.roomId, { type: "message.created", message });
     if (result.participant) {
       for (const connection of connections) {

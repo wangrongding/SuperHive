@@ -1,13 +1,13 @@
 /**
  * hive telemetry status|on|off|preview|reset：查看和改匿名使用统计。
  * 开关和数据在 ~/.superhive/telemetry（同一台电脑上的 Server、桌面端共用），Server 没在跑也能改；
- * 跑着的 Server 下次用到时按文件重新读，不用重启。CLI 自己从不往外发，只往本机队列里追加，由 Server 统一上报。
+ * 跑着的 Server 下次用到时按文件重新读，不用重启。CLI 自己从不往外发，只往本机队列里追加，由 Server
+ * 每天跟心跳一起上报。
  */
 import {
   TELEMETRY_DOCS_URL,
   appendTelemetryEvents,
   hourOf,
-  readTelemetryQueue,
   readTelemetryState,
   resetTelemetryId,
   setTelemetryEnabled,
@@ -15,6 +15,7 @@ import {
   telemetryContext,
   telemetryDir,
   telemetryEndpoint,
+  telemetryOutbox,
   telemetryRequestBody,
   telemetryRunMode,
   telemetrySite,
@@ -35,7 +36,7 @@ const usage = `用法：
   hive telemetry status   查看匿名使用统计开着没有、为什么
   hive telemetry on       打开
   hive telemetry off      关闭，并删掉还没发出的数据
-  hive telemetry preview  打印下一次要发送的数据（发给统计服务的原始 JSON）
+  hive telemetry preview  打印等着发送的数据（发给统计服务的原始 JSON，每天最多发一次）
   hive telemetry reset    换一个新的随机安装 ID，并删掉还没发出的数据
 
 也可以设环境变量 SUPERHIVE_TELEMETRY=0 或 DO_NOT_TRACK=1 一律关闭。
@@ -73,9 +74,11 @@ export function telemetryStatusText(
           : "匿名使用统计：开（源码运行默认不上报：只在本机记录，一条都不发；要发设 SUPERHIVE_TELEMETRY_URL）",
     );
     if (endpoint)
-      lines.push(`  上报到：${endpoint.replace(/\/api\/batch$/, "")}（自部署的 Umami）`);
+      lines.push(
+        `  上报到：${endpoint.replace(/\/api\/batch$/, "")}（自部署的 Umami，每天最多发一次）`,
+      );
     lines.push(
-      `  等着发的数据：${readTelemetryQueue(dir).length} 条（hive telemetry preview 查看）`,
+      `  等着发的数据：${telemetryOutbox(dir, state).length} 条（hive telemetry preview 查看）`,
     );
     lines.push("  关闭：hive telemetry off，或设环境变量 SUPERHIVE_TELEMETRY=0");
   }
@@ -122,7 +125,7 @@ export function telemetryCommand(args: string[], options: TelemetryCommandOption
       );
       return;
     }
-    const queue = readTelemetryQueue(dir);
+    const queue = telemetryOutbox(dir, state);
     write(
       queue.length
         ? JSON.stringify(telemetryRequestBody(telemetrySite(env), state.installId, queue), null, 2)
@@ -139,7 +142,8 @@ export function telemetryCommand(args: string[], options: TelemetryCommandOption
 }
 
 /**
- * CLI 自己记一条事件（比如网页里点的 npm 更新，由 web-update 子进程完成）：只追加到本机队列，由 Server 统一发。
+ * CLI 自己记一条事件（比如网页里点的 npm 更新，由 web-update 子进程完成）：只追加到本机队列，由 Server
+ * 跟下一次心跳一起发。
  * 没开、被挡住时什么都不做；出任何错都吞掉，不影响命令本身。
  */
 export function recordCliTelemetry(

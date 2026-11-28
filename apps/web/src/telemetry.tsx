@@ -153,7 +153,9 @@ export function TelemetrySettingsGroup({ local }: { local: LocalAgentsState }) {
         checked={status.enabled && !status.blocker}
         disabled={!owner || Boolean(status.blocker) || busy}
         label={t("匿名使用统计")}
-        description={t("只收版本、系统、用过哪些功能这类匿名数据，不收消息、路径、名字和 key")}
+        description={t(
+          "每天最多上报一次版本、系统、用过哪些功能这类匿名数据，不收消息、路径、名字和 key",
+        )}
         onChange={(checked) => run(() => local.updateTelemetry(checked), true)}
       />
       {status.blocker && <p className="settings-note">{blockerText[status.blocker]}</p>}
@@ -271,7 +273,7 @@ export function TelemetryNotice({
           <UpdateCard title={t("匿名使用统计")} onClose={close}>
             <p className="update-card-text">
               {t(
-                "为了知道哪些功能有人用、更新有没有出问题，SuperHive 会记下版本、系统、用过哪些功能这类匿名数据，不收消息、路径、名字和 key。",
+                "为了知道每天有多少人在用、哪些功能有人用、更新有没有出问题，SuperHive 每天最多上报一次版本、系统、用过哪些功能这类匿名数据，不收消息、路径、名字和 key。",
               )}
             </p>
             {status && !status.endpoint && (

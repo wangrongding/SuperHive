@@ -77,7 +77,7 @@ hive start --host 127.0.0.1 --port 8787 --no-open
 | `hive telemetry status`  | 查看统计开没开、为什么关、有没有上报地址 | 不带子命令时也是这个                        |
 | `hive telemetry off`     | 关掉匿名使用统计                         | 还没发出去的数据一起删掉                    |
 | `hive telemetry on`      | 重新打开                                 | 环境变量挡住时（如 `DO_NOT_TRACK=1`）仍然关 |
-| `hive telemetry preview` | 打印下一次要发的原始 JSON                | 和网页设置里「查看要发送的数据」一样        |
+| `hive telemetry preview` | 打印等着发的原始 JSON                    | 和网页设置里「查看要发送的数据」一样        |
 | `hive telemetry reset`   | 换一个新的随机安装 ID                    | 旧 ID 下没发出去的数据一起删掉              |
 
 收什么、不收什么见[使用统计](/reference/telemetry/)。

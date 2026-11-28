@@ -20,9 +20,8 @@
       event: "heartbeat",
       time,
       context,
-      props: { agents: { claude: 4, codex: 1, omp: 1 }, rooms: "2-5" },
+      props: { agents: { claude: 4, codex: 1, omp: 1 }, rooms: "2-5", active: "yes" },
     },
-    { event: "incident_counts", time, context, props: { counts: { "external.invocation": 2 } } },
     { event: "feature_first_used", time, context, props: { feature: "room_create" } },
     { event: "feature_first_used", time, context, props: { feature: "code_panel" } },
     {

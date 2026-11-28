@@ -48,7 +48,7 @@ describe("hive telemetry", () => {
     for (const runMode of ["npm", "desktop"] as const) {
       const { text } = run(["status"], {}, tempDir(), runMode);
       expect(text).toContain("匿名使用统计：开\n");
-      expect(text).toContain("上报到：https://60.205.92.58（自部署的 Umami）");
+      expect(text).toContain("上报到：https://60.205.92.58（自部署的 Umami，每天最多发一次）");
       expect(text).toContain("hive telemetry off");
     }
   });
@@ -61,7 +61,7 @@ describe("hive telemetry", () => {
     expect(text).not.toContain("上报到");
     expect(
       run(["status"], { SUPERHIVE_TELEMETRY_URL: "https://stats.example.com" }).text,
-    ).toContain("上报到：https://stats.example.com（自部署的 Umami）");
+    ).toContain("上报到：https://stats.example.com（自部署的 Umami，每天最多发一次）");
     // 设错了不退回内置地址
     expect(
       run(["status"], { SUPERHIVE_TELEMETRY_URL: "stats.example.com" }, tempDir(), "npm").text,
@@ -129,6 +129,39 @@ describe("hive telemetry", () => {
     const site = "0f8c2a4e-1b3d-4e5f-8a9b-0c1d2e3f4a5b";
     const custom = JSON.parse(run(["preview"], { SUPERHIVE_TELEMETRY_SITE: site }, dir).text);
     expect(custom[0].payload.website).toBe(site);
+  });
+
+  it("includes today's heartbeat that is still waiting for someone to send a message", () => {
+    const dir = tempDir();
+    const time = hourOf(Date.now());
+    const pendingHeartbeat = {
+      event: "heartbeat" as const,
+      time,
+      context: {
+        version: "0.4.9",
+        runMode: "npm",
+        os: "linux",
+        arch: "x64",
+        locale: "en",
+      } as const,
+      props: { agents: { claude: 1 }, rooms: "1", active: "no" },
+    };
+    writeTelemetryState(dir, { ...readTelemetryState(dir).state, pendingHeartbeat });
+    const preview = () =>
+      JSON.parse(run(["preview"], {}, dir).text) as Array<{ payload: { data: object } }>;
+    expect(preview().map((item) => item.payload.data)).toEqual([
+      expect.objectContaining({ agents_claude: 1, rooms: "1", active: "no" }),
+    ]);
+    expect(run(["status"], {}, dir).text).toContain("等着发的数据：1 条");
+    // 当天有人发过消息：发出去时是 active=yes
+    writeTelemetryState(dir, {
+      ...readTelemetryState(dir).state,
+      activeDay: time.slice(0, 10),
+    });
+    expect(preview()[0]!.payload.data).toMatchObject({ active: "yes" });
+    // 关掉时待定的心跳也一起删掉
+    run(["off"], {}, dir);
+    expect(readTelemetryState(dir).state).not.toHaveProperty("pendingHeartbeat");
   });
 
   it("resets the install ID", () => {
