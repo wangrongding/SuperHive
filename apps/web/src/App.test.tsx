@@ -5547,4 +5547,114 @@ describe("App mention autocomplete", () => {
     );
     expect(await screen.findByRole("button", { name: /工作区文件与改动/ })).toBeTruthy();
   });
+
+  it("桌面端关着局域网时不发 127.0.0.1 的邀请链接和远程命令，按钮直达设置开关；打开后换成新地址", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("superhive.username", "Alice");
+    localStorage.setItem("superhive.notify-prompt-dismissed", "true");
+    localApi.enabled = true;
+    let httpUrl = "http://127.0.0.1:8799";
+    let metaFetches = 0;
+    const original = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/api/meta")) {
+          metaFetches += 1;
+          return jsonResponse({
+            name: "SuperHive",
+            roomId: "general",
+            httpUrl,
+            wsUrl: `${httpUrl.replace("http", "ws")}/ws`,
+            mcpUrl: `${httpUrl}/mcp`,
+            joinToken: "test-token",
+            agentCommand: `npx --yes superhive@latest join --server ${httpUrl} --name my-agent --token test-token`,
+          });
+        }
+        return original(input, init);
+      }),
+    );
+    let lanState = { enabled: false, managed: true, restarting: false };
+    const listeners = new Set<(state: typeof lanState) => void>();
+    const push = (state: typeof lanState) => listeners.forEach((listener) => listener(state));
+    const noop = () => () => undefined;
+    window.superhiveDesktop = {
+      version: 1,
+      platform: "darwin",
+      terminal: {
+        create: noop,
+        write: noop,
+        resize: noop,
+        kill: noop,
+        onData: noop,
+        onExit: noop,
+        onNewRequest: noop,
+      },
+      lan: {
+        get: async () => lanState,
+        set: async (enabled: boolean) => (lanState = { ...lanState, enabled }),
+        firewall: async () => null,
+        onChange: (listener: (state: typeof lanState) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as NonNullable<typeof window.superhiveDesktop>;
+    try {
+      render(<App />);
+      await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0]!;
+      act(() => socket.open());
+      const self = participant("00000000-0000-4000-8000-000000000001", "Alice", "human");
+      act(() =>
+        socket.serverEvent({
+          type: "room.snapshot",
+          self,
+          participants: [self],
+          messages: [],
+          latestSeq: 0,
+        }),
+      );
+      const membersPanel = screen.getByLabelText("成员列表");
+
+      // 邀请成员：不生成链接，换成说明 + 按钮
+      await user.click(within(membersPanel).getByRole("button", { name: /邀请成员/ }));
+      const inviteDialog = await screen.findByRole("dialog", { name: /邀请成员/ });
+      await within(inviteDialog).findByText(/要邀请别的设备上的人/);
+      expect(within(inviteDialog).queryByRole("button", { name: /生成/ })).toBeNull();
+      await user.click(within(inviteDialog).getByRole("button", { name: "去打开局域网访问" }));
+      expect(screen.queryByRole("dialog", { name: /邀请成员/ })).toBeNull();
+      const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
+      expect(
+        within(settingsDialog).getByRole("tab", { name: /^设备/ }).getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(
+        await within(settingsDialog).findByRole("switch", { name: /允许局域网设备访问/ }),
+      ).toBeTruthy();
+      await user.keyboard("{Escape}");
+
+      // 接入 Agent：本机启动照旧，复制的命令标明只能在这台电脑上跑
+      await user.click(within(membersPanel).getByRole("button", { name: "接入 Agent" }));
+      await user.click(await screen.findByRole("radio", { name: /OpenCode/ }));
+      await user.click(screen.getByRole("button", { name: "下一步" }));
+      await user.click(screen.getByRole("button", { name: "下一步" }));
+      expect(screen.getByRole("button", { name: "在本机启动" })).toBeTruthy();
+      expect(screen.getByText(/这条命令只能在这台电脑上运行/)).toBeTruthy();
+      await user.click(screen.getByRole("button", { name: "关闭" }));
+
+      // 在别处打开了局域网：Server 换地址重启完，重取 meta，提示消失
+      const before = metaFetches;
+      httpUrl = "http://192.168.1.5:8799";
+      act(() => push({ enabled: true, managed: true, restarting: true }));
+      act(() => push({ enabled: true, managed: true, restarting: false }));
+      await waitFor(() => expect(metaFetches).toBe(before + 1));
+      await user.click(within(membersPanel).getByRole("button", { name: /邀请成员/ }));
+      const reopened = await screen.findByRole("dialog", { name: /邀请成员/ });
+      expect(within(reopened).getByRole("button", { name: /生成/ })).toBeTruthy();
+      expect(within(reopened).queryByText(/要邀请别的设备上的人/)).toBeNull();
+    } finally {
+      delete window.superhiveDesktop;
+    }
+  });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveServerBase, resolveShareBase, resolveWebSocketUrl } from "./server-url";
+import {
+  isLoopbackUrl,
+  resolveServerBase,
+  resolveShareBase,
+  resolveWebSocketUrl,
+} from "./server-url";
 
 describe("resolveServerBase", () => {
   it("uses the Hive Server on 8787 for any Vite development port", () => {
@@ -125,5 +130,17 @@ describe("resolveShareBase", () => {
         advertisedUrl: "https://hive.example.com/",
       }),
     ).toBe("https://hive.example.com");
+  });
+});
+
+describe("isLoopbackUrl", () => {
+  it("认出本机回环地址，局域网地址、公网地址和解析不了的都不算", () => {
+    expect(isLoopbackUrl("http://127.0.0.1:8799")).toBe(true);
+    expect(isLoopbackUrl("http://localhost:8799/")).toBe(true);
+    expect(isLoopbackUrl("http://[::1]:8799")).toBe(true);
+    expect(isLoopbackUrl("http://192.168.1.5:8799")).toBe(false);
+    expect(isLoopbackUrl("https://hive.example.com")).toBe(false);
+    expect(isLoopbackUrl("not a url")).toBe(false);
+    expect(isLoopbackUrl(undefined)).toBe(false);
   });
 });

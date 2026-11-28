@@ -5,6 +5,7 @@ import { SettingsSwitch } from "./settings-switch";
 import { copyTextToClipboard } from "./clipboard";
 import { localized, t } from "./i18n";
 import { Button } from "./button";
+import { isLoopbackUrl } from "./server-url";
 import {
   desktopBridge,
   type DesktopFirewallStatus,
@@ -253,6 +254,34 @@ export function useDesktopLan(
   );
   if (!api || !state?.managed) return undefined;
   return { state, set, api };
+}
+
+/**
+ * 发给别的设备的链接和命令现在能不能用：桌面端自己起的 Server 关着局域网时只听 127.0.0.1，
+ * 公布的地址也是 127.0.0.1，发出去别人打不开。设了 HIVE_PUBLIC_URL（公布地址不是本机）、
+ * 连的是别人起的 Server（lan 为 undefined）或网页版都不受影响。正在切换时以公布地址为准。
+ */
+export function lanBlocksSharing(input: {
+  localMode: LocalAgentsState["mode"];
+  lan: { state: DesktopLanState } | undefined;
+  advertisedUrl: string | undefined;
+}): boolean {
+  const { lan } = input;
+  if (input.localMode !== "local" || !lan) return false;
+  if (lan.state.enabled && !lan.state.restarting) return false;
+  return isLoopbackUrl(input.advertisedUrl);
+}
+
+/** 局域网关着时替代邀请链接 / 远程接入命令的一句话说明，按钮直接去设置「设备」页打开开关 */
+export function LanShareNote({ message, onOpen }: { message: string; onOpen: () => void }) {
+  return (
+    <div className="lan-share-note" role="status">
+      <p>{message}</p>
+      <Button size="sm" onClick={onOpen}>
+        {t("去打开局域网访问")}
+      </Button>
+    </div>
+  );
 }
 
 /** 设备页最上面：「允许局域网设备访问」开关，Windows 上开着时顺带查防火墙 */

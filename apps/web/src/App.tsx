@@ -118,7 +118,12 @@ import { platformModifierLabel } from "./ui-utils";
 import { AgentAccessMode, AgentSetupStep, agentCommandFor } from "./agent-setup";
 import { PinGlyph, Icon } from "./app-icons";
 import { serverBase } from "./server-base";
-import { HostApprovalsBanner, HostApprovalWaiting } from "./host-settings";
+import {
+  HostApprovalsBanner,
+  HostApprovalWaiting,
+  lanBlocksSharing,
+  useDesktopLan,
+} from "./host-settings";
 import { LoginDialog } from "./login-dialog";
 import { RoomDialog } from "./room-dialog";
 import { isAutoLead, leadChoiceOf, leadPatchOf } from "./lead-agent";
@@ -757,6 +762,21 @@ export function App({
     root.dataset.reduceMotion = String(reduceMotion);
   }, [interfaceDensity, messageSize, reduceMotion, threadWidth]);
 
+  // 桌面端换了监听地址（开关「允许局域网设备访问」）后 Server 重启、页面不刷新：
+  // 切换完成时重取一次 meta，邀请链接和接入命令跟着换成新地址
+  const desktopLan = useDesktopLan();
+  const lanSettled =
+    desktopLan && !desktopLan.state.restarting ? desktopLan.state.enabled : undefined;
+  const lastLanSettled = useRef(lanSettled);
+  const [metaEpoch, setMetaEpoch] = useState(0);
+  useEffect(() => {
+    if (lanSettled === undefined) return;
+    if (lastLanSettled.current !== undefined && lastLanSettled.current !== lanSettled) {
+      setMetaEpoch((value) => value + 1);
+    }
+    lastLanSettled.current = lanSettled;
+  }, [lanSettled]);
+
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
@@ -789,7 +809,7 @@ export function App({
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [base, ownerToken]);
+  }, [base, ownerToken, metaEpoch]);
 
   const scroll = useMessageScroll({ messages, username, timeline });
   const { setPendingNewMessages, setShowJumpToBottom, nearBottomRef } = scroll;
@@ -977,6 +997,24 @@ export function App({
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [closeMobilePanel, mobilePanel]);
+
+  const sharingBlocked = lanBlocksSharing({
+    localMode: local.mode,
+    lan: desktopLan,
+    advertisedUrl: meta?.httpUrl,
+  });
+  /** 邀请 / 接入弹窗里的「去打开局域网访问」：关掉弹窗，打开设置「设备」页，开关在最上面 */
+  const lanBlocked = sharingBlocked
+    ? {
+        openSettings: () => {
+          setInviteDialogOpen(false);
+          setAgentDialogOpen(false);
+          setFullAccessConfirmationOpen(false);
+          setSettingsTab("devices");
+          setSettingsOpen(true);
+        },
+      }
+    : undefined;
 
   const closeAgentDialog = useCallback(() => {
     setAgentDialogOpen(false);
@@ -3005,6 +3043,7 @@ export function App({
           adminToken={authToken}
           roomId={currentRoomId}
           linkFor={(token) => `${inviteLink()}?invite=${token}`}
+          lanBlocked={lanBlocked}
           onClose={() => setInviteDialogOpen(false)}
         />
       )}
@@ -3100,6 +3139,7 @@ export function App({
           setAgentProviderChosen={setAgentProviderChosen}
           takenAgentNames={takenAgentNames}
           username={username}
+          lanBlocked={lanBlocked}
         />
       )}
 

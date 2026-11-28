@@ -3,7 +3,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OwnerDevicesPanel } from "./host-settings";
+import { OwnerDevicesPanel, lanBlocksSharing } from "./host-settings";
 import type { LocalAgentsState } from "./local-agents";
 import type { DesktopFirewallStatus, DesktopLanState } from "./desktop-bridge";
 
@@ -150,5 +150,52 @@ describe("允许局域网设备访问", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     act(() => bridge.push({ enabled: false, managed: true, restarting: false }));
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+});
+
+describe("局域网关着时发给别的设备的链接和命令", () => {
+  const off = { state: { enabled: false, managed: true, restarting: false } };
+  const on = { state: { enabled: true, managed: true, restarting: false } };
+
+  it("桌面端自管 Server、关着局域网、公布地址是本机时拦下", () => {
+    for (const advertisedUrl of [
+      "http://127.0.0.1:8799",
+      "http://localhost:8799",
+      "http://[::1]:8799",
+    ]) {
+      expect(lanBlocksSharing({ localMode: "local", lan: off, advertisedUrl })).toBe(true);
+    }
+  });
+
+  it("正在切换时以公布地址为准：打开中、地址还没换过来也拦下", () => {
+    const opening = { state: { enabled: true, managed: true, restarting: true } };
+    expect(
+      lanBlocksSharing({ localMode: "local", lan: opening, advertisedUrl: "http://127.0.0.1:1" }),
+    ).toBe(true);
+    expect(
+      lanBlocksSharing({ localMode: "local", lan: opening, advertisedUrl: "http://10.0.0.2:1" }),
+    ).toBe(false);
+  });
+
+  it("开着局域网、设了 HIVE_PUBLIC_URL、网页版或连别人起的 Server 都不拦", () => {
+    const loopback = "http://127.0.0.1:8799";
+    expect(lanBlocksSharing({ localMode: "local", lan: on, advertisedUrl: loopback })).toBe(false);
+    expect(
+      lanBlocksSharing({
+        localMode: "local",
+        lan: off,
+        advertisedUrl: "https://hive.example.com",
+      }),
+    ).toBe(false);
+    // 网页版没有桌面桥；hive start 起的 Server 时 useDesktopLan 返回 undefined
+    expect(lanBlocksSharing({ localMode: "local", lan: undefined, advertisedUrl: loopback })).toBe(
+      false,
+    );
+    expect(lanBlocksSharing({ localMode: "device", lan: off, advertisedUrl: loopback })).toBe(
+      false,
+    );
+    expect(lanBlocksSharing({ localMode: "local", lan: off, advertisedUrl: undefined })).toBe(
+      false,
+    );
   });
 });

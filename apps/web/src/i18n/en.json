@@ -2707,5 +2707,8 @@
   "确认升级 {0} 个 CLI": "Confirm updating {0} CLIs",
   "最多同时跑 3 个；正在用这些 CLI 的 Agent 不会自动重启，升完再重启。": "Up to 3 run at once. Agents using these CLIs won't restart on their own; restart them afterwards.",
   "升级 {0} 个": "Update {0}",
-  "复制失败": "Copy failed"
+  "复制失败": "Copy failed",
+  "现在只有这台电脑能打开 SuperHive。要邀请别的设备上的人，先打开「允许局域网设备访问」。": "Right now only this computer can open SuperHive. To invite people on other devices, turn on \"Allow devices on your network\" first.",
+  "这条命令只能在这台电脑上运行。要在别的电脑上接入 Agent，先打开「允许局域网设备访问」。": "This command only works on this computer. To connect an Agent from another computer, turn on \"Allow devices on your network\" first.",
+  "去打开局域网访问": "Turn on LAN access"
 }

@@ -34,6 +34,16 @@ export function resolveWebSocketUrl(input: {
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
+/** 地址指向本机回环（别的设备拿到也打不开）；解析不了的按不是处理 */
+export function isLoopbackUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return LOOPBACK_HOSTS.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 发给别人的链接（邀请、分享）用的地址。开发时页面多半开在 localhost 上，别人打不开：
  * 换成 Server 公布的局域网主机名，端口仍用当前页面（Vite）的；正式环境直接用 Server 公布的地址。

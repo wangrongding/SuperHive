@@ -17,7 +17,7 @@ import { providerInfo, LocalLaunch, type LocalAgentsState } from "./local-agents
 import { ProviderLogo } from "./provider-logos";
 import { hasRuntimeConfig } from "./runtime-credentials";
 import { ConfirmPopover } from "./confirm-popover";
-import { HostManageNotice } from "./host-settings";
+import { HostManageNotice, LanShareNote } from "./host-settings";
 import type { RefObject, Dispatch, SetStateAction } from "react";
 import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
@@ -53,6 +53,7 @@ export function AgentSetupDialog({
   setAgentProviderChosen,
   takenAgentNames,
   username,
+  lanBlocked,
   rejoin,
 }: {
   rejoin?: RemovedLocalAgent & { participantId: string };
@@ -84,6 +85,8 @@ export function AgentSetupDialog({
   setAgentProviderChosen: Dispatch<SetStateAction<boolean>>;
   takenAgentNames: Set<string>;
   username: string;
+  /** 桌面端关着局域网：命令里的地址是 127.0.0.1，只能在这台电脑上跑，提示去打开 */
+  lanBlocked?: { openSettings: () => void } | undefined;
 }) {
   return (
     <div className="agent-dialog-layer">
@@ -388,6 +391,14 @@ export function AgentSetupDialog({
               // 复制命令这一整段：本机模式下折叠为"或复制命令"，否则直接展示
               const commandSection = (
                 <>
+                  {lanBlocked && (
+                    <LanShareNote
+                      message={t(
+                        "这条命令只能在这台电脑上运行。要在别的电脑上接入 Agent，先打开「允许局域网设备访问」。",
+                      )}
+                      onOpen={lanBlocked.openSettings}
+                    />
+                  )}
                   <div className="command">
                     <div className="command-heading">
                       <span className="terminal-dots" aria-hidden="true">

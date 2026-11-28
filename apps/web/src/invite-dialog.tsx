@@ -21,6 +21,7 @@ import { agentProviderLabel, guestAgentCommand, selectableAgentProviders } from 
 import type { SelectableAgentProvider } from "./agent-name";
 import { localized, t } from "./i18n";
 import { Button, IconButton, buttonClass } from "./button";
+import { LanShareNote } from "./host-settings";
 
 type DurationChoice = { kind: "preset"; minutes: number | null } | { kind: "custom" };
 
@@ -169,12 +170,15 @@ export function InviteDialog({
   roomId,
   linkFor,
   onClose,
+  lanBlocked,
 }: {
   base: string;
   adminToken: string;
   roomId: string;
   linkFor: (token: string) => string;
   onClose: () => void;
+  /** 桌面端关着局域网：链接只能本机打开，不生成新的、不给复制；已有的照样能续期、撤销 */
+  lanBlocked?: { openSettings: () => void } | undefined;
 }) {
   const [minutes, setMinutes] = useState<number | null | undefined>(24 * 60);
   const [allowAgents, setAllowAgents] = useState(false);
@@ -268,7 +272,7 @@ export function InviteDialog({
           </div>
           {state !== "revoked" && renewing !== invite.id && (
             <div className="invite-item-actions">
-              {link && state === "active" && (
+              {link && state === "active" && !lanBlocked && (
                 <Button size="sm" onClick={() => void copy(invite.id, link)}>
                   {copiedId === invite.id ? t("已复制") : t("复制链接")}
                 </Button>
@@ -355,92 +359,101 @@ export function InviteDialog({
         </header>
 
         <div className="invite-dialog-body">
-          <form
-            className="invite-create"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <div className="invite-field">
-              <span className="invite-label">{t("有效期")}</span>
-              <DurationPicker onChange={setMinutes} />
-              <small>
-                {t("到期后，凭这个链接进来的人和他们带进来的 Agent 会被断开，已发的消息保留。")}
-              </small>
-            </div>
-
-            <button
-              type="button"
-              role="switch"
-              aria-checked={allowAgents}
-              className="invite-switch"
-              onClick={() => setAllowAgents((value) => !value)}
+          {lanBlocked ? (
+            <LanShareNote
+              message={t(
+                "现在只有这台电脑能打开 SuperHive。要邀请别的设备上的人，先打开「允许局域网设备访问」。",
+              )}
+              onOpen={lanBlocked.openSettings}
+            />
+          ) : (
+            <form
+              className="invite-create"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submit();
+              }}
             >
-              <span>
-                <strong>{t("允许对方直接让房间里的 Agent 干活")}</strong>
+              <div className="invite-field">
+                <span className="invite-label">{t("有效期")}</span>
+                <DurationPicker onChange={setMinutes} />
                 <small>
-                  {t(
-                    "关闭时，对方 @ 你的 Agent 需要你点「批准」才会执行。你的 Agent 可能有本机完全权限。",
-                  )}
+                  {t("到期后，凭这个链接进来的人和他们带进来的 Agent 会被断开，已发的消息保留。")}
                 </small>
-              </span>
-              <i className="switch-control" aria-hidden="true">
-                <b />
-              </i>
-            </button>
-
-            <button
-              type="button"
-              role="switch"
-              aria-checked={showTrace}
-              className="invite-switch"
-              onClick={() => setShowTrace((value) => !value)}
-            >
-              <span>
-                <strong>{t("让对方看到 Agent 的执行过程")}</strong>
-                <small>
-                  {t(
-                    "打开时，对方在「详情」里能实时看到 Agent 跑的命令、读写的文件和中途说的话（已遮掉密钥）。关闭时只看到「执行中」这类精简状态。",
-                  )}
-                </small>
-              </span>
-              <i className="switch-control" aria-hidden="true">
-                <b />
-              </i>
-            </button>
-
-            {error && (
-              <p className="room-dialog-error" role="alert">
-                {error}
-              </p>
-            )}
-
-            {created && (
-              <div className="invite-created" role="status">
-                <div className="invite-created-head">
-                  <strong>
-                    {created.copied ? t("已复制邀请链接") : t("邀请链接已生成，请手动复制")}
-                  </strong>
-                  <small>
-                    {t("{0} · 可以发给多人", { 0: formatDeadline(created.invite.expiresAt) })}
-                  </small>
-                </div>
-                <div className="invite-link-row">
-                  <code>{created.link}</code>
-                  <Button size="sm" onClick={() => void copy(created.invite.id, created.link)}>
-                    {copiedId === created.invite.id ? t("已复制") : t("复制")}
-                  </Button>
-                </div>
               </div>
-            )}
 
-            <div className="dialog-actions">
-              <Button type="submit" variant="primary" disabled={busy || minutes === undefined}>
-                {busy ? t("正在生成…") : created ? t("再生成一个链接") : t("生成并复制链接")}
-              </Button>
-            </div>
-          </form>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={allowAgents}
+                className="invite-switch"
+                onClick={() => setAllowAgents((value) => !value)}
+              >
+                <span>
+                  <strong>{t("允许对方直接让房间里的 Agent 干活")}</strong>
+                  <small>
+                    {t(
+                      "关闭时，对方 @ 你的 Agent 需要你点「批准」才会执行。你的 Agent 可能有本机完全权限。",
+                    )}
+                  </small>
+                </span>
+                <i className="switch-control" aria-hidden="true">
+                  <b />
+                </i>
+              </button>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showTrace}
+                className="invite-switch"
+                onClick={() => setShowTrace((value) => !value)}
+              >
+                <span>
+                  <strong>{t("让对方看到 Agent 的执行过程")}</strong>
+                  <small>
+                    {t(
+                      "打开时，对方在「详情」里能实时看到 Agent 跑的命令、读写的文件和中途说的话（已遮掉密钥）。关闭时只看到「执行中」这类精简状态。",
+                    )}
+                  </small>
+                </span>
+                <i className="switch-control" aria-hidden="true">
+                  <b />
+                </i>
+              </button>
+
+              {error && (
+                <p className="room-dialog-error" role="alert">
+                  {error}
+                </p>
+              )}
+
+              {created && (
+                <div className="invite-created" role="status">
+                  <div className="invite-created-head">
+                    <strong>
+                      {created.copied ? t("已复制邀请链接") : t("邀请链接已生成，请手动复制")}
+                    </strong>
+                    <small>
+                      {t("{0} · 可以发给多人", { 0: formatDeadline(created.invite.expiresAt) })}
+                    </small>
+                  </div>
+                  <div className="invite-link-row">
+                    <code>{created.link}</code>
+                    <Button size="sm" onClick={() => void copy(created.invite.id, created.link)}>
+                      {copiedId === created.invite.id ? t("已复制") : t("复制")}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <div className="dialog-actions">
+                <Button type="submit" variant="primary" disabled={busy || minutes === undefined}>
+                  {busy ? t("正在生成…") : created ? t("再生成一个链接") : t("生成并复制链接")}
+                </Button>
+              </div>
+            </form>
+          )}
 
           <section className="invite-list" aria-label={t("本房间的邀请")}>
             <h3>
