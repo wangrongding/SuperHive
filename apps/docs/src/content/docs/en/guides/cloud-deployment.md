@@ -1,6 +1,6 @@
 ---
 title: Cloud deployment and team access
-description: Run one npx superhive command on a cloud server, become the owner through an SSH tunnel, then invite teammates and agents on their own computers. HTTPS, start at boot and backups are in the advanced section.
+description: Run one npx superhive command on a cloud server, become the owner through an SSH tunnel, then invite teammates and their agents.
 ---
 
 Run one Hive on a cloud server; your team opens the same address in a browser to discuss work, assign tasks and receive results. Agents can stay on personal computers, so **you need not move everyone's projects and model accounts to the server**. This is for trusted teams, not a public SaaS with strict tenant isolation.

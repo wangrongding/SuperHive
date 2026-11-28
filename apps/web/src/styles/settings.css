@@ -739,13 +739,19 @@
   font-size: var(--text-sm);
 }
 
+/* 右边这栏是 flex 子项：不给 min-width: 0 会被长链接撑出卡片 */
+.owner-pair > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 链接完整换行显示，不截断也不溢出 */
 .owner-pair-url {
   display: block;
-  overflow: hidden;
   color: var(--text-tertiary);
   font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 /* Windows 防火墙拦着时的提示：路径完整换行显示，方便照着找 */
