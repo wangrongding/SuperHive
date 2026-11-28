@@ -15,6 +15,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 import {
+  localAgentAccessSchema,
   maskProxyUrl,
   isAgentOutdated,
   runtimeReasoningEfforts,
@@ -27,6 +28,7 @@ import type {
   AgentCodeVersion,
   CreateLocalAgentRequest,
   LocalAgent,
+  LocalAgentAccess,
   LocalAgentMcpResponse,
   LocalAgentModelsResponse,
   LocalAgentProvider,
@@ -262,7 +264,13 @@ type Runtime = {
   /** 正在重启（等旧进程退出）：这期间不接受设置改动，免得新进程用上没批准过的配置 */
   transitioning?: boolean;
   /** 人点了「重启」但它正忙：等手上的调用都结束再重启；guard 是批准单绑定的配置核对 */
-  pendingRestart?: { guard?: ((agent: LocalAgent) => boolean) | undefined } | undefined;
+  pendingRestart?:
+    | {
+        guard?: ((agent: LocalAgent) => boolean) | undefined;
+        /** 只是为了换成新权限才等着重启：权限又改回启动时的样子就不用重启了 */
+        forAccess?: boolean;
+      }
+    | undefined;
   /** 上次自动更新重启时的目标版本：同一个目标只自动重启一次，重启后仍判为旧就不再重试 */
   autoRestartedFor?: string | undefined;
   lastAutoRestartAt?: number | undefined;
@@ -270,6 +278,11 @@ type Runtime = {
   outdatedSince?: { key: string; at: number } | undefined;
   /** 这次启动没能用配置里的工作目录、退回了主目录（见 checkCwd） */
   cwdFallback?: CwdFallback | undefined;
+  /**
+   * 在跑的进程是按什么权限和工作目录启动的：设置里改了以后，和配置不一致就要重启才生效。
+   * cwd 为 undefined：接管来的进程，认不出它的目录、只知道和配置不一样
+   */
+  launched?: { access: LocalAgentAccess; cwd: string | null | undefined } | undefined;
 };
 
 export type CwdFallback = NonNullable<LocalAgent["cwdFallback"]>;
@@ -785,6 +798,13 @@ export class LocalAgentSupervisor {
           previous.commandLine !== undefined
             ? previous.commandLine.includes("--agent-settings")
             : await processHasArgument(previous.pid, "--agent-settings");
+        runtime.launched = adoptedLaunch(config, previous.commandLine, this.options.home?.());
+        // 上一个 Server 改了权限、还没等到它空闲就交接了：接着等它空闲再按新权限重启
+        if (runtime.launched.access !== config.access || runtime.launched.cwd !== config.cwd) {
+          runtime.pendingRestart = { forAccess: true };
+          this.appendLog(runtime, "[hive] 权限设置改过还没生效，手上的任务做完后按新权限重启\n");
+          this.checkSoon();
+        }
         continue;
       }
       // 不该再运行的（已手动停止）结束掉；已经不在的清掉记录
@@ -864,9 +884,16 @@ export class LocalAgentSupervisor {
       effort?: string | null | undefined;
       compactWindow?: ClaudeCompactWindow | null | undefined;
       cacheTtl?: ClaudeCacheTtl | null | undefined;
+      access?: LocalAgentAccess | undefined;
+      cwd?: string | undefined;
     },
   ): LocalAgent {
     const runtime = this.require(id);
+    // 权限和工作目录先整体核对：目录不对就整次不存，别的设置也不动
+    const accessChange =
+      settings.access !== undefined || settings.cwd !== undefined
+        ? this.accessChange(runtime, settings.access, settings.cwd)
+        : undefined;
     // 自动压缩阈值、缓存时长：只有 Claude Code 有，写进设置文件，下一轮生效
     if (settings.compactWindow !== undefined || settings.cacheTtl !== undefined) {
       if (!supportsClaudeContextSettings(runtime.config.provider)) {
@@ -913,6 +940,7 @@ export class LocalAgentSupervisor {
         settings.autoSteer ? "1" : "0",
       );
     }
+    if (accessChange) this.applyAccess(runtime, accessChange);
     if (settings.mcpDisabled === undefined) return this.view(runtime);
     if (runtime.transitioning) {
       throw new HiveError("LOCAL_AGENT_BUSY", serverText("error.localAgent.restartingSettings"));
@@ -929,6 +957,66 @@ export class LocalAgentSupervisor {
     );
     this.writeSettings(runtime.config);
     return this.view(runtime);
+  }
+
+  /**
+   * 算出要改成的权限和工作目录；和现在一样时返回 undefined。可写的档位必须有工作目录（和接入时一样
+   * 核对：存在、是目录、不是根目录），没给就沿用原来的；改成只读时保留原目录，它照样在那里读代码。
+   */
+  private accessChange(
+    runtime: Runtime,
+    access: LocalAgentAccess | undefined,
+    cwdInput: string | undefined,
+  ): { access: LocalAgentAccess; cwd: string | null } | undefined {
+    if (runtime.transitioning) {
+      throw new HiveError("LOCAL_AGENT_BUSY", serverText("error.localAgent.restartingSettings"));
+    }
+    const nextAccess = access ?? runtime.config.access;
+    const cwd =
+      cwdInput !== undefined
+        ? resolveWorkspace(cwdInput)
+        : nextAccess === "read-only"
+          ? runtime.config.cwd
+          : resolveWorkspace(runtime.config.cwd ?? undefined);
+    if (nextAccess === runtime.config.access && cwd === runtime.config.cwd) return undefined;
+    return { access: nextAccess, cwd };
+  }
+
+  /**
+   * 存下新的权限和工作目录。权限是启动参数，要换进程才生效：在跑的空闲时马上按新权限重启，
+   * 正忙就等这一轮结束（和「重启」按钮一样，不打断）；没在跑的下次启动时生效。
+   */
+  private applyAccess(runtime: Runtime, change: { access: LocalAgentAccess; cwd: string | null }) {
+    const { id } = runtime.config;
+    this.options.database.setLocalAgentAccess(id, change.access, change.cwd);
+    runtime.config.access = change.access;
+    runtime.config.cwd = change.cwd;
+    if (!runtime.child) return;
+    // 改回了进程启动时的样子：不用再重启，只为换权限等着的那次重启也取消
+    if (
+      runtime.launched &&
+      runtime.launched.access === change.access &&
+      runtime.launched.cwd === change.cwd
+    ) {
+      if (runtime.pendingRestart?.forAccess) {
+        runtime.pendingRestart = undefined;
+        this.appendLog(runtime, "[hive] 权限改回了原来的，不用重启了\n");
+      }
+      return;
+    }
+    const manual = runtime.pendingRestart !== undefined && !runtime.pendingRestart.forAccess;
+    this.appendLog(
+      runtime,
+      `[hive] 权限改成 ${change.access}${change.cwd ? `（${change.cwd}）` : ""}，空闲后按新权限重启\n`,
+    );
+    void this.restartWhenIdle(id).catch((error: unknown) => {
+      this.appendLog(
+        runtime,
+        `[hive] 按新权限重启没有完成：${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    });
+    // 正忙、记下了空闲后重启（restartWhenIdle 同步记下）：人另外点过「重启」的不算只为权限
+    if (runtime.pendingRestart && !manual) runtime.pendingRestart.forAccess = true;
   }
 
   /**
@@ -1563,6 +1651,11 @@ export class LocalAgentSupervisor {
       busy: runtime.child ? this.isBusy(runtime, busy) : false,
       ...(running ? { version: running } : {}),
       ...(runtime.cwdFallback ? { cwdFallback: runtime.cwdFallback } : {}),
+      ...(runtime.child &&
+      runtime.launched &&
+      (runtime.launched.access !== config.access || runtime.launched.cwd !== config.cwd)
+        ? { accessPendingRestart: true }
+        : {}),
       ...(outdated ? { outdated: true } : {}),
       ...(outdatedSince !== undefined
         ? { outdatedSince: new Date(outdatedSince).toISOString() }
@@ -1638,6 +1731,7 @@ export class LocalAgentSupervisor {
       }
     }
     const cwd = fallback ? fallback.to : config.cwd;
+    runtime.launched = { access: runtime.config.access, cwd: runtime.config.cwd };
     const settingsFile = this.writeSettings(runtime.config);
     runtime.settingsApplied = settingsFile !== undefined;
     const args = [
@@ -1899,6 +1993,27 @@ function killTree(pid: number): void {
   execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => {
     /* 已经退出时 taskkill 报错，忽略 */
   });
+}
+
+/**
+ * 接管上一个 Server 留下的进程时，看它是按什么权限和目录启动的：从命令行里认 `--access=` / `--cwd=`；
+ * 读不到命令行就当和配置一致。目录不一致时 cwd 为 undefined（命令行按空格拆不准，只判断是不是同一个）。
+ * 配置里的目录用不了、这次本来就会退回主目录的，不拿目录比（免得每次接管都重启）
+ */
+export function adoptedLaunch(
+  config: Pick<LocalAgentConfig, "access" | "cwd">,
+  commandLine: string | undefined,
+  home?: string,
+): NonNullable<Runtime["launched"]> {
+  if (commandLine === undefined) return { access: config.access, cwd: config.cwd };
+  const access =
+    localAgentAccessSchema.options.find((value) =>
+      commandLine.includes(cliOption("access", value)),
+    ) ?? config.access;
+  const cwdMatches = config.cwd
+    ? checkCwd(config.cwd, home) !== undefined || commandLine.includes(cliOption("cwd", config.cwd))
+    : !commandLine.includes("--cwd=");
+  return { access, cwd: cwdMatches ? config.cwd : undefined };
 }
 
 /** workspace / full 的目录必须真实存在且是绝对路径；取 realpath 存储，拒绝文件系统根目录 */

@@ -689,4 +689,116 @@ describe("AgentSettingsDialog", () => {
     fireEvent.click(within(confirm).getByRole("button", { name: "删除" }));
     await waitFor(() => expect(props.remove).toHaveBeenCalledWith(agent.id));
   });
+
+  it("changes access with the same three levels as joining, prefilling the room workspace and waiting for a busy turn", async () => {
+    const readOnly = { ...agent, access: "read-only", cwd: null, busy: true } as LocalAgent;
+    const updateSettings = vi.fn(async (_id: string, settings: Partial<LocalAgent>) => ({
+      ...readOnly,
+      ...settings,
+      accessPendingRestart: true,
+      restartWhenIdle: true,
+    }));
+    const props = {
+      mcpServers: vi.fn(async () => listed),
+      updateSettings,
+      act: vi.fn(async () => undefined),
+      canManage: true,
+      logs: async () => [],
+      remove: async () => undefined,
+      models: async () => modelList,
+    };
+    const { rerender } = render(
+      <AgentSettingsDialog
+        agent={readOnly}
+        local={props}
+        roomWorkspace="/work/web"
+        onClose={() => undefined}
+      />,
+    );
+    const group = screen.getByRole("radiogroup", { name: "权限" });
+    const radios = within(group).getAllByRole("radio");
+    // 顺序、文案和接入时第 2 步一样，「推荐」在完全访问上
+    expect(radios.map((radio) => radio.querySelector("strong")?.textContent)).toEqual([
+      "只读",
+      "工作区",
+      "完全访问",
+    ]);
+    expect(radios[2]!.textContent).toContain("推荐");
+    expect(radios[0]!.getAttribute("aria-checked")).toBe("true");
+    // 只读没有工作目录，也没有保存按钮
+    expect(screen.queryByRole("textbox", { name: "工作目录" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存并重启" })).toBeNull();
+
+    // 方向键和点选一样只选中，不自动保存；工作目录先填房间工作区
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(radios[2]!);
+    const cwd = screen.getByRole("textbox", { name: "工作目录" }) as HTMLInputElement;
+    expect(cwd.value).toBe("/work/web");
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    // 取消：回到原来的档位
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(radios[0]!.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(radios[2]!);
+    fireEvent.change(screen.getByRole("textbox", { name: "工作目录" }), {
+      target: { value: "~/project" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并重启" }));
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith(agent.id, { access: "full", cwd: "~/project" }),
+    );
+    rerender(
+      <AgentSettingsDialog
+        agent={await updateSettings.mock.results[0]!.value}
+        local={props}
+        roomWorkspace="/work/web"
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText(/新权限在这一轮结束后生效/)).toBeTruthy();
+  });
+
+  it("shows the access of a stopped agent, saves without restarting it, and keeps it read-only without management access", async () => {
+    const updateSettings = vi.fn(async (_id: string, settings: Partial<LocalAgent>) => ({
+      ...agent,
+      status: "stopped" as const,
+      ...settings,
+    }));
+    const props = {
+      mcpServers: vi.fn(async () => listed),
+      updateSettings,
+      act: vi.fn(async () => undefined),
+      canManage: true,
+      logs: async () => [],
+      remove: async () => undefined,
+      models: async () => modelList,
+    };
+    const stopped = { ...agent, status: "stopped" } as LocalAgent;
+    const { rerender } = render(
+      <AgentSettingsDialog agent={stopped} local={props} onClose={() => undefined} />,
+    );
+    const group = screen.getByRole("radiogroup", { name: "权限" });
+    fireEvent.click(within(group).getByRole("radio", { name: /只读/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith(agent.id, { access: "read-only" }),
+    );
+    expect(await screen.findByText("已保存，下次启动时按新权限运行。")).toBeTruthy();
+    expect(props.act).not.toHaveBeenCalled();
+
+    rerender(
+      <AgentSettingsDialog
+        agent={agent}
+        local={{ ...props, canManage: false }}
+        onClose={() => undefined}
+      />,
+    );
+    for (const radio of within(screen.getByRole("radiogroup", { name: "权限" })).getAllByRole(
+      "radio",
+    )) {
+      expect((radio as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
 });

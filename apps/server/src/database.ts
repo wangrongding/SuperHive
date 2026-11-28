@@ -3028,6 +3028,13 @@ export class HiveDatabase {
     this.db.prepare("UPDATE local_agents SET cwd = ? WHERE id = ?").run(cwd, id);
   }
 
+  /** 设置里改权限档位（和工作目录）：下次启动按新的传给 Agent 进程 */
+  setLocalAgentAccess(id: string, access: LocalAgentAccess, cwd: string | null): void {
+    this.db
+      .prepare("UPDATE local_agents SET access = ?, cwd = ? WHERE id = ?")
+      .run(access, cwd, id);
+  }
+
   /** 网页上勾掉的本机 MCP；名称排序去重后保存 */
   setLocalAgentModel(id: string, model: string | null): string | null {
     this.db.prepare("UPDATE local_agents SET model = ? WHERE id = ?").run(model, id);

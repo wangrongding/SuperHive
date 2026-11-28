@@ -20,7 +20,7 @@ import { HostManageNotice, LanShareNote } from "./host-settings";
 import type { RefObject, Dispatch, SetStateAction } from "react";
 import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
-import { noSandboxNote, workspaceLacksSandbox } from "./member-sandbox";
+import { AccessSelector } from "./access-selector";
 
 /** 接入 Agent 弹窗：选 Agent、设置权限、复制命令 */
 export function AgentSetupDialog({
@@ -306,41 +306,13 @@ export function AgentSetupDialog({
           {agentStep === 2 && (
             <>
               <div>
-                <div
-                  className="access-selector"
-                  role="radiogroup"
-                  aria-labelledby="agent-step-title"
-                  onKeyDown={(event) =>
-                    moveRadioSelection(
-                      event,
-                      agentAccessOptions.findIndex((option) => option.id === agentAccess),
-                      (index) => chooseAgentAccess(agentAccessOptions[index]!.id),
-                    )
-                  }
-                >
-                  {agentAccessOptions.map((option) => (
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={agentAccess === option.id}
-                      tabIndex={agentAccess === option.id ? 0 : -1}
-                      className={`${option.id} ${agentAccess === option.id ? "active" : ""}`}
-                      // 只选中，不自动跳步
-                      onClick={() => chooseAgentAccess(option.id)}
-                      key={option.id}
-                    >
-                      <span className="access-indicator" aria-hidden="true">
-                        <i />
-                      </span>
-                      <strong>{option.label}</strong>
-                      <small>{option.description}</small>
-                      {/* 本机 Agent 跑在 Server 所在电脑上，按它的平台说明（不看浏览器平台） */}
-                      {workspaceLacksSandbox(agentProvider, option.id, local.hostPlatform) && (
-                        <small className="access-platform-note">{noSandboxNote()}</small>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                <AccessSelector
+                  value={agentAccess}
+                  onChange={chooseAgentAccess}
+                  provider={agentProvider}
+                  hostPlatform={local.hostPlatform}
+                  labelledBy="agent-step-title"
+                />
               </div>
               {agentProvider === "openclaw" && (
                 <p className="openclaw-access-note">

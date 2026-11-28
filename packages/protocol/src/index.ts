@@ -1587,6 +1587,8 @@ export const localAgentSchema = z.object({
   outdated: z.boolean().optional(),
   /** 从什么时候起判为旧版本（当前代码换了就重新计）：忙了很久一直没能重启时，设置里提示人处理 */
   outdatedSince: z.string().datetime().optional(),
+  /** 权限或工作目录改过，在跑的进程还是按旧的启动的：重启后才按新的生效 */
+  accessPendingRestart: z.boolean().optional(),
   /** 已安排在空闲后重启（手动点了「重启」，或自动更新在等它忙完） */
   restartWhenIdle: z.boolean().optional(),
   /**
@@ -1618,9 +1620,15 @@ export const updateLocalAgentSettingsRequestSchema = z
     compactWindow: claudeCompactWindowSchema.nullable().optional(),
     /** Claude：缓存时长；null 表示不传，由 Claude Code 自动选。下一轮生效 */
     cacheTtl: claudeCacheTtlSchema.nullable().optional(),
+    /** 权限档位：要换进程才生效，保存后 Agent 空闲时按新权限重启（正忙就等这一轮结束） */
+    access: localAgentAccessSchema.optional(),
+    /** 工作目录（本机绝对路径或 ~/…）：workspace / full 必须有；和 access 一样重启后生效 */
+    cwd: z.string().trim().min(1).max(4096).optional(),
   })
   .refine(
     (value) =>
+      value.access !== undefined ||
+      value.cwd !== undefined ||
       value.mcpDisabled !== undefined ||
       value.autoSteer !== undefined ||
       value.model !== undefined ||

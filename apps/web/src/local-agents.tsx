@@ -216,6 +216,8 @@ export type LocalAgentsState = {
       effort?: string | null;
       compactWindow?: ClaudeCompactWindow | null;
       cacheTtl?: ClaudeCacheTtl | null;
+      access?: LocalAgent["access"];
+      cwd?: string;
     },
   ): Promise<LocalAgent>;
   /** 这个 Agent 的运行时能用的模型；refresh 时让 Server 重新拉 */
@@ -868,6 +870,8 @@ export function useLocalAgents(
         effort?: string | null;
         compactWindow?: ClaudeCompactWindow | null;
         cacheTtl?: ClaudeCacheTtl | null;
+        access?: LocalAgent["access"];
+        cwd?: string;
       },
     ) => {
       const response = await request(`/api/local/agents/${id}/settings`, {

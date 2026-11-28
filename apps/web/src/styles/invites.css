@@ -840,6 +840,80 @@
   outline: none;
 }
 
+/* Agent 设置：权限（和模型区块同样的外框；三档横排，窄屏竖排） */
+.agent-access {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+}
+
+.agent-access h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.access-selector.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.access-selector.compact button {
+  /* 三张卡片等高：多出来的高度留在底部，标题和说明不被拉开 */
+  align-content: start;
+  column-gap: 10px;
+  padding: 10px 12px;
+}
+
+.access-selector button:disabled {
+  cursor: default;
+}
+
+.access-selector button:disabled:hover {
+  background: transparent;
+}
+
+.access-selector button.active:disabled:hover {
+  background: var(--bg-subtle);
+}
+
+.agent-access .local-launch-cwd label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.agent-access .openclaw-access-note {
+  margin: 0;
+}
+
+.agent-access-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.agent-access-footer .agent-save-status {
+  flex: 1 1 240px;
+}
+
+.agent-access-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+@media (max-width: 600px) {
+  .access-selector.compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Agent 设置：模型 */
 .agent-model {
   display: grid;

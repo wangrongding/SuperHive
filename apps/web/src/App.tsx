@@ -3110,6 +3110,7 @@ export function App({
             )?.lastModel
           }
           local={local}
+          roomWorkspace={currentRoomWorkspace ?? undefined}
           onOpenTerminal={() => void openAgentTerminal(settingsAgent)}
           onClose={() => setSettingsAgentId(undefined)}
         />

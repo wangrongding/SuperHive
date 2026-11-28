@@ -221,7 +221,9 @@
   font-weight: var(--weight-medium);
 }
 
-.local-launch-form input {
+/* 工作目录输入框在 Agent 设置的「权限」里也用 */
+.local-launch-form input,
+.local-launch-cwd-row input {
   height: 38px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -231,7 +233,8 @@
   font-size: var(--text-sm);
 }
 
-.local-launch-form input:focus-visible {
+.local-launch-form input:focus-visible,
+.local-launch-cwd-row input:focus-visible {
   border-color: var(--border-heavy);
   outline: none;
 }

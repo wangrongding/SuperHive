@@ -689,6 +689,17 @@ export const imTexts = {
     zh: "把本机 Agent {name} 的上下文设置改成了：自动压缩 {window}，缓存 {ttl}",
     en: "set the context settings of local agent {name} to: auto-compact {window}, cache {ttl}",
   },
+  "im.audit.accessChanged": {
+    zh: "把本机 Agent {name} 的权限改成了{access}，工作目录 {cwd}",
+    en: "set the access of local agent {name} to {access}, working directory {cwd}",
+  },
+  "im.audit.accessChangedReadOnly": {
+    zh: "把本机 Agent {name} 的权限改成了{access}",
+    en: "set the access of local agent {name} to {access}",
+  },
+  "im.access.read-only": { zh: "只读", en: "read-only" },
+  "im.access.workspace": { zh: "工作区", en: "workspace" },
+  "im.access.full": { zh: "完全访问", en: "full access" },
   "im.audit.modelDefault": {
     zh: "把本机 Agent {name} 的模型改回运行时默认",
     en: "set local agent {name} back to its runtime's default model",

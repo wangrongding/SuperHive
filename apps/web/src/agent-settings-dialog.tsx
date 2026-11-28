@@ -14,6 +14,7 @@ import { Button, IconButton } from "./button";
 import { EffortPicker, ModelPicker, effortLabel } from "./model-picker";
 import { modelDisplayName } from "./agent-models";
 import { SaveStatus, useAutoSave } from "./auto-save";
+import { AgentAccessSettings } from "./agent-access-settings";
 
 function CloseGlyph() {
   return (
@@ -193,8 +194,11 @@ export function AgentSettingsDialog({
   local,
   onClose,
   onOpenTerminal,
+  roomWorkspace,
 }: {
   agent: LocalAgent;
+  /** 当前房间的工作区：把只读改成可写的档位时预填成工作目录 */
+  roomWorkspace?: string | undefined;
   /** 它是当前房间的主 Agent：缓存时长跟随 Claude Code 时实际按 1 小时 */
   lead?: boolean;
   /** 它在当前房间最近一轮实际用的模型和思考强度 */
@@ -204,7 +208,8 @@ export function AgentSettingsDialog({
   local: Pick<
     LocalAgentsState,
     "mcpServers" | "updateSettings" | "act" | "canManage" | "logs" | "remove" | "models"
-  >;
+  > &
+    Partial<Pick<LocalAgentsState, "directories" | "hostPlatform">>;
   onClose: () => void;
 }) {
   const [data, setData] = useState<LocalAgentMcpResponse | undefined>();
@@ -458,7 +463,7 @@ export function AgentSettingsDialog({
             </p>
             <p>
               {t(
-                "重启、停止这个 Agent，选择它用的模型和加载哪些本机 MCP。每个 MCP 的工具说明会在每个会话开局整段发给模型，体积大的会明显增加新会话和缓存过期时的费用。hive 始终加载。",
+                "重启、停止这个 Agent，修改它的权限、模型和加载哪些本机 MCP。每个 MCP 的工具说明会在每个会话开局整段发给模型，体积大的会明显增加新会话和缓存过期时的费用。hive 始终加载。",
               )}
             </p>
           </div>
@@ -495,6 +500,7 @@ export function AgentSettingsDialog({
             </div>
           )}
           {logsOpen && <LogViewer load={local.logs} agentId={agent.id} />}
+          <AgentAccessSettings agent={agent} local={local} roomWorkspace={roomWorkspace} />
           <section className="agent-model" aria-labelledby="agent-model-title">
             <h3 id="agent-model-title">{effortSupported ? t("模型与思考强度") : t("模型")}</h3>
             <div className={effortSupported ? "agent-settings-fields" : "agent-settings-field"}>

@@ -1489,7 +1489,37 @@ export function registerLocalAgentRoutes(
     if (!parsed.success)
       return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
     try {
+      const before = supervisor!.get(request.params.id);
       const agent = supervisor!.updateSettings(request.params.id, parsed.data);
+      if (before.access !== agent.access || before.cwd !== agent.cwd)
+        audit(
+          request,
+          caller,
+          agent.access === "read-only"
+            ? {
+                key: "im.audit.accessChangedReadOnly",
+                params: { name: agent.name, access: { key: `im.access.${agent.access}` } },
+              }
+            : {
+                key: "im.audit.accessChanged",
+                params: {
+                  name: agent.name,
+                  access: { key: `im.access.${agent.access}` },
+                  cwd: agent.cwd ?? "",
+                },
+              },
+          true,
+        );
+      // 只改了权限、工作目录：上面已经记过
+      if (
+        parsed.data.model === undefined &&
+        parsed.data.effort === undefined &&
+        parsed.data.mcpDisabled === undefined &&
+        parsed.data.autoSteer === undefined &&
+        parsed.data.compactWindow === undefined &&
+        parsed.data.cacheTtl === undefined
+      )
+        return { agent };
       const contextChanged =
         parsed.data.compactWindow !== undefined || parsed.data.cacheTtl !== undefined;
       if (contextChanged)
