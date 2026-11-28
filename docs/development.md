@@ -138,6 +138,13 @@ pnpm preview:sandbox --from-data ~/Coding/ai-hive/apps/server/data -- \
 6. **两种主题、窄屏**：浅色和深色都要截，深色下的进度条、边框、底色要看得见；280px 宽的侧栏不能挤成一团。
 7. **只改要求的地方**：`git diff main --stat` 里不能出现需求以外的界面文件。需求指的是哪一块不确定时，先拿截图问清楚再动手。
 
+### 二次确认用哪个
+
+不要用浏览器原生的 `window.confirm` / `alert` / `prompt`：不跟主题，桌面端标题栏还会显示网址。
+
+- **就地气泡 `ConfirmPopover`**（`confirm-popover.tsx`）：只影响眼前这一个控件、点错了也好改回来的，比如切换设置、写入配置。气泡贴着按钮弹出，不挡别的内容。
+- **确认弹窗 `confirmAction`**（`confirm-dialog.tsx`）：收不回、或影响别人和整个房间的，比如删除、撤销、断开、中断正在执行的任务。`await confirmAction({ title, message, confirmLabel, danger })` 拿到 `true` / `false`；标题一句话说要做什么，`message` 一两行说后果，按钮写具体动作，不写「确定」；收不回的加 `danger`，焦点默认停在「取消」上。
+
 ## CLI 参数
 
 ```text

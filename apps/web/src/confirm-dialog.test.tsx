@@ -100,4 +100,17 @@ describe("confirmAction", () => {
     fireEvent.click(within(first.dialog).getByRole("button", { name: "好" }));
     await expect(first.promise).resolves.toBe(true);
   });
+
+  it("mounts inside the last open native dialog so the top-layer one doesn't cover it", async () => {
+    const lower = document.createElement("dialog");
+    const upper = document.createElement("dialog");
+    lower.setAttribute("open", "");
+    upper.setAttribute("open", "");
+    document.body.append(lower, upper);
+    const { promise, dialog } = await open({ title: "撤销？", confirmLabel: "撤销" });
+    expect(upper.contains(dialog)).toBe(true);
+    expect(lower.contains(dialog)).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await expect(promise).resolves.toBe(false);
+  });
 });

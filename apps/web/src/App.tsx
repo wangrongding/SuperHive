@@ -2190,7 +2190,8 @@ export function App({
         // 正在执行：提醒一次，确认了照样打开
         if ((reason as { code?: string }).code !== "AGENT_BUSY") throw reason;
         const open = await confirmAction({
-          title: t("{0} 正在执行，仍要在终端打开？", { 0: agent.name }),
+          // 正文是 Server 的说明，已经写了「正在执行任务」，标题不再重复
+          title: t("仍要在终端打开 {0} 的会话？", { 0: agent.name }),
           message: (reason as Error).message,
           confirmLabel: t("仍要打开"),
         });

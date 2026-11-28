@@ -9,7 +9,10 @@
  *   其它确认焦点落在确认按钮上。
  * - Esc、点遮罩、点「取消」都算取消；Esc 在捕获阶段先接住，不会把外层的设置、邀请弹窗一起关掉。
  * - Tab 只在弹窗里转；关上后焦点回到打开前的按钮。读屏按 alertdialog 念标题和说明。
- * - 自己挂一个 React 根，调用方不用在页面里放任何东西；有打开着的原生 <dialog> 时放进它的顶层，免得被盖住。
+ * - 自己挂一个 React 根，调用方不用在页面里放任何东西；有打开着的原生 <dialog> 时放进最后打开的那个
+ *   （顶层里它在最上面），免得被盖住。
+ * - 和 ConfirmPopover 的分工：只影响眼前这一个控件、点错了也好改回来的，用就地气泡 ConfirmPopover；
+ *   收不回、影响别人或整个房间的（删除、撤销、断开、中断任务），用这个弹窗。
  */
 import { useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
@@ -37,7 +40,8 @@ const stack: symbol[] = [];
 export function confirmAction(options: ConfirmOptions): Promise<boolean> {
   if (typeof document === "undefined") return Promise.resolve(false);
   const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const host = document.querySelector<HTMLDialogElement>("dialog[open]") ?? document.body;
+  const host =
+    [...document.querySelectorAll<HTMLDialogElement>("dialog[open]")].at(-1) ?? document.body;
   const container = document.createElement("div");
   host.append(container);
   const root = createRoot(container);

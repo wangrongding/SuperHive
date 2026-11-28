@@ -2703,7 +2703,6 @@
   "局域网访问已关闭，手机和其他电脑打不开 IM 卡片上的网页链接。": "LAN access is off, so phones and other computers can't open web links on IM cards.",
   "去打开": "Turn on",
   "仅本机可打开": "This computer only",
-  "{0} 正在执行，仍要在终端打开？": "{0} is busy. Open it in a terminal anyway?",
   "仍要打开": "Open anyway",
   "开启新话题？": "Start a new topic?",
   "房间里的 Agent 都会丢掉之前的会话，从头开始；历史消息保留。": "Every agent in the room drops its previous session and starts fresh. Message history is kept.",
@@ -2724,5 +2723,6 @@
   "删除后无法恢复。": "This can't be undone.",
   "归档所选 {0} 条事项？": "Archive {0} selected items?",
   "待 review 或还在用的成果先别归档。归档后可以从历史恢复。": "Keep items awaiting review or still in use. Archived items can be restored from history.",
-  "归档": "Archive"
+  "归档": "Archive",
+  "仍要在终端打开 {0} 的会话？": "Open {0}'s session in a terminal anyway?"
 }
