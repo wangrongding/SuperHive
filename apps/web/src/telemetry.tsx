@@ -322,7 +322,7 @@ export function TelemetryNotice({
                 // 和「了解详情」一样的灰色小字：只是给个入口，不抢「知道了」
                 <button
                   type="button"
-                  className="docs-link telemetry-notice-settings"
+                  className="telemetry-notice-settings docs-link"
                   onClick={() => {
                     close();
                     onOpenSettings();

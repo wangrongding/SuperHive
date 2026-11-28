@@ -16,6 +16,8 @@ import { describe, expect, it } from "vitest";
 
 /** 允许写裸 <button> 的 className（第一个词）：不是操作按钮，而是可点的区域或复合控件的一部分 */
 const RAW_BUTTON_CLASSES = new Set([
+  // 统计首次告知里的「去设置里关闭」：和旁边「了解详情」同一种灰色小字链接，故意不做成按钮去抢「知道了」
+  "telemetry-notice-settings",
   // MCP 安装抽屉的遮罩：点空白处收起抽屉
   "runtime-drawer-scrim",
   // 文档预览右侧目录里的一行：像链接一样点了滚到对应标题
