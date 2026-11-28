@@ -229,7 +229,7 @@ export function StatusAgentClisPopover({
 
   return (
     <>
-      <section className="status-popover-section status-runtimes">
+      <section className="status-popover-section status-runtimes-popover">
         {!tools && !error && <p className="status-popover-note">{t("正在检测…")}</p>}
         {startable.length > 1 && !batchOpen && (
           <div className="status-runtimes-batch">

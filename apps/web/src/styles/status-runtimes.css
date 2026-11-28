@@ -7,7 +7,8 @@
   opacity: 1;
 }
 
-.status-runtimes {
+/* 弹层宽度；别用 .status-runtimes，那是状态栏「MCP · 技能」那一项的类名（撞名会把它撑到 300px） */
+.status-runtimes-popover {
   width: 300px;
   max-width: 100%;
 }
