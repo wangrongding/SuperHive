@@ -244,6 +244,10 @@ export const serverTexts = {
     zh: "工作区操作失败，未强制删除：{reason}",
     en: "Worktree operation failed; nothing was forcibly deleted: {reason}",
   },
+  "error.worktree.lookupTimeout": {
+    zh: "{seconds} 秒内没查完任务目录（git 太慢，或在排队等这个仓库别的任务目录操作），稍后再试",
+    en: "Could not check the task workspace within {seconds}s (git is slow, or another worktree operation on this repository is ahead in line); try again shortly",
+  },
   "worktree.created": { zh: "工作区 {branch}：{path}", en: "Worktree {branch}: {path}" },
   "worktree.cleaned": {
     zh: "任务目录已被清理：{path}",

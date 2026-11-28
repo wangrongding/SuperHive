@@ -1,8 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -10,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ManagedWorktree, Participant } from "@superhive/protocol";
 import { HiveDatabase } from "./database.js";
 import { WorktreeManager, blockingIgnored, worktreeGit, worktreeRepository } from "./worktrees.js";
@@ -343,6 +346,109 @@ describe("managed worktrees", () => {
       }
     }, 20_000);
   });
+
+  /**
+   * 让 git 变慢：PATH 前面放一个包装脚本，命令行里带 slow(pattern) 给的片段时先睡几秒再执行真的 git，
+   * 每次调用都记下来。模拟机器负载很高时 git 半天不返回（故障单 3493d392）。
+   */
+  function installSlowGit(seconds: number) {
+    const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const bin = path.join(root, "slow-git-bin");
+    mkdirSync(bin);
+    const log = path.join(bin, "calls.log");
+    const pattern = path.join(bin, "slow");
+    const started = path.join(bin, "started");
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    writeFileSync(
+      path.join(bin, "git"),
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$*" >> ${quote(log)}`,
+        `if [ -f ${quote(pattern)} ]; then`,
+        `  pattern=$(cat ${quote(pattern)})`,
+        `  case "$*" in *"$pattern"*) : > ${quote(started)}; sleep ${seconds} ;; esac`,
+        "fi",
+        `exec ${quote(real)} "$@"`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(path.join(bin, "git"), 0o755);
+    vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    return {
+      slow: (fragment: string) => writeFileSync(pattern, fragment),
+      fast: () => rmSync(pattern, { force: true }),
+      started: () => existsSync(started),
+      calls: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []),
+    };
+  }
+
+  it.skipIf(process.platform === "win32")(
+    "answers busy before the Bridge gives up when git is slow, and stops that git so the lock is free",
+    async () => {
+      const id = randomUUID();
+      const { worktree } = await manager.create(repo, agent, "Alice", [id], { slug: "feature" });
+      const slowGit = installSlowGit(5);
+      const lookups = new WorktreeManager({
+        database,
+        activeInvocations: () => active,
+        lookupDeadlineMs: 2_000,
+      });
+      // 复核任务目录时核对它是不是还在原仓库：这一步的 git 卡住
+      slowGit.slow(`-C ${worktree.path} rev-parse`);
+      const started = performance.now();
+      await expect(lookups.runtimeWorkspace(repo, agent, "Alice", id)).rejects.toMatchObject({
+        code: "WORKTREE_GIT_LIMIT",
+        message: expect.stringContaining("2 秒内没查完任务目录"),
+      });
+      // 比 Bridge 的 17 秒先放弃，也没等卡住的 git 睡完
+      expect(performance.now() - started).toBeLessThan(4_000);
+      expect(slowGit.started()).toBe(true);
+      // 卡住的 git 到点就被结束、锁随之放开：紧接着的查询不用等它睡完
+      slowGit.fast();
+      const again = performance.now();
+      expect(idOf(await lookups.runtimeWorkspace(repo, agent, "Alice", id))).toBe(worktree.id);
+      expect(performance.now() - again).toBeLessThan(1_500);
+    },
+    15_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "answers busy while another worktree operation holds the repository, and skips the stale lookup",
+    async () => {
+      const id = randomUUID();
+      const { worktree } = await manager.create(repo, agent, "Alice", [id], { slug: "feature" });
+      const slowGit = installSlowGit(5);
+      const lookups = new WorktreeManager({
+        database,
+        activeInvocations: () => active,
+        lookupDeadlineMs: 2_000,
+      });
+      // 同一个仓库正在建另一条任务线，git worktree add 很慢，一直占着仓库锁
+      slowGit.slow("worktree add");
+      const creating = lookups.create(repo, agent, "Alice", [randomUUID()], { slug: "other" });
+      await vi.waitFor(() => expect(slowGit.started()).toBe(true), { timeout: 5_000 });
+      const started = performance.now();
+      await expect(lookups.runtimeWorkspace(repo, agent, "Alice", id)).rejects.toMatchObject({
+        code: "WORKTREE_GIT_LIMIT",
+      });
+      expect(performance.now() - started).toBeLessThan(4_000);
+      const seen = slowGit.calls().length;
+      slowGit.fast();
+      await creating;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      // 排到锁时已经过了时限：没再去核对那个任务目录
+      expect(
+        slowGit
+          .calls()
+          .slice(seen)
+          .filter((call) => call.includes(worktree.path)),
+      ).toEqual([]);
+    },
+    15_000,
+  );
 
   it("does not require a Git workspace when there is no managed task binding", async () => {
     expect(await manager.runtimeWorkspace(root, agent, "Alice", randomUUID())).toBeUndefined();

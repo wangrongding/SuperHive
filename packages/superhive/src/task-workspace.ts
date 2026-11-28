@@ -155,8 +155,11 @@ async function lookup<Body>(
         ...(init.body ? { body: init.body } : {}),
         signal: AbortSignal.timeout(retry.timeoutMs),
       });
+      // 带上 Server 给的原因（比如在限时内没查完任务目录），人和日志里看得出忙在哪
       if ([429, 502, 503, 504].includes(response.status))
-        throw new TransientLookupError(`Hive Server is busy (${response.status})`);
+        throw new TransientLookupError(
+          `Hive Server is busy (${response.status})${await refusal(response)}`,
+        );
       if (response.status === 401) {
         const body = (await response.json().catch(() => undefined)) as
           { error?: unknown; code?: unknown } | undefined;

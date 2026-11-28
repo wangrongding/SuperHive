@@ -148,6 +148,25 @@ describe("task workspace resolution", () => {
     );
   });
 
+  it("keeps the server's reason when it answers busy, so the Bridge knows what it was waiting on", async () => {
+    // Server 在限时内没查完任务目录（git 慢或排队等锁）时先回 503 和原因，比 Bridge 自己 17 秒超时先到
+    const reason =
+      "10 秒内没查完任务目录（git 太慢，或在排队等这个仓库别的任务目录操作），稍后再试";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ error: reason, code: "WORKTREE_GIT_LIMIT" }, { status: 503 }),
+      ),
+    );
+    const failure = await resolveTaskWorkspaces(hive, ["first"], quickRetry).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(TaskWorkspaceBusyError);
+    expect((failure as TaskWorkspaceBusyError).reason).toBe(
+      `Hive Server is busy (503): WORKTREE_GIT_LIMIT: ${reason} (after 3 attempts)`,
+    );
+  });
+
   it("hands the server's notice to the sink when the last task workspace was not reused", async () => {
     const reason = "任务目录 /wt/a 登记的分支是 feat/a，现在却在 feat/b";
     vi.stubGlobal(

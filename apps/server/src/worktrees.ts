@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { userFsPromises } from "./user-fs.js";
@@ -48,6 +49,15 @@ export type FocusDropped = {
 };
 type Checkout = { path: string; branch: string | undefined; locked: boolean };
 type Repository = { repo: string; commonDir: string; target: string };
+
+type RuntimeTask = {
+  ownerName: string;
+  invocationId: string;
+  /** 同一件活的上游：子任务回执、回复唤醒的那一轮沿用它们的任务目录 */
+  ancestorIds?: string[];
+  /** 委派链更上面、这个 Agent 之前的别的活：它们的目录被清理了不影响这件新活，只告诉 Agent 一声 */
+  earlierIds?: string[];
+};
 type RemovedWorktree = ManagedWorktree & { removed: true };
 
 export type DependencySettings = {
@@ -71,6 +81,40 @@ export type WorktreeCleanupBatch = {
   results?: Array<{ path: string; removed: boolean; branchDeleted?: boolean; error?: string }>;
 };
 
+/** 单条 git 命令的时限：建、删任务目录这类写操作在大仓库上可能要十几秒 */
+const GIT_TIMEOUT_MS = 20_000;
+
+/**
+ * Bridge 查任务目录（开工前选目录、一轮跑完复核）整个请求的时限：排队等仓库锁加上里面所有 git 命令。
+ * Bridge 每次只等 17 秒（packages/superhive 的 task-workspace.ts），Server 得比它先放弃、回 503 和原因，
+ * 不然 Bridge 只看得到自己的超时。留 7 秒给负载高时请求排队进来、计时器晚触发和回包
+ * （故障单 3493d392 那次，同一时刻 ls 都要 12 秒）；正常一次查询的 git 只要几十毫秒。
+ */
+export const LOOKUP_DEADLINE_MS = 10_000;
+
+/** 查任务目录这一次请求的截止时间（performance.now()）：这次查询里起的 git 都不许超过它，建、删任务目录不受影响 */
+const lookupDeadline = new AsyncLocalStorage<{ at: number; ms: number }>();
+
+function lookupTimeout(ms: number): HiveError {
+  return new HiveError(
+    "WORKTREE_GIT_LIMIT",
+    serverText("error.worktree.lookupTimeout", { seconds: String(Math.round(ms / 1000)) }),
+  );
+}
+
+/**
+ * 查任务目录超过截止时间就先回「忙」。没做完的那份在后台收尾：正在跑的 git 到点被结束；还在排队等锁的，
+ * 排到时第一条 git 就直接报超时（spawnGit 不再起新进程），不会白跑一遍
+ */
+function beforeLookupDeadline<Result>(work: Promise<Result>, ms: number): Promise<Result> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(lookupTimeout(ms)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
 export async function worktreeGit(cwd: string, args: string[], input?: string): Promise<GitResult> {
   const started = performance.now();
   let failed = false;
@@ -91,6 +135,13 @@ export async function worktreeGit(cwd: string, args: string[], input?: string): 
 }
 
 function spawnGit(cwd: string, args: string[], input?: string): Promise<GitResult> {
+  const deadline = lookupDeadline.getStore();
+  const limitMs =
+    deadline === undefined
+      ? GIT_TIMEOUT_MS
+      : Math.min(GIT_TIMEOUT_MS, deadline.at - performance.now());
+  // 这次查询已经到点：不再起新的 git
+  if (deadline && limitMs <= 0) return Promise.reject(lookupTimeout(deadline.ms));
   return new Promise((resolve, reject) => {
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
@@ -116,21 +167,23 @@ function spawnGit(cwd: string, args: string[], input?: string): Promise<GitResul
     let stderr = "";
     let bytes = 0;
     let stopped = false;
-    const stop = () => {
+    const stop = (timedOut: boolean) => {
       if (stopped) return;
       stopped = true;
       child.kill("SIGKILL");
       reject(
-        new HiveError(
-          "WORKTREE_GIT_LIMIT",
-          serverText("error.worktree.operation", { reason: "Git timeout/output limit" }),
-        ),
+        timedOut && deadline && limitMs < GIT_TIMEOUT_MS
+          ? lookupTimeout(deadline.ms)
+          : new HiveError(
+              "WORKTREE_GIT_LIMIT",
+              serverText("error.worktree.operation", { reason: "Git timeout/output limit" }),
+            ),
       );
     };
-    const timer = setTimeout(stop, 20_000);
+    const timer = setTimeout(() => stop(true), limitMs);
     const collect = (chunk: string, target: "stdout" | "stderr") => {
       bytes += Buffer.byteLength(chunk);
-      if (bytes > 16 * 1024 * 1024) return stop();
+      if (bytes > 16 * 1024 * 1024) return stop(false);
       if (target === "stdout") stdout += chunk;
       else stderr += chunk;
     };
@@ -384,6 +437,8 @@ export class WorktreeManager {
       readOnly?: boolean;
       /** 新任务目录自动准备依赖；省略或 false 不准备 */
       dependencies?: DependencySettings | false;
+      /** 查任务目录整个请求的时限；默认 LOOKUP_DEADLINE_MS，测试注入 */
+      lookupDeadlineMs?: number;
     },
   ) {
     options.database.connection().exec(`CREATE TABLE IF NOT EXISTS managed_worktrees (
@@ -1011,17 +1066,26 @@ export class WorktreeManager {
     );
   }
 
+  /**
+   * 给 Bridge 选或复核任务目录。整个请求（排队等仓库锁、里面所有 git）在 lookupDeadlineMs 内答不上来就报
+   * WORKTREE_GIT_LIMIT（接口回 503），比 Bridge 自己的超时先到，它拿得到明确的原因、稍后再问。
+   */
   async runtimeWorkspaces(
     workspace: string,
     actor: Participant,
-    tasks: Array<{
-      ownerName: string;
-      invocationId: string;
-      /** 同一件活的上游：子任务回执、回复唤醒的那一轮沿用它们的任务目录 */
-      ancestorIds?: string[];
-      /** 委派链更上面、这个 Agent 之前的别的活：它们的目录被清理了不影响这件新活，只告诉 Agent 一声 */
-      earlierIds?: string[];
-    }>,
+    tasks: RuntimeTask[],
+  ): Promise<Map<string, ManagedWorktree | RemovedWorktree | FocusDropped | undefined>> {
+    const ms = this.options.lookupDeadlineMs ?? LOOKUP_DEADLINE_MS;
+    const work = lookupDeadline.run({ at: performance.now() + ms, ms }, () =>
+      this.selectRuntimeWorkspaces(workspace, actor, tasks),
+    );
+    return beforeLookupDeadline(work, ms);
+  }
+
+  private async selectRuntimeWorkspaces(
+    workspace: string,
+    actor: Participant,
+    tasks: RuntimeTask[],
   ): Promise<Map<string, ManagedWorktree | RemovedWorktree | FocusDropped | undefined>> {
     const binding = this.options.database
       .connection()
