@@ -99,6 +99,42 @@ export const SHOTS = [
     ],
   },
   {
+    name: "agent-setup",
+    title: "接入 Agent · 第 1 步：列出本机检测到的 Claude Code、Codex 等 CLI 和版本，选一个",
+    prepare: [
+      `__shot.click("button", (el) => el.textContent.trim() === "接入 Agent")`,
+      `__shot.click("[role=radio]", (el) => /Claude Code/.test(el.textContent))`,
+    ],
+  },
+  {
+    name: "agent-access",
+    title: "接入 Agent · 第 2 步：选本机权限，默认完全访问，也可以改成工作区或只读",
+    prepare: [
+      `__shot.click("button", (el) => el.textContent.trim() === "接入 Agent")`,
+      `__shot.click("[role=radio]", (el) => /Claude Code/.test(el.textContent))`,
+      `__shot.click("button", (el) => el.textContent.trim().startsWith("下一步"))`,
+      `__shot.find("[role=radiogroup]")`,
+    ],
+  },
+  {
+    name: "agent-launch",
+    title: "接入 Agent · 第 3 步：核对名称和工作目录，一键在本机启动，也可以复制命令到别的电脑运行",
+    prepare: [
+      `__shot.click("button", (el) => el.textContent.trim() === "接入 Agent")`,
+      `__shot.click("[role=radio]", (el) => /Claude Code/.test(el.textContent))`,
+      `__shot.click("button", (el) => el.textContent.trim().startsWith("下一步"))`,
+      `__shot.click("button", (el) => el.textContent.trim().startsWith("下一步"))`,
+      `new Promise((resolve) => setTimeout(resolve, 800))`,
+      // 工作目录预填的是演示 Server 临时目录的真实路径：换成文档里的示例路径
+      `__shot.find("input[aria-label='工作目录']").then((el) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, "~/work/web");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.blur();
+      })`,
+      `new Promise((resolve) => setTimeout(resolve, 500))`,
+    ],
+  },
+  {
     name: "progress",
     title: "进展：白板上两步验证各路的状态，在做、卡住等你决定、做完待验收",
     prepare: [`__shot.click("#side-tab-whiteboard")`, `__shot.find(".progress-board")`],

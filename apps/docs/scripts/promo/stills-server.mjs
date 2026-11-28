@@ -748,7 +748,14 @@ const app = await buildApp({
       onExit: () => undefined,
       kill: () => undefined,
     }),
-    probe: async () => ({ installed: true, version: "1.0.0" }),
+    // 接入弹窗第 1 步显示的 CLI 版本：按命令给像样的版本号，不要一排 1.0.0
+    probe: async (command) => ({
+      installed: true,
+      version:
+        { codex: "0.142.0", claude: "2.1.332", copilot: "1.0.104", opencode: "1.3.2" }[
+          command.split(/[\\/]/).pop()
+        ] ?? "1.2.0",
+    }),
     listMcp: async () => [],
   },
 });
