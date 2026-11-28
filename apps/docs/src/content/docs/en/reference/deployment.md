@@ -68,7 +68,7 @@ hive \
   --no-open
 ```
 
-Currently `--no-local-agents` also disables owner-device pairing and management. Leave it off for initial pairing; re-enable local capability to add or revoke devices later. Follow the [cloud guide's SSH pairing steps](/en/guides/cloud-deployment/#4-first-owner-sign-in-through-ssh-pairing).
+Currently `--no-local-agents` also disables owner-device pairing and management. Leave it off for initial pairing; re-enable local capability to add or revoke devices later. Follow the [cloud guide's SSH tunnel sign-in](/en/guides/cloud-deployment/#2-become-the-owner-through-an-ssh-tunnel).
 
 Add the following to the matching HTTPS `server` block in Nginx:
 

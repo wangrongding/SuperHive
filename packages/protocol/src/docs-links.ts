@@ -26,7 +26,7 @@ export const DOCS_LINKS = {
   },
   permissions: {
     path: "guides/permissions/",
-    anchor: { "zh-CN": "选择最小够用的档位", en: "pick-the-least-access-that-does-the-job" },
+    anchor: { "zh-CN": "选择档位", en: "choosing-a-level" },
   },
   im: { path: "guides/im/" },
   incidents: {

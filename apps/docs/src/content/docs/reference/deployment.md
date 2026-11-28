@@ -68,7 +68,7 @@ hive \
   --no-open
 ```
 
-当前 `--no-local-agents` 也会关闭房主设备配对和管理入口；首次配对时先不要加它，关闭后新增或撤销设备也需重新启用。步骤见[云端指南的 SSH 配对](/guides/cloud-deployment/#4-首次房主登录通过-ssh-配对)。
+当前 `--no-local-agents` 也会关闭房主设备配对和管理入口；首次配对时先不要加它，关闭后新增或撤销设备也需重新启用。步骤见[云端指南的 SSH 隧道登录](/guides/cloud-deployment/#2-用-ssh-隧道成为房主)。
 
 Nginx 的对应 HTTPS `server` 中添加：
 

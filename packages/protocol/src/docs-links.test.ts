@@ -7,10 +7,10 @@ describe("docsUrl", () => {
     expect(docsUrl("home", "en")).toBe(`${DOCS_BASE_URL}en/`);
     expect(docsUrl("im", "en")).toBe(`${DOCS_BASE_URL}en/guides/im/`);
     expect(docsUrl("permissions", "en")).toBe(
-      `${DOCS_BASE_URL}en/guides/permissions/#pick-the-least-access-that-does-the-job`,
+      `${DOCS_BASE_URL}en/guides/permissions/#choosing-a-level`,
     );
     expect(decodeURIComponent(docsUrl("permissions"))).toBe(
-      `${DOCS_BASE_URL}guides/permissions/#选择最小够用的档位`,
+      `${DOCS_BASE_URL}guides/permissions/#选择档位`,
     );
   });
 });
