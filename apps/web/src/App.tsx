@@ -316,14 +316,13 @@ export function App({
   const [commandCopied, setCommandCopied] = useState(false);
   const [copyError, setCopyError] = useState<string>();
   const [agentProvider, setAgentProvider] = useState<SelectableAgentProvider>("codex");
-  // 默认工作区档：只读什么都改不了，接进来基本没用；完全访问每次都要明确选
-  const [agentAccess, setAgentAccess] = useState<AgentAccessMode>("workspace");
+  // 默认完全访问（和 Orca 一样）：工作区档的沙箱常常拦住装依赖、跑测试、git 推送，接进来还得再改
+  const [agentAccess, setAgentAccess] = useState<AgentAccessMode>("full");
   // 第一步先让人选 Agent，选了才能下一步（不默认替人选一个）
   const [agentProviderChosen, setAgentProviderChosen] = useState(false);
   // 真的启动了或复制了命令才显示「完成」，免得第 3 步点了「完成」却什么也没发生
   const [agentConnected, setAgentConnected] = useState(false);
   const [agentStep, setAgentStep] = useState<AgentSetupStep>(1);
-  const [fullAccessConfirmationOpen, setFullAccessConfirmationOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>();
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [rejoinAgent, setRejoinAgent] = useState<
@@ -430,7 +429,6 @@ export function App({
   const agentDialogCloseRef = useRef<HTMLButtonElement>(null);
   const agentDialogTriggerRef = useRef<HTMLButtonElement>(null);
   const agentStepHeadingRef = useRef<HTMLHeadingElement>(null);
-  const fullAccessOptionRef = useRef<HTMLButtonElement>(null);
   const roomDialogRef = useRef<HTMLDivElement>(null);
   const roomDialogCloseRef = useRef<HTMLButtonElement>(null);
   const roomDialogTriggerRef = useRef<HTMLButtonElement>(null);
@@ -1039,7 +1037,6 @@ export function App({
         openSettings: () => {
           setInviteDialogOpen(false);
           setAgentDialogOpen(false);
-          setFullAccessConfirmationOpen(false);
           setImDialogOpen(false);
           setSettingsTab("devices");
           setSettingsOpen(true);
@@ -1050,7 +1047,6 @@ export function App({
 
   const closeAgentDialog = useCallback(() => {
     setAgentDialogOpen(false);
-    setFullAccessConfirmationOpen(false);
     window.requestAnimationFrame(() => agentDialogTriggerRef.current?.focus());
   }, []);
 
@@ -1060,8 +1056,6 @@ export function App({
     setAgentStep(1);
     setAgentProviderChosen(false);
     setAgentConnected(false);
-    // 完全访问不跨次保留：每次打开都要重新明确选择最高权限
-    setAgentAccess((current) => (current === "full" ? "workspace" : current));
     setCommandCopied(false);
     setCopyError(undefined);
     setAgentDialogOpen(true);
@@ -1089,9 +1083,8 @@ export function App({
     setRejoinAgent({ ...removed, name: participant.username, participantId: participant.id });
     setAgentProvider(removed.provider);
     setAgentProviderChosen(true);
-    setAgentAccess(removed.cwd ? "workspace" : "read-only");
+    setAgentAccess(removed.cwd ? "full" : "read-only");
     setAgentStep(2);
-    setFullAccessConfirmationOpen(false);
     setAgentConnected(false);
     setCommandCopied(false);
     setCopyError(undefined);
@@ -1163,34 +1156,12 @@ export function App({
 
   const goToAgentStep = useCallback((step: AgentSetupStep) => {
     setAgentStep(step);
-    setFullAccessConfirmationOpen(false);
     setCommandCopied(false);
     setCopyError(undefined);
     window.requestAnimationFrame(() => agentStepHeadingRef.current?.focus());
   }, []);
 
-  const chooseAgentAccess = useCallback(
-    (access: AgentAccessMode) => {
-      if (access === "full" && agentAccess !== "full") {
-        setFullAccessConfirmationOpen(true);
-        return;
-      }
-      setFullAccessConfirmationOpen(false);
-      setAgentAccess(access);
-    },
-    [agentAccess],
-  );
-
-  const closeFullAccessConfirmation = useCallback(() => {
-    setFullAccessConfirmationOpen(false);
-    fullAccessOptionRef.current?.focus();
-  }, []);
-
-  const confirmFullAccess = useCallback(() => {
-    setAgentAccess("full");
-    setFullAccessConfirmationOpen(false);
-    fullAccessOptionRef.current?.focus();
-  }, []);
+  const chooseAgentAccess = useCallback((access: AgentAccessMode) => setAgentAccess(access), []);
   useEffect(() => {
     if (!agentDialogOpen) return;
     window.requestAnimationFrame(() => agentDialogCloseRef.current?.focus());
@@ -1297,7 +1268,6 @@ export function App({
   /** 接入 Agent 弹窗里的「安装、升级或调整配置」：先收起接入弹窗，打开设置的「Agent 运行时」 */
   const openRuntimeSettings = useCallback((provider: SelectableAgentProvider | undefined) => {
     setAgentDialogOpen(false);
-    setFullAccessConfirmationOpen(false);
     returnToAgentDialogRef.current = true;
     setRuntimesFocus(provider);
     setSettingsTab("runtimes");
@@ -3186,13 +3156,9 @@ export function App({
           base={base}
           chooseAgentAccess={chooseAgentAccess}
           closeAgentDialog={closeAgentDialog}
-          closeFullAccessConfirmation={closeFullAccessConfirmation}
           commandCopied={commandCopied}
-          confirmFullAccess={confirmFullAccess}
           copyCommand={copyCommand}
           copyError={copyError}
-          fullAccessConfirmationOpen={fullAccessConfirmationOpen}
-          fullAccessOptionRef={fullAccessOptionRef}
           goToAgentStep={goToAgentStep}
           local={local}
           meta={meta}

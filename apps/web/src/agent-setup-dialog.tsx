@@ -16,7 +16,6 @@ import { moveRadioSelection } from "./ui-utils";
 import { providerInfo, LocalLaunch, type LocalAgentsState } from "./local-agents";
 import { ProviderLogo } from "./provider-logos";
 import { hasRuntimeConfig } from "./runtime-credentials";
-import { ConfirmPopover } from "./confirm-popover";
 import { HostManageNotice, LanShareNote } from "./host-settings";
 import type { RefObject, Dispatch, SetStateAction } from "react";
 import { Tooltip } from "./tooltip";
@@ -36,13 +35,9 @@ export function AgentSetupDialog({
   base,
   chooseAgentAccess,
   closeAgentDialog,
-  closeFullAccessConfirmation,
   commandCopied,
-  confirmFullAccess,
   copyCommand,
   copyError,
-  fullAccessConfirmationOpen,
-  fullAccessOptionRef,
   goToAgentStep,
   local,
   meta,
@@ -68,13 +63,9 @@ export function AgentSetupDialog({
   base: string;
   chooseAgentAccess: (access: AgentAccessMode) => void;
   closeAgentDialog: () => void;
-  closeFullAccessConfirmation: () => void;
   commandCopied: boolean;
-  confirmFullAccess: () => void;
   copyCommand: () => Promise<void>;
   copyError: string | undefined;
-  fullAccessConfirmationOpen: boolean;
-  fullAccessOptionRef: RefObject<HTMLButtonElement | null>;
   goToAgentStep: (step: AgentSetupStep) => void;
   local: LocalAgentsState;
   meta: MetaResponse | undefined;
@@ -199,7 +190,7 @@ export function AgentSetupDialog({
             )}
             {agentStep === 2 && (
               <p>
-                {t("权限只在 Agent 所在电脑生效，Hive Server 始终只转发消息。默认工作区档。")}{" "}
+                {t("权限只在 Agent 所在电脑生效，Hive Server 始终只转发消息。默认完全访问。")}{" "}
                 <DocsLink to="permissions">{t("权限说明")}</DocsLink>
               </p>
             )}
@@ -331,12 +322,10 @@ export function AgentSetupDialog({
                     <button
                       type="button"
                       role="radio"
-                      ref={option.id === "full" ? fullAccessOptionRef : undefined}
                       aria-checked={agentAccess === option.id}
-                      aria-expanded={option.id === "full" ? fullAccessConfirmationOpen : undefined}
                       tabIndex={agentAccess === option.id ? 0 : -1}
                       className={`${option.id} ${agentAccess === option.id ? "active" : ""}`}
-                      // 只选中，不自动跳步；完全访问要先在选项旁的气泡里确认风险
+                      // 只选中，不自动跳步
                       onClick={() => chooseAgentAccess(option.id)}
                       key={option.id}
                     >
@@ -352,22 +341,6 @@ export function AgentSetupDialog({
                     </button>
                   ))}
                 </div>
-                {fullAccessConfirmationOpen && agentAccess !== "full" && (
-                  <ConfirmPopover
-                    ariaLabel={t("确认开启完全访问")}
-                    title={t("确认移除本机安全边界？")}
-                    message={t(
-                      "{0} 将可以执行当前系统用户有权进行的操作；房间消息可能触发文件、命令或网络操作。",
-                      { 0: agentProviderLabel(agentProvider) },
-                    )}
-                    confirmLabel={t("我了解风险，开启完全访问")}
-                    cancelLabel={t("取消")}
-                    anchorRef={fullAccessOptionRef}
-                    danger
-                    onConfirm={confirmFullAccess}
-                    onCancel={closeFullAccessConfirmation}
-                  />
-                )}
               </div>
               {agentProvider === "openclaw" && (
                 <p className="openclaw-access-note">

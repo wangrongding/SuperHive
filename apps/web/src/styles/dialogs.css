@@ -385,27 +385,6 @@
   background: var(--text);
 }
 
-.access-selector button.workspace.active .access-indicator {
-  box-shadow: inset 0 0 0 1.5px var(--warning);
-}
-
-.access-selector button.workspace.active .access-indicator i {
-  background: var(--warning);
-}
-
-.access-selector button.full.active {
-  border-color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.access-selector button.full.active .access-indicator {
-  box-shadow: inset 0 0 0 1.5px var(--danger);
-}
-
-.access-selector button.full.active .access-indicator i {
-  background: var(--danger);
-}
-
 .openclaw-access-note {
   margin-top: 12px;
   border-radius: var(--radius-lg);

@@ -40,12 +40,14 @@ export const agentAccessOptions: Array<{
   {
     id: "workspace",
     label: t("工作区"),
-    description: t("推荐。可在指定目录内读写文件、运行命令；越界的操作会被拦下或先问你。"),
+    description: t("可在指定目录内读写文件、运行命令；越界的操作会被拦下或先问你。"),
   },
   {
     id: "full",
     label: t("完全访问"),
-    description: t("不设 Hive 沙箱，可执行当前系统用户的所有操作。"),
+    description: t(
+      "推荐。不设 Hive 沙箱，能做你这个系统用户能做的所有事，装依赖、跑测试、推代码不会被拦。",
+    ),
   },
 ]);
 

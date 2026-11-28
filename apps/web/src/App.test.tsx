@@ -858,7 +858,7 @@ describe("App mention autocomplete", () => {
     ).toMatchObject({
       name: "removed",
       provider: "claude",
-      access: "workspace",
+      access: "full",
       cwd: "/Users/alice/old-project",
       rejoinParticipantId: members[1]!.id,
     });
@@ -1402,12 +1402,12 @@ describe("App mention autocomplete", () => {
     const nextStep = () => user.click(screen.getByRole("button", { name: "下一步" }));
     const previousStep = () => user.click(screen.getByRole("button", { name: "上一步" }));
 
-    // 点 Agent 只是选中，不自动跳步；点「下一步」才到第 2 步，默认工作区档
+    // 点 Agent 只是选中，不自动跳步；点「下一步」才到第 2 步，默认完全访问
     await user.click(screen.getByRole("radio", { name: /Claude Code/ }));
     expect(screen.queryByRole("heading", { name: /允许 Claude Code 在本机做什么/ })).toBeNull();
     await nextStep();
     expect(screen.getByRole("heading", { name: /允许 Claude Code 在本机做什么/ })).toBeTruthy();
-    expect(screen.getByRole("radio", { name: /^工作区/ }).getAttribute("aria-checked")).toBe(
+    expect(screen.getByRole("radio", { name: /^完全访问/ }).getAttribute("aria-checked")).toBe(
       "true",
     );
     await nextStep();
@@ -1421,7 +1421,7 @@ describe("App mention autocomplete", () => {
     expect(screen.getByRole("button", { name: "完成" })).toBeTruthy();
     expect(await navigator.clipboard.readText()).toContain("npx --yes superhive@latest join");
     expect(await navigator.clipboard.readText()).toContain("--name Alice-claude");
-    expect(await navigator.clipboard.readText()).toContain("--access workspace --cwd .");
+    expect(await navigator.clipboard.readText()).toContain("--access full --cwd .");
     expect(screen.getByRole("button", { name: "已复制到剪贴板" })).toBeTruthy();
 
     // 选权限也只是选中，点「下一步」才到第 3 步
@@ -1432,25 +1432,14 @@ describe("App mention autocomplete", () => {
     await user.click(screen.getByRole("button", { name: "复制命令" }));
     expect(await navigator.clipboard.readText()).toContain("--access read-only");
 
+    // 换回工作区档同样只是选中
     await previousStep();
-    await user.click(screen.getByRole("radio", { name: /^完全访问/ }));
-    // 和 worktree 自动清理同款就地确认气泡：选项旁边弹出，确认前权限不变
-    const fullAccessPopover = screen.getByRole("dialog", { name: "确认开启完全访问" });
-    expect(fullAccessPopover.textContent).toContain("确认移除本机安全边界");
-    expect(screen.getByRole("radio", { name: /^只读/ }).getAttribute("aria-checked")).toBe("true");
-    // Esc 收起气泡并把焦点还给「完全访问」选项，没有勾上
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "确认开启完全访问" })).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("radio", { name: /^完全访问/ }));
-    expect(screen.getByRole("radio", { name: /^只读/ }).getAttribute("aria-checked")).toBe("true");
-    // 重新点开，这次确认，才切到完全访问
-    await user.click(screen.getByRole("radio", { name: /^完全访问/ }));
-    await user.click(screen.getByRole("button", { name: "我了解风险，开启完全访问" }));
-    expect(screen.getByRole("radio", { name: /^完全访问/ }).getAttribute("aria-checked")).toBe(
+    await user.click(screen.getByRole("radio", { name: /^工作区/ }));
+    expect(screen.getByRole("radio", { name: /^工作区/ }).getAttribute("aria-checked")).toBe(
       "true",
     );
     await nextStep();
-    expect(commandText()).toContain("--access full --cwd .");
+    expect(commandText()).toContain("--access workspace --cwd .");
 
     await user.click(screen.getByRole("button", { name: "返回第 1 步：选择 Agent" }));
     await user.click(screen.getByRole("radio", { name: /GitHub Copilot/ }));
@@ -3606,7 +3595,6 @@ describe("App mention autocomplete", () => {
     // 本机房主也可以一键启动完全访问：需要工作目录，并给出无沙箱警告
     await user.click(screen.getByRole("button", { name: "返回第 2 步：设置权限" }));
     await user.click(screen.getByRole("radio", { name: /^完全访问/ }));
-    await user.click(screen.getByRole("button", { name: "我了解风险，开启完全访问" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { name: "在本机启动" })).toBeTruthy();
     expect(screen.getByRole("note").textContent).toContain("完全访问没有任何沙箱");
@@ -3631,12 +3619,12 @@ describe("App mention autocomplete", () => {
       body: { access: "full", cwd: "/Users/alice/hive/apps" },
     });
 
-    // 完全访问不跨次保留：关掉再打开回到工作区档
+    // 关掉再打开，保留上次选的档位
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "接入 Agent" }));
     await user.click(screen.getByRole("radio", { name: /OpenCode/ }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByRole("radio", { name: /^工作区/ }).getAttribute("aria-checked")).toBe(
+    expect(screen.getByRole("radio", { name: /^完全访问/ }).getAttribute("aria-checked")).toBe(
       "true",
     );
   });
