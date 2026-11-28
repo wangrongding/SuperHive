@@ -29,6 +29,7 @@ import {
   type Snapshot,
 } from "./room-client.js";
 import { StateStore, type AgentState } from "./state-store.js";
+import { TaskWorkspaceBusyError } from "./task-workspace.js";
 
 const SELF = "00000000-0000-4000-8000-0000000000aa";
 let seq = 0;
@@ -1815,36 +1816,56 @@ describe("AgentBridge", () => {
     },
   );
 
-  it("waits for the Server to come back when the post-turn workspace re-check cannot reach it", async () => {
-    // 合入 main 后开发环境换代、Server 重启：这一轮跑完去复核任务目录时连不上，等它回来再复核，不判结果未知
-    const { TaskWorkspaceBusyError } = await import("./task-workspace.js");
-    let turnDone = false;
-    let offline = 2;
-    const resolveMany = vi.fn(async (ids: string[]) => {
-      if (turnDone && offline > 0) {
-        offline -= 1;
-        throw new TaskWorkspaceBusyError("fetch failed (after 3 attempts)");
-      }
-      return new Map(ids.map((id) => [id, undefined] as const));
-    });
-    taskWorkspace = { resolve: async () => undefined, resolveMany, responder: () => responder };
-    await startBridge(baseState());
-    const message = chat();
-    room.messages.push(message);
-    room.handlers.onMention(message, message.seq, false);
-    await waitUntil(() => responder.calls.length === 1);
-    turnDone = true;
-    responder.finish("done");
-    await waitUntil(() =>
-      room
-        .statuses(message.id)
-        .some((status) => ["completed", "failed", "uncertain"].includes(status)),
-    );
-    expect(room.statuses(message.id)).toContain("completed");
-    expect(room.statuses(message.id)).not.toContain("uncertain");
-    expect(resolveMany).toHaveBeenCalledTimes(4);
-    expect(responder.calls).toHaveLength(1);
-  });
+  it.each([
+    {
+      // 合入 main 后开发环境换代、Server 重启：连不上
+      case: "unreachable",
+      error: () => new TaskWorkspaceBusyError("fetch failed (after 3 attempts)"),
+    },
+    {
+      // 故障单 3493d392 11-28 的现场：机器负载很高，Server 在、但 17 秒内答不上来，三次都超时
+      case: "too slow to answer",
+      error: () =>
+        new TaskWorkspaceBusyError("The operation was aborted due to timeout (after 3 attempts)", {
+          cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        }),
+    },
+    {
+      case: "rate limited",
+      error: () => new TaskWorkspaceBusyError("Hive Server is busy (429) (after 3 attempts)"),
+    },
+  ])(
+    "waits for the Server when the post-turn workspace re-check finds it $case",
+    async ({ error }) => {
+      // 这一轮跑完去复核任务目录时 Server 暂时答不上：等它回来再复核，不判结果未知
+      let turnDone = false;
+      let offline = 2;
+      const resolveMany = vi.fn(async (ids: string[]) => {
+        if (turnDone && offline > 0) {
+          offline -= 1;
+          throw error();
+        }
+        return new Map(ids.map((id) => [id, undefined] as const));
+      });
+      taskWorkspace = { resolve: async () => undefined, resolveMany, responder: () => responder };
+      await startBridge(baseState());
+      const message = chat();
+      room.messages.push(message);
+      room.handlers.onMention(message, message.seq, false);
+      await waitUntil(() => responder.calls.length === 1);
+      turnDone = true;
+      responder.finish("done");
+      await waitUntil(() =>
+        room
+          .statuses(message.id)
+          .some((status) => ["completed", "failed", "uncertain"].includes(status)),
+      );
+      expect(room.statuses(message.id)).toContain("completed");
+      expect(room.statuses(message.id)).not.toContain("uncertain");
+      expect(resolveMany).toHaveBeenCalledTimes(4);
+      expect(responder.calls).toHaveLength(1);
+    },
+  );
 
   it("does not batch or steer messages across different managed checkouts", async () => {
     const first = chat();

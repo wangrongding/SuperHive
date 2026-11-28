@@ -186,6 +186,9 @@ export type BridgeTuning = {
 /** 连不上 Server 一类的错误：可以等 Server 回来再试，不代表这一轮做错了 */
 export function isServerUnavailable(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
+  // 查任务目录时已经判过、也快速重试过的「Server 忙或答不上」：连不上、503/429，还有 Server 在但答得太慢
+  // （机器负载高时 17 秒内没回，超时原因包在 reason 里，名字和原文都不像连不上，故障单 3493d392）
+  if (error instanceof TaskWorkspaceBusyError) return true;
   if (error.name === "TypeError" || error.name === "AbortError" || error.name === "TimeoutError")
     return true;
   return /ECONNREFUSED|ECONNRESET|fetch failed|socket hang up|聊天室连接|未在 15 秒内确认|\(5\d\d\)/.test(

@@ -9,6 +9,7 @@ import {
   TaskWorkspaceBusyError,
   TaskWorkspaceRemovedError,
 } from "./task-workspace.js";
+import { isServerUnavailable } from "./bridge.js";
 import { AgentNonRetryableError } from "./responder.js";
 
 const hive = { serverUrl: "http://hive", roomId: "general", username: "writer", token: "test" };
@@ -48,6 +49,7 @@ describe("task workspace resolution", () => {
       Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
     () => Promise.reject(new TypeError("fetch failed")),
     () => Promise.resolve(new Response("busy", { status: 503 })),
+    () => Promise.resolve(new Response("slow down", { status: 429 })),
   ])("gives a retryable busy result once retries run out", async (attempt) => {
     const fetch = vi.fn(attempt);
     vi.stubGlobal("fetch", fetch);
@@ -55,6 +57,8 @@ describe("task workspace resolution", () => {
     await expect(failure).rejects.toBeInstanceOf(TaskWorkspaceBusyError);
     await expect(failure).rejects.not.toBeInstanceOf(AgentNonRetryableError);
     expect(fetch).toHaveBeenCalledTimes(3);
+    // 一轮跑完复核任务目录时，Bridge 对这些「忙」都要等 Server 回来再复核（故障单 3493d392：超时那种曾漏掉）
+    expect(isServerUnavailable(await failure.catch((error: unknown) => error))).toBe(true);
   });
 
   it("fails at once, without retrying, when the server refuses the identity", async () => {
