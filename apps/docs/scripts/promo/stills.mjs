@@ -36,7 +36,7 @@ export const SHOTS = [
   {
     name: "overview",
     title:
-      "主界面全景：林夏提需求，claude-1 拆成四路派给 Gemini、Codex、Claude、Copilot，回执、提问、执行中的卡片都在消息流里",
+      "主界面全景：林夏提需求，claude-1 拆成四路派给 Claude 和 Codex，回执、提问、执行中的卡片都在消息流里",
     prepare: [`__shot.find("article.thinking-card")`],
   },
   {

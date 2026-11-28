@@ -155,7 +155,7 @@ export function verifyTotp(
 }
 `;
 
-// copilot-1 review 后改的：同一个时间窗的动态码只能用一次
+// codex-3 review 后改的：同一个时间窗的动态码只能用一次
 const TOTP_REVIEWED = TOTP.replace(
   `/** 允许前后各 window 个时间窗的时钟偏差；逐字节比较用 timingSafeEqual，防计时攻击 */
 export function verifyTotp(

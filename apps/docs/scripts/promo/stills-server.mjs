@@ -1,9 +1,9 @@
 // 宣传截图用的演示 Server：和宣传片（server.mjs）同一套做法——临时 HOME、临时数据库、演示仓库，只监听
 // 127.0.0.1，成员都是经真实协议上线的假连接——场景换成「一个功能从需求到上线」：
 //
-//   林夏在 #web 提「两步验证」→ 主 Agent claude-1 拆成四路，用 hive_invoke 派给 gemini-1（调研）、codex-1（后端）、
-//   claude-2（前端）、copilot-1（安全 review）→ 中途 claude-2 提问、林夏点选回答 → 各自交回报告、设计稿和代码 →
-//   回执回到 claude-1 汇总 → 林夏接着派 E2E（执行中）和部署预发（omp-1 在等林夏回答）。
+//   林夏在 #web 提「两步验证」→ 主 Agent claude-1 拆成四路，用 hive_invoke 派给 claude-3（调研）、codex-1（后端）、
+//   claude-2（前端）、codex-3（安全 review）→ 中途 claude-2 提问、林夏点选回答 → 各自交回报告、设计稿和代码 →
+//   回执回到 claude-1 汇总 → 林夏接着派 E2E（执行中）和部署预发（codex-4 在等林夏回答）。
 //
 // codex-1 的任务线里是真实的 git 提交，代码面板看到的是真的 diff。由 stills.mjs 用 tsx 拉起，就绪后在标准输出
 // 打一行 `DEMO_READY <json>`；附件图片由 stills.mjs 先渲染好放在 $HOME/assets。
@@ -39,10 +39,10 @@ const AGENTS = {
   "claude-2": { provider: "claude", persona: "前端页面与交互" },
   "codex-1": { provider: "codex", persona: "后端接口、补测试" },
   "codex-2": { provider: "codex", persona: "E2E 测试、修 bug" },
-  "copilot-1": { provider: "copilot", persona: "代码与安全 review" },
-  "gemini-1": { provider: "gemini", persona: "查资料、方案对比" },
-  "opencode-1": { provider: "opencode", persona: "文档与变更说明" },
-  "omp-1": { provider: "omp", persona: "部署与环境巡检" },
+  "codex-3": { provider: "codex", persona: "代码与安全 review" },
+  "claude-3": { provider: "claude", persona: "查资料、方案对比" },
+  "claude-4": { provider: "claude", persona: "文档与变更说明" },
+  "codex-4": { provider: "codex", persona: "部署与环境巡检" },
   // 周屿电脑上的 Agent：从别的电脑接进来，不是本机 Agent
   "zhou-codex": { provider: "codex", persona: "周屿的电脑 · 接口联调", remote: true },
 };
@@ -58,22 +58,22 @@ const ROOMS = [
     // 成员栏里后上线的排在前面：倒着写
     agents: [
       "zhou-codex",
-      "omp-1",
-      "opencode-1",
-      "gemini-1",
-      "copilot-1",
+      "codex-4",
+      "claude-4",
+      "claude-3",
+      "codex-3",
       "codex-2",
       "codex-1",
       "claude-2",
       "claude-1",
     ],
   },
-  { id: "design", pinned: true, humans: ["许棠"], agents: ["claude-2", "opencode-1"] },
-  { id: "payment", humans: ["周屿"], agents: ["codex-2", "copilot-1"] },
+  { id: "design", pinned: true, humans: ["许棠"], agents: ["claude-2", "claude-4"] },
+  { id: "payment", humans: ["周屿"], agents: ["codex-2", "codex-3"] },
   { id: "mobile-app", humans: ["周屿"], agents: ["codex-1", "claude-2"] },
-  { id: "infra", humans: [], agents: ["omp-1"] },
-  { id: "data-report", humans: ["陈默"], agents: ["gemini-1"] },
-  { id: "release", humans: ["陈默"], agents: ["opencode-1", "copilot-1"] },
+  { id: "infra", humans: [], agents: ["codex-4"] },
+  { id: "data-report", humans: ["陈默"], agents: ["claude-3"] },
+  { id: "release", humans: ["陈默"], agents: ["claude-4", "codex-3"] },
   { id: "general", humans: ["周屿", "许棠"], agents: ["claude-1"] },
 ];
 
@@ -84,7 +84,7 @@ const PEOPLE = {
   "claude-1": "claude-1",
   "codex-1": "codex-1",
   "codex-2": "codex-2",
-  "opencode-1": "opencode-1",
+  "claude-4": "claude-4",
 };
 
 function git(cwd, author, ...args) {
@@ -134,7 +134,7 @@ function createRepository() {
   commit(repo, "codex-2", "fix(auth): 会话快过期时并发刷新令牌偶发 401", 2 * day, {
     "src/auth/session.ts": AUTH_FILES.session,
   });
-  commit(repo, "opencode-1", "docs: 补充登录流程和错误码说明", 30 * HOUR, {
+  commit(repo, "claude-4", "docs: 补充登录流程和错误码说明", 30 * HOUR, {
     "docs/auth.md": AUTH_FILES.docs,
   });
   commit(repo, "周屿", "chore: vitest 升级到 3.2", 20 * HOUR, {
@@ -228,8 +228,8 @@ async function play(url, token, repo, assets) {
   await exchange(
     "payment",
     "周屿",
-    "copilot-1",
-    "@copilot-1 review 一下分账接口的幂等处理。",
+    "codex-3",
+    "@codex-3 review 一下分账接口的幂等处理。",
     "看完了：幂等键用「订单号 + 分账批次号」没问题；重放时返回第一次的结果，建议把 409 改成 200，详见 PR 评论。",
     { age: 5 * HOUR },
   );
@@ -244,8 +244,8 @@ async function play(url, token, repo, assets) {
   await exchange(
     "data-report",
     "陈默",
-    "gemini-1",
-    "@gemini-1 上周登录失败的原因分一下类。",
+    "claude-3",
+    "@claude-3 上周登录失败的原因分一下类。",
     "分好了：密码错误 71%，验证码过期 18%，限流 9%，其他 2%。明细见附件。",
     {
       age: 4 * HOUR,
@@ -261,8 +261,8 @@ async function play(url, token, repo, assets) {
   await exchange(
     "release",
     "陈默",
-    "opencode-1",
-    "@opencode-1 整理 v2.6 的变更日志。",
+    "claude-4",
+    "@claude-4 整理 v2.6 的变更日志。",
     "变更日志已生成：新增 3 项、修复 7 项，两步验证这一项等合入后补上。",
     { age: 50 * MINUTE },
   );
@@ -276,8 +276,8 @@ async function play(url, token, repo, assets) {
   await exchange(
     web,
     "周屿",
-    "opencode-1",
-    "@opencode-1 把登录和会话相关的接口整理成一页说明，后面两步验证接着往上补。",
+    "claude-4",
+    "@claude-4 把登录和会话相关的接口整理成一页说明，后面两步验证接着往上补。",
     "整理好了，见附件：登录、刷新令牌、限流和错误码都在里面，最后留了「两步验证」一节待补。",
     {
       age: 3 * HOUR + 10 * MINUTE,
@@ -332,7 +332,7 @@ async function play(url, token, repo, assets) {
   await lead.tool("hive_todo_add", { title: "备用码剩 2 个以下时提示重新生成" });
   const subtasks = [
     [
-      "gemini-1",
+      "claude-3",
       "对比 TOTP 的几种实现（自己写 RFC 6238 / otplib / speakeasy），从维护状态、体积和时钟偏差处理给个建议，写成一页报告。",
     ],
     [
@@ -344,7 +344,7 @@ async function play(url, token, repo, assets) {
       "前端：安全设置里的绑定页（二维码 + 手动输入密钥 + 备用码）和登录时输入动态码的页面，按许棠的设计规范做，出两张截图。",
     ],
     [
-      "copilot-1",
+      "codex-3",
       "安全 review：密钥存储、动态码防爆破、备用码一次性、计时攻击，codex-1 交回后逐条核。",
     ],
   ];
@@ -354,7 +354,7 @@ async function play(url, token, repo, assets) {
     delegations[agent] = result.messageId;
   }
   const plan = await lead.say(
-    "拆成四路，已经派出去了：\n\n1. **gemini-1** 调研 TOTP 实现，给选型建议\n2. **codex-1** 后端：动态码、备用码、登录第二步\n3. **claude-2** 前端：绑定页和动态码输入页\n4. **copilot-1** 安全 review\n\n进展记在白板 `two-factor`，四路交回后我汇总给你。",
+    "拆成四路，已经派出去了：\n\n1. **claude-3** 调研 TOTP 实现，给选型建议\n2. **codex-1** 后端：动态码、备用码、登录第二步\n3. **claude-2** 前端：绑定页和动态码输入页\n4. **codex-3** 安全 review\n\n进展记在白板 `two-factor`，四路交回后我汇总给你。",
     { parentMessageId: kickTask.id },
   );
   lead.report(kickTask.id, "completed", { replyMessageId: plan.id });
@@ -367,9 +367,9 @@ async function play(url, token, repo, assets) {
     return { bot, task, t: tracer(bot, task.id) };
   };
 
-  // gemini-1：调研报告
+  // claude-3：调研报告
   {
-    const { bot, task, t } = await job("gemini-1");
+    const { bot, task, t } = await job("claude-3");
     await t.tool("search", "WebFetch", "RFC 6238", 30);
     await t.tool("search", "WebSearch", "otplib vs speakeasy maintenance", 30);
     const file = await bot.upload("TOTP 方案调研.md", REPORTS.research, "text/markdown");
@@ -501,7 +501,7 @@ async function play(url, token, repo, assets) {
     commit(dir, "codex-1", "test(auth): 动态码、备用码和登录第二步补 32 个用例", 50 * MINUTE, {
       "src/auth/totp.test.ts": AUTH_FILES.totpTest,
     });
-    // copilot-1 review 后的修改还没提交：代码面板上能看到未提交的改动
+    // codex-3 review 后的修改还没提交：代码面板上能看到未提交的改动
     write(path.join(dir, "src/auth/totp.ts"), AUTH_FILES.totpReviewed);
     await t.tool("command", "Bash", "pnpm vitest run src/auth", 30);
     await board(
@@ -523,9 +523,9 @@ async function play(url, token, repo, assets) {
     at(reply, 45 * MINUTE);
   }
 
-  // copilot-1：安全 review
+  // codex-3：安全 review
   {
-    const { bot, task, t } = await job("copilot-1");
+    const { bot, task, t } = await job("codex-3");
     await t.tool("read", "Read", "src/auth/totp.ts", 30);
     await t.tool("read", "Read", "src/auth/backup-codes.ts", 30);
     await t.tool("read", "Read", "src/auth/login.ts", 30);
@@ -564,7 +564,7 @@ async function play(url, token, repo, assets) {
       28 * MINUTE,
     );
     const summary = await lead.say(
-      "@林夏 两步验证四路都交回了，我 review 过：\n\n- **调研** gemini-1：参照 otplib 自己实现约 60 行，不加依赖\n- **后端** codex-1：32 个用例通过，覆盖率 96%\n- **前端** claude-2：绑定页、动态码页，许棠已过目\n- **安全** copilot-1：6 项通过，1 项已改（动态码防重放）\n\n建议：先合后端和前端两条分支，再让 codex-2 补一条端到端用例，然后上预发。",
+      "@林夏 两步验证四路都交回了，我 review 过：\n\n- **调研** claude-3：参照 otplib 自己实现约 60 行，不加依赖\n- **后端** codex-1：32 个用例通过，覆盖率 96%\n- **前端** claude-2：绑定页、动态码页，许棠已过目\n- **安全** codex-3：6 项通过，1 项已改（动态码防重放）\n\n建议：先合后端和前端两条分支，再让 codex-2 补一条端到端用例，然后上预发。",
       { parentMessageId: final.id },
     );
     lead.report(final.id, "completed", { replyMessageId: summary.id });
@@ -608,11 +608,11 @@ async function play(url, token, repo, assets) {
     ]);
   }
 
-  // omp-1：部署预发，在等林夏定时间
-  const deploy = await lin.say("@omp-1 合进 main 后部署到预发，跑一遍登录冒烟。");
+  // codex-4：部署预发，在等林夏定时间
+  const deploy = await lin.say("@codex-4 合进 main 后部署到预发，跑一遍登录冒烟。");
   at(deploy, 6 * MINUTE);
   {
-    const bot = m(web, "omp-1");
+    const bot = m(web, "codex-4");
     const task = await bot.mentioned((message) => message.id === deploy.id);
     bot.report(task.id, "running");
     const t = tracer(bot, task.id);
@@ -645,7 +645,7 @@ async function play(url, token, repo, assets) {
       "@codex-2 分账回调补上验签和重放测试。",
       "pnpm vitest run src/split",
     ],
-    ["infra", OWNER, "omp-1", "@omp-1 预发证书月底到期，先续上。", "certbot renew --dry-run"],
+    ["infra", OWNER, "codex-4", "@codex-4 预发证书月底到期，先续上。", "certbot renew --dry-run"],
   ];
   for (const [room, from, agent, ask, command] of busy) {
     const human = from === OWNER ? owners[room] : m(room, from);
