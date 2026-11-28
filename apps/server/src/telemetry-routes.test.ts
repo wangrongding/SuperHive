@@ -54,8 +54,12 @@ describe("telemetry routes", () => {
     });
     expect(created.statusCode).toBe(201);
     const preview = await app.inject({ url: "/api/local/telemetry/preview", headers: owner });
-    const payload = preview.json().payload as { events: Array<{ props: unknown }> };
-    expect(payload.events.map((event) => event.props)).toEqual([{ feature: "room_create" }]);
+    const payload = preview.json().payload as Array<{
+      payload: { name: string; data: Record<string, unknown> };
+    }>;
+    expect(payload.map((event) => [event.payload.name, event.payload.data.feature])).toEqual([
+      ["feature_first_used", "room_create"],
+    ]);
     // 房间名、房间 ID 都不在数据里
     expect(JSON.stringify(payload)).not.toMatch(/design/i);
 

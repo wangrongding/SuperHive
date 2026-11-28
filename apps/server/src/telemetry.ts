@@ -5,7 +5,10 @@
  * - 一律不报：设置里关了（或 hive telemetry off）、SUPERHIVE_TELEMETRY=0、DO_NOT_TRACK=1、CI、沙箱、测试。
  *   这时什么都不记，也不建文件。
  * - 上报地址默认为空（DEFAULT_TELEMETRY_ENDPOINT）：只在本机记录、可以预览，一条都不发。
- * - 发送失败就丢掉，不重试、不堆积；任何一步出错都只记日志，不影响别的功能。
+ * - 发给自部署的 Umami：{地址}/api/batch，一次最多 TELEMETRY_BATCH_LIMIT 条，请求头带 SuperHive 的 UA
+ *   （不带 Umami 会当机器人丢掉）。网络不通、服务出错（408、429、5xx）时放回本机队列，过一会儿再发：
+ *   第一次等 1 小时，连续失败每次翻倍，最多等 1 天；队列最多 200 条，满了丢最旧的。
+ *   服务明确拒收（其它 4xx）的丢掉，重发也没用。任何一步出错都只记日志，不影响别的功能。
  * - 开关存在 ~/.superhive/telemetry/state.json，CLI 改了以后这里按文件修改时间重新读。
  */
 import type { TelemetryBlocker, TelemetryStatus } from "@superhive/protocol";
@@ -15,16 +18,21 @@ import {
   hourOf,
   readTelemetryQueue,
   readTelemetryState,
+  requeueTelemetryEvents,
   resetTelemetryId,
   roomBucket,
   setTelemetryEnabled,
   takeTelemetryQueue,
+  TELEMETRY_BATCH_LIMIT,
   telemetryBlocker,
   telemetryContext,
   telemetryEndpoint,
-  telemetryPayload,
+  telemetryRequestBody,
+  telemetrySite,
   telemetryStateStamp,
+  telemetryUserAgent,
   writeTelemetryState,
+  type TelemetryEvent,
   type TelemetryEventName,
   type TelemetryFeature,
   type TelemetryLocale,
@@ -62,11 +70,26 @@ export type TelemetryOptions = {
 };
 
 const HOUR_MS = 60 * 60_000;
+/** 发送失败后最多隔多久再试（从 1 小时起每次翻倍） */
+const RETRY_MAX_MS = 24 * HOUR_MS;
+
+/** 一批的结果：sent=收下了（或被明确拒收，重发也没用，丢掉）；retry=放回队列，过一会儿再发 */
+type SendResult = "sent" | "retry";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export class Telemetry {
   readonly blocker: TelemetryBlocker | undefined;
   private readonly endpoint: string | undefined;
+  /** Umami 的 websiteId */
+  private readonly site: string;
+  private readonly userAgent: string;
   private readonly now: () => number;
+  /** 连续失败了几次、下次最早什么时候再发 */
+  private failures = 0;
+  private retryAt = 0;
   private cached: { stamp: string | undefined; state: TelemetryState; stored: boolean } | undefined;
   private timers: Array<ReturnType<typeof setTimeout>> = [];
   private flushing: Promise<void> | undefined;
@@ -79,6 +102,10 @@ export class Telemetry {
     const env = options.env ?? process.env;
     this.blocker = options.sandbox ? "sandbox" : telemetryBlocker(env);
     this.endpoint = telemetryEndpoint(env);
+    this.site = telemetrySite(env);
+    this.userAgent = telemetryUserAgent(
+      telemetryContext({ version: options.version, runMode: options.runMode, locale: "other" }),
+    );
     this.now = options.now ?? Date.now;
   }
 
@@ -218,10 +245,14 @@ export class Telemetry {
   }
 
   /** 下一次要发的请求体（设置里「查看要发送的数据」、hive telemetry preview） */
-  preview(): ReturnType<typeof telemetryPayload> | null {
+  preview(): ReturnType<typeof telemetryRequestBody> | null {
     try {
       if (!this.active()) return null;
-      return telemetryPayload(this.state().state.installId, readTelemetryQueue(this.options.dir));
+      return telemetryRequestBody(
+        this.site,
+        this.state().state.installId,
+        readTelemetryQueue(this.options.dir),
+      );
     } catch (error) {
       this.warn("read", error);
       return null;
@@ -311,24 +342,37 @@ export class Telemetry {
     }
   }
 
-  /** 上报：没配地址、没开时什么都不做；发了不管成败都从队列里去掉 */
+  /**
+   * 上报：没配地址、没开、还在失败后的等待期里时什么都不做。按批发，某一批该重发时停下，
+   * 这一批和后面没发的放回队列，等一会儿再发。
+   */
   flush(): Promise<void> {
-    if (this.flushing || !this.endpoint || !this.active())
-      return this.flushing ?? Promise.resolve();
+    if (this.flushing) return this.flushing;
+    if (!this.endpoint || this.now() < this.retryAt || !this.active()) return Promise.resolve();
     const endpoint = this.endpoint;
     this.flushing = (async () => {
       try {
+        const installId = this.state().state.installId;
         const events = takeTelemetryQueue(this.options.dir);
-        if (!events.length) return;
-        const body = JSON.stringify(telemetryPayload(this.state().state.installId, events));
-        const response = await (this.options.fetch ?? fetch)(endpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body,
-          signal: AbortSignal.timeout(this.options.timeoutMs ?? 10_000),
-        });
-        if (!response.ok)
-          this.options.log?.(`Usage statistics upload rejected (${response.status})`);
+        let unsent: TelemetryEvent[] = [];
+        for (let start = 0; start < events.length; start += TELEMETRY_BATCH_LIMIT) {
+          const batch = events.slice(start, start + TELEMETRY_BATCH_LIMIT);
+          if ((await this.send(endpoint, installId, batch)) === "retry") {
+            unsent = events.slice(start);
+            break;
+          }
+        }
+        if (!unsent.length) {
+          this.failures = 0;
+          this.retryAt = 0;
+          return;
+        }
+        this.failures += 1;
+        this.retryAt = this.now() + Math.min(HOUR_MS * 2 ** (this.failures - 1), RETRY_MAX_MS);
+        // 发的时候关掉了统计、或重置了安装 ID：这些数据作废，不放回去
+        if (this.active() && this.state().state.installId === installId) {
+          requeueTelemetryEvents(this.options.dir, unsent);
+        }
       } catch (error) {
         this.warn("send", error);
       } finally {
@@ -336,6 +380,48 @@ export class Telemetry {
       }
     })();
     return this.flushing;
+  }
+
+  private async send(
+    endpoint: string,
+    installId: string,
+    events: readonly TelemetryEvent[],
+  ): Promise<SendResult> {
+    let response: Response;
+    try {
+      response = await (this.options.fetch ?? fetch)(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", "user-agent": this.userAgent },
+        body: JSON.stringify(telemetryRequestBody(this.site, installId, events)),
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 30_000),
+      });
+    } catch (error) {
+      this.warn("send", error);
+      return "retry";
+    }
+    if (response.status === 408 || response.status === 429 || response.status >= 500) {
+      this.options.log?.(`Usage statistics upload failed (${response.status}), will retry later`);
+      return "retry";
+    }
+    if (!response.ok) {
+      this.options.log?.(`Usage statistics upload rejected (${response.status})`);
+      return "sent";
+    }
+    // Umami 的 /api/batch 逐条处理，回 { size, processed, errors }：一条都没收下（比如它的数据库出错）
+    // 时下次再发；只拒了其中几条的（数据不合格）丢掉
+    const result: unknown = await response.json().catch(() => undefined);
+    if (isRecord(result) && typeof result.errors === "number" && result.errors > 0) {
+      if (result.processed === 0) {
+        this.options.log?.("Usage statistics upload failed (no event accepted), will retry later");
+        return "retry";
+      }
+      this.options.log?.(`Usage statistics upload: ${result.errors} event(s) rejected`);
+    }
+    // 发出去了留一行日志（一天也就一两行），哪天发了多少条有据可查
+    const accepted =
+      isRecord(result) && typeof result.processed === "number" ? result.processed : events.length;
+    this.options.log?.(`Usage statistics sent (${accepted} of ${events.length} event(s) accepted)`);
+    return "sent";
   }
 
   private warn(step: string, error: unknown): void {

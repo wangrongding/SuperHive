@@ -65,14 +65,39 @@ describe("hive telemetry", () => {
     expect(readTelemetryState(dir).state.enabled).toBe(true);
   });
 
-  it("prints the same JSON body the Server would send", () => {
+  it("prints the same Umami request body the Server would send", () => {
     const dir = tempDir();
     const { state } = readTelemetryState(dir);
     writeTelemetryState(dir, state);
+    expect(run(["preview"], {}, dir).text).toBe("还没有要发送的数据。");
     queued(dir);
     const payload = JSON.parse(run(["preview"], {}, dir).text);
-    expect(payload).toMatchObject({ schema: 1, installId: state.installId });
-    expect(payload.events).toHaveLength(1);
+    expect(payload).toEqual([
+      {
+        type: "event",
+        payload: {
+          website: "b2d13ec6-3fa6-47bf-9cbd-7317357517fc",
+          hostname: "superhive.app",
+          url: "/feature_first_used",
+          name: "feature_first_used",
+          language: "en",
+          timestamp: expect.any(Number),
+          id: state.installId,
+          data: {
+            schema: 1,
+            version: "0.4.9",
+            runMode: "npm",
+            os: "linux",
+            arch: "x64",
+            locale: "en",
+            feature: "room_create",
+          },
+        },
+      },
+    ]);
+    const site = "0f8c2a4e-1b3d-4e5f-8a9b-0c1d2e3f4a5b";
+    const custom = JSON.parse(run(["preview"], { SUPERHIVE_TELEMETRY_SITE: site }, dir).text);
+    expect(custom[0].payload.website).toBe(site);
   });
 
   it("resets the install ID", () => {

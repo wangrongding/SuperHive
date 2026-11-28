@@ -10,6 +10,8 @@
  *
  * 只有 Server 往外发（apps/server 的 telemetry.ts），CLI 只往队列里追加。
  * 上报地址默认为空：没配地址时只在本机记录、可以预览，一条都不发。
+ * 统计服务是自部署的 Umami（https://umami.is）：发出去的请求体由 telemetryRequestBody 生成，
+ * 一条事件对应 Umami 的一条 { type: "event", payload }，预览看到的也是它。
  *
  * 事件和字段都按下面的 TELEMETRY_EVENTS 白名单校验：不在表里的事件整条丢掉，不在表里的字段、
  * 不在取值范围里的值直接去掉。表里只有枚举和计数，没有任何自由文本，消息、路径、名字、主机名、
@@ -31,10 +33,16 @@ import path from "node:path";
 /** 上报的数据格式版本：字段有不兼容的改动时加一 */
 export const TELEMETRY_SCHEMA = 1;
 /**
- * 上报地址。统计服务定下来之前为空：一条都不发，只在本机记录。
- * 也可以用环境变量 SUPERHIVE_TELEMETRY_URL 指定（自己部署统计服务、或调试时用）。
+ * 上报地址（Umami 的根地址，例如 https://stats.example.com）。统计服务定下来之前为空：一条都不发，
+ * 只在本机记录。也可以用环境变量 SUPERHIVE_TELEMETRY_URL 指定（自己部署统计服务、或调试时用）。
  */
 export const DEFAULT_TELEMETRY_ENDPOINT = "";
+/** Umami 里 SuperHive 这个站点的 websiteId；环境变量 SUPERHIVE_TELEMETRY_SITE 可以换 */
+export const DEFAULT_TELEMETRY_SITE = "b2d13ec6-3fa6-47bf-9cbd-7317357517fc";
+/** 每条事件在 Umami 里记的域名：只是个标签，不对应真实网站 */
+export const TELEMETRY_HOSTNAME = "superhive.app";
+/** 一次请求最多带几条事件（Umami 的 /api/batch 一次最多收 500 条） */
+export const TELEMETRY_BATCH_LIMIT = 50;
 /** 本地队列最多留多少条，超出丢最旧的 */
 export const QUEUE_LIMIT = 200;
 /** 「使用统计」文档 */
@@ -328,16 +336,33 @@ export function telemetryBlocker(
   return undefined;
 }
 
-/** 上报地址：环境变量优先，其次内置地址；都没有或不是 http(s) 地址时为 undefined（不发） */
+/**
+ * 真正发往的地址：Umami 的 {根地址}/api/batch。环境变量优先，其次内置地址；都没有或不是 http(s)
+ * 地址时为 undefined（不发）。根地址可以带子路径（Umami 挂在反向代理的 /umami 下）；
+ * 写成 …/api/send 或 …/api/batch 也认。
+ */
 export function telemetryEndpoint(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const raw = env.SUPERHIVE_TELEMETRY_URL?.trim() || DEFAULT_TELEMETRY_ENDPOINT;
   if (!raw) return undefined;
   try {
     const url = new URL(raw);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : undefined;
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    const base = url.pathname.replace(/\/api\/(?:send|batch)\/?$/, "").replace(/\/*$/, "/");
+    url.pathname = `${base}api/batch`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
   } catch {
     return undefined;
   }
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Umami 的 websiteId：环境变量 SUPERHIVE_TELEMETRY_SITE 优先（不是 UUID 时不认），其次内置的 */
+export function telemetrySite(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.SUPERHIVE_TELEMETRY_SITE?.trim();
+  return override && UUID_PATTERN.test(override) ? override.toLowerCase() : DEFAULT_TELEMETRY_SITE;
 }
 
 /* ---------- 本机状态 ---------- */
@@ -523,11 +548,85 @@ export function takeTelemetryQueue(dir: string): TelemetryEvent[] {
   }
 }
 
+/**
+ * 没发出去的放回队列，排在取走以后别的进程新追加的前面，下次再发；超过上限时丢最旧的。
+ * 先把队列再取一次（改名）再一起追加：这期间别的进程追加的行不会被覆盖掉。
+ */
+export function requeueTelemetryEvents(dir: string, events: readonly TelemetryEvent[]): number {
+  return appendTelemetryEvents(dir, [...events, ...takeTelemetryQueue(dir)]);
+}
+
 export function clearTelemetryQueue(dir: string): void {
   rmSync(queueFile(dir), { force: true });
 }
 
-/** 要发出去的请求体（预览看到的就是它） */
-export function telemetryPayload(installId: string, events: readonly TelemetryEvent[]) {
-  return { schema: TELEMETRY_SCHEMA, installId, events: [...events] };
+/* ---------- 发给 Umami 的格式 ---------- */
+
+/** Umami 一条事件的请求体（POST /api/send 的 body，/api/batch 收的是它的数组） */
+export type UmamiEvent = {
+  type: "event";
+  payload: {
+    website: string;
+    hostname: string;
+    /** 「/事件名」：Umami 要求事件有个页面地址 */
+    url: string;
+    name: TelemetryEventName;
+    /** 界面语言；other 时不带 */
+    language?: string;
+    /** 事件发生的整点（Unix 秒）：晚发的事件也记在原来的时间上 */
+    timestamp: number;
+    /** 安装 ID：Umami 的 distinct ID，按它数有多少台电脑 */
+    id: string;
+    /** 公共字段和事件字段，拍平成一层；计数类字段拍成「字段_键」，例如 agents_claude */
+    data: Record<string, string | number>;
+  };
+};
+
+/** 拍平：Umami 的 data 只收一层 string / number */
+export function telemetryData(event: TelemetryEvent): Record<string, string | number> {
+  const data: Record<string, string | number> = { schema: TELEMETRY_SCHEMA, ...event.context };
+  for (const [name, value] of Object.entries(event.props)) {
+    if (typeof value === "string") {
+      data[name] = value;
+    } else {
+      for (const [key, count] of Object.entries(value))
+        data[`${name}_${key.replaceAll(".", "_")}`] = count;
+    }
+  }
+  return data;
+}
+
+export function umamiEvent(site: string, installId: string, event: TelemetryEvent): UmamiEvent {
+  return {
+    type: "event",
+    payload: {
+      website: site,
+      hostname: TELEMETRY_HOSTNAME,
+      url: `/${event.event}`,
+      name: event.event,
+      ...(event.context.locale === "other" ? {} : { language: event.context.locale }),
+      timestamp: Math.floor(Date.parse(event.time) / 1000),
+      id: installId,
+      data: telemetryData(event),
+    },
+  };
+}
+
+/** 要发出去的请求体（预览看到的就是它；真正发送时按 TELEMETRY_BATCH_LIMIT 条一批分开发） */
+export function telemetryRequestBody(
+  site: string,
+  installId: string,
+  events: readonly TelemetryEvent[],
+): UmamiEvent[] {
+  return events.map((event) => umamiEvent(site, installId, event));
+}
+
+/**
+ * 请求头里的 User-Agent。Umami 会把不带 UA、或 UA 像爬虫的请求当机器人丢掉（只回 {"beep":"boop"}），
+ * 所以必须带上，形如「SuperHive/0.4.9 (darwin; arm64)」。
+ */
+export function telemetryUserAgent(
+  context: Pick<TelemetryContext, "version" | "os" | "arch">,
+): string {
+  return `SuperHive/${context.version} (${context.os}; ${context.arch})`;
 }

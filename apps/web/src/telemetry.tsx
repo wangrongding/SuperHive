@@ -139,7 +139,9 @@ export function TelemetrySettingsGroup({ local }: { local: LocalAgentsState }) {
   const showPreview = async () => {
     try {
       const payload = await local.telemetryPreview();
-      setPreview(payload ? JSON.stringify(payload, null, 2) : "");
+      // 发给统计服务的原始请求体（一个数组）；一条都没有时显示「没有要发送的数据」
+      const empty = !payload || (Array.isArray(payload) && payload.length === 0);
+      setPreview(empty ? "" : JSON.stringify(payload, null, 2));
     } catch (reason) {
       setError(errorMessage(reason));
     }

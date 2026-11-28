@@ -38,6 +38,29 @@
     },
     { event: "update_result", time, context, props: { kind: "npm", outcome: "success" } },
   ];
+  // 和 telemetry-core.ts 的 umamiEvent 同样的格式：预览里看到的是发给 Umami 的请求体
+  const umami = (item) => {
+    const data = { schema: 1, ...item.context };
+    for (const [name, value] of Object.entries(item.props)) {
+      if (typeof value === "string") data[name] = value;
+      else
+        for (const [key, count] of Object.entries(value))
+          data[`${name}_${key.replaceAll(".", "_")}`] = count;
+    }
+    return {
+      type: "event",
+      payload: {
+        website: "b2d13ec6-3fa6-47bf-9cbd-7317357517fc",
+        hostname: "superhive.app",
+        url: `/${item.event}`,
+        name: item.event,
+        language: item.context.locale,
+        timestamp: Date.parse(item.time) / 1000,
+        id: installId,
+        data,
+      },
+    };
+  };
   let installId = "8d0f3c1e-2a4b-4c6d-8e9f-0a1b2c3d4e5f";
   let enabled = true;
   let queued = events.length;
@@ -81,9 +104,7 @@
     }
     if (url === "/api/local/telemetry/preview") {
       const active = enabled && !blocker;
-      return json({
-        payload: active ? { schema: 1, installId, events: events.slice(0, queued) } : null,
-      });
+      return json({ payload: active ? events.slice(0, queued).map(umami) : null });
     }
     return original(input, init);
   };

@@ -43,7 +43,9 @@ function api(initial: TelemetryStatus, mode: "local" | "device" = "local") {
     telemetryNoticeShown: vi.fn(async () => (current = { ...current, noticePending: false })),
     telemetryPreview: vi.fn(async () =>
       current.active
-        ? { schema: 1, installId: current.installId, events: [{ event: "heartbeat" }] }
+        ? current.queued
+          ? [{ type: "event", payload: { name: "heartbeat", id: current.installId } }]
+          : []
         : null,
     ),
   };
@@ -124,8 +126,18 @@ describe("TelemetrySettingsGroup", () => {
     renderGroup(local);
     fireEvent.click(await screen.findByRole("button", { name: "查看要发送的数据（2 条）" }));
     const preview = await screen.findByLabelText("要发送的数据");
-    expect(JSON.parse(preview.textContent ?? "")).toMatchObject({ schema: 1, events: [{}] });
+    expect(JSON.parse(preview.textContent ?? "")).toMatchObject([
+      { type: "event", payload: { name: "heartbeat" } },
+    ]);
     fireEvent.click(screen.getByRole("button", { name: "收起" }));
+    expect(screen.queryByLabelText("要发送的数据")).toBeNull();
+  });
+
+  it("says there is nothing to send when the queue is empty", async () => {
+    const local = api(status({ queued: 0 }));
+    renderGroup(local);
+    fireEvent.click(await screen.findByRole("button", { name: "查看要发送的数据（0 条）" }));
+    expect(await screen.findByText("没有要发送的数据。")).toBeTruthy();
     expect(screen.queryByLabelText("要发送的数据")).toBeNull();
   });
 

@@ -24,55 +24,69 @@ Once turned off, nothing more is recorded and **anything not yet sent is deleted
 
 ## Preview what would be sent
 
-- In the web UI, open **Settings → This computer → Anonymous usage statistics** and click **View data to be sent**. It shows the raw JSON of the next upload.
+- In the web UI, open **Settings → This computer → Anonymous usage statistics** and click **View data to be sent**. It shows the raw JSON of the next upload to the statistics service.
 - In a terminal, run `hive telemetry preview`. It prints the same content.
 
-An upload body looks like this:
+The statistics service is a self-hosted [Umami](https://umami.is), and each event is one Umami `event`. An upload body looks like this (an array of at most 50 events):
 
 ```json
-{
-  "schema": 1,
-  "installId": "8d0f3c1e-2a4b-4c6d-8e9f-0a1b2c3d4e5f",
-  "events": [
-    {
-      "event": "heartbeat",
-      "time": "2026-11-28T04:00:00.000Z",
-      "context": {
+[
+  {
+    "type": "event",
+    "payload": {
+      "website": "b2d13ec6-3fa6-47bf-9cbd-7317357517fc",
+      "hostname": "superhive.app",
+      "url": "/heartbeat",
+      "name": "heartbeat",
+      "language": "zh-CN",
+      "timestamp": 1795838400,
+      "id": "8d0f3c1e-2a4b-4c6d-8e9f-0a1b2c3d4e5f",
+      "data": {
+        "schema": 1,
         "version": "0.4.9",
         "runMode": "npm",
         "os": "darwin",
         "arch": "arm64",
-        "locale": "zh-CN"
-      },
-      "props": { "agents": { "claude": 2, "codex": 1 }, "rooms": "2-5" }
+        "locale": "zh-CN",
+        "agents_claude": 2,
+        "agents_codex": 1,
+        "rooms": "2-5"
+      }
     }
-  ]
-}
+  }
+]
 ```
+
+The only request headers are `Content-Type: application/json` and `User-Agent: SuperHive/0.4.9 (darwin; arm64)` (version, operating system, CPU architecture). No cookies and no other identifiers.
 
 ## Common fields
 
-| Field             | Content                                                                                                                          |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `schema`          | Data format version, currently `1`                                                                                               |
-| `installId`       | A random ID generated on first start, unrelated to your computer or account; reset it in Settings or with `hive telemetry reset` |
-| `time`            | When the event happened, rounded down to the hour (UTC)                                                                          |
-| `context.version` | SuperHive version, such as `0.4.9`                                                                                               |
-| `context.runMode` | How it runs: `npm` (global npm install), `desktop` (desktop app) or `source` (from source)                                       |
-| `context.os`      | Operating system: `darwin`, `win32`, `linux` or `other`                                                                          |
-| `context.arch`    | CPU architecture: `x64`, `arm64` or `other`                                                                                      |
-| `context.locale`  | Interface language: `zh-CN`, `en` or `other`                                                                                     |
+Every event carries these:
+
+| Field               | Content                                                                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `payload.id`        | The install ID: random, generated on first start, unrelated to your computer or account; reset it in Settings or with `hive telemetry reset` |
+| `payload.timestamp` | When the event happened (Unix seconds), rounded down to the hour (UTC)                                                                       |
+| `payload.name`      | The event name, see "Events" below; `payload.url` is `/` followed by the event name                                                          |
+| `payload.language`  | Interface language: `zh-CN` or `en`; left out for other languages                                                                            |
+| `payload.website`   | Fixed: the ID of the SuperHive site in the statistics service; `payload.hostname` is always `superhive.app` as well                          |
+| `data.schema`       | Data format version, currently `1`                                                                                                           |
+| `data.version`      | SuperHive version, such as `0.4.9`                                                                                                           |
+| `data.runMode`      | How it runs: `npm` (global npm install), `desktop` (desktop app) or `source` (from source)                                                   |
+| `data.os`           | Operating system: `darwin`, `win32`, `linux` or `other`                                                                                      |
+| `data.arch`         | CPU architecture: `x64`, `arm64` or `other`                                                                                                  |
+| `data.locale`       | Interface language: `zh-CN`, `en` or `other`                                                                                                 |
 
 ## Events
 
-Every field can only take the values listed below. Unknown fields and values outside the list are dropped before anything is recorded, and an event missing a required field is dropped entirely.
+Each event's own fields go into `data` too, in a single level; count fields are flattened to "field_category", such as `agents_claude`. Every field can only take the values listed below. Unknown fields and values outside the list are dropped before anything is recorded, and an event missing a required field is dropped entirely.
 
 ### `heartbeat`: once a day
 
-| Field    | Content                                                                                                                                                         |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agents` | Number of local agents per CLI type. The only types are `codex`, `claude`, `copilot`, `opencode`, `omp`, `openclaw`, `gemini` and `agy`; each count stops at 99 |
-| `rooms`  | The range the room count falls in: `0`, `1`, `2-5`, `6-20` or `21+`                                                                                             |
+| Field    | Content                                                                                                                                                                                                                            |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents` | Number of local agents per CLI type, flattened to `agents_type`. The only types are `codex`, `claude`, `copilot`, `opencode`, `omp`, `openclaw`, `gemini` and `agy`; types with no agents are left out, and each count stops at 99 |
+| `rooms`  | The range the room count falls in: `0`, `1`, `2-5`, `6-20` or `21+`                                                                                                                                                                |
 
 ### `feature_first_used`: the first use of a key feature
 
@@ -109,19 +123,19 @@ Failure categories (`reason`):
 
 ### `incident_counts`: incidents counted by category
 
-Recorded together with the daily `heartbeat`, and only when there were incidents since the last one. `counts` maps "origin.source" to a number of occurrences; each count stops at 9999:
+Recorded together with the daily `heartbeat`, and only when there were incidents since the last one. `counts` counts occurrences per "origin_source", flattened to `counts_origin_source`; each count stops at 9999:
 
 - Origin: `internal` (a problem in SuperHive itself), `external` (models, network and other outside causes) or `unknown`
 - Source: `invocation` (an agent turn failed), `server` (a Server exception), `protocol` (a received event failed validation) or `web` (a web page error)
 
-For example `{ "external.invocation": 2, "internal.server": 1 }`.
+For example `"counts_external_invocation": 2, "counts_internal_server": 1`.
 
 ## What we promise never to collect
 
 - The content of messages, attachments, questions, boards and tasks
 - File paths, working directories, repository names and URLs
 - Room names, room IDs, people's names, agent names and usernames
-- Hostnames and IP addresses (the Server neither records nor forwards them; the statistics service sees the IP of the request but does not store it)
+- Hostnames and IP addresses (the Server neither records nor forwards them. The statistics service is a self-hosted Umami: it does not store IP addresses and only uses the request's IP to roughly work out the country, region and city)
 - Tokens, keys, passwords or any other credentials
 - Raw error messages, logs and command-line arguments
 
@@ -130,8 +144,9 @@ This doesn't rely on being careful about what to send. Only a whitelist is accep
 ## Uploads and retention
 
 - Only the Hive Server sends anything. The web UI, the desktop app and the `hive` command only hand events to the local Server or write them to the local queue.
-- Data is sent once an hour, or earlier once 50 events have built up. A failed upload is dropped: no retries, no pile-up, and no effect on any feature.
+- Data is sent once an hour, or earlier once 50 events have built up, at most 50 per request.
+- When the network is down or the statistics service has an error, unsent events stay on this computer and are retried later: first after 1 hour, doubling after each failure in a row, up to 1 day. Events the service explicitly rejects are dropped. Upload errors never affect any feature.
 - At most 200 unsent events are kept locally; when full, the oldest are dropped.
 - Data received by the statistics service is kept for 90 days and then deleted.
-- The endpoint is empty by default. To send to your own statistics service, set `SUPERHIVE_TELEMETRY_URL=https://your-endpoint` before starting (only http and https are accepted).
+- The endpoint is empty by default. To send to your own Umami, set `SUPERHIVE_TELEMETRY_URL=https://your-umami-address` before starting (only http and https are accepted; uploads go to its `/api/batch`), and put your site's websiteId in `SUPERHIVE_TELEMETRY_SITE`.
 - The install ID, the switch and unsent data live in `~/.superhive/telemetry/`. Use `SUPERHIVE_TELEMETRY_DIR` to move them.

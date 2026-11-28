@@ -15,7 +15,8 @@ import {
   telemetryContext,
   telemetryDir,
   telemetryEndpoint,
-  telemetryPayload,
+  telemetryRequestBody,
+  telemetrySite,
   type TelemetryBlocker,
   type TelemetryEventName,
 } from "./telemetry-core.js";
@@ -32,7 +33,7 @@ const usage = `用法：
   hive telemetry status   查看匿名使用统计开着没有、为什么
   hive telemetry on       打开
   hive telemetry off      关闭，并删掉还没发出的数据
-  hive telemetry preview  打印下一次要发送的数据（原始 JSON）
+  hive telemetry preview  打印下一次要发送的数据（发给统计服务的原始 JSON）
   hive telemetry reset    换一个新的随机安装 ID，并删掉还没发出的数据
 
 也可以设环境变量 SUPERHIVE_TELEMETRY=0 或 DO_NOT_TRACK=1 一律关闭。
@@ -108,7 +109,12 @@ export function telemetryCommand(args: string[], options: TelemetryCommandOption
       );
       return;
     }
-    write(JSON.stringify(telemetryPayload(state.installId, readTelemetryQueue(dir)), null, 2));
+    const queue = readTelemetryQueue(dir);
+    write(
+      queue.length
+        ? JSON.stringify(telemetryRequestBody(telemetrySite(env), state.installId, queue), null, 2)
+        : "还没有要发送的数据。",
+    );
     return;
   }
   if (sub === "reset") {

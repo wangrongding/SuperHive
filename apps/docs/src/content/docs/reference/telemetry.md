@@ -24,55 +24,69 @@ SuperHive 默认开启匿名使用统计：只记版本、系统、用到了哪�
 
 ## 怎么看要发什么
 
-- 网页「设置 → 这台电脑 → 匿名使用统计」点「查看要发送的数据」，显示下一次要发的原始 JSON。
+- 网页「设置 → 这台电脑 → 匿名使用统计」点「查看要发送的数据」，显示下一次要发给统计服务的原始 JSON。
 - 终端运行 `hive telemetry preview`，内容和网页一样。
 
-一次上报的请求体长这样：
+统计服务是自部署的 [Umami](https://umami.is)，一条事件就是它的一条 `event`。请求体长这样（一个数组，一次最多 50 条）：
 
 ```json
-{
-  "schema": 1,
-  "installId": "8d0f3c1e-2a4b-4c6d-8e9f-0a1b2c3d4e5f",
-  "events": [
-    {
-      "event": "heartbeat",
-      "time": "2026-11-28T04:00:00.000Z",
-      "context": {
+[
+  {
+    "type": "event",
+    "payload": {
+      "website": "b2d13ec6-3fa6-47bf-9cbd-7317357517fc",
+      "hostname": "superhive.app",
+      "url": "/heartbeat",
+      "name": "heartbeat",
+      "language": "zh-CN",
+      "timestamp": 1795838400,
+      "id": "8d0f3c1e-2a4b-4c6d-8e9f-0a1b2c3d4e5f",
+      "data": {
+        "schema": 1,
         "version": "0.4.9",
         "runMode": "npm",
         "os": "darwin",
         "arch": "arm64",
-        "locale": "zh-CN"
-      },
-      "props": { "agents": { "claude": 2, "codex": 1 }, "rooms": "2-5" }
+        "locale": "zh-CN",
+        "agents_claude": 2,
+        "agents_codex": 1,
+        "rooms": "2-5"
+      }
     }
-  ]
-}
+  }
+]
 ```
+
+请求头只有 `Content-Type: application/json` 和 `User-Agent: SuperHive/0.4.9 (darwin; arm64)`（版本、系统、CPU 架构），没有 Cookie 和别的标识。
 
 ## 公共字段
 
-| 字段              | 内容                                                                                  |
-| ----------------- | ------------------------------------------------------------------------------------- |
-| `schema`          | 数据格式版本，现在是 `1`                                                              |
-| `installId`       | 第一次启动时随机生成的 ID，和电脑、账号无关；可在设置里或 `hive telemetry reset` 重置 |
-| `time`            | 事件发生的时间，只精确到小时（UTC）                                                   |
-| `context.version` | SuperHive 版本号，例如 `0.4.9`                                                        |
-| `context.runMode` | 运行方式：`npm`（npm 全局安装）、`desktop`（桌面端）、`source`（源码）                |
-| `context.os`      | 操作系统：`darwin`、`win32`、`linux`、`other`                                         |
-| `context.arch`    | CPU 架构：`x64`、`arm64`、`other`                                                     |
-| `context.locale`  | 界面语言：`zh-CN`、`en`、`other`                                                      |
+每条事件都带这些：
+
+| 字段                | 内容                                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `payload.id`        | 安装 ID：第一次启动时随机生成，和电脑、账号无关；可在设置里或 `hive telemetry reset` 重置 |
+| `payload.timestamp` | 事件发生的时间（Unix 秒），只精确到小时（UTC）                                            |
+| `payload.name`      | 事件名，见下面「事件」；`payload.url` 是 `/` 加事件名                                     |
+| `payload.language`  | 界面语言：`zh-CN` 或 `en`，其它语言不带这一项                                             |
+| `payload.website`   | 固定值：统计服务里 SuperHive 这个站点的 ID；`payload.hostname` 也是固定的 `superhive.app` |
+| `data.schema`       | 数据格式版本，现在是 `1`                                                                  |
+| `data.version`      | SuperHive 版本号，例如 `0.4.9`                                                            |
+| `data.runMode`      | 运行方式：`npm`（npm 全局安装）、`desktop`（桌面端）、`source`（源码）                    |
+| `data.os`           | 操作系统：`darwin`、`win32`、`linux`、`other`                                             |
+| `data.arch`         | CPU 架构：`x64`、`arm64`、`other`                                                         |
+| `data.locale`       | 界面语言：`zh-CN`、`en`、`other`                                                          |
 
 ## 事件
 
-所有字段都只能取下面列出的值；不认得的字段、不在范围里的值在记录前就丢掉，整条事件缺了必填字段也丢掉。
+各事件自己的字段也放在 `data` 里，只有一层；计数类的字段拍成「字段\_类别」，例如 `agents_claude`。所有字段都只能取下面列出的值；不认得的字段、不在范围里的值在记录前就丢掉，整条事件缺了必填字段也丢掉。
 
 ### `heartbeat`：每天一次
 
-| 字段     | 内容                                                                                                                                   |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `agents` | 本机 Agent 按 CLI 类型分的个数，类型只有 `codex`、`claude`、`copilot`、`opencode`、`omp`、`openclaw`、`gemini`、`agy`；每类最多记到 99 |
-| `rooms`  | 房间数所在的区间：`0`、`1`、`2-5`、`6-20`、`21+`                                                                                       |
+| 字段     | 内容                                                                                                                                                                       |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents` | 本机 Agent 按 CLI 类型分的个数，拍成 `agents_类型`，类型只有 `codex`、`claude`、`copilot`、`opencode`、`omp`、`openclaw`、`gemini`、`agy`；没有的类型不带，每类最多记到 99 |
+| `rooms`  | 房间数所在的区间：`0`、`1`、`2-5`、`6-20`、`21+`                                                                                                                           |
 
 ### `feature_first_used`：关键功能第一次用到
 
@@ -109,19 +123,19 @@ SuperHive 默认开启匿名使用统计：只记版本、系统、用到了哪�
 
 ### `incident_counts`：故障按类别计数
 
-随每天的 `heartbeat` 一起记，只有这段时间出过故障时才有。`counts` 是「来源.位置」到次数的对照，每类最多记到 9999：
+随每天的 `heartbeat` 一起记，只有这段时间出过故障时才有。`counts` 按「来源\_位置」计次数，拍成 `counts_来源_位置`，每类最多记到 9999：
 
 - 来源：`internal`（SuperHive 自己的问题）、`external`（模型、网络等外部原因）、`unknown`
 - 位置：`invocation`（Agent 一轮失败）、`server`（Server 抛异常）、`protocol`（收到的事件没通过校验）、`web`（网页报错）
 
-例如 `{ "external.invocation": 2, "internal.server": 1 }`。
+例如 `"counts_external_invocation": 2, "counts_internal_server": 1`。
 
 ## 我们承诺不收
 
 - 消息、附件、提问、白板和任务的内容
 - 文件路径、工作目录、仓库名和地址
 - 房间名、房间 ID、人名、Agent 名、用户名
-- 电脑名、IP 地址（Server 不记录也不转发；统计服务收到请求时看得到 IP，但不保存）
+- 电脑名、IP 地址（Server 不记录也不转发。统计服务用的是自部署的 Umami，它不存 IP，只用请求的 IP 粗算国家、地区和城市）
 - Token、key、密码等任何凭据
 - 报错原文、日志、命令行参数
 
@@ -130,8 +144,9 @@ SuperHive 默认开启匿名使用统计：只记版本、系统、用到了哪�
 ## 上报和保留
 
 - 只有 Hive Server 往外发；网页、桌面端和 `hive` 命令只把事件交给本机 Server 或写进本机队列。
-- 每小时发一次，攒够 50 条提前发。发送失败就丢掉，不重试、不堆积，也不影响任何功能。
+- 每小时发一次，攒够 50 条提前发，一次最多 50 条。
+- 网络不通、统计服务出错时，没发出去的留在本机，过一会儿再发：第一次隔 1 小时，连续失败每次翻倍，最多隔 1 天。统计服务明确拒收的直接丢掉。发送出错不影响任何功能。
 - 本机最多留 200 条没发的，满了丢最旧的。
 - 统计服务收到的数据保留 90 天，之后删除。
-- 上报地址默认为空。想发到自己的统计服务，启动前设 `SUPERHIVE_TELEMETRY_URL=https://你的地址`（只认 http 和 https）。
+- 上报地址默认为空。想发到自己部署的 Umami，启动前设 `SUPERHIVE_TELEMETRY_URL=https://你的 Umami 地址`（只认 http 和 https，发到它的 `/api/batch`），再用 `SUPERHIVE_TELEMETRY_SITE` 填你那边站点的 websiteId。
 - 安装 ID、开关和待发的数据在 `~/.superhive/telemetry/`，可以用 `SUPERHIVE_TELEMETRY_DIR` 换个位置。
