@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { userFsPromises } from "./user-fs.js";
 import path from "node:path";
 import {
@@ -48,6 +48,16 @@ export type FocusDropped = {
   focusDropped: { worktreeId: string; path: string; branch: string; reason: string };
 };
 type Checkout = { path: string; branch: string | undefined; locked: boolean };
+/** 改动文件集合的指纹：文件名去掉空白（和 patch-id 的算法一致）、排序后取哈希；没改文件为 "" */
+function fileSetKey(names: string[]): string {
+  if (names.length === 0) return "";
+  const hash = createHash("sha1");
+  for (const name of names.map((item) => item.replace(/\s/g, "")).sort()) hash.update(`${name}\0`);
+  return hash.digest("hex");
+}
+
+/** 列一次任务线时整个仓库只读一遍的东西：所有 checkout、所有分支的提交 */
+type RepositorySnapshot = { checkouts: Checkout[]; tips: Map<string, string> };
 type Repository = { repo: string; commonDir: string; target: string };
 
 type RuntimeTask = {
@@ -104,7 +114,7 @@ function lookupTimeout(ms: number): HiveError {
 
 /**
  * 查任务目录超过截止时间就先回「忙」。没做完的那份在后台收尾：正在跑的 git 到点被结束；还在排队等锁的，
- * 排到时第一条 git 就直接报超时（spawnGit 不再起新进程），不会白跑一遍
+ * 排到时第一条 git 就直接报超时（spawnGitPipe 不再起新进程），不会白跑一遍
  */
 function beforeLookupDeadline<Result>(work: Promise<Result>, ms: number): Promise<Result> {
   let timer: NodeJS.Timeout | undefined;
@@ -115,18 +125,29 @@ function beforeLookupDeadline<Result>(work: Promise<Result>, ms: number): Promis
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
-export async function worktreeGit(cwd: string, args: string[], input?: string): Promise<GitResult> {
+export function worktreeGit(cwd: string, args: string[], input?: string): Promise<GitResult> {
+  return recordedGit(cwd, undefined, args, input);
+}
+
+async function recordedGit(
+  cwd: string,
+  producer: string[] | undefined,
+  args: string[],
+  input?: string,
+): Promise<GitResult> {
   const started = performance.now();
   let failed = false;
   try {
-    return await spawnGit(cwd, args, input);
+    return await spawnGitPipe(cwd, producer, args, input);
   } catch (error) {
     failed = true;
     throw error;
   } finally {
     slowOps.record({
       kind: "git",
-      name: gitOperationName(args),
+      name: producer
+        ? `${gitOperationName(producer)} | ${gitOperationName(args)}`
+        : gitOperationName(args),
       durationMs: performance.now() - started,
       repo: cwd,
       ...(failed ? { failed } : {}),
@@ -134,7 +155,42 @@ export async function worktreeGit(cwd: string, args: string[], input?: string): 
   }
 }
 
-function spawnGit(cwd: string, args: string[], input?: string): Promise<GitResult> {
+function gitEnv(): NodeJS.ProcessEnv {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+  );
+  return { ...env, GIT_TERMINAL_PROMPT: "0" };
+}
+
+function gitProcess(cwd: string, args: string[]) {
+  return spawn(
+    "git",
+    [
+      "-c",
+      `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
+      "-c",
+      "core.fsmonitor=false",
+      "-C",
+      cwd,
+      ...args,
+    ],
+    { env: gitEnv(), stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
+  );
+}
+
+/** 输出上限：防止一条命令把几百 MB 读进内存；管道里前一条的输出直接流给后一条，不算在内 */
+const GIT_OUTPUT_LIMIT = 16 * 1024 * 1024;
+
+/**
+ * 起一条 git；给了 producer 就先起它，把它的输出直接接到这条的输入上（相当于 `git A | git B`），
+ * 大段 diff 不经过 Node、也不受输出上限限制。producer 失败按 git 失败返回它的退出码和报错。
+ */
+function spawnGitPipe(
+  cwd: string,
+  producer: string[] | undefined,
+  args: string[],
+  input?: string,
+): Promise<GitResult> {
   const deadline = lookupDeadline.getStore();
   const limitMs =
     deadline === undefined
@@ -143,33 +199,20 @@ function spawnGit(cwd: string, args: string[], input?: string): Promise<GitResul
   // 这次查询已经到点：不再起新的 git
   if (deadline && limitMs <= 0) return Promise.reject(lookupTimeout(deadline.ms));
   return new Promise((resolve, reject) => {
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
-    );
-    const child = spawn(
-      "git",
-      [
-        "-c",
-        `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`,
-        "-c",
-        "core.fsmonitor=false",
-        "-C",
-        cwd,
-        ...args,
-      ],
-      {
-        env: { ...env, GIT_TERMINAL_PROMPT: "0" },
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      },
-    );
+    const source = producer ? gitProcess(cwd, producer) : undefined;
+    const child = gitProcess(cwd, args);
     let stdout = "";
     let stderr = "";
+    let sourceStderr = "";
     let bytes = 0;
     let stopped = false;
+    let sourceCode: number | undefined = source ? undefined : 0;
+    let code: number | undefined;
     const stop = (timedOut: boolean) => {
       if (stopped) return;
       stopped = true;
+      clearTimeout(timer);
+      source?.kill("SIGKILL");
       child.kill("SIGKILL");
       reject(
         timedOut && deadline && limitMs < GIT_TIMEOUT_MS
@@ -181,31 +224,69 @@ function spawnGit(cwd: string, args: string[], input?: string): Promise<GitResul
       );
     };
     const timer = setTimeout(() => stop(true), limitMs);
-    const collect = (chunk: string, target: "stdout" | "stderr") => {
+    const settle = () => {
+      if (stopped || code === undefined || sourceCode === undefined) return;
+      clearTimeout(timer);
+      if (sourceCode !== 0) resolve({ code: sourceCode, stdout: "", stderr: sourceStderr });
+      else resolve({ code, stdout, stderr });
+    };
+    const collect = (chunk: string, target: "stdout" | "stderr" | "source") => {
       bytes += Buffer.byteLength(chunk);
-      if (bytes > 16 * 1024 * 1024) return stop(false);
+      if (bytes > GIT_OUTPUT_LIMIT) return stop(false);
       if (target === "stdout") stdout += chunk;
-      else stderr += chunk;
+      else if (target === "stderr") stderr += chunk;
+      else sourceStderr += chunk;
+    };
+    const failed = (error: Error) => {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(timer);
+      source?.kill("SIGKILL");
+      child.kill("SIGKILL");
+      reject(error);
     };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => collect(chunk, "stdout"));
     child.stderr.on("data", (chunk: string) => collect(chunk, "stderr"));
     child.stdin.on("error", () => undefined);
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+    child.on("error", failed);
+    child.on("close", (exit) => {
+      code = exit ?? -1;
+      settle();
     });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (!stopped) resolve({ code: code ?? -1, stdout, stderr });
-    });
-    child.stdin.end(input);
+    if (source) {
+      source.stderr.setEncoding("utf8");
+      source.stderr.on("data", (chunk: string) => collect(chunk, "source"));
+      source.stdin.on("error", () => undefined);
+      // 后一条提前退出时前一条会写到断掉的管道，这不算错，以后一条的结果为准
+      source.stdout.on("error", () => undefined);
+      source.on("error", failed);
+      source.on("close", (exit) => {
+        sourceCode = exit ?? -1;
+        settle();
+      });
+      source.stdout.pipe(child.stdin);
+      source.stdin.end(input);
+    } else child.stdin.end(input);
   });
 }
 
 async function git(cwd: string, args: string[], input?: string): Promise<string> {
-  const result = await worktreeGit(cwd, args, input);
+  return gitOutput(await worktreeGit(cwd, args, input));
+}
+
+/** `git producer | git args`：失败照 git() 的规矩报错 */
+async function gitPipe(
+  cwd: string,
+  producer: string[],
+  args: string[],
+  input?: string,
+): Promise<string> {
+  return gitOutput(await recordedGit(cwd, producer, args, input));
+}
+
+function gitOutput(result: GitResult): string {
   if (result.code !== 0) {
     throw new HiveError(
       "WORKTREE_GIT_FAILED",
@@ -267,11 +348,17 @@ async function commit(repo: string, ref: string): Promise<string> {
 export async function worktreeRepository(workspace: string): Promise<Repository> {
   try {
     const cwd = await realpath(workspace);
-    if ((await git(cwd, ["rev-parse", "--is-bare-repository"])).trim() !== "false")
-      throw new Error("Bare repository");
-    const commonDir = await realpath(
-      (await git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
-    );
+    // 一条 rev-parse 同时问两件事，按参数顺序各输出一行
+    const [bare, gitCommonDir] = (
+      await git(cwd, [
+        "rev-parse",
+        "--is-bare-repository",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ])
+    ).split("\n");
+    if (bare?.trim() !== "false") throw new Error("Bare repository");
+    const commonDir = await realpath(gitCommonDir!.trim());
     const listed = await checkouts(cwd);
     const repo = await realpath(listed[0]!.path);
     let target: string | undefined;
@@ -315,6 +402,20 @@ type CachedStatus = { status: WorktreeStatus; at: number; fingerprint: string };
 const STATUS_CONCURRENCY = 4;
 /** 合入判断按（分支提交, 目标提交）缓存：两边都没动结论就不会变，上限防止无限增长 */
 const MERGE_CACHE_LIMIT = 1_000;
+/**
+ * 按提交号缓存的 patch-id 最多几条：提交的内容不会变，一个仓库目标分支上最近 500 个提交、加上
+ * 各分支整体的改动，几个仓库也用不满；每条不到 200 字节
+ */
+const PATCH_ID_CACHE_LIMIT = 20_000;
+/**
+ * 一条 `git log -p | git patch-id` 算几个提交：大仓库里一个合并提交的改动就可能有几 MB，分小批算、
+ * 算完一批就记下来，机器再忙一条命令也不会跑到 20 秒超时；超时了下次也只用重算那一批
+ */
+const PATCH_ID_BATCH = 25;
+/** 一条命令列几个提交改了哪些文件：只比目录树，可以多一些 */
+const FILE_SET_BATCH = 100;
+/** 算 patch-id 用的 diff 参数：二进制改动也要算进去，不走外部 diff 和文本转换 */
+const PATCH_DIFF_OPTIONS = ["--binary", "--no-ext-diff", "--no-textconv", "--no-color"];
 
 /** 列出的挡住清理的忽略文件最多几条：够人看清是什么，不把整个目录树塞进状态 */
 const IGNORED_FILES_LIMIT = 20;
@@ -399,12 +500,24 @@ export class WorktreeManager {
   /** 每条任务线的写版本：写操作前后各加一，算到一半版本变了的状态不进缓存 */
   private readonly statusEpochs = new Map<string, number>();
   private readonly statusInflight = new Map<string, Promise<WorktreeStatus>>();
+  /** 仓库 + 目标分支 → 进行中的列表扫描；generation 是开始时的写版本，见 sharedList */
+  private readonly listInflight = new Map<
+    string,
+    { generation: number; running: Promise<WorktreeStatus[]> }
+  >();
+  private readonly repositoryInflight = new Map<string, Promise<Repository>>();
+  /** 任何任务线被写操作碰过就加一：之前的扫描结果不再共用 */
+  private listGeneration = 0;
   /** 正在被写操作改动的任务线（id → 进行中的写操作数）：这期间读到的状态不算可清理、也不进缓存 */
   private readonly writes = new Map<string, number>();
   private readonly mergeCache = new Map<
     string,
     { merged: boolean; mergeMethod?: WorktreeStatus["mergeMethod"] }
   >();
+  /** 种类（patch / files）+ commonDir + 提交号（或「起点..终点」）→ patch-id 或改动文件指纹，见 perCommit */
+  private readonly patchIds = new Map<string, string>();
+  /** 正在算的：同时检查的几条任务线不重复算同一个提交 */
+  private readonly patchIdsInflight = new Map<string, Promise<string>>();
   private scanning: Promise<void> | undefined;
   private closed = false;
   /** 正在准备依赖的任务线：装的时候目录在变，不算可清理 */
@@ -1491,14 +1604,16 @@ export class WorktreeManager {
   }
 
   /** 任务目录还是登记的那一个：路径、仓库、分支都对得上。对不上时说清楚是哪一种 */
-  private async identity(record: ManagedWorktree): Promise<void> {
+  private async identity(record: ManagedWorktree, listed?: Checkout[]): Promise<void> {
     const params = { path: record.path, branch: record.branch };
     const stat = await lstat(record.path).catch(() => undefined);
     if (!stat?.isDirectory() && !stat?.isSymbolicLink())
       throw new WorktreeIdentityError(serverText("error.worktree.missingDirectory", params));
     if (stat.isSymbolicLink() || (await realpath(record.path)) !== record.path)
       throw new WorktreeIdentityError(serverText("error.worktree.replaced", params));
-    const checkout = (await checkouts(record.repo)).find((item) => item.path === record.path);
+    const checkout = (listed ?? (await checkouts(record.repo))).find(
+      (item) => item.path === record.path,
+    );
     if (!checkout)
       throw new WorktreeIdentityError(serverText("error.worktree.notCheckout", params));
     const commonDir = await git(record.path, [
@@ -1554,12 +1669,13 @@ export class WorktreeManager {
 
   private async merged(
     record: ManagedWorktree,
+    known?: { tip: string; target: string },
   ): Promise<{ merged: boolean; mergeMethod?: WorktreeStatus["mergeMethod"] }> {
-    const tip = await commit(record.repo, `refs/heads/${record.branch}`);
-    const target = await commit(record.repo, `refs/heads/${record.target}`);
+    const tip = known?.tip ?? (await commit(record.repo, `refs/heads/${record.branch}`));
+    const target = known?.target ?? (await commit(record.repo, `refs/heads/${record.target}`));
     const key = `${record.repo}\0${tip}\0${target}`;
-    const known = this.mergeCache.get(key);
-    if (known) return known;
+    const cached = this.mergeCache.get(key);
+    if (cached) return cached;
     const result = await slowOps.track("worktrees.merged", { repo: record.path }, () =>
       this.mergedBetween(record, tip, target),
     );
@@ -1569,34 +1685,183 @@ export class WorktreeManager {
     return result;
   }
 
+  /** 缓存里的 patch-id；有就挪到最后，淘汰时先丢最久没用过的 */
+  private cachedPatchId(key: string): string | undefined {
+    const value = this.patchIds.get(key);
+    if (value === undefined) return undefined;
+    this.patchIds.delete(key);
+    this.patchIds.set(key, value);
+    return value;
+  }
+
+  private rememberPatchId(key: string, value: string): void {
+    this.patchIds.delete(key);
+    if (this.patchIds.size >= PATCH_ID_CACHE_LIMIT)
+      this.patchIds.delete(this.patchIds.keys().next().value!);
+    this.patchIds.set(key, value);
+  }
+
+  /** 两个提交之间整体改动的 patch-id（空 diff 为 ""）；diff 直接流给 patch-id，不读进内存 */
+  private async rangePatchId(record: ManagedWorktree, from: string, to: string): Promise<string> {
+    const key = `patch\0${record.commonDir}\0${from}..${to}`;
+    const known = this.cachedPatchId(key);
+    if (known !== undefined) return known;
+    const output = await gitPipe(
+      record.repo,
+      ["diff", ...PATCH_DIFF_OPTIONS, from, to, "--"],
+      ["patch-id", "--stable"],
+    );
+    const patch = output.trim().split(" ")[0] ?? "";
+    this.rememberPatchId(key, patch);
+    return patch;
+  }
+
+  /**
+   * 一批提交各自相对第一个父提交的某项结果（patch-id 或改动文件集合）。提交的内容不会变，结果按
+   * 「仓库 + 提交号」长期缓存，目标分支前进以后只算新增的提交；几条任务线同时检查时目标分支上的
+   * 提交大多相同，别的检查正在算的就等它的结果。没缓存的分批一批接一批地算，每批只起一条命令。
+   */
+  private async perCommit(
+    kind: "patch" | "files",
+    record: ManagedWorktree,
+    revisions: string[],
+    batchSize: number,
+    compute: (batch: string[]) => Promise<Map<string, string>>,
+  ): Promise<Map<string, string>> {
+    const keyOf = (revision: string) => `${kind}\0${record.commonDir}\0${revision}`;
+    const result = new Map<string, string>();
+    const waiting: Array<[string, Promise<string>]> = [];
+    const missing: string[] = [];
+    for (const revision of revisions) {
+      const known = this.cachedPatchId(keyOf(revision));
+      if (known !== undefined) result.set(revision, known);
+      else {
+        const pending = this.patchIdsInflight.get(keyOf(revision));
+        if (pending) waiting.push([revision, pending]);
+        else missing.push(revision);
+      }
+    }
+    let previous: Promise<unknown> = Promise.resolve();
+    for (let start = 0; start < missing.length; start += batchSize) {
+      const batch = missing.slice(start, start + batchSize);
+      const job = previous.then(async () => {
+        const computed = await compute(batch);
+        for (const revision of batch)
+          this.rememberPatchId(keyOf(revision), computed.get(revision) ?? "");
+        return computed;
+      });
+      previous = job;
+      for (const revision of batch) {
+        const key = keyOf(revision);
+        const pending = job.then((computed) => computed.get(revision) ?? "");
+        this.patchIdsInflight.set(key, pending);
+        void pending
+          .finally(() => {
+            if (this.patchIdsInflight.get(key) === pending) this.patchIdsInflight.delete(key);
+          })
+          .catch(() => undefined);
+        waiting.push([revision, pending]);
+      }
+    }
+    for (const [revision, pending] of waiting) result.set(revision, await pending);
+    return result;
+  }
+
+  /**
+   * 一批提交各自相对第一个父提交改了哪些文件，压成一个指纹（没改文件为 ""）。只比较目录树、不读
+   * 文件内容，很便宜。指纹相同是 patch-id 相同的必要条件：patch-id 把 diff 头里的文件名（去掉空白）
+   * 也算进去，所以这里同样去掉空白再比
+   */
+  private async fileSetBatch(
+    record: ManagedWorktree,
+    batch: string[],
+  ): Promise<Map<string, string>> {
+    const output = await git(
+      record.repo,
+      [
+        "log",
+        "--no-walk=unsorted",
+        "--stdin",
+        "--format=%x01%H",
+        "--no-show-signature",
+        "--name-only",
+        "--diff-merges=first-parent",
+        "--no-ext-diff",
+      ],
+      `${batch.join("\n")}\n`,
+    );
+    const names = new Map<string, string[]>();
+    let current: string[] | undefined;
+    for (const line of output.split("\n")) {
+      // 文件名里的控制字符会被 git 转义，所以 \x01 开头的行一定是提交行
+      if (line.startsWith("\x01")) names.set(line.slice(1), (current = []));
+      else if (line && current) current.push(line);
+    }
+    return new Map(batch.map((revision) => [revision, fileSetKey(names.get(revision) ?? [])]));
+  }
+
+  /** 两个提交之间改了哪些文件的指纹，见 fileSetBatch */
+  private async rangeFileSet(record: ManagedWorktree, from: string, to: string): Promise<string> {
+    const key = `files\0${record.commonDir}\0${from}..${to}`;
+    const known = this.cachedPatchId(key);
+    if (known !== undefined) return known;
+    const output = await git(record.repo, ["diff", "--name-only", "--no-ext-diff", from, to, "--"]);
+    const value = fileSetKey(output.split("\n").filter(Boolean));
+    this.rememberPatchId(key, value);
+    return value;
+  }
+
+  private async patchIdBatch(
+    record: ManagedWorktree,
+    batch: string[],
+  ): Promise<Map<string, string>> {
+    const output = await gitPipe(
+      record.repo,
+      [
+        "log",
+        "--no-walk=unsorted",
+        "--stdin",
+        "--format=commit %H",
+        "--no-show-signature",
+        "-p",
+        "--diff-merges=first-parent",
+        ...PATCH_DIFF_OPTIONS,
+      ],
+      ["patch-id", "--stable"],
+      `${batch.join("\n")}\n`,
+    );
+    const computed = new Map<string, string>();
+    for (const line of output.split("\n")) {
+      const [patch, revision] = line.trim().split(" ");
+      if (patch && revision) computed.set(revision, patch);
+    }
+    // 改动为空（比如只改了提交信息的空提交）的提交 patch-id 不输出，perCommit 记成 ""
+    return computed;
+  }
+
   private async mergedBetween(
     record: ManagedWorktree,
     tip: string,
     target: string,
   ): Promise<{ merged: boolean; mergeMethod?: WorktreeStatus["mergeMethod"] }> {
-    const ancestor = await worktreeGit(record.repo, ["merge-base", "--is-ancestor", tip, target]);
-    if (ancestor.code === 0) return { merged: true, mergeMethod: "ancestor" };
-    if (ancestor.code !== 1) await git(record.repo, ["merge-base", "--is-ancestor", tip, target]);
+    // 分支提交是目标的祖先，当且仅当两者的合并基就是分支提交本身：一条命令同时拿到合并基
     const fork = (await git(record.repo, ["merge-base", tip, target])).trim();
+    if (fork === tip) return { merged: true, mergeMethod: "ancestor" };
     const cherry = (await git(record.repo, ["cherry", target, tip]))
       .trim()
       .split("\n")
       .filter(Boolean);
-    const merges = (await git(record.repo, ["rev-list", "--merges", `${fork}..${tip}`])).trim();
-    if (!merges && cherry.length > 0 && cherry.every((line) => line.startsWith("- "))) {
+    if (
+      cherry.length > 0 &&
+      cherry.every((line) => line.startsWith("- ")) &&
+      !(await git(record.repo, ["rev-list", "--merges", `${fork}..${tip}`])).trim()
+    ) {
       return { merged: true, mergeMethod: "patches" };
     }
-    const diff = await git(record.repo, [
-      "diff",
-      "--binary",
-      "--no-ext-diff",
-      "--no-textconv",
-      fork,
-      tip,
-      "--",
-    ]);
-    const patch = (await git(record.repo, ["patch-id", "--stable"], diff)).trim().split(" ")[0];
-    if (!patch) return { merged: false };
+    // squash 合入：分支整体的改动和目标分支上某个提交（沿第一父，最近 500 个）的改动一样。
+    // 先比改了哪些文件（便宜），文件对得上的才算 patch-id：大仓库里合并提交的 diff 动辄几 MB
+    const files = await this.rangeFileSet(record, fork, tip);
+    if (!files) return { merged: false };
     const history = (
       await git(record.repo, [
         "rev-list",
@@ -1608,28 +1873,28 @@ export class WorktreeManager {
       .trim()
       .split("\n")
       .filter(Boolean);
-    for (const revision of history) {
-      const parent = await commit(record.repo, `${revision}^1`);
-      const change = await git(record.repo, [
-        "diff",
-        "--binary",
-        "--no-ext-diff",
-        "--no-textconv",
-        parent,
-        revision,
-        "--",
-      ]);
-      const candidate = (await git(record.repo, ["patch-id", "--stable"], change))
-        .trim()
-        .split(" ")[0];
-      if (candidate === patch) return { merged: true, mergeMethod: "squash" };
-    }
-    return { merged: false };
+    const fileSets = await this.perCommit("files", record, history, FILE_SET_BATCH, (batch) =>
+      this.fileSetBatch(record, batch),
+    );
+    const candidates = history.filter((revision) => fileSets.get(revision) === files);
+    if (candidates.length === 0) return { merged: false };
+    const patch = await this.rangePatchId(record, fork, tip);
+    if (!patch) return { merged: false };
+    const patches = await this.perCommit("patch", record, candidates, PATCH_ID_BATCH, (batch) =>
+      this.patchIdBatch(record, batch),
+    );
+    return candidates.some((revision) => patches.get(revision) === patch)
+      ? { merged: true, mergeMethod: "squash" }
+      : { merged: false };
   }
 
-  async status(record: ManagedWorktree, expectedTarget = record.target): Promise<WorktreeStatus> {
+  async status(
+    record: ManagedWorktree,
+    expectedTarget = record.target,
+    snapshot?: RepositorySnapshot,
+  ): Promise<WorktreeStatus> {
     const status = await slowOps.track("worktrees.status", { repo: record.path }, () =>
-      this.inspect(record, expectedTarget),
+      this.inspect(record, expectedTarget, snapshot),
     );
     const dependencies = this.dependencies(record.id);
     const settled = !this.dependencyJobs.has(record.id);
@@ -1641,7 +1906,12 @@ export class WorktreeManager {
     };
   }
 
-  private async inspect(record: ManagedWorktree, expectedTarget: string): Promise<WorktreeStatus> {
+  /** snapshot：列表开头整个仓库读一次的 checkout 和分支提交，省得每条任务线各读一遍 */
+  private async inspect(
+    record: ManagedWorktree,
+    expectedTarget: string,
+    snapshot?: RepositorySnapshot,
+  ): Promise<WorktreeStatus> {
     const activeInvocationIds = this.options.activeInvocations(record);
     try {
       if (record.target !== expectedTarget)
@@ -1660,7 +1930,7 @@ export class WorktreeManager {
           activeInvocationIds,
           removable: activeInvocationIds.length === 0,
         };
-      await this.identity(record);
+      await this.identity(record, snapshot?.checkouts);
       const { dirty, untracked } = await this.changes(record.path, unfinished(record));
       // --directory：整个被忽略的目录只列一行，node_modules 里成千上万个文件不用逐个列出
       const ignoredFiles = blockingIgnored(
@@ -1678,14 +1948,17 @@ export class WorktreeManager {
           .filter(Boolean),
       );
       const ignored = ignoredFiles.length > 0;
-      const merged = await this.merged(record);
+      const tip = snapshot?.tips.get(`refs/heads/${record.branch}`);
+      const target = snapshot?.tips.get(`refs/heads/${record.target}`);
+      const headCommit = tip ?? (await commit(record.repo, `refs/heads/${record.branch}`));
+      const merged = await this.merged(record, target ? { tip: headCommit, target } : undefined);
       return {
         worktree: record,
         dirty,
         untracked,
         ignored,
         ...(ignored ? { ignoredFiles: ignoredFiles.slice(0, IGNORED_FILES_LIMIT) } : {}),
-        headCommit: await commit(record.repo, `refs/heads/${record.branch}`),
+        headCommit,
         ...merged,
         activeInvocationIds,
         removable:
@@ -1736,27 +2009,78 @@ export class WorktreeManager {
    * 中间状态，所以正在建/删的一律不算可清理；真正删除时 remove() 会在写锁里重新确认。
    */
   async list(workspace: string): Promise<WorktreeStatus[]> {
-    const repository = await worktreeRepository(workspace);
+    // 同一个目录同时来的请求共用一次仓库识别（rev-parse、worktree list、找默认分支）
+    let pending = this.repositoryInflight.get(workspace);
+    if (!pending) {
+      pending = worktreeRepository(workspace);
+      const current = pending;
+      this.repositoryInflight.set(workspace, current);
+      void current
+        .finally(() => {
+          if (this.repositoryInflight.get(workspace) === current)
+            this.repositoryInflight.delete(workspace);
+        })
+        .catch(() => undefined);
+    }
+    const repository = await pending;
     return slowOps.track("worktrees.list", { repo: repository.repo }, () =>
-      this.listIn(repository),
+      this.sharedList(repository),
     );
+  }
+
+  /**
+   * 同一个仓库同时来的列表请求（面板轮询、多个标签页、Agent 查任务目录）共用进行中的那次扫描。
+   * 扫描开始后有写操作碰过任何任务线、或多了新登记的任务线，就不共用，重新扫。能不能清理每次都按
+   * 最新的记录和正在执行的任务重新判断。扫完以后不整份复用：下一次请求照常读一遍分支提交，
+   * 没变的任务线走 statusCache，有人刚提交的那条马上重查。
+   */
+  private async sharedList(repository: Repository): Promise<WorktreeStatus[]> {
+    const key = `${repository.repo}\0${repository.target}`;
+    let scan = this.listInflight.get(key);
+    if (!scan || scan.generation !== this.listGeneration) {
+      const generation = this.listGeneration;
+      const running = this.listIn(repository);
+      scan = { generation, running };
+      const current = scan;
+      this.listInflight.set(key, current);
+      void running
+        .finally(() => {
+          if (this.listInflight.get(key) === current) this.listInflight.delete(key);
+        })
+        .catch(() => undefined);
+    }
+    const statuses = await scan.running;
+    return this.relive(repository, statuses) ?? this.listIn(repository);
+  }
+
+  /** 共用的扫描结果配上最新的记录；扫描之后才登记的任务线不在结果里，返回 undefined 让调用方重扫 */
+  private relive(repository: Repository, statuses: WorktreeStatus[]): WorktreeStatus[] | undefined {
+    const records = this.records(repository.repo);
+    const scanned = new Set(statuses.map((status) => status.worktree.id));
+    if (records.some((record) => !scanned.has(record.id))) return undefined;
+    const current = new Map(records.map((record) => [record.id, record]));
+    const result = statuses.flatMap((status) => {
+      const record = current.get(status.worktree.id);
+      return record ? [this.live(status, record)] : [];
+    });
+    this.pruneCleanupBatches(result);
+    return result;
   }
 
   private async listIn(repository: Repository): Promise<WorktreeStatus[]> {
     const records = this.records(repository.repo);
-    // 一次读出所有分支的提交，用来判断缓存是否还对得上（比逐条 rev-parse 省得多）
+    // 一次读出所有分支的提交和所有 checkout：用来判断缓存是否还对得上，也省掉每条任务线各自的 rev-parse、worktree list
+    const [refs, listed] = await Promise.all([
+      git(repository.repo, ["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads/"]),
+      checkouts(repository.repo),
+    ]);
     const tips = new Map(
-      (
-        await git(repository.repo, [
-          "for-each-ref",
-          "--format=%(refname)%00%(objectname)",
-          "refs/heads/",
-        ])
-      )
+      refs
         .split("\n")
         .filter(Boolean)
         .map((line) => line.split("\0") as [string, string]),
     );
+    const snapshot: RepositorySnapshot = { checkouts: listed, tips };
     const statuses: Array<WorktreeStatus | undefined> = Array.from({ length: records.length });
     let next = 0;
     const worker = async () => {
@@ -1768,7 +2092,7 @@ export class WorktreeManager {
           tips.get(`refs/heads/${record.branch}`) ?? "",
           tips.get(`refs/heads/${repository.target}`) ?? "",
         ].join("\0");
-        statuses[index] = await this.cachedStatus(record, repository.target, fingerprint);
+        statuses[index] = await this.cachedStatus(record, repository.target, fingerprint, snapshot);
       }
     };
     await Promise.all(Array.from({ length: Math.min(STATUS_CONCURRENCY, records.length) }, worker));
@@ -1808,6 +2132,8 @@ export class WorktreeManager {
 
   private invalidate(id: string): void {
     this.statusEpochs.set(id, (this.statusEpochs.get(id) ?? 0) + 1);
+    // 进行中的扫描可能读到这条的中间状态：不再让后来的请求共用
+    this.listGeneration++;
     this.statusCache.delete(id);
   }
 
@@ -1829,6 +2155,7 @@ export class WorktreeManager {
     record: ManagedWorktree,
     expectedTarget: string,
     fingerprint: string,
+    snapshot?: RepositorySnapshot,
   ): Promise<WorktreeStatus> {
     const ttl = this.options.statusCacheMs ?? 15_000;
     const cached = this.statusCache.get(record.id);
@@ -1840,7 +2167,7 @@ export class WorktreeManager {
     if (pending) return this.live(await pending, record);
     const epoch = this.statusEpochs.get(record.id) ?? 0;
     const started = Date.now();
-    const running = this.status(record, expectedTarget);
+    const running = this.status(record, expectedTarget, snapshot);
     this.statusInflight.set(key, running);
     try {
       const status = await running;

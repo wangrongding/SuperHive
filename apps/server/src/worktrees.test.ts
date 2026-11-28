@@ -1067,6 +1067,104 @@ describe("managed worktrees", () => {
     expect((await manager.list(repo))[0]).toMatchObject({ mergeMethod: "patches", merged: true });
   });
 
+  it("recognizes a squash that reached the target through a merge commit, after the target moved on", async () => {
+    const { worktree } = await create();
+    await change(worktree);
+    await change(worktree, "second.txt", "also changed\n");
+    // 先 squash 进集成分支，再用 --no-ff 合进 main：main 第一父链上是一个合并提交
+    await git(repo, "checkout", "-q", "-b", "integration");
+    await git(repo, "merge", "--squash", worktree.branch);
+    await git(repo, "commit", "-m", "squashed feature");
+    await git(repo, "checkout", "-q", "main");
+    await git(repo, "merge", "--no-ff", "-m", "merge integration", "integration");
+    writeFileSync(path.join(repo, "later.txt"), "later\n");
+    await git(repo, "add", "later.txt");
+    await git(repo, "commit", "-m", "later change");
+    expect((await manager.list(repo))[0]).toMatchObject({ mergeMethod: "squash", merged: true });
+  });
+
+  it("only computes patch-ids for target commits it has not seen before", async () => {
+    const { worktree } = await create();
+    // 两个提交：单个提交的 squash 会被 git cherry 当成 patches 认出来，走不到 squash 判断
+    await change(worktree);
+    await change(worktree, "second.txt", "also changed\n");
+    const commitOnMain = async (file: string) => {
+      writeFileSync(path.join(repo, file), `${file}\n`);
+      await git(repo, "add", file);
+      await git(repo, "commit", "-m", `add ${file}`);
+      return git(repo, "rev-parse", "HEAD");
+    };
+    const first = await commitOnMain("a.txt");
+    const second = await commitOnMain("b.txt");
+    const remembered = vi.spyOn(
+      manager as unknown as { rememberPatchId: (key: string, value: string) => void },
+      "rememberPatchId",
+    );
+    // 记下来的「种类:提交」；分支整体的改动记的是「起点..终点」
+    const computed = () =>
+      remembered.mock.calls.map(([key]) => {
+        const parts = key.split("\0");
+        return `${parts[0]}:${parts.at(-1)}`;
+      });
+    expect((await manager.list(repo))[0]?.merged).toBe(false);
+    expect(computed()).toEqual(expect.arrayContaining([`files:${first}`, `files:${second}`]));
+    // 改的文件和分支对不上，不用算 patch-id
+    expect(computed().filter((entry) => entry.startsWith("patch:"))).toEqual([]);
+    remembered.mockClear();
+    // main 前进：旧提交和分支整体的改动都在缓存里，只看新来的这一个
+    const third = await commitOnMain("c.txt");
+    expect((await manager.list(repo))[0]?.merged).toBe(false);
+    expect(computed()).toEqual([`files:${third}`]);
+    // 新提交正好是这条分支的 squash：照样认出来，只给它和分支整体算 patch-id
+    remembered.mockClear();
+    await git(repo, "merge", "--squash", worktree.branch);
+    await git(repo, "commit", "-m", "squashed feature");
+    const squash = await git(repo, "rev-parse", "HEAD");
+    expect((await manager.list(repo))[0]).toMatchObject({ mergeMethod: "squash", merged: true });
+    expect(computed()).toEqual([
+      `files:${squash}`,
+      expect.stringMatching(/^patch:[0-9a-f]+\.\.[0-9a-f]+$/),
+      `patch:${squash}`,
+    ]);
+  });
+
+  it("recognizes a squash whose diff is larger than the git output limit", async () => {
+    const { worktree } = await create();
+    // 超过 16MB 的改动：以前 diff 读进内存就超过上限，报 Git timeout/output limit
+    const line = `${"x".repeat(99)}\n`;
+    await change(worktree, "big.txt", line.repeat(180_000));
+    await change(worktree, "second.txt", "also changed\n");
+    await git(repo, "merge", "--squash", worktree.branch);
+    await git(repo, "commit", "-m", "squashed feature");
+    expect((await manager.list(repo))[0]).toMatchObject({ mergeMethod: "squash", merged: true });
+  });
+
+  it("shares one scan between list requests that arrive together", async () => {
+    await create();
+    const scans = vi.spyOn(manager as unknown as { listIn: () => Promise<unknown> }, "listIn");
+    const results = await Promise.all([1, 2, 3, 4, 5].map(() => manager.list(repo)));
+    expect(scans).toHaveBeenCalledTimes(1);
+    expect(new Set(results.map((statuses) => statuses.length))).toEqual(new Set([1]));
+    // 扫完以后再来的请求重新扫（没变的任务线走缓存），不拿整份旧结果
+    await manager.list(repo);
+    expect(scans).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not hand a scan that started before a write to later requests", async () => {
+    const { worktree } = await create();
+    const scans = vi.spyOn(manager as unknown as { listIn: () => Promise<unknown> }, "listIn");
+    const before = manager.list(repo);
+    // 等第一个请求真的开始扫描，再做一次写操作
+    await vi.waitFor(() => expect(scans).toHaveBeenCalledTimes(1));
+    await manager.create(repo, agent, "Alice", [randomUUID()], { slug: "second" });
+    const after = await manager.list(repo);
+    expect(scans).toHaveBeenCalledTimes(2);
+    expect(after.map((status) => status.worktree.path).sort()).toEqual(
+      [worktree.path, path.join(root, "example repo-wt", "agent-a-second")].sort(),
+    );
+    await before;
+  });
+
   it("fails closed when a worktree is locked, detached or on a different branch", async () => {
     const { worktree } = await create();
     await git(repo, "worktree", "lock", worktree.path);
