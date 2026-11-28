@@ -26,6 +26,7 @@ import { Tooltip } from "./tooltip";
 import { Button, IconButton } from "./button";
 import { DesktopUpdateEntry } from "./desktop-update";
 import { desktopBridge } from "./desktop-bridge";
+import { SUPERHIVE_REPOSITORY } from "./feedback";
 import { returnFocus } from "./focus-return";
 import { openJoinDialog, RemoteServerList } from "./join-remote";
 
@@ -420,6 +421,21 @@ export function RoomSidebar({
             >
               <Icon name="help" size={15} />
               <span>{t("帮助与文档")}</span>
+              <Icon name="external" size={13} />
+            </a>
+            <a
+              role="menuitem"
+              className="user-menu-external"
+              href={SUPERHIVE_REPOSITORY}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => {
+                setUserMenuOpen(false);
+                setMobilePanel(undefined);
+              }}
+            >
+              <Icon name="github" size={15} />
+              <span>GitHub</span>
               <Icon name="external" size={13} />
             </a>
             {/* 桌面客户端里不出：客户端自己有 DesktopUpdateEntry 管更新 */}
