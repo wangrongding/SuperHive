@@ -52,45 +52,113 @@ function api(initial: TelemetryStatus, mode: "local" | "device" = "local") {
 }
 
 describe("TelemetryNotice", () => {
-  it("pops up once for the local owner and marks itself as shown right away", async () => {
+  const title = "帮我们把 SuperHive 做得更好";
+  const card = () => screen.queryByRole("region", { name: title });
+  /** 让假时钟往前走，并等 Server 的回应落地 */
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  it("pops up once for the local owner, with just 「知道了」 and a docs link", async () => {
     const local = api(status());
     render(<TelemetryNotice local={local} delayMs={0} />);
-    expect(await screen.findByRole("region", { name: "匿名使用统计" })).toBeTruthy();
-    expect(screen.getByText(/不收消息、路径、名字和 key/)).toBeTruthy();
-    expect(screen.getByText(/每天最多上报一次/)).toBeTruthy();
-    // npm、桌面版有上报地址：不说「只留在这台电脑上」
+    expect(await screen.findByRole("region", { name: title })).toBeTruthy();
+    expect(screen.getByText(/每天有多少人在用、用的什么版本和系统/)).toBeTruthy();
+    expect(screen.getByText(/不收消息内容和 key，可以在设置里关/)).toBeTruthy();
+    // npm、桌面版有上报地址：不说「只记在这台电脑上」
     expect(screen.queryByText(/这台电脑上/)).toBeNull();
-    expect(screen.getByRole("link", { name: "了解详情" }).getAttribute("href")).toContain(
+    // 只告知、不引导关：没有关统计的按钮，也没有 ×
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["知道了"]);
+    expect(screen.getByRole("link", { name: /了解详情/ }).getAttribute("href")).toContain(
       "reference/telemetry/",
     );
     await waitFor(() => expect(local.telemetryNoticeShown).toHaveBeenCalledTimes(1));
+    expect(local.updateTelemetry).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    expect(card()).toBeNull();
 
     // 刷新页面（重新挂载）后不再弹
     cleanup();
     render(<TelemetryNotice local={local} delayMs={0} />);
     await waitFor(() => expect(local.telemetry).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole("region", { name: "匿名使用统计" })).toBeNull();
+    expect(card()).toBeNull();
   });
 
   it("says the data stays local when running from source", async () => {
     render(<TelemetryNotice local={api(status({ endpoint: false }))} delayMs={0} />);
-    expect(await screen.findByText("源码运行默认不上报，数据只留在这台电脑上。")).toBeTruthy();
+    expect(
+      await screen.findByText("从源码运行时不上报，统计只记在这台电脑上，可以在设置里关。"),
+    ).toBeTruthy();
   });
 
-  it("turns statistics off from the card", async () => {
-    const local = api(status());
-    render(<TelemetryNotice local={local} delayMs={0} />);
-    fireEvent.click(await screen.findByRole("button", { name: "关闭统计" }));
-    expect(await screen.findByRole("region", { name: "已关闭匿名使用统计" })).toBeTruthy();
-    expect(local.updateTelemetry).toHaveBeenCalledWith(false);
+  it("closes with Esc", async () => {
+    render(<TelemetryNotice local={api(status())} delayMs={0} />);
+    fireEvent.keyDown(await screen.findByRole("region", { name: title }), { key: "Escape" });
+    expect(card()).toBeNull();
   });
 
-  it("closes with × or Esc", async () => {
+  it("waits until the first message is sent, or the page has been open a while", async () => {
+    vi.useFakeTimers();
     const local = api(status());
+    const view = render(<TelemetryNotice local={local} delayMs={60_000} afterSendMs={2_000} />);
+    await advance(30_000);
+    expect(local.telemetry).not.toHaveBeenCalled();
+    // 发完第一条消息：过两秒出，不再等满一分钟
+    view.rerender(<TelemetryNotice local={local} sent delayMs={60_000} afterSendMs={2_000} />);
+    await advance(1_000);
+    expect(card()).toBeNull();
+    await advance(1_000);
+    expect(card()).toBeTruthy();
+
+    // 一直不发消息：页面开满一分钟才出
+    cleanup();
+    const idle = api(status());
+    render(<TelemetryNotice local={idle} delayMs={60_000} afterSendMs={2_000} />);
+    await advance(59_000);
+    expect(idle.telemetry).not.toHaveBeenCalled();
+    await advance(1_000);
+    expect(card()).toBeTruthy();
+    expect(idle.telemetryNoticeShown).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds back while a dialog is open or the page is in the background", async () => {
+    vi.useFakeTimers();
+    const local = api(status());
+    const guide = document.createElement("dialog");
+    guide.setAttribute("open", "");
+    document.body.append(guide);
     render(<TelemetryNotice local={local} delayMs={0} />);
-    const card = await screen.findByRole("region", { name: "匿名使用统计" });
-    fireEvent.keyDown(card, { key: "Escape" });
-    expect(screen.queryByRole("region", { name: "匿名使用统计" })).toBeNull();
+    await advance(10_000);
+    // 新用户引导开着：没弹、也不算看过
+    expect(local.telemetry).not.toHaveBeenCalled();
+    expect(local.telemetryNoticeShown).not.toHaveBeenCalled();
+    guide.remove();
+
+    const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    await advance(10_000);
+    expect(local.telemetry).not.toHaveBeenCalled();
+    // 切回这个页面：马上出
+    hidden.mockReturnValue("visible");
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(card()).toBeTruthy();
+    expect(local.telemetryNoticeShown).toHaveBeenCalledTimes(1);
+    hidden.mockRestore();
+  });
+
+  it("hides while settings are open and comes back after", async () => {
+    const local = api(status());
+    const view = render(<TelemetryNotice local={local} delayMs={0} />);
+    expect(await screen.findByRole("region", { name: title })).toBeTruthy();
+    view.rerender(<TelemetryNotice local={local} paused delayMs={0} />);
+    expect(card()).toBeNull();
+    view.rerender(<TelemetryNotice local={local} delayMs={0} />);
+    expect(card()).toBeTruthy();
+    expect(local.telemetryNoticeShown).toHaveBeenCalledTimes(1);
   });
 
   it("stays away from other devices, when turned off or blocked", async () => {
@@ -104,7 +172,7 @@ describe("TelemetryNotice", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
-      expect(screen.queryByRole("region", { name: "匿名使用统计" })).toBeNull();
+      expect(card()).toBeNull();
       expect(local.telemetryNoticeShown).not.toHaveBeenCalled();
       cleanup();
     }

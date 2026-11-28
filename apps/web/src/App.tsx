@@ -877,6 +877,9 @@ export function App({
     return true;
   }, []);
 
+  // 这个页面里发出过消息：统计的首次告知等到这时（或页面开了一会儿）再出
+  const [messageSent, setMessageSent] = useState(false);
+  const markMessageSent = useCallback(() => setMessageSent(true), []);
   const composer = useComposer({
     username,
     currentRoomId,
@@ -891,6 +894,7 @@ export function App({
     authToken,
     socketRef: room.socketRef,
     interceptCommand: interceptPluginCommand,
+    onSent: markMessageSent,
   });
   const { draft, setMentionContext, setComposerPreview, appendMention } = composer;
   /** 插件的 composer.insert：接在已有草稿后面另起一行，不替人发送 */
@@ -3302,7 +3306,7 @@ export function App({
           onDismissAll={attention.dismissAllToasts}
         />
         <UpdateCorner />
-        <TelemetryNotice local={local} paused={settingsOpen} />
+        <TelemetryNotice local={local} paused={settingsOpen} sent={messageSent} />
       </div>
       {showOnboarding && onboardingOpen && (
         <OnboardingGuide steps={onboardingSteps} onClose={closeOnboarding} />

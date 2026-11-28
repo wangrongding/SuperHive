@@ -1,7 +1,8 @@
 /**
  * 匿名使用统计在网页里的三处：
  * - 设置 → 这台电脑：开关、查看要发送的数据、重置安装 ID（TelemetrySettingsGroup）；
- * - 右下角一列的首次告知（TelemetryNotice）：只给这台电脑上的本机房主，弹出就算看过，以后不再弹；
+ * - 右下角一列的首次告知（TelemetryNotice）：只给这台电脑上的本机房主，发完第一条消息或页面开了一会儿才出，
+ *   弹出就算看过，以后不再弹；
  * - 网页自己报的几件事（产物、代码面板第一次打开，桌面端更新结果，界面语言）：Server 在记录时
  *   （/api/meta 的 telemetry）才交给自己的 Server，由它按白名单校验、统一上报，网页从不直接往外发。
  */
@@ -11,12 +12,13 @@ import type {
   TelemetryClientRequest,
   TelemetryStatus,
 } from "@superhive/protocol";
-import { Button, buttonClass } from "./button";
-import { DocsLink, docsHref } from "./docs-link";
+import { Icon } from "./app-icons";
+import { Button } from "./button";
+import { DocsLink } from "./docs-link";
 import { localized, t } from "./i18n";
 import type { LocalAgentsState } from "./local-agents";
 import { SettingsSwitch } from "./settings-switch";
-import { UpdateCard, UpdateCornerPortal } from "./update-card";
+import { UpdateCornerPortal } from "./update-card";
 import "./styles/telemetry.css";
 
 /* ---------- 网页报的事件 ---------- */
@@ -207,104 +209,120 @@ export function TelemetrySettingsGroup({ local }: { local: LocalAgentsState }) {
 
 /* ---------- 首次告知 ---------- */
 
-/** 页面打开后等多久再查（不和页面启动、别的提醒抢） */
-export const NOTICE_DELAY_MS = 5_000;
+/** 一直没发消息时，页面打开多久后再出 */
+export const NOTICE_IDLE_DELAY_MS = 60_000;
+/** 发完第一条消息后等一会儿再出：先让人看到自己的消息上屏 */
+export const NOTICE_AFTER_SEND_MS = 2_000;
+/** 到点时被挡着（弹窗开着、页面在后台）：隔多久再看一次 */
+const NOTICE_RETRY_MS = 2_000;
 
+/** 有弹窗挡着（引导、设置、接入 Agent……）或页面在后台：弹出来没人看见却算看过，先不出 */
+function noticeBlocked(): boolean {
+  return (
+    document.visibilityState === "hidden" ||
+    document.querySelector('[aria-modal="true"], dialog[open]') !== null
+  );
+}
+
+/**
+ * 只告知、不引导关：一句话说清收什么、不收什么、在哪关，只有「知道了」和「了解详情」（文档里写怎么关）。
+ * 不一打开就弹：等发完第一条消息，或页面开了一会儿；弹出就算看过，以后不再弹。
+ */
 export function TelemetryNotice({
   local,
   paused = false,
-  delayMs = NOTICE_DELAY_MS,
+  sent = false,
+  delayMs = NOTICE_IDLE_DELAY_MS,
+  afterSendMs = NOTICE_AFTER_SEND_MS,
 }: {
-  local: Pick<LocalAgentsState, "mode" | "telemetry" | "telemetryNoticeShown" | "updateTelemetry">;
+  local: Pick<LocalAgentsState, "mode" | "telemetry" | "telemetryNoticeShown">;
   /** 设置弹窗开着：先藏起来，关上后接着显示 */
   paused?: boolean;
+  /** 这个页面里已经发出过消息 */
+  sent?: boolean;
   delayMs?: number;
+  afterSendMs?: number;
 }) {
-  const [phase, setPhase] = useState<"hidden" | "open" | "disabled">("hidden");
+  const [due, setDue] = useState(false);
   const [status, setStatus] = useState<TelemetryStatus>();
-  const [error, setError] = useState<string>();
   const checked = useRef(false);
+  const mounted = useRef(true);
   const { mode, telemetry, telemetryNoticeShown } = local;
 
   useEffect(() => {
-    if (mode !== "local" || checked.current) return;
-    let alive = true;
-    const timer = window.setTimeout(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // 到点：发完第一条消息，或者页面开了一会儿，先到哪个算哪个
+  useEffect(() => {
+    if (mode !== "local" || due) return;
+    const timer = window.setTimeout(() => setDue(true), sent ? afterSendMs : delayMs);
+    return () => window.clearTimeout(timer);
+  }, [mode, due, sent, delayMs, afterSendMs]);
+
+  // 到点后等没东西挡着再问 Server 要不要弹；只问一次
+  useEffect(() => {
+    if (!due || paused || checked.current) return;
+    let timer = 0;
+    const stop = () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", attempt);
+    };
+    const attempt = () => {
+      if (checked.current || noticeBlocked()) return;
       checked.current = true;
+      stop();
       telemetry().then(
         (value) => {
-          if (!alive || !value.noticePending) return;
+          if (!mounted.current || !value.noticePending) return;
           setStatus(value);
-          setPhase("open");
           // 弹出来就算看过：没理它、刷新页面也不再弹
           void telemetryNoticeShown().catch(() => undefined);
         },
         () => undefined,
       );
-    }, delayMs);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
     };
-  }, [mode, telemetry, telemetryNoticeShown, delayMs]);
+    timer = window.setInterval(attempt, NOTICE_RETRY_MS);
+    document.addEventListener("visibilitychange", attempt);
+    attempt();
+    return stop;
+  }, [due, paused, telemetry, telemetryNoticeShown]);
 
-  useEffect(() => {
-    if (phase !== "disabled") return;
-    const timer = window.setTimeout(() => setPhase("hidden"), 4_000);
-    return () => window.clearTimeout(timer);
-  }, [phase]);
-
-  if (phase === "hidden" || paused) return null;
-  const close = () => setPhase("hidden");
+  if (!status || paused) return null;
+  const close = () => setStatus(undefined);
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     event.preventDefault();
     close();
   };
+  const title = t("帮我们把 SuperHive 做得更好");
 
   return (
     <UpdateCornerPortal>
-      <div className="telemetry-notice" onKeyDown={onKeyDown}>
-        {phase === "disabled" ? (
-          <UpdateCard title={t("已关闭匿名使用统计")} tone="ok" onClose={close}>
-            <p className="update-card-text">{t("想再打开，到「设置 → 这台电脑」里打开。")}</p>
-          </UpdateCard>
-        ) : (
-          <UpdateCard title={t("匿名使用统计")} onClose={close}>
-            <p className="update-card-text">
-              {t(
-                "为了知道每天有多少人在用、哪些功能有人用、更新有没有出问题，SuperHive 每天最多上报一次版本、系统、用过哪些功能这类匿名数据，不收消息、路径、名字和 key。",
-              )}
-            </p>
-            {status && !status.endpoint && (
-              <p className="update-card-text">{t("源码运行默认不上报，数据只留在这台电脑上。")}</p>
-            )}
-            {error && <p className="update-card-text error">{error}</p>}
-            <div className="update-card-actions">
-              <a
-                className={buttonClass({ variant: "ghost", size: "sm" })}
-                href={docsHref("telemetry")}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {t("了解详情")}
-              </a>
-              <Button
-                size="sm"
-                onClick={() => {
-                  setError(undefined);
-                  local.updateTelemetry(false).then(
-                    () => setPhase("disabled"),
-                    (reason: unknown) => setError(errorMessage(reason)),
-                  );
-                }}
-              >
-                {t("关闭统计")}
-              </Button>
-            </div>
-          </UpdateCard>
-        )}
-      </div>
+      <section className="update-card telemetry-notice" aria-label={title} onKeyDown={onKeyDown}>
+        <span className="update-notice-icon" aria-hidden="true">
+          <Icon name="info" size={14} />
+        </span>
+        <div className="telemetry-notice-body">
+          <strong className="telemetry-notice-title">{title}</strong>
+          <p className="update-card-text">
+            {status.endpoint
+              ? t(
+                  "匿名统计每天有多少人在用、用的什么版本和系统，不收消息内容和 key，可以在设置里关。",
+                )
+              : t("从源码运行时不上报，统计只记在这台电脑上，可以在设置里关。")}
+          </p>
+          <div className="telemetry-notice-actions">
+            <DocsLink to="telemetry">{t("了解详情")}</DocsLink>
+            <Button size="sm" onClick={close}>
+              {t("知道了")}
+            </Button>
+          </div>
+        </div>
+      </section>
     </UpdateCornerPortal>
   );
 }

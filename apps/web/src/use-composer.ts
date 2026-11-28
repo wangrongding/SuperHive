@@ -46,6 +46,7 @@ export function useComposer({
   authToken,
   socketRef,
   interceptCommand,
+  onSent,
 }: {
   username: string;
   currentRoomId: string;
@@ -61,6 +62,8 @@ export function useComposer({
   socketRef: RefObject<WebSocket | undefined>;
   /** 发送前先问一下：插件认领了这条 /命令就返回 true，清空输入框但不发出去 */
   interceptCommand?: (content: string) => boolean;
+  /** 发出了一条消息（交给 Server 之后） */
+  onSent?: () => void;
 }) {
   // 正在回答的 Agent 提问；发送时作为 replyToMessageId
   const [answering, setAnswering] = useState<ChatMessage>();
@@ -294,6 +297,7 @@ export function useComposer({
     setMentionContext(undefined);
     setAnswering(undefined);
     setQuoting(undefined);
+    onSent?.();
   }
 
   function answerQuestion(question: ChatMessage) {
