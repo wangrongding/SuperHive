@@ -23,6 +23,7 @@ import { Select } from "./select";
 import { DocsLink } from "./docs-link";
 import { Button, IconButton } from "./button";
 import { SettingsSwitch } from "./settings-switch";
+import { LanShareNote } from "./host-settings";
 
 function CloseGlyph() {
   return (
@@ -179,6 +180,7 @@ export function ImDialog({
   rooms = [],
   focusId,
   onClose,
+  lanBlocked,
 }: {
   base: string;
   adminToken: string;
@@ -189,6 +191,8 @@ export function ImDialog({
   /** 可选的默认房间（房主所在、没归档的） */
   rooms?: RoomOption[];
   onClose: () => void;
+  /** 桌面端关着局域网：卡片上的「在网页查看」指向 127.0.0.1，手机上打不开 */
+  lanBlocked?: { openSettings: () => void } | undefined;
 }) {
   const [channels, setChannels] = useState<ImChannelsInfo>();
   const [connections, setConnections] = useState<ImConnection[]>();
@@ -361,6 +365,12 @@ export function ImDialog({
         </header>
 
         <div className="invite-dialog-body im-dialog-body">
+          {lanBlocked && (
+            <LanShareNote
+              message={t("局域网访问已关闭，手机和其他电脑打不开 IM 卡片上的网页链接。")}
+              onOpen={lanBlocked.openSettings}
+            />
+          )}
           {error && (
             <p className="room-dialog-error" role="alert">
               {error}

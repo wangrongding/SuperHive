@@ -122,6 +122,7 @@ import {
   HostApprovalsBanner,
   HostApprovalWaiting,
   lanBlocksSharing,
+  revealLanSwitch,
   useDesktopLan,
 } from "./host-settings";
 import { LoginDialog } from "./login-dialog";
@@ -1010,8 +1011,10 @@ export function App({
           setInviteDialogOpen(false);
           setAgentDialogOpen(false);
           setFullAccessConfirmationOpen(false);
+          setImDialogOpen(false);
           setSettingsTab("devices");
           setSettingsOpen(true);
+          revealLanSwitch();
         },
       }
     : undefined;
@@ -2113,7 +2116,12 @@ export function App({
           onSelect: () => markRoomReadNow(room),
         },
         "separator",
-        { label: t("复制房间链接"), onSelect: () => void copyForMenu(`${origin}/#${room.id}`) },
+        {
+          label: t("复制房间链接"),
+          // 局域网关着时链接是 127.0.0.1，只有这台电脑能打开，标出来免得发给别人
+          ...(sharingBlocked ? { hint: t("仅本机可打开") } : {}),
+          onSelect: () => void copyForMenu(`${origin}/#${room.id}`),
+        },
         { label: t("复制房间 ID"), onSelect: () => void copyForMenu(room.id) },
         ...(isOwner
           ? [
@@ -3091,6 +3099,7 @@ export function App({
           rooms={rooms
             .filter((room) => !room.archivedAt)
             .map((room) => ({ id: room.id, name: room.name }))}
+          lanBlocked={lanBlocked}
           onClose={() => setImDialogOpen(false)}
         />
       )}

@@ -83,7 +83,10 @@ describe("允许局域网设备访问", () => {
     const toggle = await screen.findByRole("switch", { name: /允许局域网设备访问/ });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByRole("button", { name: "显示登录二维码" })).toBeNull();
-    expect(screen.getByText(/先打开「允许局域网设备访问」/)).toBeTruthy();
+    expect(screen.getByText(/局域网访问已关闭，手机和其他电脑扫码也登录不了/)).toBeTruthy();
+    // 「去打开」就在同一页：滚到开关并短暂高亮
+    await user.click(screen.getByRole("button", { name: "去打开" }));
+    expect(document.getElementById("settings-lan-access")?.classList.contains("flash")).toBe(true);
     // 关着时不查防火墙
     expect(bridge.lan.firewall).not.toHaveBeenCalled();
 

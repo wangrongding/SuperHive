@@ -272,13 +272,36 @@ export function lanBlocksSharing(input: {
   return isLoopbackUrl(input.advertisedUrl);
 }
 
-/** 局域网关着时替代邀请链接 / 远程接入命令的一句话说明，按钮直接去设置「设备」页打开开关 */
+const LAN_SWITCH_ID = "settings-lan-access";
+
+/**
+ * 把「允许局域网设备访问」开关滚到看得见的地方并短暂高亮。设置弹窗刚打开时开关可能还没渲染出来，
+ * 每 16ms 找一次，最多约 1 秒。
+ */
+export function revealLanSwitch(tries = 60) {
+  const target = document.getElementById(LAN_SWITCH_ID);
+  if (!target) {
+    if (tries > 0) window.setTimeout(() => revealLanSwitch(tries - 1), 16);
+    return;
+  }
+  target.scrollIntoView?.({ block: "center" });
+  target.classList.remove("flash");
+  // 重新触发动画：连点两次也能再闪一下
+  void target.offsetWidth;
+  target.classList.add("flash");
+  window.setTimeout(() => target.classList.remove("flash"), 2_400);
+}
+
+/**
+ * 局域网关着时，发给别的设备用的入口（邀请成员、接入 Agent、在其他设备登录、IM）顶上的统一提示：
+ * 说明哪样东西别的设备用不了，按钮直达开关。用强调色，不是报错。
+ */
 export function LanShareNote({ message, onOpen }: { message: string; onOpen: () => void }) {
   return (
     <div className="lan-share-note" role="status">
       <p>{message}</p>
       <Button size="sm" onClick={onOpen}>
-        {t("去打开局域网访问")}
+        {t("去打开")}
       </Button>
     </div>
   );
@@ -309,17 +332,19 @@ export function LanAccessGroup({
   const blocked = firewall?.status === "blocked" || firewall?.status === "missing";
   return (
     <>
-      <SettingsSwitch
-        checked={state.enabled}
-        disabled={state.restarting}
-        label={t("允许局域网设备访问")}
-        description={
-          state.restarting
-            ? t("正在重启 Server，Agent 不会断开…")
-            : t("手机或另一台电脑可以扫码、用局域网地址连进来。关掉后只有这台电脑能打开。")
-        }
-        onChange={lan.set}
-      />
+      <div id={LAN_SWITCH_ID} className="lan-access-switch">
+        <SettingsSwitch
+          checked={state.enabled}
+          disabled={state.restarting}
+          label={t("允许局域网设备访问")}
+          description={
+            state.restarting
+              ? t("正在重启 Server，Agent 不会断开…")
+              : t("手机或另一台电脑可以扫码、用局域网地址连进来。关掉后只有这台电脑能打开。")
+          }
+          onChange={lan.set}
+        />
+      </div>
       {blocked && firewall && (
         <div className="lan-firewall-note" role="status">
           <p>
@@ -389,9 +414,10 @@ export function OwnerDevicesPanel({ local }: { local: LocalAgentsState }) {
     <div className="settings-group owner-devices-panel">
       {local.mode === "local" && lan && <LanAccessGroup lan={lan} />}
       {local.mode === "device" ? null : lanOff ? (
-        <p className="settings-note">
-          {t("先打开「允许局域网设备访问」，手机和其他电脑才能扫码登录。")}
-        </p>
+        <LanShareNote
+          message={t("局域网访问已关闭，手机和其他电脑扫码也登录不了。")}
+          onOpen={() => revealLanSwitch()}
+        />
       ) : pair ? (
         <div className="owner-pair">
           <img src={pair.qrDataUrl} alt={t("登录二维码")} width={160} height={160} />

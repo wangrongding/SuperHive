@@ -1028,3 +1028,16 @@
   color: var(--text-secondary);
   font-size: var(--text-sm);
 }
+
+/* 从邀请、接入 Agent 等处点「去打开」跳过来时，开关这一行短暂高亮（不用动画，减少动效时也看得见） */
+.lan-access-switch {
+  border-radius: var(--radius-md);
+  transition:
+    background-color 0.8s ease,
+    box-shadow 0.8s ease;
+}
+
+.lan-access-switch.flash {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}

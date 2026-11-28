@@ -96,10 +96,10 @@ describe("InviteDialog 在局域网关着时", () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.getByText(/要邀请别的设备上的人，先打开「允许局域网设备访问」/)).toBeTruthy();
+    expect(screen.getByText(/局域网访问已关闭，别的设备上的人打不开邀请链接/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /生成/ })).toBeNull();
     expect(screen.queryByText(/127\.0\.0\.1/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "去打开局域网访问" }));
+    await user.click(screen.getByRole("button", { name: "去打开" }));
     expect(openSettings).toHaveBeenCalledTimes(1);
 
     await screen.findByRole("button", { name: "撤销" });

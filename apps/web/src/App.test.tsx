@@ -5621,9 +5621,9 @@ describe("App mention autocomplete", () => {
       // 邀请成员：不生成链接，换成说明 + 按钮
       await user.click(within(membersPanel).getByRole("button", { name: /邀请成员/ }));
       const inviteDialog = await screen.findByRole("dialog", { name: /邀请成员/ });
-      await within(inviteDialog).findByText(/要邀请别的设备上的人/);
+      await within(inviteDialog).findByText(/别的设备上的人打不开邀请链接/);
       expect(within(inviteDialog).queryByRole("button", { name: /生成/ })).toBeNull();
-      await user.click(within(inviteDialog).getByRole("button", { name: "去打开局域网访问" }));
+      await user.click(within(inviteDialog).getByRole("button", { name: "去打开" }));
       expect(screen.queryByRole("dialog", { name: /邀请成员/ })).toBeNull();
       const settingsDialog = screen.getByRole("dialog", { name: "偏好设置" });
       expect(
@@ -5632,6 +5632,25 @@ describe("App mention autocomplete", () => {
       expect(
         await within(settingsDialog).findByRole("switch", { name: /允许局域网设备访问/ }),
       ).toBeTruthy();
+      // 开关滚到看得见的地方并短暂高亮
+      await waitFor(() =>
+        expect(document.getElementById("settings-lan-access")?.classList.contains("flash")).toBe(
+          true,
+        ),
+      );
+      await user.keyboard("{Escape}");
+
+      // 房间右键「复制房间链接」标出只有本机能打开
+      fireEvent.contextMenu(within(screen.getByLabelText("房间列表")).getByText("# general"), {
+        clientX: 40,
+        clientY: 80,
+      });
+      expect(screen.getByRole("menuitem", { name: /复制房间链接.*仅本机可打开/ })).toBeTruthy();
+      await user.keyboard("{Escape}");
+
+      // 连接 IM：卡片上的网页链接手机打不开，同样提示
+      await user.click(screen.getByRole("button", { name: "连接 IM" }));
+      expect(await screen.findByText(/手机和其他电脑打不开 IM 卡片上的网页链接/)).toBeTruthy();
       await user.keyboard("{Escape}");
 
       // 接入 Agent：本机启动照旧，复制的命令标明只能在这台电脑上跑
@@ -5640,7 +5659,7 @@ describe("App mention autocomplete", () => {
       await user.click(screen.getByRole("button", { name: "下一步" }));
       await user.click(screen.getByRole("button", { name: "下一步" }));
       expect(screen.getByRole("button", { name: "在本机启动" })).toBeTruthy();
-      expect(screen.getByText(/这条命令只能在这台电脑上运行/)).toBeTruthy();
+      expect(screen.getByText(/下面的命令只能在这台电脑上运行/)).toBeTruthy();
       await user.click(screen.getByRole("button", { name: "关闭" }));
 
       // 在别处打开了局域网：Server 换地址重启完，重取 meta，提示消失
@@ -5652,7 +5671,7 @@ describe("App mention autocomplete", () => {
       await user.click(within(membersPanel).getByRole("button", { name: /邀请成员/ }));
       const reopened = await screen.findByRole("dialog", { name: /邀请成员/ });
       expect(within(reopened).getByRole("button", { name: /生成/ })).toBeTruthy();
-      expect(within(reopened).queryByText(/要邀请别的设备上的人/)).toBeNull();
+      expect(within(reopened).queryByText(/别的设备上的人打不开邀请链接/)).toBeNull();
     } finally {
       delete window.superhiveDesktop;
     }

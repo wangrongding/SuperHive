@@ -394,7 +394,7 @@ export function AgentSetupDialog({
                   {lanBlocked && (
                     <LanShareNote
                       message={t(
-                        "这条命令只能在这台电脑上运行。要在别的电脑上接入 Agent，先打开「允许局域网设备访问」。",
+                        "局域网访问已关闭，别的电脑连不上，下面的命令只能在这台电脑上运行。",
                       )}
                       onOpen={lanBlocked.openSettings}
                     />

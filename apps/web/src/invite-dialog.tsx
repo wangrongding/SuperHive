@@ -361,9 +361,7 @@ export function InviteDialog({
         <div className="invite-dialog-body">
           {lanBlocked ? (
             <LanShareNote
-              message={t(
-                "现在只有这台电脑能打开 SuperHive。要邀请别的设备上的人，先打开「允许局域网设备访问」。",
-              )}
+              message={t("局域网访问已关闭，别的设备上的人打不开邀请链接。")}
               onOpen={lanBlocked.openSettings}
             />
           ) : (
