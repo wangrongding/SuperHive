@@ -5,7 +5,7 @@ description: "SuperHive records anonymous, coarse usage statistics by default: e
 
 SuperHive records anonymous usage statistics by default: only coarse numbers such as the version, the operating system, whether anyone used it each day, which features were used and whether updates worked, sent at most once a day, so we can decide what to fix and build first. **No messages, paths, names or keys**, and you can turn it off at any time. The approach follows Next.js and Homebrew: on by default, you are told the first time, and one switch or one environment variable turns it off.
 
-The first time you use SuperHive (after you send your first message, or once the page has been open for a minute), a note in the bottom-right corner explains this. It is shown only once; **Learn more** opens this page.
+The first time you use SuperHive (after you send your first message, or once the page has been open for a minute), a note in the bottom-right corner explains this. It is shown only once; **Turn off in Settings** takes you straight to the switch in Settings, and **Learn more** opens this page.
 
 :::note[Where it goes]
 npm installs and the desktop app send to the project's self-hosted [Umami](https://umami.is) at `https://60.205.92.58` by default. Running from source (`pnpm dev` in the repository, your own build, or an unpackaged desktop app) sends nothing by default and only records on this computer; to send, set `SUPERHIVE_TELEMETRY_URL` explicitly, see [Uploads and retention](#uploads-and-retention).

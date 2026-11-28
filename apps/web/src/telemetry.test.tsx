@@ -65,7 +65,7 @@ describe("TelemetryNotice", () => {
     render(<TelemetryNotice local={local} delayMs={0} />);
     expect(await screen.findByRole("region", { name: title })).toBeTruthy();
     expect(screen.getByText(/每天有多少人在用、用的什么版本和系统/)).toBeTruthy();
-    expect(screen.getByText(/不收消息内容和 key，可以在设置里关/)).toBeTruthy();
+    expect(screen.getByText(/不会收集任何其它与此无关的信息/)).toBeTruthy();
     // npm、桌面版有上报地址：不说「只记在这台电脑上」
     expect(screen.queryByText(/这台电脑上/)).toBeNull();
     // 只告知、不引导关：没有关统计的按钮，也没有 ×
@@ -88,9 +88,18 @@ describe("TelemetryNotice", () => {
 
   it("says the data stays local when running from source", async () => {
     render(<TelemetryNotice local={api(status({ endpoint: false }))} delayMs={0} />);
-    expect(
-      await screen.findByText("从源码运行时不上报，统计只记在这台电脑上，可以在设置里关。"),
-    ).toBeTruthy();
+    expect(await screen.findByText("从源码运行时不上报，统计只记在这台电脑上。")).toBeTruthy();
+  });
+
+  it("offers a way to Settings, closing the card first", async () => {
+    const local = api(status());
+    const onOpenSettings = vi.fn();
+    render(<TelemetryNotice local={local} delayMs={0} onOpenSettings={onOpenSettings} />);
+    fireEvent.click(await screen.findByRole("button", { name: "去设置里关闭" }));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(card()).toBeNull();
+    // 只是带过去，关不关由人在设置里自己定
+    expect(local.updateTelemetry).not.toHaveBeenCalled();
   });
 
   it("closes with Esc", async () => {

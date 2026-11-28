@@ -2740,8 +2740,9 @@
   "要发送的数据": "Data to be sent",
   "没有要发送的数据。": "Nothing to send.",
   "帮我们把 SuperHive 做得更好": "Help us make SuperHive better",
-  "匿名统计每天有多少人在用、用的什么版本和系统，不收消息内容和 key，可以在设置里关。": "We anonymously count daily users and which version and OS they run, never message content or keys. You can turn it off in Settings.",
-  "从源码运行时不上报，统计只记在这台电脑上，可以在设置里关。": "Running from source, so nothing is sent and the statistics stay on this computer. You can turn them off in Settings.",
+  "匿名统计每天有多少人在用、用的什么版本和系统，不会收集任何其它与此无关的信息。": "We anonymously count daily users and which version and OS they run, and collect nothing else.",
+  "从源码运行时不上报，统计只记在这台电脑上。": "Running from source, so nothing is sent and the statistics stay on this computer.",
+  "去设置里关闭": "Turn off in Settings",
   "了解详情": "Learn more",
   "知道了": "Got it"
 }

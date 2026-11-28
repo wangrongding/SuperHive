@@ -1366,6 +1366,23 @@ export function App({
     window.requestAnimationFrame(() => focusProxy(60));
   }, []);
 
+  /** 统计首次告知里的「去设置里关闭」：打开设置「这台电脑」，定位到「匿名使用统计」开关 */
+  const openTelemetrySettings = useCallback(() => {
+    setSettingsTab("computer");
+    setSettingsOpen(true);
+    const focusSwitch = (tries: number) => {
+      const target = document.querySelector<HTMLElement>('#settings-telemetry [role="switch"]');
+      if (target) {
+        window.setTimeout(() => {
+          target.scrollIntoView({ block: "center" });
+          target.focus({ preventScroll: true });
+        }, 30);
+      } else if (tries > 0) window.requestAnimationFrame(() => focusSwitch(tries - 1));
+    };
+    // 统计状态要先从 Server 读回来才显示，多等几帧
+    window.requestAnimationFrame(() => focusSwitch(60));
+  }, []);
+
   useEffect(() => {
     if (!settingsOpen) return;
     window.requestAnimationFrame(() => settingsCloseRef.current?.focus());
@@ -3306,7 +3323,12 @@ export function App({
           onDismissAll={attention.dismissAllToasts}
         />
         <UpdateCorner />
-        <TelemetryNotice local={local} paused={settingsOpen} sent={messageSent} />
+        <TelemetryNotice
+          local={local}
+          paused={settingsOpen}
+          sent={messageSent}
+          onOpenSettings={openTelemetrySettings}
+        />
       </div>
       {showOnboarding && onboardingOpen && (
         <OnboardingGuide steps={onboardingSteps} onClose={closeOnboarding} />

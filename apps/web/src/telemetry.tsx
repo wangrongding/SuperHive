@@ -150,7 +150,7 @@ export function TelemetrySettingsGroup({ local }: { local: LocalAgentsState }) {
   };
 
   return (
-    <div className="settings-group divided telemetry-settings">
+    <div className="settings-group divided telemetry-settings" id="settings-telemetry">
       <SettingsSwitch
         checked={status.enabled && !status.blocker}
         disabled={!owner || Boolean(status.blocker) || busy}
@@ -225,7 +225,7 @@ function noticeBlocked(): boolean {
 }
 
 /**
- * 只告知、不引导关：一句话说清收什么、不收什么、在哪关，只有「知道了」和「了解详情」（文档里写怎么关）。
+ * 只告知、不引导关：一句话说清收什么、不收别的，「知道了」为主，旁边小字「去设置里关闭」「了解详情」。
  * 不一打开就弹：等发完第一条消息，或页面开了一会儿；弹出就算看过，以后不再弹。
  */
 export function TelemetryNotice({
@@ -234,6 +234,7 @@ export function TelemetryNotice({
   sent = false,
   delayMs = NOTICE_IDLE_DELAY_MS,
   afterSendMs = NOTICE_AFTER_SEND_MS,
+  onOpenSettings,
 }: {
   local: Pick<LocalAgentsState, "mode" | "telemetry" | "telemetryNoticeShown">;
   /** 设置弹窗开着：先藏起来，关上后接着显示 */
@@ -242,6 +243,8 @@ export function TelemetryNotice({
   sent?: boolean;
   delayMs?: number;
   afterSendMs?: number;
+  /** 「去设置里关闭」：打开设置「这台电脑」，定位到统计开关 */
+  onOpenSettings?: () => void;
 }) {
   const [due, setDue] = useState(false);
   const [status, setStatus] = useState<TelemetryStatus>();
@@ -310,13 +313,26 @@ export function TelemetryNotice({
           <strong className="telemetry-notice-title">{title}</strong>
           <p className="update-card-text">
             {status.endpoint
-              ? t(
-                  "匿名统计每天有多少人在用、用的什么版本和系统，不收消息内容和 key，可以在设置里关。",
-                )
-              : t("从源码运行时不上报，统计只记在这台电脑上，可以在设置里关。")}
+              ? t("匿名统计每天有多少人在用、用的什么版本和系统，不会收集任何其它与此无关的信息。")
+              : t("从源码运行时不上报，统计只记在这台电脑上。")}
           </p>
           <div className="telemetry-notice-actions">
-            <DocsLink to="telemetry">{t("了解详情")}</DocsLink>
+            <span className="telemetry-notice-links">
+              {onOpenSettings && (
+                // 和「了解详情」一样的灰色小字：只是给个入口，不抢「知道了」
+                <button
+                  type="button"
+                  className="docs-link telemetry-notice-settings"
+                  onClick={() => {
+                    close();
+                    onOpenSettings();
+                  }}
+                >
+                  {t("去设置里关闭")}
+                </button>
+              )}
+              <DocsLink to="telemetry">{t("了解详情")}</DocsLink>
+            </span>
             <Button size="sm" onClick={close}>
               {t("知道了")}
             </Button>

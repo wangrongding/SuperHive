@@ -60,3 +60,20 @@
   gap: 8px;
   margin-top: 4px;
 }
+
+.telemetry-notice-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.telemetry-notice-settings {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
