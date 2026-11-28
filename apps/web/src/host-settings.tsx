@@ -287,7 +287,7 @@ export function LanAccessGroup({
         description={
           state.restarting
             ? t("正在重启 Server，Agent 不会断开…")
-            : t("手机或另一台电脑扫码、用局域网地址连进来时要打开。关着时只有这台电脑能打开。")
+            : t("手机或另一台电脑可以扫码、用局域网地址连进来。关掉后只有这台电脑能打开。")
         }
         onChange={lan.set}
       />
@@ -296,10 +296,10 @@ export function LanAccessGroup({
           <p>
             {firewall.status === "blocked"
               ? t(
-                  "Windows 防火墙拦着 SuperHive，其他设备连不上。到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里勾上这个程序：",
+                  "Windows 防火墙还没放行 SuperHive（弹窗时可能点了取消），手机和其他电脑暂时连不上；只在这台电脑上用可以不管。要放行，到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里勾上这个程序：",
                 )
               : t(
-                  "Windows 防火墙里还没有放行 SuperHive，其他设备可能连不上。到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里添加这个程序：",
+                  "Windows 防火墙还没放行 SuperHive，手机和其他电脑可能连不上；只在这台电脑上用可以不管。要放行，到「Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙」里添加这个程序：",
                 )}
           </p>
           <code>{firewall.program}</code>

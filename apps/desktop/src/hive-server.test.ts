@@ -158,7 +158,7 @@ describe("server environment", () => {
     expect(forked).toHaveLength(1);
     expect(forked[0]!.cwd).toBe("/Users/rd");
     expect(forked[0]!.env.HIVE_LAUNCH_DIR).toBe("/Users/rd");
-    // 默认只听本机：不触发 Windows 防火墙 / Mac「接受传入连接」
+    // 没传 host 时只听本机（桌面端按「允许局域网设备访问」显式传，默认开启时传 0.0.0.0）
     expect(forked[0]!.env.HIVE_HOST).toBe("127.0.0.1");
   });
 });

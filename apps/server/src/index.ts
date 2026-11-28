@@ -207,13 +207,6 @@ if (shutdownToken) {
       );
     return local && provided.length === expected.length && timingSafeEqual(provided, expected);
   };
-  // 桌面端升级到「默认只听本机」后第一次启动时问一次：以前有别的设备连进来过就保持局域网访问
-  app.get("/api/local/lan-usage", async (request, reply) => {
-    if (!fromLauncher(request))
-      return reply.code(403).send({ ...errorText(serverText("error.auth.notAllowed")) });
-    const usage = (app as unknown as { lanUsage?: () => unknown }).lanUsage;
-    return usage ? usage() : { ownerDevices: 0, guestSessions: 0 };
-  });
   app.post("/api/local/shutdown", async (request, reply) => {
     if (!fromLauncher(request)) {
       return reply.code(403).send({ ...errorText(serverText("error.auth.notAllowed")) });

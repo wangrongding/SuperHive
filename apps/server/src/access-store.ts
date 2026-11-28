@@ -180,14 +180,6 @@ export class AccessStore {
 
   private readonly migrate: () => void;
 
-  /** 还没撤销、没到期的访客会话数：桌面端据此判断以前有没有别的设备连进来过 */
-  activeSessionCount(now = Date.now()): number {
-    const rows = this.db
-      .prepare("SELECT expires_at FROM access_sessions WHERE revoked_at IS NULL")
-      .all() as Array<{ expires_at: string | null }>;
-    return rows.filter((row) => !row.expires_at || Date.parse(row.expires_at) > now).length;
-  }
-
   createInvite(input: {
     roomId: string;
     expiresAt: string | null;

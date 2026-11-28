@@ -1,9 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 /**
- * 「允许局域网设备访问」：桌面端内置 Server 默认只听 127.0.0.1。
- * 听 0.0.0.0 时 Windows 防火墙按 exe 路径问一次要不要放行，而 exe 在 app-<版本> 目录里，
- * 每升一版都要重新问；点了取消还会留下一条拦截规则，手机从此连不上。只在本机用的人用不着这些。
+ * 「允许局域网设备访问」：桌面端内置 Server 默认听 0.0.0.0（主打协同，手机、别的电脑能直接连进来），
+ * 用户可以在设置里关掉，关掉后只听 127.0.0.1。没存过选择时按开启处理。
+ * 开着时 Windows 防火墙按 exe 路径问要不要放行（exe 在 app-<版本> 目录里，每升一版会再问一次），
+ * 设备页会只读检查一下，被拦或还没放行时提示去哪里放行。
  */
 
 export const LOOPBACK_HOST = "127.0.0.1";
@@ -13,7 +14,7 @@ export function hostFor(enabled: boolean): string {
   return enabled ? LAN_HOST : LOOPBACK_HOST;
 }
 
-/** 存下来的选择；没存过（升级前的版本、新装）是 undefined */
+/** 存下来的选择；没存过（升级前的版本、新装）是 undefined，调用方按开启处理 */
 export function loadLanSetting(file: string): boolean | undefined {
   try {
     const value = JSON.parse(readFileSync(file, "utf8")) as { enabled?: unknown };
@@ -31,17 +32,15 @@ export function saveLanSetting(file: string, enabled: boolean): void {
   }
 }
 
-/** Server 的 /api/local/lan-usage：有没有已登录的其它设备、还有效的访客会话 */
-export type LanUsage = { ownerDevices: number; guestSessions: number };
-
 /**
- * 升级前的版本一直听 0.0.0.0：已经有别的设备（扫码登录的手机、经飞书卡片登录的、接进来的访客和
- * 远程 Agent）连进来过的，升级后保持开启，别把人家的手机断掉。查不到（老 Server、出错）时也保持开启：
- * 宁可多弹一次防火墙，也不悄悄断掉别人的连接。
+ * 启动时用哪个：存过的（开或关）按存的来；没存过（新装、从老版本升上来）一律开启并存下来，
+ * 和老版本一直听 0.0.0.0 一致，不用先只听本机再查一遍、白白多重启一次。
  */
-export function legacyLanWanted(usage: LanUsage | undefined): boolean {
-  if (!usage) return true;
-  return usage.ownerDevices > 0 || usage.guestSessions > 0;
+export function resolveLanSetting(file: string): boolean {
+  const saved = loadLanSetting(file);
+  if (saved !== undefined) return saved;
+  saveLanSetting(file, true);
+  return true;
 }
 
 /** 给网页看的状态 */

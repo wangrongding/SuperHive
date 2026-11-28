@@ -223,7 +223,7 @@ export async function startServer(options: {
 }): Promise<OwnedServer> {
   const dataDir = options.dataDir;
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  // 默认只听本机；要让局域网设备连进来由调用方传 0.0.0.0（见 lan-access.ts）
+  // 没传时只听本机；桌面端按「允许局域网设备访问」显式传（默认开启，见 lan-access.ts）
   const host = options.host ?? "127.0.0.1";
   const instanceId = randomUUID();
   const shutdownToken = randomUUID();
@@ -339,24 +339,4 @@ export async function stopServer(options: {
   const current = readState(options.statePath);
   if (!current || current.instanceId === state.instanceId)
     rmSync(options.statePath, { force: true });
-}
-
-/** 问自己起的 Server 有没有别的设备连进来过（老 Server 没有这个接口、出错时返回 undefined） */
-export async function readLanUsage(
-  state: Pick<ServiceState, "healthUrl" | "shutdownToken">,
-): Promise<{ ownerDevices: number; guestSessions: number } | undefined> {
-  if (!state.shutdownToken) return undefined;
-  try {
-    const response = await fetch(new URL("/api/local/lan-usage", state.healthUrl), {
-      headers: { "x-hive-shutdown": state.shutdownToken },
-      signal: AbortSignal.timeout(3_000),
-    });
-    if (!response.ok) return undefined;
-    const value = (await response.json()) as { ownerDevices?: unknown; guestSessions?: unknown };
-    if (typeof value.ownerDevices !== "number" || typeof value.guestSessions !== "number")
-      return undefined;
-    return { ownerDevices: value.ownerDevices, guestSessions: value.guestSessions };
-  } catch {
-    return undefined;
-  }
 }

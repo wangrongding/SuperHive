@@ -8,12 +8,12 @@ import {
   checkFirewall,
   FIREWALL_SCRIPT,
   hostFor,
-  legacyLanWanted,
   loadLanSetting,
   parseFirewallResult,
+  resolveLanSetting,
   saveLanSetting,
 } from "./lan-access.js";
-import { readLanUsage, stopServer, type ServerChild, type ServiceState } from "./hive-server.js";
+import { stopServer, type ServerChild, type ServiceState } from "./hive-server.js";
 
 let dir: string | undefined;
 let server: Server | undefined;
@@ -47,11 +47,16 @@ describe("局域网访问开关", () => {
     expect(loadLanSetting(file)).toBeUndefined();
   });
 
-  it("老用户：有已登录的其它设备或访客会话就保持开启，查不到也保持开启", () => {
-    expect(legacyLanWanted({ ownerDevices: 0, guestSessions: 0 })).toBe(false);
-    expect(legacyLanWanted({ ownerDevices: 1, guestSessions: 0 })).toBe(true);
-    expect(legacyLanWanted({ ownerDevices: 0, guestSessions: 2 })).toBe(true);
-    expect(legacyLanWanted(undefined)).toBe(true);
+  it("没存过（新装、老版本升上来）默认开启并存下来；存过的开或关都按存的来", () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "superhive-lan-"));
+    const file = path.join(dir, "lan-access.json");
+    expect(resolveLanSetting(file)).toBe(true);
+    expect(loadLanSetting(file)).toBe(true);
+    saveLanSetting(file, false);
+    expect(resolveLanSetting(file)).toBe(false);
+    expect(loadLanSetting(file)).toBe(false);
+    writeFileSync(file, "{not json");
+    expect(resolveLanSetting(file)).toBe(true);
   });
 });
 
@@ -188,24 +193,6 @@ async function fakeHive(
 }
 
 describe("和自己起的 Server 打交道", () => {
-  it("问有没有别的设备连进来过：带启动口令；老 Server 没这个接口时是 undefined", async () => {
-    const hive = await fakeHive((request) =>
-      request.url === "/api/local/lan-usage"
-        ? { status: 200, body: { ownerDevices: 1, guestSessions: 0 } }
-        : { status: 404 },
-    );
-    expect(await readLanUsage({ healthUrl: hive.healthUrl, shutdownToken: "secret" })).toEqual({
-      ownerDevices: 1,
-      guestSessions: 0,
-    });
-    expect(hive.requests[0]!.headers["x-hive-shutdown"]).toBe("secret");
-    expect(await readLanUsage({ healthUrl: hive.healthUrl })).toBeUndefined();
-    const old = await fakeHive(() => ({ status: 404 }));
-    expect(
-      await readLanUsage({ healthUrl: old.healthUrl, shutdownToken: "secret" }),
-    ).toBeUndefined();
-  });
-
   it("切换开关时交接重启：关闭请求带 handover，本机 Agent 不下线", async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), "superhive-lan-stop-"));
     let exit: ((code: number) => void) | undefined;

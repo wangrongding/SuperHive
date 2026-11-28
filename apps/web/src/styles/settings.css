@@ -757,9 +757,10 @@
   margin: 4px 0 8px;
   padding: 10px 12px;
   border: 1px solid var(--border-light);
-  border-left: 3px solid var(--warning);
+  /* 提醒而不是报错：默认开着，只在本机用的人也会看到，用强调色不用警示色 */
+  border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
-  background: var(--warning-soft);
+  background: var(--accent-soft);
 }
 
 .lan-firewall-note p {

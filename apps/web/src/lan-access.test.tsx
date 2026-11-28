@@ -98,14 +98,14 @@ describe("允许局域网设备访问", () => {
     expect(bridge.lan.firewall).toHaveBeenCalledTimes(1);
   });
 
-  it("Windows 防火墙拦着时提示去允许，附上程序路径；放行了就不提示", async () => {
+  it("Windows 防火墙拦着、还没放行时提示去放行，附上程序路径，说明只在本机用可以不管；放行了就不提示", async () => {
     const program = "C:\\Users\\rd\\AppData\\Local\\SuperHive\\app-0.5.0\\SuperHive.exe";
     installBridge({
       state: { enabled: true, managed: true, restarting: false },
       firewall: { status: "blocked", program },
     });
     const { unmount } = render(<OwnerDevicesPanel local={local} />);
-    expect(await screen.findByText(/Windows 防火墙拦着 SuperHive/)).toBeTruthy();
+    expect(await screen.findByText(/弹窗时可能点了取消.*只在这台电脑上用可以不管/)).toBeTruthy();
     expect(screen.getByText(program)).toBeTruthy();
     expect(screen.getByRole("button", { name: "复制路径" })).toBeTruthy();
     unmount();
@@ -115,7 +115,11 @@ describe("允许局域网设备访问", () => {
       firewall: { status: "missing", program },
     });
     const second = render(<OwnerDevicesPanel local={local} />);
-    expect(await screen.findByText(/Windows 防火墙里还没有放行 SuperHive/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        /Windows 防火墙还没放行 SuperHive，手机和其他电脑可能连不上；只在这台电脑上用可以不管/,
+      ),
+    ).toBeTruthy();
     second.unmount();
 
     const ok = installBridge({

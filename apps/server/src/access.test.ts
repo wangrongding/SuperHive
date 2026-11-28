@@ -82,20 +82,6 @@ describe("限时邀请与访客会话", () => {
     };
   }
 
-  it("桌面端问有没有别的设备连进来过：数还有效的访客会话，到期的不算", async () => {
-    const { app, invite, redeem, advance } = await start();
-    const usage = () =>
-      (
-        app as unknown as { lanUsage: () => { ownerDevices: number; guestSessions: number } }
-      ).lanUsage();
-    expect(usage()).toEqual({ ownerDevices: 0, guestSessions: 0 });
-    const created = await invite(60);
-    expect((await redeem(created.token, "alice")).status).toBe(200);
-    expect(usage()).toEqual({ ownerDevices: 0, guestSessions: 1 });
-    advance(61 * 60_000);
-    expect(usage().guestSessions).toBe(0);
-  });
-
   it("远程访问拿不到共享凭证；本机房主仍能拿到", async () => {
     const { app } = await start();
     const remote = await app.inject({ url: "/api/meta", remoteAddress: "203.0.113.5" });

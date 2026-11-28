@@ -74,6 +74,8 @@ If you don't manage local agents from the web UI, you can choose `--no-local-age
 
 The CLI listens on `0.0.0.0:8787` by default, not just the loopback address. If only local access is needed, choose `--host 127.0.0.1` explicitly; to serve LAN participants, configure the actual network interface, firewall, and network isolation.
 
+The desktop app's built-in server also listens on all interfaces by default (“Allow devices on your network” under Settings → Devices is on). If you only use this computer, turn it off; the server then listens on `127.0.0.1` only, and the choice is remembered.
+
 A plain HTTP LAN connection is still not encrypted. On shared Wi-Fi, guest networks, or untrusted networks, don't relax credential protection just because it's "the internal network".
 
 A public deployment needs at least:

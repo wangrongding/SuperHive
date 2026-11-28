@@ -5,7 +5,7 @@
 //     --init-script scripts/fixtures/desktop-lan.js --action settings:devices
 // ?lan=off 开关关着；?lan=blocked 开着且 Windows 防火墙拦着；?lan=missing 开着、还没放行；?lan=on 开着、已放行
 (() => {
-  const mode = new URLSearchParams(location.search).get("lan") ?? "off";
+  const mode = new URLSearchParams(location.search).get("lan") ?? "on";
   const noop = () => () => undefined;
   let state = { enabled: mode !== "off", managed: true, restarting: false };
   const listeners = new Set();

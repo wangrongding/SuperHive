@@ -7407,11 +7407,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.decorate("runSchedules", runSchedules);
   app.decorate("hiveDatabase", database);
   app.decorate("incidentDesk", incidentDesk);
-  /** 桌面端第一次决定要不要开局域网访问时问：有没有已登录的其它设备、还有效的访客会话 */
-  app.decorate("lanUsage", () => ({
-    ownerDevices: ownerDevices.unrevokedIds().length,
-    guestSessions: access.activeSessionCount(options.now?.() ?? Date.now()),
-  }));
   /**
    * 关闭前先让本机 Agent 正常下线：要趁 WebSocket 还连着（Windows 上靠它通知 Agent 退出），
    * app.close() 时连接已经被关掉了。换代交接时不下线，由 onClose 交给下一个 Server。

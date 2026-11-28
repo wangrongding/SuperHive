@@ -29,7 +29,6 @@ import {
   type WebPreferences,
 } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -37,15 +36,13 @@ import { pathToFileURL } from "node:url";
 import {
   checkFirewall,
   hostFor,
-  legacyLanWanted,
-  loadLanSetting,
+  resolveLanSetting,
   saveLanSetting,
   type FirewallStatus,
   type LanAccessState,
 } from "./lan-access.js";
 import {
   discover,
-  readLanUsage,
   startServer,
   superhiveHome,
   type ForkServer,
@@ -1184,7 +1181,7 @@ function runApp(): void {
 
   // ---------- 局域网访问 ----------
   const lanFile = () => path.join(app.getPath("userData"), "lan-access.json");
-  /** 存下来的选择；升级前的版本没存过，第一次起 Server 后按有没有别的设备连进来过决定 */
+  /** 存下来的选择；没存过时第一次起 Server 前按开启存下（resolveLanSetting） */
   let lanEnabled: boolean | undefined;
   let lanRestarting = false;
   /** 正在被换掉的 Server：它退出不算「Server 停了」 */
@@ -1269,21 +1266,8 @@ function runApp(): void {
       return found.origin;
     }
     onPhase("starting");
-    lanEnabled ??= loadLanSetting(lanFile());
-    // 没有数据库就是新装：直接默认只听本机，不用问
-    const firstRun = !existsSync(path.join(dataDir, "hive.sqlite"));
-    if (lanEnabled === undefined && firstRun) {
-      lanEnabled = false;
-      saveLanSetting(lanFile(), false);
-    }
+    lanEnabled ??= resolveLanSetting(lanFile());
     const server = await launchOwned(found.port);
-    if (lanEnabled === undefined) {
-      // 从一直听 0.0.0.0 的老版本升上来：先只听本机（不弹防火墙），问一下以前有没有别的设备
-      // 连进来过，有就保持局域网访问，交接重启一次换到 0.0.0.0
-      lanEnabled = legacyLanWanted(await readLanUsage(server.state));
-      saveLanSetting(lanFile(), lanEnabled);
-      if (lanEnabled) await relaunchOwned();
-    }
     return server.origin;
   }
 
