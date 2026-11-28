@@ -113,12 +113,54 @@
 }
 
 /* ---------- 第 3 步：在本机启动 ---------- */
-/* 离线成员右边的「启动」「重新接入」：和行同一行，不另起一行把行撑高 */
+/*
+ * 离线成员的「启动」「重新接入」：和行同一行。平时只显示离线的圈，一列按钮不堆在那儿；
+ * 悬停或键盘移到这一行时盖在圈的位置上显示。藏起来时只是透明（不是 display: none），Tab 照样能走到，
+ * 走到了就显示。没有悬停的触屏一直显示；正在启动的一直显示一行小字。
+ */
+.member:has(.member-recovery-actions) {
+  position: relative;
+}
+
 .member-recovery-actions {
+  position: absolute;
+  top: 50%;
+  right: 8px;
   display: flex;
-  flex: 0 0 auto;
   align-items: center;
   gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.member-row:hover .member-recovery-actions,
+.member-recovery-actions:focus-within,
+.member-recovery-actions.pending {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.member-row:hover .member-recovery-actions + .status-dot,
+.member-recovery-actions:focus-within + .status-dot,
+.member-recovery-actions.pending + .status-dot {
+  visibility: hidden;
+}
+
+.member-recovery-actions.pending {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+@media (hover: none) {
+  .member-recovery-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .member-recovery-actions + .status-dot {
+    visibility: hidden;
+  }
 }
 
 .member.muted:has(.member-recovery-actions) {

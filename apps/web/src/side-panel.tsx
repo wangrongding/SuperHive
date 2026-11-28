@@ -527,15 +527,12 @@ export function SidePanel({
                                   )}
                                 </small>
                               </span>
-                              {/* 能启动 / 重新接入的放在右边，代替离线的圈：行高和在线成员一样 */}
-                              {memberRecoveryActions(participant) ?? (
-                                <span
-                                  className="status-dot offline"
-                                  aria-label={
-                                    isRemovedMember(participant) ? t("已移除") : t("离线")
-                                  }
-                                />
-                              )}
+                              {/* 能启动 / 重新接入的平时只显示离线的圈，悬停或键盘移到这一行时换成按钮 */}
+                              {memberRecoveryActions(participant)}
+                              <span
+                                className="status-dot offline"
+                                aria-label={isRemovedMember(participant) ? t("已移除") : t("离线")}
+                              />
                             </div>
                           </div>
                         ))}

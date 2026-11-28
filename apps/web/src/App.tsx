@@ -1118,23 +1118,28 @@ export function App({
       return null;
     const agent = localAgentFor(participant.username);
     const removed = removedAgentFor(participant);
+    const startable = agent && (agent.status === "stopped" || agent.status === "crashed");
     return agent ? (
-      <span className="member-recovery-actions">
-        <Button
-          size="sm"
-          aria-label={t("启动 {0}", { 0: participant.username })}
-          disabled={agent.status !== "stopped" && agent.status !== "crashed"}
-          onClick={() =>
-            void local
-              .act(agent.id, "start")
-              .catch((reason: unknown) =>
-                setError(reason instanceof Error ? reason.message : String(reason)),
-              )
-          }
-        >
-          {agent.status === "stopped" || agent.status === "crashed" ? t("启动") : t("正在启动…")}
-        </Button>
-      </span>
+      startable ? (
+        <span className="member-recovery-actions">
+          <Button
+            size="sm"
+            aria-label={t("启动 {0}", { 0: participant.username })}
+            onClick={() =>
+              void local
+                .act(agent.id, "start")
+                .catch((reason: unknown) =>
+                  setError(reason instanceof Error ? reason.message : String(reason)),
+                )
+            }
+          >
+            {t("启动")}
+          </Button>
+        </span>
+      ) : (
+        // 正在启动：一直显示一行小字，不用悬停才看得到，也不是一个点不了的按钮
+        <span className="member-recovery-actions pending">{t("正在启动…")}</span>
+      )
     ) : removed ? (
       <span className="member-recovery-actions">
         <Button
