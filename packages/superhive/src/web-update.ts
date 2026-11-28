@@ -31,6 +31,8 @@ import {
   refreshLatest,
   upgradeCommand,
 } from "./update.js";
+import { recordCliTelemetry } from "./telemetry-command.js";
+import type { TelemetryUpdateFailure } from "./telemetry-core.js";
 
 type Blocker = "source" | "npx" | "desktop" | "permissions" | "external" | "installer";
 type Context = { packageRoot: string; version: string; dataDir: string; serverPid: number };
@@ -288,6 +290,8 @@ async function performUpdate(context: Context, job: Job, choice: string | undefi
     job.phase = value;
     saveJob(context.dataDir, job);
   };
+  /** 走到哪一步了：失败时匿名使用统计按它记失败类别（不记报错原文） */
+  let step: TelemetryUpdateFailure = "not_managed";
   try {
     const originalState = readServiceState(context.dataDir);
     if (!originalState) throw new Error("The original Server configuration is missing");
@@ -297,6 +301,7 @@ async function performUpdate(context: Context, job: Job, choice: string | undefi
     const info = await inspectWebUpdate(context);
     if (!info.canUpdate || info.latest !== job.target)
       throw new Error("Update eligibility changed; check the version again");
+    step = "install_failed";
     staging = mkdtempSync(path.join(path.dirname(context.packageRoot), ".superhive-update-"));
     const command = upgradeCommand({ kind: "npm", prefix: staging }, { version: job.target })!;
     const npmCli = path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
@@ -310,6 +315,7 @@ async function performUpdate(context: Context, job: Job, choice: string | undefi
       staging,
       process.platform === "win32" ? "node_modules/superhive" : "lib/node_modules/superhive",
     );
+    step = "package_mismatch";
     const cli = path.join(candidate, "dist/cli.js");
     const candidatePackage = JSON.parse(
       readFileSync(path.join(candidate, "package.json"), "utf8"),
@@ -321,6 +327,7 @@ async function performUpdate(context: Context, job: Job, choice: string | undefi
       !existsSync(path.join(candidate, "web/index.html"))
     )
       throw new Error("The downloaded package is missing Server or web files");
+    step = "verify_failed";
     await runChecked(process.execPath, [cli, "--version"], 30_000, logFd);
     const checkNative = `const require = (await import('node:module')).createRequire(${JSON.stringify(path.join(candidate, "package.json"))}); const Database = require('better-sqlite3'); const database = new Database(':memory:'); database.close();`;
     await runChecked(
@@ -329,8 +336,10 @@ async function performUpdate(context: Context, job: Job, choice: string | undefi
       30_000,
       logFd,
     );
+    step = "not_managed";
     const fresh = await inspectWebUpdate(context);
     if (!fresh.canUpdate) throw new Error("The Server is no longer managed by Hive");
+    step = "busy_agents";
     if (!fresh.canHandover && fresh.busyAgents.length && choice !== "now") {
       if (choice !== "wait") throw new Error("Busy Agents require confirmation");
       phase("waiting");
@@ -359,6 +368,7 @@ async function performUpdate(context: Context, job: Job, choice: string | undefi
       )
         throw new Error("The restarted Server did not confirm the expected version");
     };
+    step = "restart_failed";
     await replaceAndRestart({
       packageRoot: context.packageRoot,
       candidate,
@@ -371,9 +381,19 @@ async function performUpdate(context: Context, job: Job, choice: string | undefi
       phase,
     });
     phase("completed");
+    recordCliTelemetry(
+      "update_result",
+      { kind: "npm", outcome: "success" },
+      { version: context.version },
+    );
   } catch (error) {
     job.error = error instanceof Error ? error.message : "Update failed";
     phase("failed");
+    recordCliTelemetry(
+      "update_result",
+      { kind: "npm", outcome: "failure", reason: step },
+      { version: context.version },
+    );
   } finally {
     closeSync(logFd);
     if (staging) rmSync(staging, { recursive: true, force: true });

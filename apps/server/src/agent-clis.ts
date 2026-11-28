@@ -1508,8 +1508,23 @@ export class AgentCliManager {
     }
   }
 
+  private readonly finishedListeners = new Set<(job: AgentCliJob) => void>();
+
+  /** 安装、升级任务结束（成功或失败）时通知；返回取消订阅 */
+  onJobFinished(listener: (job: AgentCliJob) => void): () => void {
+    this.finishedListeners.add(listener);
+    return () => this.finishedListeners.delete(listener);
+  }
+
   /** 任务结束：放开这个 CLI 和并发名额，排队的接着跑 */
   private release(job: AgentCliJob) {
+    for (const listener of this.finishedListeners) {
+      try {
+        listener({ ...job });
+      } catch {
+        // 订阅方出错不影响队列
+      }
+    }
     if (this.active.get(job.tool) === job) this.active.delete(job.tool);
     this.spawned.delete(job.id);
     while (this.spawned.size < this.maxConcurrent && this.queue.length) {

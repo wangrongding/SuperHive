@@ -16,6 +16,7 @@ import type {
   KeepAwakeState,
   NetworkProxySettings,
   NetworkProxyState,
+  TelemetryStatus,
   CreateRemoteJoinRequest,
   RemoteJoin,
   RemoteJoinListResponse,
@@ -225,6 +226,13 @@ export type LocalAgentsState = {
   /** 网络代理：本机 Agent 子进程走不走代理（设置 → 这台电脑） */
   networkProxy(): Promise<NetworkProxyState>;
   updateNetworkProxy(patch: Partial<NetworkProxySettings>): Promise<NetworkProxyState>;
+  /** 匿名使用统计（设置 → 这台电脑）：状态；改开关、重置安装 ID、标记首次告知只限本机 */
+  telemetry(): Promise<TelemetryStatus>;
+  updateTelemetry(enabled: boolean): Promise<TelemetryStatus>;
+  resetTelemetryId(): Promise<TelemetryStatus>;
+  telemetryNoticeShown(): Promise<TelemetryStatus>;
+  /** 下一次要发送的请求体（原始 JSON）；没在记录时为 null */
+  telemetryPreview(): Promise<unknown>;
   /** 带到别人房间的 Agent（设置 → 这台电脑 → 带到别处的 Agent）；旧版 Server 没有这个接口时抛 404 */
   remoteJoins(): Promise<RemoteJoin[]>;
   createRemoteJoin(body: CreateRemoteJoinRequest): Promise<RemoteJoin>;
@@ -915,6 +923,34 @@ export function useLocalAgents(
     [request],
   );
 
+  /* ---------- 匿名使用统计 ---------- */
+
+  const telemetryRequest = useCallback(
+    async (path: string, init?: RequestInit) => {
+      const response = await request(`/api/local/telemetry${path}`, init);
+      return (await response.json()) as TelemetryStatus;
+    },
+    [request],
+  );
+  const telemetry = useCallback(() => telemetryRequest(""), [telemetryRequest]);
+  const updateTelemetry = useCallback(
+    (enabled: boolean) =>
+      telemetryRequest("", { method: "PUT", body: JSON.stringify({ enabled }) }),
+    [telemetryRequest],
+  );
+  const resetTelemetryId = useCallback(
+    () => telemetryRequest("/reset", { method: "POST" }),
+    [telemetryRequest],
+  );
+  const telemetryNoticeShown = useCallback(
+    () => telemetryRequest("/notice", { method: "POST" }),
+    [telemetryRequest],
+  );
+  const telemetryPreview = useCallback(async () => {
+    const response = await request("/api/local/telemetry/preview");
+    return ((await response.json()) as { payload: unknown }).payload;
+  }, [request]);
+
   /* ---------- 插件 ---------- */
 
   const plugins = useCallback(async () => {
@@ -1496,6 +1532,11 @@ export function useLocalAgents(
     updateKeepAwake,
     networkProxy,
     updateNetworkProxy,
+    telemetry,
+    updateTelemetry,
+    resetTelemetryId,
+    telemetryNoticeShown,
+    telemetryPreview,
     remoteJoins,
     plugins: pluginsWithProviders,
     grantPlugin,

@@ -174,6 +174,7 @@ pnpm --filter @superhive/desktop make   # build installers into apps/desktop/out
 - [日常的な使い方](https://wangrongding.github.io/SuperHive/en/guides/usage/): 人の招待、ほかのデバイスでのオーナーのサインイン、Feishu と WeChat、エージェントの権限、追跡、停止と再試行、フォローアップ、委任とボード、スケジュールされたタスク、添付ファイル、使用量、オンラインの維持、自動起動、LAN とパブリックアクセス、トラブルシューティング。
 - [開発者向けドキュメント](https://wangrongding.github.io/SuperHive/en/reference/development/): アーキテクチャ、リポジトリからの実行、CLI フラグ、環境変数、MCP ツールと HTTP API、ループ防止と信頼性、セキュリティ境界。[CLI リファレンス](https://wangrongding.github.io/SuperHive/en/reference/cli/)、[デプロイ](https://wangrongding.github.io/SuperHive/en/reference/deployment/)、[セキュリティ](https://wangrongding.github.io/SuperHive/en/reference/security/)も参照してください。
 - [エージェント向け協働ガイド](skills/superhive/SKILL.md): `hive --skill` でも同じファイルが表示されます。それぞれのターミナルで動作している Claude Code、Codex、その他のエージェントにインストールすると、Hive への参加方法が分かるようになります。
+- [利用統計](https://wangrongding.github.io/SuperHive/en/reference/telemetry/): SuperHive はデフォルトで匿名の大まかな利用統計を記録します（メッセージ、パス、名前、キーは収集しません）。設定、`hive telemetry off`、または `DO_NOT_TRACK=1` でオフにできます。
 - リポジトリ内の Markdown ドキュメント（中国語）: [docs/](docs/README.md)。
 
 ## ライセンス

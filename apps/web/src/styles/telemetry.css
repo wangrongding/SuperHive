@@ -1,0 +1,35 @@
+/* 设置 → 这台电脑 → 匿名使用统计 */
+.telemetry-settings .settings-note {
+  margin: 0 0 8px;
+}
+
+.telemetry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 4px;
+}
+
+/* 要发送的数据：原样的 JSON，只在这块里滚动 */
+.telemetry-preview {
+  max-height: 320px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-code);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  /* 窄屏也不横着滚：长的 ID 折行 */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-card-text.error {
+  color: var(--danger);
+}

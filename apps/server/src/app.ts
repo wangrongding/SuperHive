@@ -13,6 +13,7 @@ import {
   type AgentContextStatus,
   type AgentLastModel,
   type AgentUsage,
+  type AgentCliJob,
 } from "@superhive/protocol";
 import { errorText, hiveErrorBody, wsText } from "./texts.js";
 import { resolveRoom, roomsNamedLike } from "./room-lookup.js";
@@ -35,6 +36,7 @@ import {
   LIMITS,
   clientEventSchema,
   clientErrorReportSchema,
+  telemetryClientRequestSchema,
   parseMentions,
   createRoomRequestSchema,
   updateRoomRequestSchema,
@@ -141,6 +143,8 @@ import {
   redact,
 } from "./incidents.js";
 import { IncidentStore } from "./incident-store.js";
+import { Telemetry, type TelemetryOptions } from "./telemetry.js";
+import { TELEMETRY_AGENT_PROVIDERS, type TelemetryUpdateFailure } from "./telemetry-core.js";
 import { IncidentDesk, type IncidentGit } from "./incident-desk.js";
 import { ImHub } from "./im/im-hub.js";
 import { ImStore } from "./im/im-store.js";
@@ -278,6 +282,11 @@ export type BuildAppOptions = {
   /** 插件原型：插件目录（docs/research/plugin-system.md）；省略即不开放插件 */
   plugins?: { dir: string; hostVersion: string };
   /**
+   * 匿名使用统计：数据目录（~/.superhive/telemetry）等。省略即不记（测试默认关闭，免得读写真实的目录），
+   * 由 index.ts 注入；版本、运行方式、心跳统计由这里补上
+   */
+  telemetry?: Omit<TelemetryOptions, "version" | "runMode" | "sandbox" | "snapshot" | "log">;
+  /**
    * 新任务目录自动准备依赖（按锁文件安装，失败退回软链主目录）。省略或 false 时关闭（测试默认关闭，
    * 免得每个建任务线的用例都去跑安装）；由 index.ts 按 HIVE_WORKTREE_DEPS 打开。
    */
@@ -322,6 +331,29 @@ function requestPublicUrl(
 ): string {
   if (configuredUrl) return resolveUrl(configuredUrl);
   return `${request.protocol}://${request.headers.host ?? "localhost:8787"}`;
+}
+
+/** Agent CLI 安装、升级失败的说明键 → 使用统计里的失败类别 */
+const AGENT_CLI_FAILURES: Readonly<Record<string, TelemetryUpdateFailure>> = {
+  "error.agentCli.timeout": "timeout",
+  "error.agentCli.stalled": "stalled",
+  "error.agentCli.exitCode": "exit_code",
+  "error.agentCli.spawnFailed": "spawn_failed",
+  "error.agentCli.versionUnknown": "version_unknown",
+  "error.agentCli.versionUnchanged": "version_unchanged",
+  "error.agentCli.installBroken": "install_broken",
+};
+
+export function agentCliUpdateResult(job: AgentCliJob): Record<string, string> {
+  return {
+    kind: "agent_cli",
+    target: job.tool,
+    action: job.action,
+    outcome: job.state === "succeeded" ? "success" : "failure",
+    ...(job.state === "succeeded"
+      ? {}
+      : { reason: AGENT_CLI_FAILURES[job.reasonText?.key ?? ""] ?? "unknown" }),
+  };
 }
 
 /** 里程碑在白板上留多久再自动归档 */
@@ -539,6 +571,33 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       : (options.incidentRepo ?? sourceRepository());
   const runningCommit = incidentRepo ? await currentCommit(incidentRepo) : undefined;
   const feedback = await feedbackInfo(runningCommit);
+  const telemetry = options.telemetry
+    ? new Telemetry({
+        ...options.telemetry,
+        version: feedback?.version ?? "0.0.0",
+        // 桌面端跑的是打包进去的 npm 产物，按 Electron 认
+        runMode: process.versions.electron ? "desktop" : (feedback?.runMode ?? "npm"),
+        sandbox,
+        log: (message, detail) => app.log.info(detail ?? {}, message),
+        snapshot: () => {
+          const agents: Record<string, number> = {};
+          for (const agent of localAgents?.list() ?? []) {
+            if ((TELEMETRY_AGENT_PROVIDERS as readonly string[]).includes(agent.provider)) {
+              agents[agent.provider] = (agents[agent.provider] ?? 0) + 1;
+            }
+          }
+          return { agents, rooms: database.listRooms(false).length };
+        },
+      })
+    : undefined;
+  // Agent CLI 的安装、升级结果（成功或失败、失败类别）
+  const stopCliTelemetry =
+    telemetry && options.agentClis && !sandbox
+      ? options.agentClis.onJobFinished((job) =>
+          telemetry.record("update_result", agentCliUpdateResult(job)),
+        )
+      : undefined;
+  telemetry?.start();
   const incidentDesk = new IncidentDesk({
     store: new IncidentStore(database.connection(), () => clock()),
     readSetting: (key) => database.getSetting(key),
@@ -1186,6 +1245,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
     ...(networkProxy ? { networkProxy } : {}),
     ...(options.remoteJoins && !sandbox ? { remoteJoins: options.remoteJoins } : {}),
+    ...(telemetry ? { telemetry } : {}),
   });
 
   /* ---------- 访问控制：房主（join token）与限时访客 ---------- */
@@ -1669,7 +1729,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   /** 记一次故障：出错只写日志，不能让归档本身影响正在处理的请求 */
   function recordIncident(occurrence: Parameters<IncidentDesk["record"]>[0]): void {
     try {
-      incidentDesk.record(occurrence);
+      // 重复上报（断线重发）返回 undefined，不重复计数
+      if (incidentDesk.record(occurrence))
+        telemetry?.incident(occurrence.origin, occurrence.source);
     } catch (error) {
       app.log.warn({ err: error }, "incident record failed");
     }
@@ -3202,6 +3264,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           ...(input.workspace ? { workspace: roomWorkspace(input.workspace) } : {}),
         }),
       );
+      telemetry?.feature("room_create");
       broadcastAll({ type: "rooms.changed", room });
       return { room, sameName: roomsNamedLike(room.name, database.listRooms(false), room.id) };
     } catch (error) {
@@ -4528,6 +4591,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         : undefined;
     },
     onConnectionsChanged: () => scheduleKeepAwake(),
+    onConnected: () => telemetry?.feature("im_connect"),
     decideHostApproval: (connectionId, actorId, approvalId, allow) => {
       if (!isHostApprover({ id: connectionId, ownerActorId: actorId })) {
         return { ok: false, key: "im.host.notApprover" };
@@ -4828,6 +4892,24 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return reply.code(204).send();
   });
 
+  /**
+   * 匿名使用统计：网页报产物、代码面板第一次打开，桌面端应用内更新的结果，以及本机房主的界面语言。
+   * 只收房主的；没在记录时直接忽略。事件再经 telemetry-core 的白名单校验一遍
+   */
+  app.post<{ Body: unknown }>("/api/telemetry/events", async (request, reply) => {
+    if (!adminOnly(request, reply)) return reply;
+    const body = telemetryClientRequestSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.code(400).send({ ...errorText(serverText("error.request.invalid")) });
+    if (!telemetry?.active()) return reply.code(204).send();
+    if (body.data.locale) telemetry.setUiLocale(body.data.locale);
+    for (const item of body.data.events) {
+      if (item.event === "feature_first_used") telemetry.feature(item.props.feature);
+      else telemetry.record(item.event, item.props);
+    }
+    return reply.code(204).send();
+  });
+
   app.get("/agent.md", async (_request, reply) => {
     return reply
       .type("text/markdown; charset=utf-8")
@@ -4920,6 +5002,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       mcpUrl: `${httpUrl}/mcp`,
       ...(feedback ? { feedback } : {}),
       ...(sandbox ? { sandbox: true } : {}),
+      ...(telemetry?.active() ? { telemetry: true } : {}),
       ...(isOwnerRequest(request)
         ? (() => {
             const token = ownerTokenFor(request);
@@ -5022,6 +5105,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       allowAgents: body.data.allowAgents,
       showTrace: body.data.showTrace,
     });
+    telemetry?.feature("invite_member");
     return reply.code(201).send(created);
   });
 
@@ -6627,6 +6711,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         ...body.data,
         ...(body.data.workspace ? { workspace: roomWorkspace(body.data.workspace) } : {}),
       });
+      telemetry?.feature("room_create");
       broadcastAll({ type: "rooms.changed", room: withBranch(room) });
       return reply.code(201).send({ room: withBranch(room) });
     } catch (error) {
@@ -6916,6 +7001,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           connection.participant = participant;
           connection.lastHeartbeat = Date.now();
           if (participant.type === "agent") {
+            telemetry?.feature("agent_join");
             connection.version = event.version;
             connection.workspace = event.workspace;
           }
@@ -7443,6 +7529,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     clearInterval(milestoneTimer);
     await worktrees.close();
     keepAwake?.close();
+    stopCliTelemetry?.();
+    telemetry?.close();
     // 换代重启：本机 Agent 交给下一个 Server 接管，正在跑的任务不中断；否则先让它们正常离线
     if (localAgents && consumeHandover(options.handoverFile)) {
       localAgents.detach();

@@ -16,6 +16,7 @@ import { redirectOutputToLog } from "./self-log.js";
 import { restartService, serviceRunning, startService, stopService } from "./service.js";
 import { readSkill } from "./skill.js";
 import { skillInstallCommand, skillStatusCommand, skillUninstallCommand } from "./skill-command.js";
+import { telemetryCommand } from "./telemetry-command.js";
 import {
   checkLatest,
   detectInstall,
@@ -57,6 +58,8 @@ SuperHive（命令：hive；未全局安装时用 npx superhive 代替 hive）
   hive skill uninstall [claude|codex|openclaw]
                       移除装进去的 SKILL.md（缺省=全部）
   hive skill search <词>  在 skills.sh 上搜别人分享的 skill（安装请到网页「MCP 与技能」里预览后装）
+  hive telemetry status|on|off|preview|reset
+                      匿名使用统计：查看、打开、关闭、预览要发送的数据、换一个安装 ID
 
 运行 hive <命令> --help 查看详细选项。
 文档：${DOCS_URL}
@@ -77,6 +80,7 @@ const QUIET_COMMANDS = new Set([
   "--skill",
   "update",
   "web-update",
+  "telemetry",
   "-v",
   "-V",
   "--version",
@@ -140,6 +144,7 @@ async function main(): Promise<void> {
   if (command === "leave") return leaveCommand(process.argv.slice(3));
   if (command === "mcp") return mcpCommand(process.argv.slice(3));
   if (command === "models") return modelsCommand(process.argv.slice(3));
+  if (command === "telemetry") return telemetryCommand(process.argv.slice(3));
   if (command === "web-update")
     return webUpdateCommand(process.argv.slice(3), { version, packageRoot });
   if (command === "update" || command === "upgrade") {

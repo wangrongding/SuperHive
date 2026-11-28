@@ -97,6 +97,8 @@ export function registerRuntimeConfigRoutes(
     openTerminal?: (command: string) => Promise<void>;
     /** MCP 测试结果存在哪（Server 的小设置）；不给就只记在内存里 */
     mcpHealth?: McpHealthPersistence;
+    /** 装上了一个 MCP（匿名使用统计记「第一次用到」） */
+    onMcpInstalled?: () => void;
     now?: () => number;
   },
 ): void {
@@ -223,6 +225,8 @@ export function registerRuntimeConfigRoutes(
       try {
         ok.store.putMcp(ok.provider, body.data.name, body.data.server, body.data.previousName);
         audit(request, "update", ok.provider, [`mcp:${body.data.name}`]);
+        // 改名、改配置不算新装
+        if (body.data.previousName === undefined) options.onMcpInstalled?.();
         return result(ok.store, ok.provider);
       } catch (error) {
         return fail(reply, error);
@@ -575,6 +579,7 @@ export function registerRuntimeConfigRoutes(
       for (const provider of new Set(body.data.targets)) {
         audit(request, "update", provider, [`mcp:${body.data.name}`]);
       }
+      options.onMcpInstalled?.();
       return { overview: runtimeOverview(store, skills, health) };
     } catch (error) {
       return fail(reply, error);
@@ -702,6 +707,7 @@ export function registerRuntimeConfigRoutes(
           });
         }
       }
+      if (results.some((item) => item.ok)) options.onMcpInstalled?.();
       const result: RuntimeInstallResult = {
         results,
         overview: runtimeOverview(ok.store, ok.skills, health),

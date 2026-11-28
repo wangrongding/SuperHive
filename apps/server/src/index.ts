@@ -16,6 +16,7 @@ import { NpmUpdateManager } from "./npm-updates.js";
 import { feishuDriver } from "./im/feishu.js";
 import type { ImChannelDriver } from "./im/types.js";
 import { lanAddresses } from "./lan-address.js";
+import { telemetryDir } from "./telemetry-core.js";
 
 import type { AgentCli } from "./local-agents.js";
 import { agentCliOverride } from "./agent-cli-override.js";
@@ -130,6 +131,8 @@ const app = await buildApp({
         remoteJoins: { dir: remoteJoinsDir() },
       }),
   imKeyPath: path.join(path.dirname(databasePath), "im-secret.key"),
+  // 匿名使用统计：同一台电脑上的 Server、桌面端、CLI 共用 ~/.superhive/telemetry；沙箱里一律不记
+  ...(sandbox ? {} : { telemetry: { dir: telemetryDir() } }),
   publicUrl,
   webUrl,
   agentCommandPrefix,

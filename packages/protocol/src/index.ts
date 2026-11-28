@@ -1345,6 +1345,8 @@ export const metaResponseSchema = z.object({
   agentCommand: z.string().optional(),
   /** 沙箱预览模式（HIVE_SANDBOX=1）：不连 IM、不起本机 Agent、不跑定时任务，网页顶部标出 */
   sandbox: z.boolean().optional(),
+  /** 匿名使用统计在记录：网页只在这时报产物、代码面板第一次打开等事件 */
+  telemetry: z.boolean().optional(),
 });
 
 /* ---------- 限时邀请（房主发给其他人类） ---------- */
@@ -2607,6 +2609,7 @@ export * from "./network-proxy.js";
 export * from "./remote-join.js";
 export * from "./plugin-manifest.js";
 export * from "./skill-market.js";
+export * from "./telemetry.js";
 export type {
   NpmUpdateInfo,
   NpmUpdateCheckResponse,

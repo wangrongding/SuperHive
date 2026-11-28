@@ -34,6 +34,7 @@ import {
 } from "./attention-alerts";
 import { playNotificationTone, type BrowserNotificationPermission } from "./browser-notify";
 import { HostManageNotice, KeepAwakeSettingsGroup, OwnerDevicesPanel } from "./host-settings";
+import { TelemetrySettingsGroup } from "./telemetry";
 import { ownerDevicesIntro } from "./owner-devices-dialog";
 import { LocalAgentAdvancedSettings, LocalAgentUpdatesGroup } from "./local-agent-updates";
 import { NetworkProxySettingsGroup } from "./network-proxy-settings";
@@ -502,6 +503,7 @@ export function SettingsDialog({
                 <RemoteJoinsGroup local={local} />
                 <NetworkProxySettingsGroup local={local} />
                 <KeepAwakeSettingsGroup local={local} />
+                <TelemetrySettingsGroup local={local} />
                 <LocalAgentAdvancedSettings local={local} />
               </section>
             )}

@@ -63,9 +63,11 @@ test("local illustrations receive dimensions and lazy loading", () => {
   assert.equal(image.properties.src, "/handbook/media/workroom.svg");
 });
 
-test("navigation requires twenty-three unique documentation routes in each language", () => {
-  assert.equal(expectedRoutes.length, 46);
-  assert.equal(new Set(expectedRoutes).size, 46);
+test("navigation requires twenty-four unique documentation routes in each language", () => {
+  assert.equal(expectedRoutes.length, 48);
+  assert.equal(new Set(expectedRoutes).size, 48);
+  assert.ok(expectedRoutes.includes("reference/telemetry/"));
+  assert.ok(expectedRoutes.includes("en/reference/telemetry/"));
   assert.ok(expectedRoutes.includes("reference/documentation/"));
   assert.ok(expectedRoutes.includes("en/reference/documentation/"));
   assert.ok(expectedRoutes.includes("en/"));

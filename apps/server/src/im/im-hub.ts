@@ -102,6 +102,8 @@ export type ImHubDeps = {
   /** 卡片按钮上的网页地址：带房主登录票，在没登录过的设备上点开也能直接进 */
   loginUrl?(connectionId: string, roomId: string): string | undefined;
   onConnectionsChanged(roomId: string): void;
+  /** 扫码连上了一个新的 IM 账号（匿名使用统计记「第一次用到」） */
+  onConnected?(channel: string): void;
   /**
    * 卡片上批准或拒绝其他设备管理 Server 所在电脑；实现方核对这个连接和操作人是否登记为可批准。
    * 返回给点按钮的人看的结果
@@ -569,6 +571,7 @@ export class ImHub {
       this.deps.store.kvMove(namespace, connection.id);
       this.finishLogin(login, { status: "succeeded", connectionId: connection.id });
       this.deps.onConnectionsChanged(connection.roomId);
+      this.deps.onConnected?.(connection.channel);
       void this.connect(connection);
     } catch (error) {
       this.deps.store.kvDelete(namespace);

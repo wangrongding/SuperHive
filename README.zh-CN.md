@@ -183,6 +183,7 @@ pnpm --filter @superhive/desktop make   # 打包，产物在 apps/desktop/out/
 - [日常使用](docs/usage.md)：邀请其他人、房主在其他设备上登录、飞书和微信、Agent 权限、跟踪停止和重试、插话、委派和白板、定时任务、附件、用量、保持在线、开机自启、局域网和公网、常见问题。
 - [开发者文档](docs/development.md)：架构、从仓库运行、CLI 参数、环境变量、MCP 工具和 HTTP API、防循环和可靠性、安全边界。
 - [给 Agent 的协作说明](skills/superhive/SKILL.md)：`hive --skill` 打印同一份，可以装进终端里单独运行的 Claude Code、Codex 等，让它们知道怎么接入 Hive。
+- [使用统计](https://wangrongding.github.io/SuperHive/reference/telemetry/)：默认记录匿名、粗粒度的使用统计（不收消息、路径、名字和 key），在设置里、用 `hive telemetry off` 或 `DO_NOT_TRACK=1` 都能关。
 - [文档目录](docs/README.md)
 
 ## License

@@ -39,6 +39,7 @@ import {
   updateCheckPending,
   useUpdateCenter,
 } from "./update-center";
+import { reportDesktopUpdate } from "./telemetry";
 
 /** 发布说明一条里中英文用「 / 」隔开（见 Release 说明的写法），按界面语言取一半；没有分隔就原样 */
 export function noteForLocale(note: string, locale: Locale): string {
@@ -273,13 +274,17 @@ export function DesktopUpdateLayer({
   // 点了「重启以更新」、桌面端说有 Agent 在忙：等人在卡片里选，名单是那一刻查到的
   const [asking, setAsking] = useState<string[]>();
   const [pending, setPending] = useState(false);
+  const failure = install?.state.phase === "failed" ? install.state.reason : undefined;
   useEffect(() => {
     const before = previous.current;
     previous.current = phase;
     if ((before === "downloading" || before === "verifying") && phase !== before) {
       expandUpdateCard();
+      // 匿名使用统计：这次下载准备好了还是失败了（只记失败类别）
+      if (phase === "ready") reportDesktopUpdate("success");
+      else if (phase === "failed") reportDesktopUpdate("failure", failure);
     }
-  }, [phase]);
+  }, [phase, failure]);
   useEffect(() => {
     // 开始等（包括从菜单选的）、等到上限：卡片收起着也展开，免得错过
     const before = previousWait.current;

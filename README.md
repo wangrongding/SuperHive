@@ -183,6 +183,7 @@ Details (Chinese) are in [apps/desktop/README.md](apps/desktop/README.md).
 - [Everyday use](https://wangrongding.github.io/SuperHive/en/guides/usage/): inviting people, owner sign-in on other devices, Feishu and WeChat, agent permissions, tracking, stopping and retrying, follow-ups, delegation and the board, scheduled tasks, attachments, usage, staying online, autostart, LAN and public access, and troubleshooting.
 - [Developer docs](https://wangrongding.github.io/SuperHive/en/reference/development/): architecture, running from the repo, CLI flags, environment variables, MCP tools and HTTP API, loop prevention and reliability, and security boundaries. See also the [CLI reference](https://wangrongding.github.io/SuperHive/en/reference/cli/), [Deployment](https://wangrongding.github.io/SuperHive/en/reference/deployment/), and [Security](https://wangrongding.github.io/SuperHive/en/reference/security/).
 - [Collaboration guide for agents](skills/superhive/SKILL.md): `hive --skill` prints the same file. Install it into Claude Code, Codex, and other agents running in their own terminals so they know how to join Hive.
+- [Usage statistics](https://wangrongding.github.io/SuperHive/en/reference/telemetry/): SuperHive records anonymous, coarse usage statistics by default (no messages, paths, names or keys). Turn them off in Settings, with `hive telemetry off` or with `DO_NOT_TRACK=1`.
 - In-repo Markdown docs (Chinese): [docs/](docs/README.md).
 
 ## License

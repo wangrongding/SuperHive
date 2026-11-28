@@ -71,6 +71,8 @@ import { registerAgentCliRoutes } from "./agent-cli-routes.js";
 import { registerNpmUpdateRoutes } from "./npm-update-routes.js";
 import type { NpmUpdates } from "./npm-updates.js";
 import { registerRemoteJoinRoutes, type RunJoinCli } from "./remote-join-routes.js";
+import { registerTelemetryRoutes } from "./telemetry-routes.js";
+import type { Telemetry } from "./telemetry.js";
 
 /**
  * 本机 Agent 的 HTTP 接口（管理 Hive Server 所在电脑）。请求方必须是下面两种之一：
@@ -254,6 +256,8 @@ export type LocalRoomActions = {
   };
   /** 带到别人房间的 Agent 清单 */
   remoteJoins?: { dir: string; runJoinCli?: RunJoinCli };
+  /** 匿名使用统计 */
+  telemetry?: Telemetry;
   /** 熄屏后保持在线 */
   keepAwake?: {
     state(): KeepAwakeState | undefined;
@@ -836,6 +840,13 @@ export function registerLocalAgentRoutes(
     });
   }
 
+  if (rooms.telemetry) {
+    registerTelemetryRoutes(app, {
+      telemetry: rooms.telemetry,
+      authorize: (request, reply, level) => authorize(request, reply, level),
+    });
+  }
+
   if (supervisor) {
     registerAgentCliRoutes(app, {
       manager: rooms.agentClis,
@@ -850,6 +861,7 @@ export function registerLocalAgentRoutes(
       ...(rooms.runtimeProfiles ? { profiles: rooms.runtimeProfiles } : {}),
       ...(rooms.openTerminal ? { openTerminal: rooms.openTerminal } : {}),
       ...(rooms.mcpHealth ? { mcpHealth: rooms.mcpHealth } : {}),
+      ...(rooms.telemetry ? { onMcpInstalled: () => rooms.telemetry!.feature("mcp_install") } : {}),
     });
     if (rooms.remoteJoins) {
       registerRemoteJoinRoutes(app, {

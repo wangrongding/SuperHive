@@ -39,6 +39,7 @@ export const navigation = [
       item("CLI 速查", "CLI reference", "reference/cli"),
       item("常见问题", "Troubleshooting", "reference/troubleshooting"),
       item("安全边界", "Security boundaries", "reference/security"),
+      item("使用统计", "Usage statistics", "reference/telemetry"),
       item("开发与扩展", "Development and extensions", "reference/development"),
     ],
   },

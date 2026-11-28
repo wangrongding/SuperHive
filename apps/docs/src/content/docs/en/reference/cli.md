@@ -70,6 +70,18 @@ Local Agents stay online: the old Server hands them over to the new one, so runn
 
 Each time you run `hive` in a terminal it does a quick version check: it waits at most 1.5 seconds, never blocks you if the check fails, and caches the result for an hour. If a new version exists, it suggests running `hive update`. Set `NO_UPDATE_NOTIFIER=1` to turn this off.
 
+### Anonymous usage statistics
+
+| Command                  | What it does                                                                     | Notes                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `hive telemetry status`  | Shows whether statistics are on, why they're off, and whether an endpoint is set | Also what `hive telemetry` alone does                                        |
+| `hive telemetry off`     | Turns anonymous usage statistics off                                             | Deletes anything not yet sent                                                |
+| `hive telemetry on`      | Turns them back on                                                               | Still off while an environment variable such as `DO_NOT_TRACK=1` blocks them |
+| `hive telemetry preview` | Prints the raw JSON of the next upload                                           | Same as **View data to be sent** in Settings                                 |
+| `hive telemetry reset`   | Switches to a new random install ID                                              | Deletes anything not yet sent under the old ID                               |
+
+For what is and isn't collected, see [Usage statistics](/en/reference/telemetry/).
+
 ## Connecting an agent to a room
 
 The example below contains no credentials. Before running it, supply `HIVE_AGENT_TOKEN` yourself, securely, in a private environment; otherwise the CLI reports missing connection parameters. Never paste a real token into chat, public config or screenshots.

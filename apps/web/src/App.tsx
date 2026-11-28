@@ -165,6 +165,12 @@ import type { LoadingStatus } from "./loading-status";
 import { Button } from "./button";
 import { StatusBar } from "./status-bar";
 import { UpdateCorner } from "./update-corner";
+import {
+  TelemetryNotice,
+  configureTelemetryReporter,
+  reportTelemetryFeature,
+  reportTelemetryLocale,
+} from "./telemetry";
 
 export function App({
   guest,
@@ -475,6 +481,18 @@ export function App({
       dev: import.meta.env.DEV,
     });
   }, [base, authToken, isOwner]);
+  // 匿名使用统计：Server 在记录时，房主页面把产物、代码面板第一次打开等交给自己的 Server，由它统一上报
+  const telemetryReady = Boolean(meta?.telemetry && isOwner && authToken);
+  useEffect(() => {
+    configureTelemetryReporter(
+      telemetryReady && authToken ? { base, token: authToken } : undefined,
+    );
+    return () => configureTelemetryReporter(undefined);
+  }, [base, authToken, telemetryReady]);
+  // 公共字段里的界面语言：只听这台电脑上本机房主的
+  useEffect(() => {
+    if (telemetryReady && local.mode === "local") reportTelemetryLocale(locale);
+  }, [telemetryReady, local.mode, locale]);
   // 「Agent 运行时」只给页面开在 Server 所在电脑上的本机房主；
   // 「其他设备」和头像菜单「在其他设备登录」一样，本机页面或房主登录过的设备才有
   const visibleSettingsTabs = settingsTabs.filter((tab) =>
@@ -593,6 +611,12 @@ export function App({
   const canViewWorkspace =
     Boolean(authToken) &&
     (isOwner || Boolean(currentRoom?.workspaceFilesGuests && currentRoomWorkspace));
+  useEffect(() => {
+    if (telemetryReady && workspaceOpen && canViewWorkspace) reportTelemetryFeature("code_panel");
+  }, [telemetryReady, workspaceOpen, canViewWorkspace]);
+  useEffect(() => {
+    if (telemetryReady && artifactsOpen) reportTelemetryFeature("artifacts_panel");
+  }, [telemetryReady, artifactsOpen]);
   const workspaceRequest = useMemo(
     () => workspaceApi(base, currentRoomId, authToken),
     [base, currentRoomId, authToken],
@@ -3278,6 +3302,7 @@ export function App({
           onDismissAll={attention.dismissAllToasts}
         />
         <UpdateCorner />
+        <TelemetryNotice local={local} paused={settingsOpen} />
       </div>
       {showOnboarding && onboardingOpen && (
         <OnboardingGuide steps={onboardingSteps} onClose={closeOnboarding} />
