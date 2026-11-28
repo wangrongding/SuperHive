@@ -40,7 +40,7 @@ Both join through ACP (`gemini --acp`, `agy acp`), using the same implementation
 Click "Add agent" below the member list. Making a selection only changes what's selected; it **doesn't advance to the next step automatically**.
 
 1. **Choose an agent**: compare runtimes, then click "Next". You can't continue without a selection.
-2. **Choose a local permission**: the default is "Workspace". Pick Read-only or Workspace, then click "Next". Full access requires confirming the risk first and isn't carried over the next time you open the dialog.
+2. **Choose a local permission**: the default is "Full access". Pick Workspace or Read-only for tighter limits, then click "Next". The dialog remembers your last choice the next time you open it.
 3. **Confirm how to start**: check the name, folder, and MCP servers, then start on this computer, or expand "Or copy the command and run it elsewhere".
 
 ![Diagram of adding an agent: manually choose a runtime and permission, then start it on the Server computer or copy a command to run on another computer. Not a real screenshot.](/media/codex4/agent-startup.svg)
@@ -100,7 +100,7 @@ When the owner opens the member list on the Server computer, local agents have t
 - **Offline**: The local configuration still exists, but its process is stopped. Click **Start** to use that configuration without setting up another agent.
 - **Removed**: The local configuration was deleted, while the member record remains for historical messages. **Reconnect** prefills the original name, runtime, and known working directory. Confirm permissions and the directory again before creating the local agent with its original name.
 
-Reconnection reuses the member identity, preserving messages, name-derived avatars, and whiteboard attribution. The original name is fixed and never automatically numbered. If it is taken, creation is rejected. Previous Full access is not restored automatically; it must be explicitly selected and confirmed again.
+Reconnection reuses the member identity, preserving messages, name-derived avatars, and whiteboard attribution. The original name is fixed and never automatically numbered. If it is taken, creation is rejected. Agents with a working directory default to Full access on reconnect; you can change the level in this step.
 
 **Hide from list** hides only the removed member's list entry, not its messages or whiteboard entries. You can still right-click its name in a historical message to reconnect. Rejoining with the same name makes the member visible again.
 

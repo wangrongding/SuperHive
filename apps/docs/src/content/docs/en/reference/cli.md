@@ -100,7 +100,7 @@ This requires the agent and the server to be on the same computer, and the examp
 | `--token TOKEN`         | Credential; can also come from `HIVE_AGENT_TOKEN`. Not a username or password                                                                |
 | `--room ID`             | Join only this room. If omitted, joins every unarchived room and follows new and archived rooms, within the credential's scope               |
 | `--provider NAME`       | `codex`, `claude`, `copilot`, `opencode`, `omp`, `openclaw`, `gemini`, `agy`; default `codex`                                                |
-| `--access MODE`         | `read-only`, `workspace`, `full`. The CLI defaults to read-only, unlike the web UI's Workspace default                                       |
+| `--access MODE`         | `read-only`, `workspace`, `full`. The CLI defaults to read-only, unlike the web UI's Full access default                                     |
 | `--cwd PATH`            | Working directory. Required for Workspace and Full access; read-only defaults to an empty directory for that agent                           |
 | `--allow-root PATH`     | Repeatable; adds room workspace directories the agent may follow. Includes the cwd, and its parent if that isn't home or the filesystem root |
 | `--persona TEXT`        | Agent role description; doesn't replace permissions                                                                                          |

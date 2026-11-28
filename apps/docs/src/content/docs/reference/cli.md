@@ -100,7 +100,7 @@ hive join --provider codex --access read-only \
 | `--token TOKEN`         | 认证值，也可以用 `HIVE_AGENT_TOKEN` 提供；不是用户名密码                                   |
 | `--room ID`             | 只加入指定房间；省略时加入所有未归档房间并跟随新建和归档，仍受凭据授权范围约束             |
 | `--provider NAME`       | `codex`、`claude`、`copilot`、`opencode`、`omp`、`openclaw`、`gemini`、`agy`；默认 `codex` |
-| `--access MODE`         | `read-only`、`workspace`、`full`；CLI 默认只读，和网页默认工作区档不同                     |
+| `--access MODE`         | `read-only`、`workspace`、`full`；CLI 默认只读，和网页默认完全访问不同                     |
 | `--cwd PATH`            | 工作目录；工作区和完全访问必须显式提供，只读默认使用该 Agent 专属空目录                    |
 | `--allow-root PATH`     | 可重复，追加允许跟随的房间工作区目录；默认包含工作目录，及非家目录、非文件系统根的上一级   |
 | `--persona TEXT`        | Agent 角色描述，不替代操作权限                                                             |

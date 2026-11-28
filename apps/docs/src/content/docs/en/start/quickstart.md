@@ -38,7 +38,7 @@ Screenshot of an isolated demo interface (cropped), showing where the entry poin
 Screenshot of the demo environment: names, rooms, and repositories are sample data, and the image follows the docs' light/dark theme. Under each card is the CLI version detected on this computer.
 
 1. Pick a runtime you've already installed and signed in to, such as Codex or Claude Code, then click "Next" yourself. Selecting a card doesn't advance automatically.
-2. Choose the "Read-only" permission, then click "Next" again. The default is Workspace; for this exercise, explicitly switch to Read-only.
+2. Choose the "Read-only" permission, then click "Next" again. The default is Full access; for this exercise, explicitly switch to Read-only.
 3. Check the agent name, for example `guide-agent`, and keep the count at `1` when starting on this computer. Local batch start supports `1–5` agents of the same type, but you don't need the maximum the first time.
 4. Click "Start on this computer". To run the agent on another computer, use "Copy command" instead and run it in that computer's terminal.
 5. Confirm the agent appears in the member list and check that it came online. Copying a command doesn't mean the agent is connected yet.

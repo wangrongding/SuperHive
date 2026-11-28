@@ -35,7 +35,7 @@
     </g>
     <g font-size="19" fill="#5d5d5d">
       <text x="74" y="235">先准备好 CLI 与登录状态</text>
-      <text x="414" y="235">默认工作区；全权另确认</text>
+      <text x="414" y="235">默认完全访问；可改工作区</text>
       <text x="754" y="235">名称、目录、MCP 加载项</text>
     </g>
     <g font-size="19" font-weight="700" fill="#0d0d0d">

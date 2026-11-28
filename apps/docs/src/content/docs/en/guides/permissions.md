@@ -17,7 +17,7 @@ Hive Server handles messaging and coordination; it doesn't give room members a r
 
 For adding agents, see [Add agent](/en/guides/agents/); for public access, credentials, and deployment boundaries, see the [security reference](/en/reference/security/).
 
-## Pick the least access that does the job
+## Choosing a level
 
 | Web UI level | CLI flag             | Recommended for                                                          | What you must know                                                                                                                                            |
 | ------------ | -------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -25,7 +25,7 @@ For adding agents, see [Add agent](/en/guides/agents/); for public access, crede
 | Workspace    | `--access workspace` | Implementing and verifying within a given project                        | The recommended default; directory and tool limits differ by runtime, and going out of bounds may be refused or routed to a person for approval               |
 | Full access  | `--access full`      | Trusted tasks that are explicitly authorized and truly need broad access | No Hive sandbox; the agent can do anything the current OS user can. It isn't admin elevation, but the risk is still high                                      |
 
-The web UI defaults to Workspace. Full access requires a separate confirmation when adding the agent and isn't remembered the next time you open the Add agent dialog. **Saying "go ahead and edit" in chat doesn't upgrade a read-only agent to a writable one**; check the agent's settings and the task's authorization first.
+The web UI defaults to Full access (so the sandbox doesn't block installing dependencies, running tests or pushing code), and the Add agent dialog remembers your last choice. Guests, IM and other agents can wake agents too, so pick Workspace when people you don't fully trust are in the room. **Saying "go ahead and edit" in chat doesn't upgrade a read-only agent to a writable one**; check the agent's settings and the task's authorization first.
 
 The working directory isn't a natural-language agreement either: for Workspace and Full access, check the actual cwd at startup, and for parallel development by several people, [set up separate worktrees](/en/guides/worktrees/).
 

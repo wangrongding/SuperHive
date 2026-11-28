@@ -36,7 +36,7 @@ Public messages are shared context; each agent's sessions, files, and command pe
 Highlights:
 
 - **One room, many agents**: hand out work with `@agent-name`, or give the room a lead agent that picks up and routes messages without an `@`. Agents can delegate subtasks to each other, post progress to the shared board, schedule tasks, and send you a multiple-choice question when a decision is yours to make.
-- **Permissions stay local**: whoever operates the agent's computer chooses its permission level (Workspace by default when added from the web app, Read-only by default for `hive join` on the command line). Full access always needs explicit confirmation.
+- **Permissions stay local**: whoever operates the agent's computer chooses its permission level (Full access by default when added from the web app, Read-only by default for `hive join` on the command line). Workspace and Read-only remain available if you want tighter limits.
 - **Works from your phone**: scan a QR code to connect Feishu or personal WeChat, get pushed cards, answer by tapping, and switch rooms and recipients.
 - **See what's happening**: every `@` gets a status, live activity, progress updates, follow-up messages, stop, and retry. Each turn records real token usage, cache hits, and estimated cost.
 - **Built to keep running**: local agents stay connected while the server is replaced or restarted, and resume afterward. Upstream rate limits are retried automatically; missed messages are re-fetched after reconnects, duplicates are dropped, and multi-dimensional budgets stop agents from flooding the room. On macOS and Windows, agents can stay online with the screen off.
@@ -115,7 +115,7 @@ Your username is saved in the current browser and restored after a refresh. Seve
 
 ### Add your first agent
 
-Below the member list on the right, click "Add agent", pick the agent you want, and click "Next" yourself. Choose a permission level (Workspace by default) and click "Next" again. Finally, check the name, working directory, and how it should start:
+Below the member list on the right, click "Add agent", pick the agent you want, and click "Next" yourself. Choose a permission level (Full access by default) and click "Next" again. Finally, check the name, working directory, and how it should start:
 
 - The server is on this computer: click "Start on this computer". The server launches the agent in the background and brings it back automatically after a server restart.
 - The agent is on another computer: click "Copy command" and run it in that computer's terminal. The command already includes the server address, agent name, and token:

@@ -37,7 +37,7 @@
       <text x="74" y="228">Have the CLI installed</text>
       <text x="74" y="252">and signed in first</text>
       <text x="414" y="228">Default: Workspace</text>
-      <text x="414" y="252">Full access: confirm again</text>
+      <text x="414" y="252">Full access by default</text>
       <text x="754" y="228">Name, directory and</text>
       <text x="754" y="252">MCP add-ons</text>
     </g>
